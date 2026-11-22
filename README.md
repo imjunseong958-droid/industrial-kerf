@@ -453,8 +453,8 @@ cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targe
 cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
 ```
 
-`.claude/verify.sh` runs these in this order, and CI runs them on Linux. The Rust
-release is the one `rust-toolchain.toml` names, which rustup installs on first use.
+CI runs these, in this order, on Linux. The Rust release is the one
+`rust-toolchain.toml` names, which rustup installs on first use.
 
 The release gate also includes a manual window check: open a project, edit
 it, restart it, enter Korean text, play/seek media, verify captions/mute, and
