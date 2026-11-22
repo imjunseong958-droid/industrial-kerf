@@ -1,9 +1,8 @@
-//! A panel open over the window: the key contexts that mark one, what Tab
-//! keeps inside while it is open, and where it sits.
+//! A panel open over the window: the key contexts that mark one, and where
+//! it sits.
 
 use crate::theme::layout;
-use gpui::{point, px, size, Bounds, FocusHandle, KeyContext, Pixels, Size, WeakFocusHandle};
-use std::cell::RefCell;
+use gpui::{point, px, size, Bounds, KeyContext, Pixels, Size};
 
 /// The key context that marks a panel open over the window: Tab from inside
 /// it goes round it only. The panels that were made before it are known by
@@ -31,25 +30,6 @@ pub fn panel_of(stack: &[KeyContext]) -> Option<&'static str> {
         .iter()
         .rev()
         .find_map(|context| PANELS.iter().copied().find(|panel| context.contains(panel)))
-}
-
-thread_local! {
-    /// What Tab keeps inside while a panel is open over the window.
-    static TAB_TRAP: RefCell<Option<WeakFocusHandle>> = const { RefCell::new(None) };
-}
-
-/// While a panel one goes into is open over the window, Tab and Shift-Tab
-/// from a field or a control of the kit go round what is inside it only,
-/// never to the window behind. A panel with a key context of [`PANELS`]
-/// needs nothing more; another can track `within` on its box
-/// (`track_focus`) and set it here as it opens, and None as it closes.
-pub fn trap_tab(within: Option<&FocusHandle>) {
-    TAB_TRAP.with(|trap| *trap.borrow_mut() = within.map(FocusHandle::downgrade));
-}
-
-/// What Tab keeps inside now ([`trap_tab`]), while it is still there.
-pub(super) fn tab_trap() -> Option<FocusHandle> {
-    TAB_TRAP.with(|trap| trap.borrow().as_ref().and_then(WeakFocusHandle::upgrade))
 }
 
 /// Where a panel one goes into (Settings, Finish) sits in a window

@@ -44,12 +44,6 @@ install_cli() {
     done
 }
 
-# What the Qt editor's install left: its binary and its bridge library.
-remove_old_editor() {
-    rm -f "$dest/kerf-qt" "$lib_dir/libkerf_qt_bridge.so" "$lib_dir/libkerf_qt_bridge.dylib" \
-        "$lib_dir"/libqtadvanceddocking*.dylib
-}
-
 # The editor as an app, for Finder, the Dock and Spotlight, and its only
 # install on macOS (kerf opens it too): a fresh bundle in place of an older
 # install's (never copied over it), with kerfd beside its executable, where
@@ -71,8 +65,6 @@ install_editor_macos() {
     # What an older install left in ~/.local: kerf would open a stale editor
     # there before the app.
     rm -f "$dest/kerf-editor"
-    remove_old_editor
-    rmdir "$lib_dir" 2>/dev/null || true
 }
 
 install_editor() {
@@ -82,7 +74,6 @@ install_editor() {
             place "$kerf_root/target/release/kerf-editor" "$dest/kerf-editor"
             mkdir -p "$lib_dir/fonts"
             cp -f "$kerf_root"/apps/kerf-editor/assets/fonts/*-LICENSE.txt "$lib_dir/fonts/"
-            remove_old_editor
             ;;
     esac
 }

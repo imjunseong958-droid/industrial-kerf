@@ -3,7 +3,7 @@
 //! going round a panel open over the window only, and on from a panel's or a
 //! region's own box where nothing binds Tab.
 
-use super::{panel_of, tab_trap, FocusNext, FocusPrevious};
+use super::{panel_of, FocusNext, FocusPrevious};
 use gpui::{
     App, Bounds, FocusHandle, KeyContext, Keymap, Keystroke, Pixels, Point, WeakFocusHandle, Window,
 };
@@ -13,10 +13,10 @@ use std::cell::{Cell, RefCell};
 /// next tab stop, or back, passing over what is folded away to nothing
 /// ([`note_shown`]). Where what holds it binds Tab itself (the launcher's
 /// own stops, the sidebar's), it goes on to that instead. Inside a panel
-/// open over the window ([`PANEL`](super::PANEL), or one named in
-/// [`trap_tab`](super::trap_tab)) it goes round that panel only; with
-/// nothing there to go to, the keys stay where they were. A field, every
-/// control of the kit, and a panel itself ([`follow_tab`]) call this.
+/// open over the window ([`PANELS`](super::PANELS)) it goes round that
+/// panel only; with nothing there to go to, the keys stay where they were.
+/// A field, every control of the kit, and a panel itself ([`follow_tab`])
+/// call this.
 pub fn tab_to(forward: bool, window: &mut Window, cx: &mut App) {
     let keymap = cx.key_bindings();
     let stack = window.context_stack();
@@ -25,7 +25,6 @@ pub fn tab_to(forward: bool, window: &mut Window, cx: &mut App) {
         cx.propagate();
         return;
     }
-    let trap = tab_trap();
     let panel = panel_of(&stack);
     let start = window.focused(cx);
     let mut first = None;
@@ -49,12 +48,7 @@ pub fn tab_to(forward: bool, window: &mut Window, cx: &mut App) {
         if now.as_ref().is_some_and(is_put_away) {
             continue;
         }
-        let inside = match (&trap, panel) {
-            (Some(trap), _) => trap.contains_focused(window, cx),
-            (None, Some(panel)) => panel_of(&window.context_stack()) == Some(panel),
-            (None, None) => true,
-        };
-        if inside {
+        if panel.is_none_or(|panel| panel_of(&window.context_stack()) == Some(panel)) {
             return;
         }
     }

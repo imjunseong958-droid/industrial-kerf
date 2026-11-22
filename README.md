@@ -115,10 +115,9 @@ Or build and install everything: `kerf`, `kerfd` and `kerf-mcp` to
 editor is an app, `~/Applications/Industrial Kerf.app` (`KERF_LOCAL_APPS`
 moves it), carrying `kerfd` beside it; it replaces an older install's app.
 Elsewhere it is `~/.local/bin/kerf-editor`, with its fonts' licences in
-`~/.local/lib/kerf` (`KERF_LOCAL_LIB`). Either removes what an install of
-the editor before 0.1.5 (Qt) left there, its binary and bridge library. The
-install does not refer back to the checkout, so cleaning `target` is safe;
-FFmpeg still comes from the system:
+`~/.local/lib/kerf` (`KERF_LOCAL_LIB`). The install does not refer back to
+the checkout, so cleaning `target` is safe; FFmpeg still comes from the
+system:
 
 ```bash
 scripts/install-kerf-local.sh        # or: cli, editor

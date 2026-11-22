@@ -338,3 +338,33 @@ fn a_media_whose_steps_are_in_a_recipe_file_is_made_once_they_are_carried() {
         "{made}"
     );
 }
+
+/// Windows sets no `HOME`: a person's own skills (`~/.kerf/skills`) are found by their
+/// `USERPROFILE` there, as `kerf --skills` lists them.
+#[test]
+fn a_persons_skills_are_found_where_only_the_user_profile_is_set() {
+    let home = tempfile::tempdir().unwrap();
+    let skill = home.path().join(".kerf/skills/house-style");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: house-style\ndescription: How this house cuts.\n---\n\nCut late.\n",
+    )
+    .unwrap();
+    let project = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
+        .env_remove("HOME")
+        .env("USERPROFILE", home.path())
+        .arg("--dir")
+        .arg(project.path())
+        .arg("--skills")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("kerf runs");
+    let listed = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        listed.contains("house-style · How this house cuts."),
+        "{listed}"
+    );
+}

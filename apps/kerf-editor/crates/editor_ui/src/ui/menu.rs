@@ -72,7 +72,7 @@ type MenuLayout = Rc<RefCell<HashMap<(usize, Option<usize>), Bounds<Pixels>>>>;
 /// next row starting with it, Right opens a submenu and Left or Esc closes
 /// it, and Esc (or a press outside) closes the menu and does nothing else.
 /// Any other key, a window's shortcut with Ctrl, ⌘ or Alt among them, does
-/// nothing while it is open ([`menu_key`]), as an open QMenu held the
+/// nothing while it is open ([`menu_key`]): an open menu holds the
 /// keyboard. It fades in over `FADE`, rising `MENU_RISE`. A submenu opens
 /// beside its row, to the left where the window ends on the right, and
 /// upward (its foot level with the row's) where it would run past the
@@ -519,8 +519,7 @@ pub enum MenuKey {
     /// A letter: the next row starting with it is lit.
     Letter(char),
     /// Anything else, with Ctrl, ⌘ or Alt or without: held, so nothing of
-    /// the window's acts under the menu and nothing closes (as an open
-    /// QMenu held the keyboard).
+    /// the window's acts under the menu and nothing closes.
     Held,
 }
 

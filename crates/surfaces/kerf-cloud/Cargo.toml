@@ -3,9 +3,11 @@ name = "kerf-cloud"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Client side of Kerf Cloud, the hosted model behind the paid tier"
 
 [dependencies]
+kerf-paths = { path = "../../foundation/kerf-paths" }
 log.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

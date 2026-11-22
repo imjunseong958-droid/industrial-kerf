@@ -114,7 +114,7 @@ try {
     }
 
     # The editor, opening with no project, and quitting on its own after five seconds.
-    # Its settings in the scratch folder: never the caller's own, nor their Qt settings taken in.
+    # Its settings in the scratch folder: never the caller's own.
     $editor = Start-Process -FilePath $editorExe -PassThru -ArgumentList @(
         '--settings-dir', "`"$(Join-Path $scratch 'settings')`"",
         '--quit-after-ms', '5000')

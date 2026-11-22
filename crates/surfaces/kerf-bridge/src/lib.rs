@@ -37,11 +37,11 @@
 //!
 //! - The command registry (kerf-commands), pure: [`commands_catalog`], [`commands_states`],
 //!   [`commands_run`].
-//! - The catalog: [`fx_catalog`], [`fx_catalog_all`], [`clip_properties`].
+//! - The catalog: [`fx_catalog_all`], [`clip_properties`].
 //! - [`about`]; [`update_check`], which asks the network: call it off the UI thread.
 //! - [`ffmpeg_bin`]: the FFmpeg kerfd runs, for the editor's own pictures (found once, by
 //!   running the candidates: call it off the UI thread the first time).
-//! - Crash reports: [`crash_install`], [`crash_fatal`], [`crash_reports`].
+//! - Crash reports: [`crash_install`], [`crash_reports`].
 //! - The system keychain: [`secret`].
 //! - The project launcher, local: [`project_inspect`], [`preset_inspect`] (which probes files
 //!   with ffprobe and may take a moment).
@@ -114,9 +114,9 @@ pub use previews::{PreviewEffect, Request as EffectPreviewsRequest};
 pub use queue::ExportRequest;
 pub use recipes::Edit as RecipeEdit;
 pub use standalone::{
-    about, clip_properties, commands_catalog, commands_run, commands_states, crash_fatal,
-    crash_install, crash_reports, ffmpeg_bin, fx_catalog, fx_catalog_all, keychain_off,
-    preset_inspect, project_inspect, secret, serve_mcp, update_check, REPOSITORY,
+    about, clip_properties, commands_catalog, commands_run, commands_states, crash_install,
+    crash_reports, ffmpeg_bin, fx_catalog_all, keychain_off, preset_inspect, project_inspect,
+    secret, serve_mcp, update_check, REPOSITORY,
 };
 pub use tasks::Task;
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};

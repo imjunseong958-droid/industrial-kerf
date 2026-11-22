@@ -3,6 +3,7 @@ name = "kerf-track"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Following what moves in a picture"
 
 [dependencies]
@@ -11,7 +12,6 @@ rayon.workspace = true
 
 [dev-dependencies]
 kerf-draw = { path = "../../render/kerf-draw" }
-kerf-model = { path = "../../foundation/kerf-model" }
 
 [lints]
 workspace = true

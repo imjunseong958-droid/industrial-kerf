@@ -62,7 +62,7 @@ impl Moves {
             project,
             Catalog::builtin(),
             &ComposeOptions {
-                sequence: Some(sequence.clone()),
+                sequence: Some(sequence),
                 pass: Pass::Ids,
                 ..ComposeOptions::default()
             },

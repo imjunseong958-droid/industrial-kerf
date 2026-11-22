@@ -84,13 +84,6 @@ pub fn crash_install() {
     kerf_runtime::crash::install("editor");
 }
 
-/// Report `message` now as what ends the editor, before it aborts; the abort then adds no
-/// second report. Nothing is written before [`crash_install`].
-pub fn crash_fatal(message: &str) {
-    // Where the report went is for `crash_reports` to list.
-    let _ = kerf_runtime::crash::fatal(message);
-}
-
 /// The crash folder's reports: `{folder, reports: [{path, component (editor|kerfd|kerf),
 /// atMs, message}]}`, newest first; `folder` is null when there is nowhere to keep them.
 pub fn crash_reports() -> Value {
@@ -178,16 +171,9 @@ pub fn commands_run(invocation: &Value) -> Value {
     }
 }
 
-/// The picture effects and transitions the editor offers, as a JSON array of `{id, kind,
-/// category, name, doc, engine, params}`.
-pub fn fx_catalog() -> Value {
-    kerf_runtime::fx_catalog_json()
-}
-
 /// Everything the catalog offers, as a JSON array of `{id, kind, domain, category, name,
-/// doc, engine, params}`: picture effects and transitions as [`fx_catalog`] lists them, plus
-/// generators (`kind: "generator"`, such as titles and solids) and sound effects (`domain:
-/// "audio"`).
+/// doc, engine, params}`: picture effects and transitions, generators (`kind: "generator"`,
+/// such as titles and solids) and sound effects (`domain: "audio"`).
 pub fn fx_catalog_all() -> Value {
     kerf_runtime::fx_catalog_all_json()
 }

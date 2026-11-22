@@ -3,6 +3,7 @@ name = "kerf-bridge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Nonblocking editor bridge: JSON commands in, JSON events out, over kerfd and Rust workers"
 
 [dependencies]
@@ -14,6 +15,7 @@ kerf-color = { path = "../../foundation/kerf-color" }
 kerf-compose = { path = "../../engine/kerf-compose" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
+kerf-paths = { path = "../../foundation/kerf-paths" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
 kerf-playback = { path = "../../engine/kerf-playback" }
 kerf-agent = { path = "../../surfaces/kerf-agent" }
@@ -26,7 +28,6 @@ kerf-engine = { path = "../../engine/kerf-engine" }
 # agent's tools read and change them. ComfyUI itself is another program,
 # never linked: it is asked over HTTP by kerf-comfy when a shot is made.
 kerf-shots = { path = "../../surfaces/kerf-shots" }
-kerf-fx = { path = "../../effects/kerf-fx" }
 # The editor waits on the bridge for events and frames (`Wake`) rather than
 # asking on a timer.
 async-channel.workspace = true

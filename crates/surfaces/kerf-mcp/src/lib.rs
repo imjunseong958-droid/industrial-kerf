@@ -612,8 +612,8 @@ impl McpServer {
 /// Bundled skills, then the user's (`~/.kerf/skills`), then the project's.
 pub fn load_project_skills(dir: &Path) -> io::Result<Vec<Skill>> {
     let mut directories = Vec::new();
-    if let Some(home) = std::env::var_os("HOME") {
-        directories.push(PathBuf::from(home).join(".kerf").join("skills"));
+    if let Some(folder) = kerf_paths::user_dir() {
+        directories.push(folder.join("skills"));
     }
     directories.push(dir.join(".kerf").join("skills"));
     load_skills_with_bundled(&directories)

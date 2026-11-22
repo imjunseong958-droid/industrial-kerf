@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Asks a ComfyUI server for a shot: a program a recipe's `generate` runs for a model kept there"
-publish = false
+publish.workspace = true
 
 [[bin]]
 name = "kerf-comfy"
@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 hex.workspace = true
+kerf-paths = { path = "../../crates/foundation/kerf-paths" }
 # The workflow's file: its blanks, what it makes, and those that come with this program.
 kerf-workflow = { path = "../../crates/surfaces/kerf-workflow" }
 serde = { workspace = true, features = ["derive", "rc"] }

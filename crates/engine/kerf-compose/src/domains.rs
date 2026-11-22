@@ -1,5 +1,5 @@
 //! The effects the compositor runs on a clip's picture, each a
-//! [`PictureEffect`](kerf_draw::effect::PictureEffect), and the one place
+//! [`PictureEffect`], and the one place
 //! the compositor names the crates they are in. A crate joins by being
 //! listed here.
 

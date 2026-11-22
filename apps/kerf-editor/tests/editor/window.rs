@@ -188,7 +188,7 @@ fn the_red_line_says_a_failed_sync_after_its_bar_is_dismissed() {
 }
 
 #[test]
-fn the_red_line_keeps_qts_order() {
+fn the_red_line_keeps_its_order() {
     let connected = Connection::Connected;
     let failed = Connection::Failed("gone".into());
     let connecting = Connection::Connecting;
@@ -382,11 +382,14 @@ fn a_vertical_picture_leaves_the_timeline_less_than_a_wide_one() {
     let wide = timeline_split(height, 0.0, width, 16.0 / 9.0);
     let vertical = timeline_split(height, 0.0, width, 9.0 / 16.0);
     // Under a wide picture 56% of the height, the transport counted in.
-    let qt_wide = height * layout::TIMELINE_WIDE_SHARE;
-    assert!((wide + layout::TRANSPORT - qt_wide).abs() < 0.5, "{wide}");
-    let qt_vertical = height * layout::TIMELINE_UPRIGHT_SHARE;
+    let wide_share = height * layout::TIMELINE_WIDE_SHARE;
     assert!(
-        (vertical + layout::TRANSPORT - qt_vertical).abs() < 0.5,
+        (wide + layout::TRANSPORT - wide_share).abs() < 0.5,
+        "{wide}"
+    );
+    let upright_share = height * layout::TIMELINE_UPRIGHT_SHARE;
+    assert!(
+        (vertical + layout::TRANSPORT - upright_share).abs() < 0.5,
         "{vertical}"
     );
     assert!(vertical < wide);
@@ -396,7 +399,7 @@ fn a_vertical_picture_leaves_the_timeline_less_than_a_wide_one() {
 }
 
 #[test]
-fn the_view_menu_has_the_mask_tools_qt_had_there() {
+fn the_view_menu_has_the_mask_tools() {
     let menus = menus_with("kerf", &[], None);
     let view = menus
         .iter()
@@ -838,7 +841,7 @@ fn switch_branch_in_the_menu_bar_is_a_submenu_of_the_other_branches() {
 // ---------------------------------------------------------------- startup
 
 #[test]
-fn window_sizes_read_as_the_qt_editor_took_them() {
+fn window_sizes_read_as_width_x_height() {
     assert_eq!(parse_window_size("1600x1000"), Some((1600.0, 1000.0)));
     assert_eq!(parse_window_size(" 800X600 "), Some((800.0, 600.0)));
     for bad in ["", "1600", "x1000", "0x10", "ax b", "1600x1000x2", "-5x5"] {

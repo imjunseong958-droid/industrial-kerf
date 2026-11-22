@@ -694,7 +694,7 @@ fn as_value(shape: &Shape) -> Value {
 
 /// What a step reads as: the words as label and request, or the object's
 /// label and request (its label when it has none); none without a label.
-fn as_qt_read(shape: &Shape) -> Option<NextStep> {
+fn as_read(shape: &Shape) -> Option<NextStep> {
     let (label, request) = match shape {
         Shape::Object(label, request) => (label.trim(), request.trim()),
         Shape::Words(words) => (words.trim(), words.trim()),
@@ -710,7 +710,7 @@ proptest! {
     #[test]
     fn next_steps_read_in_either_shape(shapes in proptest::collection::vec(shape(), 0..6)) {
         let event = json!({"type": "agent_next", "steps": shapes.iter().map(as_value).collect::<Vec<_>>()});
-        let expected: Vec<NextStep> = shapes.iter().filter_map(as_qt_read).collect();
+        let expected: Vec<NextStep> = shapes.iter().filter_map(as_read).collect();
         prop_assert_eq!(&next_steps(&crate::support::event(event.clone())), &expected);
         for step in &expected {
             prop_assert!(!step.label.is_empty() && !step.request.is_empty());
@@ -1125,7 +1125,7 @@ fn notices(state: &EditorState) -> Vec<(String, bool)> {
 }
 
 #[test]
-fn the_store_routes_preset_answers_as_qt_did() {
+fn the_store_routes_preset_answers() {
     let mut state = EditorState::default();
     let preset = json!({"name": "Intro", "slots": []});
     assert_eq!(
@@ -2325,7 +2325,7 @@ fn a_notice_without_a_hold_keeps_the_windows() {
 }
 
 #[test]
-fn a_cast_saved_is_held_as_qt_held_it() {
+fn a_cast_saved_is_held_long() {
     let mut state = EditorState::default();
     state.apply(&event(
         json!({"type": "cast", "saved": true, "toMake": [{"media": "shot-2"}]}),
@@ -2378,12 +2378,6 @@ fn activity_says_what_an_export_made_and_keeps_nothing_empty() {
             json!({"type": "export", "status": "running", "progress": 0.4})
         )),
         None
-    );
-    assert_eq!(
-        activity_of(&event(
-            json!({"type": "analysis", "message": "Analysed motion for clip 2"})
-        )),
-        Some(("analysis", "Analysed motion for clip 2".to_owned()))
     );
     assert_eq!(
         activity_of(&event(json!({"type": "clock", "position": 2.0}))),

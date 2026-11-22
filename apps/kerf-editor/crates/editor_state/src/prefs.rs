@@ -12,10 +12,6 @@
 //! Every window holds a copy of its own. A save writes only what that copy
 //! changed since it last read or wrote the file, onto the file as it is
 //! now ([`merge`]), so one window's save never undoes another's change.
-//!
-//! The first time the editor starts with no file of its own, it takes up
-//! what the editor before 0.1.5 (Qt) kept, so a person who used it finds
-//! their choices as they left them ([`import_qt_once`]).
 
 use crate::tokens::{Face, ReadingFace};
 use serde::{Deserialize, Serialize};
@@ -24,12 +20,7 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-mod legacy;
-
-pub use legacy::{
-    import_qt, import_qt_once, qt_settings_ini, qt_settings_plist, qt_settings_reg,
-    qt_string_value, qt_variant, read_qt_settings, QtSettings, QDATASTREAM_4_0, QDATASTREAM_5_6,
-};
+pub use kerf_paths::{home, user_dir};
 
 /// The version of the file this Kerf writes.
 pub const VERSION: u32 = 1;
@@ -311,9 +302,8 @@ pub struct Prefs {
     pub sidebar_open: bool,
     pub sidebar_width: f32,
     /// Which of the sidebar's folders were folded (true) or opened (false)
-    /// by hand, by folder ([`project_key`]), and taken up from the editor
-    /// before 0.1.5 (Qt), which kept them under `sidebar/folded`, so its
-    /// folds carry over; a folder not here is as the sidebar has it.
+    /// by hand, by folder ([`project_key`]); a folder not here is as the
+    /// sidebar has it.
     pub sidebar_folded: BTreeMap<String, bool>,
     /// Projects opened, newest first.
     pub recent: Vec<PathBuf>,
@@ -339,10 +329,8 @@ pub struct Prefs {
     /// started for a kerf:// link hands it to the one already open
     /// ([`crate::links::inbox_address`]); made the first time it is needed.
     pub links_inbox: String,
-    /// Where Export Master renders each project ([`MasterOutput`]): by the
-    /// project's absolute folder ([`project_key`]), or, carried over from
-    /// the editor before 0.1.5 (Qt), by its key there ([`qt_master_key`]),
-    /// so a master set there still renders where it did.
+    /// Where Export Master renders each project ([`MasterOutput`]), by the
+    /// project's absolute folder ([`project_key`]).
     pub master_outputs: BTreeMap<String, MasterOutput>,
     /// How tall each project's tracks are drawn, as the person left them
     /// (a head's edge dragged, View ▸ Fit Tracks to Panel), by the
@@ -474,7 +462,7 @@ impl Prefs {
         if let Some(path) = std::env::var_os("KERF_EDITOR_PREFS").filter(|path| !path.is_empty()) {
             return Some(path.into());
         }
-        home().map(|home| home.join(".kerf").join("editor.json"))
+        user_dir().map(|folder| folder.join("editor.json"))
     }
 
     /// The person's settings. With nothing chosen of who answers, a key of
@@ -709,20 +697,9 @@ impl Prefs {
         self.links_inbox.clone()
     }
 
-    /// Where Export Master renders `project`, if it was set: kept by its
-    /// absolute folder, else carried over from the editor before 0.1.5 (Qt)
-    /// under its key there, by the folder's name and a digest of its path,
-    /// else under the folder's name alone (that editor's first key), so a
-    /// master set there still renders where it did.
+    /// Where Export Master renders `project`, if it was set.
     pub fn master_output(&self, project: &Path) -> Option<&MasterOutput> {
-        [
-            Some(project_key(project)),
-            qt_master_key(project),
-            qt_legacy_master_key(project),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|key| self.master_outputs.get(&key))
+        self.master_outputs.get(&project_key(project))
     }
 
     /// The track heights kept for `project`, or each kind's own.
@@ -743,13 +720,10 @@ impl Prefs {
         }
     }
 
-    /// Where the cards kept under `key` were put, by card: kept here, else
-    /// as carried over from the editor before 0.1.5 (Qt) under that key
-    /// ([`qt_graph_key`]), so cards dragged there are where they were left.
+    /// Where the cards kept under `key` were put, by card.
     pub fn graph_places_of(&self, key: &str) -> std::collections::HashMap<String, (f32, f32)> {
         self.graph_places
             .get(key)
-            .or_else(|| self.graph_places.get(&qt_graph_key(key)))
             .map(|places| {
                 places
                     .iter()
@@ -760,15 +734,12 @@ impl Prefs {
             .unwrap_or_default()
     }
 
-    /// Keeps `places` under `key`; none lets the key go. What was carried
-    /// over for it ([`qt_graph_key`]) goes either way: these are the cards'
-    /// places now.
+    /// Keeps `places` under `key`; none lets the key go.
     pub fn keep_graph_places(
         &mut self,
         key: &str,
         places: &std::collections::HashMap<String, (f32, f32)>,
     ) {
-        self.graph_places.remove(&qt_graph_key(key));
         if places.is_empty() {
             self.graph_places.remove(key);
         } else {
@@ -782,9 +753,8 @@ impl Prefs {
     }
 
     /// Whether `folder`'s conversations were left folded (true) or unfolded
-    /// (false) by hand in the sidebar, here or, carried over from its
-    /// `sidebar/folded`, in the editor before 0.1.5 (Qt); None: never by
-    /// hand, so as the sidebar starts it.
+    /// (false) by hand in the sidebar; None: never by hand, so as the
+    /// sidebar starts it.
     pub fn folder_folded(&self, folder: &Path) -> Option<bool> {
         self.sidebar_folded.get(&project_key(folder)).copied()
     }
@@ -925,12 +895,6 @@ fn merge_map(
     merged
 }
 
-pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-}
-
 /// Whose key the system's keychain keeps, Anthropic's first: asked once a
 /// run, and only when nothing else says who answers.
 fn keychain_provider() -> Option<Provider> {
@@ -1000,9 +964,8 @@ pub struct MasterOutput {
     pub codec: Option<String>,
 }
 
-/// `path` made absolute and clean (no `.`, no `..`, no trailing slash), as
-/// the editor before 0.1.5 (Qt) wrote a project's path, so a key made from
-/// it (the digest in [`qt_master_key`]) is the one that editor made.
+/// `path` made absolute and clean (no `.`, no `..`, no trailing slash), so
+/// a folder gives one key however it is written.
 pub fn clean_absolute(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let mut clean = PathBuf::new();
@@ -1026,49 +989,4 @@ pub fn clean_absolute(path: &Path) -> PathBuf {
 /// The key a project's own settings are kept under: its absolute folder.
 pub fn project_key(project: &Path) -> String {
     clean_absolute(project).to_string_lossy().into_owned()
-}
-
-/// The project's folder name as a key's part: a `/` or `\` in it would
-/// open a group of its own.
-fn key_folder(project: &Path) -> Option<String> {
-    let name = clean_absolute(project)
-        .file_name()?
-        .to_string_lossy()
-        .replace(['/', '\\'], "-");
-    (!name.is_empty()).then_some(name)
-}
-
-/// The key [`Prefs::master_outputs`] keeps a master output carried over
-/// from the editor before 0.1.5 (Qt) under: `qt:` and the key that editor
-/// kept it under (`deliver/<key>/outputs`), `<folder>~<12 hex of the SHA-1
-/// of its absolute path>`, made the same way so a master set there is
-/// found again.
-pub fn qt_master_key(project: &Path) -> Option<String> {
-    let folder = key_folder(project)?;
-    let path = clean_absolute(project);
-    // The path as that editor hashed it, with forward slashes on every
-    // system; any other text gives another digest.
-    let written = path.to_string_lossy().replace('\\', "/");
-    let digest = sha1_smol::Sha1::from(written.as_bytes())
-        .digest()
-        .to_string();
-    Some(format!("qt:{folder}~{}", &digest[..12]))
-}
-
-/// The key the editor before 0.1.5 (Qt) first kept a project's master
-/// output under: the folder's name alone, so a master set in a version that
-/// old is found too.
-pub fn qt_legacy_master_key(project: &Path) -> Option<String> {
-    key_folder(project).map(|folder| format!("qt:{folder}"))
-}
-
-/// Where [`Prefs::graph_places`] keeps what the editor before 0.1.5 (Qt)
-/// kept of a graph's cards under `key` (the same key: a shot's project and
-/// media, `making::placement_key`, or a workflow's under it): its settings
-/// held only `graph/placed/<16 hex of the key's SHA-1>`, so this is
-/// `qt:<those 16>`. The digest is that editor's, so cards dragged there are
-/// found again.
-pub fn qt_graph_key(key: &str) -> String {
-    let digest = sha1_smol::Sha1::from(key.as_bytes()).digest().to_string();
-    format!("qt:{}", &digest[..16])
 }

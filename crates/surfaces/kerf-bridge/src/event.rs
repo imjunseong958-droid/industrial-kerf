@@ -14,8 +14,7 @@
 //! does not know as [`AgentUpdate::Other`], so a newer bridge or kerfd never breaks an older
 //! window. A snapshot's timelines that do not read are empty, and its proposals that do not
 //! read are left out. What only a reader takes ([`AgentUpdate::Other`],
-//! [`PreviewStatus::Other`], and [`Event::Analysis`], which only the Qt editor's bridge sent)
-//! is never sent.
+//! [`PreviewStatus::Other`]) is never sent.
 
 use crate::ShotOf;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -385,14 +384,6 @@ pub enum Event {
         url: String,
         #[serde(default)]
         created: bool,
-    },
-
-    /// An analysis made in the background, as the Qt editor's bridge said one: its line for
-    /// the editor's Activity. This bridge never sends one; one read from JSON is kept for
-    /// that line.
-    Analysis {
-        #[serde(default)]
-        message: String,
     },
 
     /// An event of a type this build does not know, or without one. It is never sent;

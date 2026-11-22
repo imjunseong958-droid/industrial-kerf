@@ -35,7 +35,7 @@ pub use kernel::{
     TrimSide, RATE_NEEDS_EMPTY,
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
-pub use timeline::{fx_catalog_all_json, fx_catalog_json, properties_json};
+pub use timeline::{fx_catalog_all_json, properties_json};
 pub use view::{
     TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
     ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,

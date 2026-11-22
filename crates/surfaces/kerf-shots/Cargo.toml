@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "A shot's graph and the workflow behind its model, read and changed the same way by the editor and by an agent"
-publish = false
+publish.workspace = true
 
 [dependencies]
 kerf-engine = { path = "../../engine/kerf-engine" }
@@ -18,7 +18,6 @@ serde_json.workspace = true
 
 [dev-dependencies]
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
-tempfile.workspace = true
 
 [lints]
 workspace = true

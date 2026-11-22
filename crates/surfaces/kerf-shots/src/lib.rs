@@ -6,7 +6,7 @@
 //! the one reading and the one rule here:
 //!
 //! - [`graph`]: the steps that make a media laid out with what they read
-//!   ([`kerf_engine::recipe::graph`]), each model saying which program's
+//!   ([`kerf_engine::recipe::graph()`]), each model saying which program's
 //!   workflow it is run with, where it is run with one.
 //! - [`workflow`]: the workflow behind a model, every node and input of it,
 //!   and a value in it set in a copy of the shot's own that the step's line

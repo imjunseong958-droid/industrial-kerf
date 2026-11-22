@@ -132,7 +132,7 @@ fn a_sidebar_row_takes_its_keys_before_the_windows() {
 }
 
 #[test]
-fn tab_in_an_open_sidebar_menu_moves_in_it_as_in_qts_menus() {
+fn tab_in_an_open_sidebar_menu_moves_in_it() {
     let menu = [WORKSPACE, sidebar::CONTEXT, sidebar::MENU];
     let row = [WORKSPACE, sidebar::CONTEXT, sidebar::ROW_KEYS];
     for name in ["kerf", "premiere", "fcp"] {
@@ -1117,7 +1117,7 @@ fn a_letter_typed_is_one_letter_or_figure() {
 }
 
 #[test]
-fn a_fields_edit_menu_has_qts_rows_in_qts_order() {
+fn a_fields_edit_menu_has_its_rows_in_order() {
     let rows: Vec<EditRow> = edit_rows(EditCan::default())
         .into_iter()
         .map(|(row, _)| row)

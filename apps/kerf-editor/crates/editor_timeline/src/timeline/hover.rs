@@ -10,7 +10,7 @@ use super::{TimelineEvent, TimelineView};
 use editor_state::model;
 use editor_ui::theme::layout;
 use editor_ui::ui;
-use gpui::{App, Context, CursorStyle, MouseMoveEvent, Window};
+use gpui::{Context, CursorStyle, MouseMoveEvent, Window};
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Hover {
@@ -65,7 +65,7 @@ impl TimelineView {
             }
             _ => None,
         };
-        let tip = self.tip_at(x, y, cx);
+        let tip = self.tip_at(x, y);
         if hover != self.hover || tip != self.tip {
             self.hover = hover;
             self.tip = tip;
@@ -106,7 +106,7 @@ impl TimelineView {
 
     /// What the pointer rests on, for its tip: a clip (its name and its
     /// in and out), a sequence marker's flag, a proposal's band.
-    fn tip_at(&self, x: f32, y: f32, cx: &App) -> Option<CanvasTip> {
+    fn tip_at(&self, x: f32, y: f32) -> Option<CanvasTip> {
         let lanes = &self.lanes;
         let view = &self.view;
         let fps = lanes.fps;
@@ -150,7 +150,6 @@ impl TimelineView {
         };
         let clip = &lanes.rows[row].clips[index];
         let (x0, top, across, tall) = self.clip_rect(row, index);
-        let _ = cx;
         Some(CanvasTip {
             key: format!("clip-{}", clip.id),
             tip: ui::Tip::new(clip.label.clone()).key(format!(

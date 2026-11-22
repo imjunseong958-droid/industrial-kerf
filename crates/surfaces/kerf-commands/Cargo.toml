@@ -3,6 +3,7 @@ name = "kerf-commands"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "The editor's command registry: ids, menus, shortcuts, enabled state, and the requests commands resolve to"
 
 [dependencies]

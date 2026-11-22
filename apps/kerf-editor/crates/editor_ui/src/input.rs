@@ -588,11 +588,6 @@ impl TextInput {
         self
     }
 
-    /// Whether Enter starts a new line here rather than submitting.
-    pub fn is_code(&self) -> bool {
-        self.code
-    }
-
     /// Shows dots in place of what is typed: a key.
     pub fn secret(mut self) -> Self {
         self.secret = true;

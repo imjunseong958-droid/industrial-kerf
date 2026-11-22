@@ -636,13 +636,6 @@ impl RuntimeClient {
         })?)
     }
 
-    pub fn start_render(
-        &self,
-        quality: &str,
-    ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-        self.start_render_range(quality, None, None, None)
-    }
-
     /// Queue a render job of the project, or of what a pending `proposal`
     /// would make of it. The returned document is what to render.
     pub fn start_render_range(

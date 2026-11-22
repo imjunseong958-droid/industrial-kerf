@@ -1,0 +1,10 @@
+[package]
+name = "kerf-paths"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Where a person's own Kerf files are kept: their home folder, and ~/.kerf in it"
+
+[lints]
+workspace = true

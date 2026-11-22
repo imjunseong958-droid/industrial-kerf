@@ -20,7 +20,7 @@
 //! picture is a path from the project's folder.
 //!
 //! A take is held to each one it names, by its words and its pictures
-//! ([`super::takes`]): changing how Ada is described asks again for the
+//! ([`mod@super::takes`]): changing how Ada is described asks again for the
 //! shots Ada is in and no other, and adding someone to the file asks for
 //! none.
 

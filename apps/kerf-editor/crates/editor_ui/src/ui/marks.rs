@@ -1,8 +1,8 @@
 //! Small marks in the editor's tokens: a hairline, a chip of words, a filled
-//! dot, a thin progress bar, and a colour as GPUI's Hsla.
+//! dot and a thin progress bar.
 
 use crate::theme::{self, text};
-use gpui::{div, prelude::*, px, Hsla, Rgba, SharedString};
+use gpui::{div, prelude::*, px, Rgba, SharedString};
 
 /// A hairline, across or down.
 pub fn hairline(across: bool) -> gpui::Div {
@@ -49,9 +49,4 @@ pub fn progress(amount: f64, color: Rgba) -> gpui::Div {
                 .bg(color)
                 .w(gpui::relative(amount)),
         )
-}
-
-/// A colour as GPUI's Hsla.
-pub fn hsla(color: Rgba) -> Hsla {
-    color.into()
 }

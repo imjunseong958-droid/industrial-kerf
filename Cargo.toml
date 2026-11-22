@@ -2,6 +2,7 @@
 members = [
     # foundation
     "crates/foundation/kerf-model",
+    "crates/foundation/kerf-paths",
     "crates/foundation/kerf-lang",
     "crates/foundation/kerf-geom",
     "crates/foundation/kerf-color",
@@ -55,6 +56,8 @@ resolver = "2"
 version = "0.1.5"
 edition = "2024"
 license = "MIT"
+# Nothing here goes to crates.io: every crate takes `publish.workspace = true`.
+publish = false
 
 # Every external dependency two or more crates use, declared once: a crate
 # takes it with `x.workspace = true` and names its own features.
@@ -69,7 +72,6 @@ kurbo = "0.13"
 libc = "0.2"
 linesweeper = "0.4"
 log = "0.4"
-naga = "30"
 proptest = "1"
 rayon = "1"
 serde = "1"

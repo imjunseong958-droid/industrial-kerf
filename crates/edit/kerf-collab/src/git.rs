@@ -1426,11 +1426,6 @@ pub fn repository_name(url: &str) -> Option<String> {
     (!name.is_empty() && name != "." && name != "..").then(|| name.to_owned())
 }
 
-/// The last commit's author and time, for the launcher.
-pub fn last_commit(dir: &Path) -> Option<CommitSummary> {
-    commits(dir, "-1").into_iter().next()
-}
-
 /// `true` when `path` is a Git LFS pointer rather than the file it stands
 /// for: the media was not downloaded.
 pub fn is_lfs_pointer(path: &Path) -> bool {

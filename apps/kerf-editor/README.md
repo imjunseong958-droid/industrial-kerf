@@ -82,9 +82,7 @@ beside itself, in the installed app on macOS, or in `target/debug` and `target/r
 
 Off macOS, an editor started for `kerf://` links alone hands them to the editor already
 open, through a link inbox (a socket in the runtime folder, else a port named in the
-settings folder), and ends. The first time it runs, the editor takes up the settings the
-editor before 0.1.5 (Qt) kept (its provider, models, faces, keymap, recent projects and
-each project's master output), once, so an update loses none of them.
+settings folder), and ends.
 
 Where `--screenshot` cannot (Wayland, Windows), or to catch the window mid-run, a picture
 of it is taken from outside.

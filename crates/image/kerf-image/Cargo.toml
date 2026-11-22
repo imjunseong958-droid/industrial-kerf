@@ -3,6 +3,7 @@ name = "kerf-image"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Kerf's image tools: what an editor once took a picture to a photo editor for"
 
 # fill.rs is carried from EffectCraft (see licenses/README.md).

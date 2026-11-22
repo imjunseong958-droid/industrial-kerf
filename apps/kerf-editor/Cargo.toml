@@ -24,6 +24,8 @@ resolver = "2"
 version = "0.1.5"
 edition = "2024"
 license = "MIT"
+# Nothing here goes to crates.io: every crate takes `publish.workspace = true`.
+publish = false
 
 # Every dependency of the editor's crates, declared once: a crate takes it
 # with `x.workspace = true` and names its own features.
@@ -40,6 +42,7 @@ editor_state = { path = "crates/editor_state" }
 editor_timeline = { path = "crates/editor_timeline" }
 editor_ui = { path = "crates/editor_ui" }
 kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
+kerf-paths = { path = "../../crates/foundation/kerf-paths" }
 gpui = "0.2.2"
 # The version gpui draws pictures with: its RenderImage holds these frames
 # (and `--screenshot` writes its PNG with it).
@@ -51,10 +54,6 @@ unicode-segmentation = "1"
 # (xn--) or as NFD text, still finds its folder.
 idna = "1"
 unicode-normalization = "0.1"
-# The editor before 0.1.5 (Qt) kept a project's master output under a
-# SHA-1 of its path, and a graph's card places under a SHA-1 of the
-# graph's key: made the same way, they are found again.
-sha1_smol = "1"
 env_logger = "0.11"
 log = "0.4"
 # "Edited … ago" counts days on the person's own calendar: the system's
@@ -91,6 +90,7 @@ name = "kerf-editor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Industrial Kerf's native editor, drawn with GPUI"
 
 [lib]

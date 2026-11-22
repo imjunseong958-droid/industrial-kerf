@@ -2606,11 +2606,11 @@ impl ActivityLog {
 }
 
 /// The Activity line a bridge event leaves, if any: an export that ended
-/// (the file it made, or how it ended), an analysis made in the
-/// background, why the picture needs a rendered preview (the bridge's
-/// reason, a render that failed among them, else "Native preview
-/// unavailable"), and what Kerf did: each tool call that ended, each
-/// status line, any other note (at most 120 characters of each).
+/// (the file it made, or how it ended), why the picture needs a rendered
+/// preview (the bridge's reason, a render that failed among them, else
+/// "Native preview unavailable"), and what Kerf did: each tool call that
+/// ended, each status line, any other note (at most 120 characters of
+/// each).
 pub fn activity_of(event: &Event) -> Option<(&'static str, String)> {
     match event {
         Event::Agent(update) => {
@@ -2666,9 +2666,6 @@ pub fn activity_of(event: &Event) -> Option<(&'static str, String)> {
                 _ => None,
             }
         }
-        Event::Analysis { message } => Some(message.as_str())
-            .filter(|message| !message.trim().is_empty())
-            .map(|message| ("analysis", message.to_owned())),
         // A render that failed says why next (`required`, with the
         // bridge's reason), which is the line kept.
         Event::Preview(preview)

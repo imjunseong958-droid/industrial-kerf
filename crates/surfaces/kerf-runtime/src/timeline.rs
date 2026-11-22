@@ -376,22 +376,10 @@ fn params_json(params: &Params, rate: Rate) -> Map<String, Json> {
         .collect()
 }
 
-/// The picture effects and transitions an editor offers, by category, each
-/// with its display name, when to use it, what renders it, and its
-/// parameter definitions.
-pub fn fx_catalog_json() -> Json {
-    let entries: Vec<Json> = Catalog::builtin()
-        .all()
-        .filter(|fx| fx.domain == Domain::Video && fx.kind != FxKind::Generator)
-        .map(fx_entry_json)
-        .collect();
-    Json::Array(entries)
-}
-
-/// The whole catalog in the shape of [`fx_catalog_json`]: picture and
-/// sound effects, transitions, and generators (titles and other pictures a
-/// clip makes on its own, `kind` `generator`), each with its `domain`
-/// (`video` or `audio`).
+/// The whole catalog: picture and sound effects, transitions, and
+/// generators (titles and other pictures a clip makes on its own, `kind`
+/// `generator`), each with its display name, when to use it, what renders
+/// it, its parameter definitions and its `domain` (`video` or `audio`).
 pub fn fx_catalog_all_json() -> Json {
     Json::Array(
         Catalog::builtin()

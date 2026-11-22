@@ -351,9 +351,8 @@ impl SidebarView {
         .detach();
     }
 
-    /// The other folders left unfolded by hand (here, or in the editor
-    /// before 0.1.5 (Qt), whose folds carry over so they open as they were
-    /// left), unfolded again as the sidebar is built.
+    /// The other folders left unfolded by hand, unfolded again as the
+    /// sidebar is built.
     pub(super) fn unfold_as_left(&mut self, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let current = session.project.clone();

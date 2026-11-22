@@ -656,11 +656,6 @@ impl Gpu {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The bytes kept from frame to frame.
-    pub fn kept_bytes(&self) -> usize {
-        self.kept().bytes()
-    }
-
     pub fn device(&self) -> &wgpu::Device {
         &self.device
     }

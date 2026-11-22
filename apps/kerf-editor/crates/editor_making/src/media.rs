@@ -732,11 +732,6 @@ impl MediaBand {
         cx.notify();
     }
 
-    /// Whether the band shows a list rather than tiles.
-    pub fn is_list(&self) -> bool {
-        self.list
-    }
-
     /// Shows the Media page or the Index; the fill slides to it.
     pub fn set_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         self.tab = tab;

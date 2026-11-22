@@ -1,5 +1,5 @@
 //! Video transitions, carried from FilmCraft's renderer (`transitions`): combine the outgoing (A)
-//! and incoming (B) layers at progress `p` ∈ [0,1]. Kerf's catalog lists them
+//! and incoming (B) layers at progress `p` ∈ \[0,1\]. Kerf's catalog lists them
 //! (`kerf-model/src/transitions.tsv`, engine `kerf`), and [`Fx`] gives them a transition's
 //! parameters as a document sets them.
 //!

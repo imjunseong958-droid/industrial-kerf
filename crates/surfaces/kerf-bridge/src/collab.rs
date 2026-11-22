@@ -606,10 +606,7 @@ impl Collab {
             None => branch_subjects(&dir),
         };
         let title = match title.trim() {
-            "" => status
-                .branch
-                .clone()
-                .unwrap_or_else(|| "Changes from Kerf".into()),
+            "" => status.branch.unwrap_or_else(|| "Changes from Kerf".into()),
             title => title.to_owned(),
         };
         let request = git::pull_request(&dir, &title, &body).map_err(text)?;

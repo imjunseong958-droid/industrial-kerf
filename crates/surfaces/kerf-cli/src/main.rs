@@ -1571,10 +1571,10 @@ fn resolve_llm(args: &Args) -> Result<LlmConfig> {
 }
 
 fn read_user_config() -> Value {
-    let Some(home) = env::var_os("HOME") else {
+    let Some(folder) = kerf_paths::user_dir() else {
         return json!({});
     };
-    fs::read_to_string(PathBuf::from(home).join(".kerf/config.json"))
+    fs::read_to_string(folder.join("config.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_else(|| json!({}))
@@ -1622,7 +1622,7 @@ fn discover_editor() -> Result<PathBuf> {
         .nth(2)
         .context("could not resolve repository root")?;
     let current = env::current_exe().ok();
-    let home = env::var_os("HOME").map(PathBuf::from);
+    let home = kerf_paths::home();
     editor_candidates(current.as_deref(), root, home.as_deref())
         .into_iter()
         .find(|path| path.is_file())
@@ -1802,7 +1802,7 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
             }
             prompt => {
                 // Its answer was printed as it streamed in.
-                let _ = run_prompt(session, prompt)?;
+                run_prompt(session, prompt)?;
                 println!();
             }
         }

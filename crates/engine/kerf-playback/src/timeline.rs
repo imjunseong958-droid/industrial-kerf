@@ -258,14 +258,6 @@ impl PlaybackTimeline {
         })
     }
 
-    pub fn video_at(&self, timeline_time: f64) -> Option<ResolvedClip> {
-        self.video_at_ref(timeline_time)
-            .map(|(clip, source)| ResolvedClip {
-                clip: clip.clone(),
-                source: source.clone(),
-            })
-    }
-
     pub fn audio_at(&self, timeline_time: f64) -> Vec<ResolvedClip> {
         self.clips
             .iter()
@@ -289,8 +281,7 @@ impl PlaybackTimeline {
     }
 
     /// Resolve the active video clip without cloning media metadata. Decoder
-    /// workers use this on every frame; the owned `video_at` API remains for
-    /// callers that need to retain the result.
+    /// workers use this on every frame.
     pub(crate) fn video_at_ref(
         &self,
         timeline_time: f64,

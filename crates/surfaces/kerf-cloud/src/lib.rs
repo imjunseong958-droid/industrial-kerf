@@ -10,7 +10,6 @@
 //! API key (Settings → Chat).
 
 use serde::{Deserialize, Serialize};
-use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,8 +32,7 @@ pub struct Store {
 
 impl Store {
     pub fn default_path() -> Option<PathBuf> {
-        home(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
-            .map(|home| home.join(".kerf/cloud.json"))
+        kerf_paths::user_dir().map(|folder| folder.join("cloud.json"))
     }
 
     /// The store at `path`; a missing or unreadable file is an empty store.
@@ -72,13 +70,6 @@ impl Store {
             .as_deref()
             .filter(|token| !token.trim().is_empty())
     }
-}
-
-/// The home folder: `HOME`, else, on Windows, which does not set it, `USERPROFILE`.
-fn home(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBuf> {
-    home.or(if cfg!(windows) { user_profile } else { None })
-        .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
 }
 
 #[cfg(unix)]
@@ -249,23 +240,6 @@ mod tests {
         let (url, server) = serve("401 Unauthorized", "{}");
         assert_eq!(fetch_account(&url, "old"), Err(CloudError::Unauthorized));
         server.join().unwrap();
-    }
-
-    #[test]
-    fn the_session_is_kept_in_the_home_folder_on_windows_too() {
-        let home_dir = || Some(OsString::from("/home/lim"));
-        let profile = || Some(OsString::from(r"C:\Users\lim"));
-        assert_eq!(
-            home(home_dir(), profile()),
-            Some(PathBuf::from("/home/lim"))
-        );
-        let without_home = home(None, profile());
-        if cfg!(windows) {
-            assert_eq!(without_home, Some(PathBuf::from(r"C:\Users\lim")));
-        } else {
-            assert_eq!(without_home, None);
-        }
-        assert_eq!(home(Some(OsString::new()), None), None);
     }
 
     #[test]

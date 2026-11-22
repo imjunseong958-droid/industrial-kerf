@@ -33,7 +33,7 @@ use std::time::Duration;
 // ------------------------------------------------------------ the composer
 
 #[test]
-fn the_composer_says_why_it_cannot_ask_in_qts_words() {
+fn the_composer_says_why_it_cannot_ask() {
     let no_folder = refusal(false, false, false, None).unwrap();
     assert_eq!(no_folder.placeholder, "Open a folder to ask Kerf");
     assert_eq!(no_folder.reason, "Open a folder or start a project first");
@@ -1262,7 +1262,7 @@ fn each_mode_chosen_takes_the_place_of_the_mode_said_last() {
         ]
     );
     let said = state.line_shown(StatusLine::Permissions).unwrap();
-    assert_eq!(said.hold, Some(MODE_HOLD), "Qt's 3 s");
+    assert_eq!(said.hold, Some(MODE_HOLD));
     assert_eq!(MODE_HOLD, Duration::from_millis(3000));
     // What the preview says is a line of its own: neither takes the other's place.
     state.apply(&preview("required"));

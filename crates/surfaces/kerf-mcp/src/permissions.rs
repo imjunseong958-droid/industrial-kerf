@@ -103,13 +103,7 @@ impl Permissions {
         let file = std::env::var_os("KERF_AGENT")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
-            .or_else(|| {
-                // Windows sets no HOME.
-                std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .filter(|home| !home.is_empty())
-                    .map(|home| PathBuf::from(home).join(".kerf").join("agent.json"))
-            })
+            .or_else(|| kerf_paths::user_dir().map(|folder| folder.join("agent.json")))
             .unwrap_or_else(|| PathBuf::from("agent.json"));
         let chosen = std::env::var_os(MODE_VARIABLE).filter(|name| !name.is_empty());
         Self::read(&file)?.in_mode(

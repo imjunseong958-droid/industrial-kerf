@@ -4,13 +4,10 @@ description = "Kerf's color science: transfer functions, log curves, gamuts, inp
 version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
-rust-version = "1.95"
+publish.workspace = true
 
 [lints]
 workspace = true
 
 [dependencies]
 serde = { workspace = true, features = ["derive", "rc"] }
-
-[dev-dependencies]
-proptest.workspace = true

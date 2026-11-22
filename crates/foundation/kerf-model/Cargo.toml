@@ -3,6 +3,7 @@ name = "kerf-model"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Exact-time editing kernel for Kerf: model, catalog, validation, and NLE operations"
 
 [dependencies]
