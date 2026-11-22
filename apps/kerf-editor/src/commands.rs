@@ -65,7 +65,8 @@ pub const NO_MASK_CLIP: &str = "Choose a picture clip to draw a mask on";
 /// Collaborate ▸ Switch Branch in the menu bar: the branches of the
 /// window in front other than the one it is on, and whether switching is
 /// held back now (as a sync is: kerfd away, project.kerf changed on disk,
-/// no repository). The window's sync chip sets it as it draws
+/// no repository). The window's sync chip sets it as git answers, as a
+/// sync begins or ends, and as its window comes to the front
 /// ([`set_menu_branches`]).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MenuBranches {

@@ -1,8 +1,8 @@
-//! The rule that keeps the editor's modules apart, read from their source: a module of `src/` may
-//! use modules of its own layer and the ones below it, never one above. The kit beneath the views
-//! stays generic (the app's own contexts and actions come to it as parameters), the data beneath
-//! the kit names no gpui, and only the assembly at the top sees every view. Every path counts,
-//! tests' included.
+//! The rule that keeps the editor's modules apart, read from their source: a module of `src/`,
+//! with the submodules in the folder of its name, may use modules of its own layer and the ones
+//! below it, never one above. The kit beneath the views stays generic (the app's own contexts
+//! and actions come to it as parameters), the data beneath the kit names no gpui, and only the
+//! assembly at the top sees every view. Every path counts, tests' included.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -35,19 +35,58 @@ fn layer(module: &str) -> Option<u8> {
 /// The layer whose modules are pure data, and so name no gpui.
 const PURE: u8 = 1;
 
-/// Every module of `src/` but lib.rs, by name, with its source.
-fn modules(src: &Path) -> std::io::Result<BTreeMap<String, String>> {
-    let mut found = BTreeMap::new();
-    for file in fs::read_dir(src)? {
-        let path = file?.path();
+/// One file of a module of `src/`: where it is under `src/`, its source, and how many modules
+/// below the module's own it is (0 for `x.rs`, 1 for `x/y.rs`, 2 for `x/y/z.rs`).
+struct File {
+    path: String,
+    source: String,
+    depth: usize,
+}
+
+/// Every module of `src/` but lib.rs, by name, with its files: its own, and those of the
+/// submodules in the folder of its name (`x/y.rs`, `x/y/z.rs`), which are of its layer.
+fn modules(src: &Path) -> std::io::Result<BTreeMap<String, Vec<File>>> {
+    let mut found: BTreeMap<String, Vec<File>> = BTreeMap::new();
+    for entry in fs::read_dir(src)? {
+        let path = entry?.path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if let Some(module) = name.strip_suffix(".rs").filter(|module| *module != "lib") {
-            found.insert(module.to_owned(), fs::read_to_string(&path)?);
+        if path.is_dir() {
+            let files = found.entry(name.to_owned()).or_default();
+            submodules(&path, name, 1, files)?;
+        } else if let Some(module) = name.strip_suffix(".rs").filter(|module| *module != "lib") {
+            found.entry(module.to_owned()).or_default().push(File {
+                path: name.to_owned(),
+                source: fs::read_to_string(&path)?,
+                depth: 0,
+            });
         }
     }
     Ok(found)
+}
+
+/// The files in `folder` (`at` under `src/`), `depth` modules below its module's own, and in
+/// the folders under it.
+fn submodules(folder: &Path, at: &str, depth: usize, files: &mut Vec<File>) -> std::io::Result<()> {
+    for entry in fs::read_dir(folder)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let under = format!("{at}/{name}");
+        if path.is_dir() {
+            submodules(&path, &under, depth + 1, files)?;
+        } else if name.ends_with(".rs") {
+            files.push(File {
+                // A folder's mod.rs is the module the folder is.
+                depth: if name == "mod.rs" { depth - 1 } else { depth },
+                path: under,
+                source: fs::read_to_string(&path)?,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// `source` with its comments and its string and character literals blanked, its newlines kept
@@ -155,9 +194,10 @@ fn is_word(c: char) -> bool {
 }
 
 /// The modules `code` names by path, each with the line it names it on: `crate::x`, `x` once for
-/// each name of `use crate::{x, ..}`, and what a `super::` that climbs out of the file names.
-/// `root` is the library's name in this file (`crate`, or `kerf_editor` in main.rs).
-fn uses(code: &str, root: &str) -> Vec<(String, usize)> {
+/// each name of `use crate::{x, ..}`, and what a `super::` that climbs out of the module (`depth`
+/// modules below it in its folder, 0 in its own file) names. `root` is the library's name in
+/// this file (`crate`, or `kerf_editor` in main.rs).
+fn uses(code: &str, root: &str, depth: usize) -> Vec<(String, usize)> {
     let text = code.as_bytes();
     let lines: Vec<usize> = code.match_indices('\n').map(|(at, _)| at).collect();
     let line = |at: usize| lines.partition_point(|&end| end < at) + 1;
@@ -197,11 +237,11 @@ fn uses(code: &str, root: &str) -> Vec<(String, usize)> {
             climbs += 1;
             end = skip_space(text, end + "super::".len());
         }
-        let depth = inline
+        let inside = inline
             .iter()
             .filter(|&&(open, close)| open < at && at < close)
             .count();
-        if climbs > depth {
+        if climbs > inside + depth {
             found.extend(named(text, end).into_iter().map(|m| (m, line(at))));
         }
     }
@@ -280,42 +320,44 @@ fn close_of(text: &[u8], open: usize) -> usize {
 }
 
 /// Every break of the rule, in words.
-fn violations(modules: &BTreeMap<String, String>) -> Vec<String> {
+fn violations(modules: &BTreeMap<String, Vec<File>>) -> Vec<String> {
     let mut found = Vec::new();
-    for (module, source) in modules {
+    for (module, files) in modules {
         let Some(from) = layer(module) else {
             found.push(format!(
                 "src/{module}.rs: `{module}` has no layer; give it one in tests/editor/layers.rs"
             ));
             continue;
         };
-        let code = code(source);
         let root = if module == "main" {
             "kerf_editor"
         } else {
             "crate"
         };
-        for (to, line) in uses(&code, root) {
-            match layer(&to) {
-                Some(up) if up > from => found.push(format!(
-                    "src/{module}.rs:{line}: {module} ({from}) may not use {to} ({up})"
-                )),
-                Some(_) => {}
-                // A module without a layer: its own line says so.
-                None if modules.contains_key(&to) => {}
-                None => found.push(format!(
-                    "src/{module}.rs:{line}: {module} names {root}::{to}, which is not a module"
-                )),
+        for file in files {
+            let (path, code) = (&file.path, code(&file.source));
+            for (to, line) in uses(&code, root, file.depth) {
+                match layer(&to) {
+                    Some(up) if up > from => found.push(format!(
+                        "src/{path}:{line}: {module} ({from}) may not use {to} ({up})"
+                    )),
+                    Some(_) => {}
+                    // A module without a layer: its own line says so.
+                    None if modules.contains_key(&to) => {}
+                    None => found.push(format!(
+                        "src/{path}:{line}: {module} names {root}::{to}, which is not a module"
+                    )),
+                }
             }
-        }
-        let gpui = code
-            .match_indices("gpui")
-            .find(|&(at, _)| alone(code.as_bytes(), at, 4));
-        if let (PURE, Some((at, _))) = (from, gpui) {
-            let line = code[..at].matches('\n').count() + 1;
-            found.push(format!(
-                "src/{module}.rs:{line}: {module} ({from}) names gpui; layer {PURE} is pure data"
-            ));
+            let gpui = code
+                .match_indices("gpui")
+                .find(|&(at, _)| alone(code.as_bytes(), at, 4));
+            if let (PURE, Some((at, _))) = (from, gpui) {
+                let line = code[..at].matches('\n').count() + 1;
+                found.push(format!(
+                    "src/{path}:{line}: {module} ({from}) names gpui; layer {PURE} is pure data"
+                ));
+            }
         }
     }
     found
