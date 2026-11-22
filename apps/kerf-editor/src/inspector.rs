@@ -33,7 +33,7 @@ use crate::ui;
 use choice::ChoiceMenu;
 use clip::{Field, Inspected};
 use effects::Adding;
-use fields::{Held, TextField};
+use fields::{TextField, TypedIn};
 use gpui::{
     div, prelude::*, px, AnyElement, Bounds, Context, Entity, FocusHandle, Focusable, MouseButton,
     Pixels, ScrollHandle, Subscription, Window,
@@ -62,7 +62,7 @@ pub struct InspectorView {
     pending: Option<Pending>,
     texts: HashMap<Field, TextField>,
     /// The field of words that had the keys as the inspector last drew.
-    held: Option<Held>,
+    typed_in: Option<TypedIn>,
     /// Where each slider's rail was drawn, left and width.
     rails: Rc<RefCell<HashMap<Field, (f32, f32)>>>,
     /// Groups opened or closed by hand.
@@ -112,7 +112,10 @@ impl InspectorView {
                     InputEvent::Changed => {}
                 },
             ),
-            cx.on_blur(&name_focus, window, |this, _, cx| this.commit_name(cx)),
+            cx.on_blur(&name_focus, window, |this, _, cx| {
+                this.left(&TypedIn::Name);
+                this.commit_name(cx);
+            }),
             cx.subscribe_in(
                 &number,
                 window,
@@ -140,7 +143,7 @@ impl InspectorView {
             drag: None,
             pending: None,
             texts: HashMap::new(),
-            held: None,
+            typed_in: None,
             rails: Rc::default(),
             groups: HashMap::new(),
             folded: HashSet::new(),

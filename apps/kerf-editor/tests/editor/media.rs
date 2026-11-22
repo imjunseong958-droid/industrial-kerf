@@ -1023,8 +1023,8 @@ fn kerfd() -> PathBuf {
     path
 }
 
-/// The Inspector in a window, beside somewhere else that takes the keys when it is pressed, as
-/// the timeline does.
+/// The Inspector in a window while a clip is chosen, as the workspace shows it, beside somewhere
+/// else that takes the keys when it is pressed, as the timeline does.
 struct Beside {
     session: Entity<Session>,
     inspector: Entity<InspectorView>,
@@ -1032,11 +1032,17 @@ struct Beside {
 }
 
 impl Render for Beside {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let chosen = !self.session.read(cx).selection.is_empty();
         div()
             .size_full()
             .flex()
-            .child(div().w(px(320.0)).h_full().child(self.inspector.clone()))
+            .child(
+                div()
+                    .w(px(320.0))
+                    .h_full()
+                    .children(chosen.then(|| self.inspector.clone())),
+            )
             .child(div().flex_1().h_full().track_focus(&self.elsewhere))
     }
 }
@@ -1068,6 +1074,10 @@ fn timeline_clip<'a>(session: &'a Session, id: &str) -> Option<&'a Clip> {
         .find(|clip| clip.id == id)
 }
 
+fn name_of<'a>(session: &'a Session, clip: &str) -> Option<&'a str> {
+    timeline_clip(session, clip).and_then(|clip| clip.name.as_deref())
+}
+
 fn prop_of(session: &Session, clip: &str, prop: &str) -> Option<Value> {
     timeline_clip(session, clip).and_then(|clip| clip.props.get(prop).cloned())
 }
@@ -1080,9 +1090,9 @@ fn choose_clip(cx: &mut VisualTestContext, session: &Entity<Session>, id: &str) 
     cx.run_until_parked();
 }
 
-/// Typed into a field, then typed over with `text`, as Ctrl+A then typing does.
+/// What a field holds, typed over with `text`, as Select All then typing does.
 fn type_over(cx: &mut VisualTestContext, text: &str) {
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes("secondary-a");
     cx.simulate_input(text);
 }
 
@@ -1133,7 +1143,7 @@ fn leaving_an_inspector_field_by_tab_or_a_press_elsewhere_sends_what_was_typed(
     type_over(cx, "Opening");
     cx.simulate_keystrokes("tab");
     run_until(cx, &session, "the name typed", |session| {
-        timeline_clip(session, "title").and_then(|clip| clip.name.as_deref()) == Some("Opening")
+        name_of(session, "title") == Some("Opening")
     });
     // Tab went on to the title's text, left by a press elsewhere.
     type_over(cx, "Sunrise");
@@ -1172,10 +1182,51 @@ fn leaving_an_inspector_field_by_tab_or_a_press_elsewhere_sends_what_was_typed(
         cx,
         &session,
         "the name typed before another clip",
-        |session| {
-            timeline_clip(session, "solid").and_then(|clip| clip.name.as_deref()) == Some("Red")
-        },
+        |session| name_of(session, "solid") == Some("Red"),
     );
+    session.read_with(cx, |session, _| {
+        assert_eq!(name_of(session, "title"), Some("Opening"));
+    });
+    // The title's name, left as the Inspector goes (a press on an empty lane chooses nothing): it
+    // is sent as it is left, and an Undo of it made meanwhile stays undone as the title is chosen
+    // again. kerfd takes edits in order, so the text sent by Return after that comes after any
+    // name sent again.
+    cx.update(|window, _| {
+        window.focus(&elsewhere);
+        window.focus_next();
+    });
+    type_over(cx, "Closing");
+    cx.update(|window, cx| {
+        window.focus(&elsewhere);
+        session.update(cx, |session, cx| {
+            session.selection.clear();
+            cx.notify();
+        });
+    });
+    run_until(
+        cx,
+        &session,
+        "the name typed as the Inspector went",
+        |session| name_of(session, "title") == Some("Closing"),
+    );
+    session.update(cx, |session, _| session.undo());
+    run_until(cx, &session, "the name undone", |session| {
+        name_of(session, "title") == Some("Opening")
+    });
+    choose_clip(cx, &session, "title");
+    cx.update(|window, _| {
+        window.focus(&elsewhere);
+        window.focus_next();
+    });
+    cx.simulate_keystrokes("tab");
+    type_over(cx, "Dusk");
+    cx.simulate_keystrokes("enter");
+    run_until(cx, &session, "the text sent by Return", |session| {
+        prop_of(session, "title", "text") == Some(json!("Dusk"))
+    });
+    session.read_with(cx, |session, _| {
+        assert_eq!(name_of(session, "title"), Some("Opening"));
+    });
 }
 
 // ---------------------------------------------------------------- the master output
