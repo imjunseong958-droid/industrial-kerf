@@ -121,11 +121,11 @@ fn what_the_catalog_sends_to_the_cpu() {
             Err(error) => unread.push(format!("{}: {error}", look.id)),
         }
         for line in &look.lines {
-            if let Line::Fx { fx, .. } = line {
-                if on_cpu.contains_key(fx.as_str()) {
-                    let entry = reached.entry(fx.to_string()).or_default();
-                    if grade { &mut entry.1 } else { &mut entry.0 }.push(look.id.to_string());
-                }
+            if let Line::Fx { fx, .. } = line
+                && on_cpu.contains_key(fx.as_str())
+            {
+                let entry = reached.entry(fx.to_string()).or_default();
+                if grade { &mut entry.1 } else { &mut entry.0 }.push(look.id.to_string());
             }
         }
     }

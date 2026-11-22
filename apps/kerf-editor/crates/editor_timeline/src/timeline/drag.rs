@@ -179,13 +179,12 @@ impl ClipDrag {
         let frames = match self.edit {
             Edit::Move => {
                 let mut at = start + delta;
-                if snap {
-                    if let Some((target, shift)) =
+                if snap
+                    && let Some((target, shift)) =
                         nearest(&self.targets, &[at, at + (end - start)], threshold)
-                    {
-                        at += shift;
-                        self.snapped = Some(target);
-                    }
+                {
+                    at += shift;
+                    self.snapped = Some(target);
                 }
                 (at * fps).round() as i64 - self.start_frame
             }
@@ -196,11 +195,9 @@ impl ClipDrag {
                     end
                 };
                 let mut at = edge + delta;
-                if snap {
-                    if let Some((target, shift)) = nearest(&self.targets, &[at], threshold) {
-                        at += shift;
-                        self.snapped = Some(target);
-                    }
+                if snap && let Some((target, shift)) = nearest(&self.targets, &[at], threshold) {
+                    at += shift;
+                    self.snapped = Some(target);
                 }
                 (at * fps).round() as i64 - (edge * fps).round() as i64
             }

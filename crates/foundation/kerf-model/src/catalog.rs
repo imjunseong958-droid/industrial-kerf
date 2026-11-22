@@ -537,17 +537,16 @@ impl Catalog {
         if self.fx.contains_key(&def.id) {
             return Err(format!("`{}` is already defined", def.id));
         }
-        if def.kind == FxKind::Generator {
-            if let Some(clash) = def
+        if def.kind == FxKind::Generator
+            && let Some(clash) = def
                 .params
                 .iter()
                 .find(|param| self.prop(def.domain, &param.name).is_some())
-            {
-                return Err(format!(
-                    "generator `{}` parameter `{}` clashes with a clip property",
-                    def.id, clash.name
-                ));
-            }
+        {
+            return Err(format!(
+                "generator `{}` parameter `{}` clashes with a clip property",
+                def.id, clash.name
+            ));
         }
         self.fx.insert(def.id.clone(), def);
         Ok(())

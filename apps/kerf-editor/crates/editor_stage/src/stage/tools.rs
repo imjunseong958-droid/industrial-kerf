@@ -253,10 +253,10 @@ impl StageView {
         let mut taken = overlay::clip_in(&self.program, clip)
             .map(|(data, _)| overlay::mask_names(data))
             .unwrap_or_default();
-        if let Some((Drag::Added { clip: held, mask }, _, _)) = &self.held {
-            if held == clip {
-                taken.push(mask.name.clone());
-            }
+        if let Some((Drag::Added { clip: held, mask }, _, _)) = &self.held
+            && held == clip
+        {
+            taken.push(mask.name.clone());
         }
         let name = overlay::new_mask_name(&taken);
         let op = overlay::mask_add(clip, &name, &outline);

@@ -783,14 +783,13 @@ pub(crate) fn contrast(
         // Between the moments read, where a box says so, one more frame of glyphs tells.
         if let (None, Some(first), Some(last)) = (cut, moments.first(), moments.last()) {
             let frame = (f64::from(sequence.width), f64::from(sequence.height));
-            if let Some(moment) = furthest_past(item, sequence, (*first, *last), frame) {
-                if let (Some(glyphs), Some(bounds)) =
+            if let Some(moment) = furthest_past(item, sequence, (*first, *last), frame)
+                && let (Some(glyphs), Some(bounds)) =
                     (draw(&alone, moment), item.bounds(sequence, moment))
-                {
-                    let scale = f64::from(glyphs.1) / f64::from(sequence.height.max(1));
-                    if cut_by_frame(&glyphs, bounds, scale) {
-                        cut = Some(moment);
-                    }
+            {
+                let scale = f64::from(glyphs.1) / f64::from(sequence.height.max(1));
+                if cut_by_frame(&glyphs, bounds, scale) {
+                    cut = Some(moment);
                 }
             }
         }

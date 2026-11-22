@@ -115,12 +115,13 @@ impl StageView {
             (Some(_), None) => true,
             _ => false,
         };
-        if new_frame && !motion::reduced() {
-            if let Some(from) = self.wipe_armed.take() {
-                // It is done once it has crossed the picture (`end_wipe`).
-                if let Some((old, _)) = self.wipe.replace((from, Instant::now())) {
-                    self.retire(old);
-                }
+        if new_frame
+            && !motion::reduced()
+            && let Some(from) = self.wipe_armed.take()
+        {
+            // It is done once it has crossed the picture (`end_wipe`).
+            if let Some((old, _)) = self.wipe.replace((from, Instant::now())) {
+                self.retire(old);
             }
         }
         if frame.is_some() {

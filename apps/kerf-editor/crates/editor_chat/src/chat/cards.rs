@@ -811,7 +811,7 @@ fn change_rows(
     rows: Vec<(String, String, String)>,
     colour: Option<(String, String)>,
     changes_key: &str,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     div()
         .flex()
         .flex_col()
@@ -858,7 +858,7 @@ fn change_rows(
 /// A proposal's changed lines, its additions sage and removals brick;
 /// they can be chosen and copied as the conversation's words can, one line
 /// after another.
-fn diff(lines: &[String], id: &str, shared: &selectable::Shared) -> impl IntoElement {
+fn diff(lines: &[String], id: &str, shared: &selectable::Shared) -> impl IntoElement + use<> {
     let run: SharedString = format!("diff-{id}").into();
     div()
         .id(ElementId::Name(format!("diff-{id}").into()))

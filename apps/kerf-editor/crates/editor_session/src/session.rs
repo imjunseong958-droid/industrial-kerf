@@ -540,10 +540,10 @@ impl Session {
         let Some(due) = self.next_due() else {
             return;
         };
-        if self.pump_due.is_none_or(|waits| due < waits) {
-            if let Some(wake) = &self.wake {
-                wake.ring();
-            }
+        if self.pump_due.is_none_or(|waits| due < waits)
+            && let Some(wake) = &self.wake
+        {
+            wake.ring();
         }
     }
 
@@ -605,13 +605,13 @@ impl Session {
                 Change::Preview => {
                     // A picture that needs a render shows none until it is
                     // rendered, so an older frame is not taken for it.
-                    if let Event::Preview(preview) = &*event {
-                        if matches!(
+                    if let Event::Preview(preview) = &*event
+                        && matches!(
                             preview.status,
                             PreviewStatus::Required | PreviewStatus::Unavailable
-                        ) {
-                            self.drop_picture(window, cx);
-                        }
+                        )
+                    {
+                        self.drop_picture(window, cx);
                     }
                     self.cut_rendered();
                 }
@@ -684,11 +684,11 @@ impl Session {
         if self.artwork.take_changed() {
             changed = true;
         }
-        if let Some(frame) = frame {
-            if self.show_frame(frame, window, cx) {
-                cx.emit(Change::Clock);
-                ticked = true;
-            }
+        if let Some(frame) = frame
+            && self.show_frame(frame, window, cx)
+        {
+            cx.emit(Change::Clock);
+            ticked = true;
         }
         if self
             .state
@@ -1643,20 +1643,20 @@ impl Session {
     pub fn set_mark_in(&mut self, at: Option<f64>) {
         self.wrapped = false;
         self.mark_in = at;
-        if let (Some(start), Some(end)) = (self.mark_in, self.mark_out) {
-            if end <= start {
-                self.mark_out = None;
-            }
+        if let (Some(start), Some(end)) = (self.mark_in, self.mark_out)
+            && end <= start
+        {
+            self.mark_out = None;
         }
     }
 
     pub fn set_mark_out(&mut self, at: Option<f64>) {
         self.wrapped = false;
         self.mark_out = at;
-        if let (Some(start), Some(end)) = (self.mark_in, self.mark_out) {
-            if end <= start {
-                self.mark_in = None;
-            }
+        if let (Some(start), Some(end)) = (self.mark_in, self.mark_out)
+            && end <= start
+        {
+            self.mark_in = None;
         }
     }
 

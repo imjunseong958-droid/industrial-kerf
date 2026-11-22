@@ -149,7 +149,7 @@ impl SidebarView {
         state: RowState,
         now: i64,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let session = self.session.read(cx);
         let chosen = session.conversation.as_deref() == Some(conversation.id.as_str());
         let working = state == RowState::Working;

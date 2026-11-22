@@ -154,7 +154,11 @@ impl LauncherView {
 
     /// The recent projects, under their heading; none yet, a line that says
     /// where they come from.
-    pub(super) fn recent_list(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn recent_list(
+        &self,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let idle = self.busy.is_none();
         let keyed = self
             .handle(Stop::Recent)
@@ -198,7 +202,7 @@ impl LauncherView {
     }
 
     /// "Recent", and Clear while there are any.
-    fn recent_head(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    fn recent_head(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .flex()
             .items_center()
@@ -232,7 +236,7 @@ impl LauncherView {
         chosen: bool,
         idle: bool,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let ink = if recent.exists {
             theme::ink()
         } else {

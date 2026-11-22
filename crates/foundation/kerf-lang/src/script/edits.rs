@@ -100,15 +100,14 @@ impl Script<'_> {
             .collect();
         let mut props: Vec<Params> = vec![Params::new(); tracks.len()];
         for (key, arg) in fields.rest() {
-            if let Content::Generator { fx, params, .. } = &mut content {
-                if let Some(def) = self.catalog.fx(fx.as_str()).and_then(|d| d.find(key)) {
-                    params.insert(
-                        key.to_owned(),
-                        parse_param(&arg.value, def, clock.rate)
-                            .map_err(|m| fields.error(arg, m))?,
-                    );
-                    continue;
-                }
+            if let Content::Generator { fx, params, .. } = &mut content
+                && let Some(def) = self.catalog.fx(fx.as_str()).and_then(|d| d.find(key))
+            {
+                params.insert(
+                    key.to_owned(),
+                    parse_param(&arg.value, def, clock.rate).map_err(|m| fields.error(arg, m))?,
+                );
+                continue;
             }
             let mut accepted = false;
             for (target, domain) in props.iter_mut().zip(&domains) {

@@ -827,10 +827,10 @@ fn normalize_tool_result(mut value: Value) -> Result<Value, String> {
     }
     let mut total = 0usize;
     let mut blocks = Vec::new();
-    if let Some(text) = value.get("text").and_then(Value::as_str) {
-        if !text.is_empty() {
-            blocks.push(json!({"type": "text", "text": text}));
-        }
+    if let Some(text) = value.get("text").and_then(Value::as_str)
+        && !text.is_empty()
+    {
+        blocks.push(json!({"type": "text", "text": text}));
     }
     if let Some(metadata) = value.get("metadata") {
         blocks.push(json!({
@@ -982,10 +982,9 @@ fn collect_inline_images(
             if let (Some(before), Some(after)) = (
                 keys.iter().position(|key| key == "before"),
                 keys.iter().position(|key| key == "after"),
-            ) {
-                if after < before {
-                    keys.swap(before, after);
-                }
+            ) && after < before
+            {
+                keys.swap(before, after);
             }
             for key in keys {
                 let length = path.len();

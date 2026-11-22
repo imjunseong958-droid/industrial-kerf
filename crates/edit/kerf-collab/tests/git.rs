@@ -4,25 +4,29 @@
 use kerf_collab::git;
 use kerf_collab::scaffold::{self, NewProject, Template};
 use kerf_model::Catalog;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Once;
+use std::sync::OnceLock;
 
-/// Keep the person's global git configuration (signing, hooks, templates)
-/// and ssh setup out of the tests. An `ssh` that prints how it was run and
-/// fails stands in for the real one, so no test reaches the network.
-fn hermetic() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
+/// What the tests give git, which keeps the person's global git configuration
+/// (signing, hooks, templates) and ssh setup out of them. An `ssh` that prints
+/// how it was run and fails stands in for the real one, so no test reaches
+/// the network.
+fn hermetic_env() -> &'static [(&'static str, Option<OsString>)] {
+    static ENV: OnceLock<Vec<(&'static str, Option<OsString>)>> = OnceLock::new();
+    ENV.get_or_init(|| {
         let empty = std::env::temp_dir().join("kerf-collab-empty-gitconfig");
         fs::write(&empty, "").unwrap();
-        std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-        std::env::set_var("GIT_AUTHOR_NAME", "Test");
-        std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
-        std::env::set_var("GIT_COMMITTER_NAME", "Test");
-        std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
+        let mut env = vec![
+            ("GIT_CONFIG_GLOBAL", Some(empty.into_os_string())),
+            ("GIT_CONFIG_NOSYSTEM", Some("1".into())),
+            ("GIT_AUTHOR_NAME", Some("Test".into())),
+            ("GIT_AUTHOR_EMAIL", Some("test@example.com".into())),
+            ("GIT_COMMITTER_NAME", Some("Test".into())),
+            ("GIT_COMMITTER_EMAIL", Some("test@example.com".into())),
+        ];
         for name in [
             "GIT_SSH",
             "GIT_SSH_COMMAND",
@@ -30,14 +34,28 @@ fn hermetic() {
             "GIT_HTTP_LOW_SPEED_TIME",
             git::INTERACTIVE_ENV,
         ] {
-            std::env::remove_var(name);
+            env.push((name, None));
         }
-        install_fake_ssh();
-    });
+        if let Some(path) = path_with_fake_ssh() {
+            env.push(("PATH", Some(path)));
+        }
+        env
+    })
 }
 
+/// Give the git the code under test runs [`hermetic_env`].
+fn hermetic() {
+    for (name, value) in hermetic_env() {
+        match value {
+            Some(value) => git::set_env(*name, value),
+            None => git::remove_env(*name),
+        }
+    }
+}
+
+/// `PATH` with a folder holding the stand-in `ssh` first.
 #[cfg(unix)]
-fn install_fake_ssh() {
+fn path_with_fake_ssh() -> Option<OsString> {
     use std::os::unix::fs::PermissionsExt;
     let bin = std::env::temp_dir().join(format!("kerf-collab-fake-ssh-{}", std::process::id()));
     fs::create_dir_all(&bin).unwrap();
@@ -50,23 +68,27 @@ fn install_fake_ssh() {
     fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
     let path = std::env::var_os("PATH").unwrap_or_default();
     let paths = std::iter::once(bin).chain(std::env::split_paths(&path));
-    std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
+    Some(std::env::join_paths(paths).unwrap())
 }
 
 #[cfg(not(unix))]
-fn install_fake_ssh() {}
+fn path_with_fake_ssh() -> Option<OsString> {
+    None
+}
 
 fn sparse_file(path: &Path, len: u64) {
     fs::File::create(path).unwrap().set_len(len).unwrap();
 }
 
 fn sh(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap();
+    let mut command = Command::new("git");
+    for (name, value) in hermetic_env() {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    let out = command.arg("-C").arg(dir).args(args).output().unwrap();
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -431,7 +453,14 @@ fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
     )
     .unwrap();
     // A collaborator without Git LFS: the attribute says lfs, no filter runs.
-    let _ = Command::new("git")
+    let mut command = Command::new("git");
+    for (name, value) in hermetic_env() {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    let _ = command
         .arg("-C")
         .arg(&team.alice)
         .args(["config", "--local", "--remove-section", "filter.lfs"])

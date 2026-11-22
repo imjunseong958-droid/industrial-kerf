@@ -102,11 +102,11 @@ pub(crate) fn media_worker(rx: Receiver<Command>, tx: Outbox, shared: Arc<Shared
         // What waits in the slot becomes what is shown with the slot held,
         // so `preview_exit` finds a preview in one place or the other.
         let taken = take_waiting(&shared);
-        if let Some((project, rendered, shown_proposal, old)) = taken {
-            if !player.show(project, rendered, shown_proposal, old, &tx, &shared) {
-                thread::sleep(Duration::from_millis(4));
-                continue;
-            }
+        if let Some((project, rendered, shown_proposal, old)) = taken
+            && !player.show(project, rendered, shown_proposal, old, &tx, &shared)
+        {
+            thread::sleep(Duration::from_millis(4));
+            continue;
         }
         player.follow(&tx, &shared);
         meter.tick(

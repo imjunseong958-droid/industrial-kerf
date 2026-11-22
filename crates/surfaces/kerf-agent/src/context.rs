@@ -296,15 +296,15 @@ fn show(message: &Value, index: usize, view: &View, budget: &ContextBudget) -> V
     } else {
         project_message(message, index, recent, budget)
     };
-    if index < view.thinking_from {
-        if let Some(blocks) = message["content"].as_array_mut() {
-            blocks.retain(|block| {
-                !matches!(
-                    block["type"].as_str(),
-                    Some("thinking" | "redacted_thinking")
-                )
-            });
-        }
+    if index < view.thinking_from
+        && let Some(blocks) = message["content"].as_array_mut()
+    {
+        blocks.retain(|block| {
+            !matches!(
+                block["type"].as_str(),
+                Some("thinking" | "redacted_thinking")
+            )
+        });
     }
     message
 }

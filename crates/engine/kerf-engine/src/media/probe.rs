@@ -271,10 +271,10 @@ pub fn parse_ffprobe_json(stdout: &str) -> Result<ProbeInfo> {
         has_audio: Some(audio.is_some()),
         ..ProbeInfo::default()
     };
-    if let Some(duration) = parsed.format.and_then(|format| format.duration) {
-        if let Ok(value) = duration.parse::<f64>() {
-            result.duration = Some(value);
-        }
+    if let Some(duration) = parsed.format.and_then(|format| format.duration)
+        && let Ok(value) = duration.parse::<f64>()
+    {
+        result.duration = Some(value);
     }
     if let Some(video) = video {
         result.width = video.width;
@@ -337,10 +337,10 @@ pub fn parse_scene_times(stderr: &str) -> Vec<SceneRange> {
             pending_time = capture.get(1).and_then(|value| value.as_str().parse().ok());
             continue;
         }
-        if SCENE_SCORE_RE.is_match(line) {
-            if let Some(time) = pending_time.take() {
-                cuts.push(time);
-            }
+        if SCENE_SCORE_RE.is_match(line)
+            && let Some(time) = pending_time.take()
+        {
+            cuts.push(time);
         }
     }
     cuts.iter()
@@ -374,10 +374,11 @@ pub fn info(src: &str) -> Result<ProbeInfo> {
         let cache = probe_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(entry) = cache.get(src) {
-            if entry.len == len && entry.modified == modified {
-                return Ok(entry.info.clone());
-            }
+        if let Some(entry) = cache.get(src)
+            && entry.len == len
+            && entry.modified == modified
+        {
+            return Ok(entry.info.clone());
         }
     }
     let output = run(
@@ -674,10 +675,11 @@ pub fn media_info(src: &str) -> Result<MediaInfo> {
         let cache = media_info_cache()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(entry) = cache.get(src) {
-            if entry.len == len && entry.modified == modified {
-                return Ok(entry.info.clone());
-            }
+        if let Some(entry) = cache.get(src)
+            && entry.len == len
+            && entry.modified == modified
+        {
+            return Ok(entry.info.clone());
         }
     }
     let output = run(
@@ -1021,26 +1023,28 @@ pub fn create_labelled_contact_sheet(
     let mut labelled = String::new();
     // The folder ffmpeg runs in when it draws labels: the font's.
     let mut beside = None;
-    if labels.len() == frame_paths.len() && font.is_file() && draws_text() {
-        if let (Some(name), Some(folder)) = (font.file_name(), font.parent()) {
-            // The font by its name alone, read from its folder. `drawtext` cannot be
-            // given every path: a filter's quotes hold no apostrophe, and on Windows it
-            // opens the font in the system's code page, where a folder named in hangul
-            // is not found.
-            if !folder.as_os_str().is_empty() {
-                pattern = std::path::absolute(&pattern)?;
-                output = std::path::absolute(&output)?;
-                beside = Some(folder);
-            }
-            let font = filter_text(&name.to_string_lossy());
-            for (index, label) in labels.iter().enumerate() {
-                labelled.push_str(&format!(
-                    "drawtext=fontfile='{font}':text='{}':enable='eq(n\\,{index})':x=w/40:\
+    if labels.len() == frame_paths.len()
+        && font.is_file()
+        && draws_text()
+        && let (Some(name), Some(folder)) = (font.file_name(), font.parent())
+    {
+        // The font by its name alone, read from its folder. `drawtext` cannot be
+        // given every path: a filter's quotes hold no apostrophe, and on Windows it
+        // opens the font in the system's code page, where a folder named in hangul
+        // is not found.
+        if !folder.as_os_str().is_empty() {
+            pattern = std::path::absolute(&pattern)?;
+            output = std::path::absolute(&output)?;
+            beside = Some(folder);
+        }
+        let font = filter_text(&name.to_string_lossy());
+        for (index, label) in labels.iter().enumerate() {
+            labelled.push_str(&format!(
+                "drawtext=fontfile='{font}':text='{}':enable='eq(n\\,{index})':x=w/40:\
                      y=w/40:fontsize=h/11:fontcolor=white:box=1:boxcolor=black@0.6:\
                      boxborderw=6,",
-                    filter_text(label)
-                ));
-            }
+                filter_text(label)
+            ));
         }
     }
     let args = vec![

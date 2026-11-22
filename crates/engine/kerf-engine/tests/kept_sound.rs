@@ -9,11 +9,12 @@
 //!   from the whole render's than AAC is from itself: than a whole encode of the same sound
 //!   that falls elsewhere among AAC's frames, which the render before a ripple edit is.
 //!
-//! The only test of this file, since it sets where renders keep things for the whole process.
+//! The only test of this file, since renders are counted for the whole process
+//! (`section_stats`).
 
 use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
 use kerf_engine::render::sections::{section_stats, SectionStats};
-use kerf_engine::render::{render_program, RenderOptions, RenderPreset};
+use kerf_engine::render::{render_program, CacheFolder, RenderOptions, RenderPreset};
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};
 use std::path::Path;
@@ -28,7 +29,8 @@ const CLIP_FRAMES: usize = 90;
 const CLIP: usize = 144_144;
 const CLIPS: usize = 30;
 
-fn render(project: &Project, out: &Path, options: RenderOptions) {
+/// `project` rendered to `out` as `options` say, with no frames kept.
+fn render_as(project: &Project, out: &Path, options: RenderOptions) {
     render_program::<fn(f64)>(
         project,
         None,
@@ -36,6 +38,7 @@ fn render(project: &Project, out: &Path, options: RenderOptions) {
         &RenderOptions {
             output: out.to_string_lossy().into_owned(),
             force_software: true,
+            frame_cache: CacheFolder::Off,
             ..options
         },
         None,
@@ -43,15 +46,31 @@ fn render(project: &Project, out: &Path, options: RenderOptions) {
     .unwrap_or_else(|error| panic!("{}: {error}", out.display()));
 }
 
+/// `project` rendered to `out` as `options` say, keeping stretches in `sections`.
+fn render(project: &Project, out: &Path, sections: &Path, options: RenderOptions) {
+    render_as(
+        project,
+        out,
+        RenderOptions {
+            section_cache: CacheFolder::At(sections.to_owned()),
+            ..options
+        },
+    );
+}
+
 /// The same render with nothing kept and nothing read back: one encoder for the picture and
 /// one for the sound, as before any of it was kept.
 fn render_whole(project: &Project, out: &Path, options: RenderOptions) {
-    let kept = std::env::var_os("KERF_SECTION_CACHE").expect("the test keeps stretches");
-    std::env::set_var("KERF_SECTION_CACHE", "off");
     let before = section_stats();
-    render(project, out, options);
+    render_as(
+        project,
+        out,
+        RenderOptions {
+            section_cache: CacheFolder::Off,
+            ..options
+        },
+    );
     assert_eq!(section_stats(), before, "a whole render keeps nothing");
-    std::env::set_var("KERF_SECTION_CACHE", kept);
 }
 
 fn run(program: &str, args: &[&str]) -> Vec<u8> {
@@ -203,7 +222,6 @@ fn since(before: SectionStats) -> SectionStats {
 #[test]
 fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from_itself() {
     let dir = tempfile::tempdir().expect("a folder");
-    std::env::set_var("KERF_FRAME_CACHE", "off");
     let source = dir.path().join("source.mp4");
     // Notes that start and stop, tones that slide, a hiss, and bursts of noise, another in each
     // channel: more than an encoder has bits for, so that two encoders differ, and with attacks
@@ -257,7 +275,7 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
             .unwrap_or_else(|error| panic!("{edit}: {error:?}"))
             .project
     };
-    std::env::set_var("KERF_SECTION_CACHE", dir.path().join("sections"));
+    let kept_in = dir.path().join("sections");
 
     // ---- Not encoded: the master's PCM, mixed from the clips' kept sound. ----
     // Eleven seconds on two tracks, at frames that are no whole number of samples, one clip
@@ -282,7 +300,7 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
     };
     render_whole(&short, &file("master-whole.mov"), master());
     let before = section_stats();
-    render(&short, &file("master.mov"), master());
+    render(&short, &file("master.mov"), &kept_in, master());
     let did = since(before);
     assert_eq!(
         (
@@ -317,7 +335,7 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
     let quieter = edited(&short, "set a1 gain=-6");
     render_whole(&quieter, &file("quieter-whole.mov"), master());
     let before = section_stats();
-    render(&quieter, &file("quieter.mov"), master());
+    render(&quieter, &file("quieter.mov"), &kept_in, master());
     let did = since(before);
     assert_eq!(
         (
@@ -360,7 +378,7 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
     // The first time, the picture is all to draw, so one encoder makes the sound from its
     // start as a whole render's does: the same sound, kept as four pieces.
     let before = section_stats();
-    render(&long, &file("first.mp4"), standard());
+    render(&long, &file("first.mp4"), &kept_in, standard());
     let did = since(before);
     assert_eq!(
         (
@@ -389,9 +407,9 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
         let cut = edited(&long, &format!("ripple-delete c{clip}"));
         let out = |kind: &str| file(&format!("{name}-{kind}.mp4"));
         render_whole(&cut, &out("whole"), standard());
-        render(&cut, &out("silent"), silent());
+        render(&cut, &out("silent"), &kept_in, silent());
         let before = section_stats();
-        render(&cut, &out("kept"), standard());
+        render(&cut, &out("kept"), &kept_in, standard());
         let did = since(before);
         assert_eq!(
             (
@@ -474,7 +492,7 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
         }
         // Again, unchanged: the sound is copied as it was kept.
         let before = section_stats();
-        render(&cut, &out("again"), standard());
+        render(&cut, &out("again"), &kept_in, standard());
         let did = since(before);
         assert_eq!((did.sound_kept, did.sound_mixed), (1, 0), "{name}: {did:?}");
         assert!(
@@ -488,7 +506,7 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
     let quieter = edited(&long, "set a14 gain=-6");
     render_whole(&quieter, &file("gain-whole.mp4"), standard());
     let before = section_stats();
-    render(&quieter, &file("gain.mp4"), standard());
+    render(&quieter, &file("gain.mp4"), &kept_in, standard());
     let did = since(before);
     assert_eq!(
         (
@@ -558,13 +576,14 @@ fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from
     render(
         &quieter,
         &file("review-silent.mp4"),
+        &kept_in,
         RenderOptions {
             sound: false,
             ..review()
         },
     );
     let before = section_stats();
-    render(&quieter, &file("review.mp4"), review());
+    render(&quieter, &file("review.mp4"), &kept_in, review());
     let did = since(before);
     assert_eq!(
         (

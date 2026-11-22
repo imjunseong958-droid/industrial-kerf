@@ -44,7 +44,7 @@ impl SidebarView {
         &self,
         project: String,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let open = self.menu_is(&SidebarMenu::Folder);
         let heading = Self::keyed(
             ui::capture_trigger(

@@ -236,20 +236,21 @@ pub fn proxy_ffmpeg_args(
             "scale={w}:{h}:force_original_aspect_ratio=decrease"
         ));
     }
-    if let Some(fps) = settings.fps {
-        if fps.is_finite() && fps > 0.0 {
-            args.push("-r".into());
-            args.push(fps.to_string());
-        }
+    if let Some(fps) = settings.fps
+        && fps.is_finite()
+        && fps > 0.0
+    {
+        args.push("-r".into());
+        args.push(fps.to_string());
     }
     args.extend(proxy_video_codec_args(settings)?);
     args.push("-c:a".into());
     args.push(settings.audio_codec.clone().unwrap_or_else(|| "aac".into()));
-    if let Some(pixel) = &settings.pixel_format {
-        if !pixel.is_empty() {
-            args.push("-pix_fmt".into());
-            args.push(pixel.clone());
-        }
+    if let Some(pixel) = &settings.pixel_format
+        && !pixel.is_empty()
+    {
+        args.push("-pix_fmt".into());
+        args.push(pixel.clone());
     }
     let format = settings
         .format

@@ -169,10 +169,10 @@ fn measured(
             &json!({"version": 1, "rate": RATE, "width": WIDTH}),
         )
         .map_err(|error| error.to_string())?;
-    if entry.is_complete(&["facts.json"]) {
-        if let Ok(kept) = entry.read_json("facts.json") {
-            return Ok(kept);
-        }
+    if entry.is_complete(&["facts.json"])
+        && let Ok(kept) = entry.read_json("facts.json")
+    {
+        return Ok(kept);
     }
     let found = measure(src, media, index)?;
     entry

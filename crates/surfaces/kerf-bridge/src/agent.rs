@@ -224,22 +224,23 @@ pub(crate) fn agent_worker(
         // A kept session that no longer goes on (Claude Code forgot it, or its
         // transcript would not run): the conversation starts its agent afresh,
         // hearing what was said, once, if nothing of the turn was heard yet.
-        if let (Err(err), Some(id)) = (&result, &conversation) {
-            if err.starts_with(RESTORED_FAILED) && !turn_events.heard {
-                sessions.forget(id);
-                result = sessions
-                    .get(id, &request.settings, open)
-                    .and_then(|(current, opened)| {
-                        run_turn(
-                            current,
-                            opened,
-                            &request,
-                            earlier.as_deref(),
-                            &shared,
-                            &mut turn_events,
-                        )
-                    });
-            }
+        if let (Err(err), Some(id)) = (&result, &conversation)
+            && err.starts_with(RESTORED_FAILED)
+            && !turn_events.heard
+        {
+            sessions.forget(id);
+            result = sessions
+                .get(id, &request.settings, open)
+                .and_then(|(current, opened)| {
+                    run_turn(
+                        current,
+                        opened,
+                        &request,
+                        earlier.as_deref(),
+                        &shared,
+                        &mut turn_events,
+                    )
+                });
         }
         let result = result.map_err(|err| {
             err.strip_prefix(RESTORED_FAILED)

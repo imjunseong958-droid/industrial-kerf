@@ -629,8 +629,8 @@ fn proposal_meta(record: &ProposalRecord) -> ProposalMeta {
         versions: Vec::new(),
         staged: None,
     });
-    if meta.versions.is_empty() {
-        if let PendingProposal::Pending {
+    if meta.versions.is_empty()
+        && let PendingProposal::Pending {
             proposal_id,
             base_revision,
             script,
@@ -638,16 +638,15 @@ fn proposal_meta(record: &ProposalRecord) -> ProposalMeta {
             document_diff,
             ..
         } = &record.lifecycle
-        {
-            meta.versions.push(ProposalVersion {
-                version: meta.version,
-                proposal_id: proposal_id.clone(),
-                base_revision: *base_revision,
-                script: script.clone(),
-                source: source.clone(),
-                document_diff: document_diff.clone(),
-            });
-        }
+    {
+        meta.versions.push(ProposalVersion {
+            version: meta.version,
+            proposal_id: proposal_id.clone(),
+            base_revision: *base_revision,
+            script: script.clone(),
+            source: source.clone(),
+            document_diff: document_diff.clone(),
+        });
     }
     meta
 }

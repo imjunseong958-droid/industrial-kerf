@@ -206,18 +206,18 @@ impl KerfMcpRouter {
         // An extension runs on what the version named makes. Named by the id
         // of a version since replaced, it would leave out what the versions
         // after it added, and become the newest all the same.
-        if let Some(id) = input.extend.as_deref() {
-            if let Some((version, newest, newest_id)) = self.newer_version(id)? {
-                return Err(McpError::new(
-                    "PROPOSAL_SUPERSEDED",
-                    format!(
-                        "proposal {id} is version {version} of a proposal now at version \
+        if let Some(id) = input.extend.as_deref()
+            && let Some((version, newest, newest_id)) = self.newer_version(id)?
+        {
+            return Err(McpError::new(
+                "PROPOSAL_SUPERSEDED",
+                format!(
+                    "proposal {id} is version {version} of a proposal now at version \
                          {newest}: built on it, this script would leave out what the versions \
                          since added. To build on all of it, pass the newest, {newest_id}, as \
                          `extend`; to start again from the project, pass `revise`"
-                    ),
-                ));
-            }
+                ),
+            ));
         }
         Ok(prior)
     }

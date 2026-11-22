@@ -701,10 +701,10 @@ impl Runtime {
     }
 
     fn check_revision(&self, expected: Option<u64>) -> Result<(), RuntimeError> {
-        if let Some(value) = expected {
-            if value != self.state.revision {
-                return Err(RuntimeError::conflict(value, self.state.revision));
-            }
+        if let Some(value) = expected
+            && value != self.state.revision
+        {
+            return Err(RuntimeError::conflict(value, self.state.revision));
         }
         Ok(())
     }

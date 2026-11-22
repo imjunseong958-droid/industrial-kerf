@@ -168,10 +168,10 @@ pub(super) fn lay_hard(canvas: &mut Image, layer: &mut Image, colors: &[[f32; 4]
             if from.iter().all(|channel| *channel == 0.0) {
                 return;
             }
-            if from[3] >= 0.5 {
-                if let Some(color) = nearest(from, colors) {
-                    to.copy_from_slice(color);
-                }
+            if from[3] >= 0.5
+                && let Some(color) = nearest(from, colors)
+            {
+                to.copy_from_slice(color);
             }
             from.fill(0.0);
         });

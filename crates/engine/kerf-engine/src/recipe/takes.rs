@@ -471,10 +471,9 @@ pub(crate) fn mesh_files(project: &Project, id: &str) -> BTreeSet<String> {
                 Content::Generator { fx, params, .. } if fx.as_str() == "mesh" => {
                     if let Some(kerf_model::Param::Static(kerf_model::Value::Text(file))) =
                         params.get("file")
+                        && !file.is_empty()
                     {
-                        if !file.is_empty() {
-                            files.insert(file.clone());
-                        }
+                        files.insert(file.clone());
                     }
                 }
                 _ => {}

@@ -933,14 +933,14 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 }
             }
         }
-        if let (Some(asked), Some(most)) = (ask.seconds, takes.seconds) {
-            if asked > most + 1e-6 {
-                notes.push(format!(
-                    "`seconds={}` is more than model `{model}` makes at once, {} s: {IN_PARTS}",
-                    plain(asked),
-                    plain(most)
-                ));
-            }
+        if let (Some(asked), Some(most)) = (ask.seconds, takes.seconds)
+            && asked > most + 1e-6
+        {
+            notes.push(format!(
+                "`seconds={}` is more than model `{model}` makes at once, {} s: {IN_PARTS}",
+                plain(asked),
+                plain(most)
+            ));
         }
         if let Some(reads) = &takes.reads {
             let named: Vec<String> = ask
@@ -1033,13 +1033,13 @@ pub fn make(
     let making = place.making(take);
     std::fs::create_dir_all(&working)?;
     // What an earlier run left must not pass for this one's. Most often there is none.
-    if let Err(error) = std::fs::remove_file(&making) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            log::warn!(
-                "what an earlier making left in {} could not be taken away: {error}",
-                making.display()
-            );
-        }
+    if let Err(error) = std::fs::remove_file(&making)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!(
+            "what an earlier making left in {} could not be taken away: {error}",
+            making.display()
+        );
     }
     let making_it = Making {
         project,
@@ -1253,7 +1253,7 @@ impl Making<'_> {
                         &asked,
                         self.models.takes(&ask.model),
                     )?;
-                    let mut command = Command::new(&words[0]);
+                    let mut command = model::program(&words[0]);
                     command.args(&words[1..]);
                     self.supervised(command, &words[0], on_line)?;
                 }

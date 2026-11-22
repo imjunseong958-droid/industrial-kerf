@@ -494,11 +494,11 @@ fn place_line(
         clock.print_position(*at),
         clock.print_duration(*duration)
     );
-    if let Content::Media { speed, .. } | Content::Sequence { speed, .. } = &first.content {
-        if !speed.is_one() {
-            write!(text, " speed={}", print_speed(speed, clock.rate))
-                .expect("writing to a String cannot fail");
-        }
+    if let Content::Media { speed, .. } | Content::Sequence { speed, .. } = &first.content
+        && !speed.is_one()
+    {
+        write!(text, " speed={}", print_speed(speed, clock.rate))
+            .expect("writing to a String cannot fail");
     }
     let tracks: Vec<Id> = targets.iter().map(|(t, _)| t.clone()).collect();
     write!(text, " on={}", id_list(&tracks)).expect("writing to a String cannot fail");

@@ -137,13 +137,13 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
                 Some(Param::Static(Value::Number(bevel))),
                 Some(Param::Static(Value::Number(depth))),
             ) = (prop("bevel"), prop("depth"))
+                && *depth > 0.0
+                && *bevel > *depth / 2.0
             {
-                if *depth > 0.0 && *bevel > *depth / 2.0 {
-                    says(format!(
-                        "`bevel` stops at half its `depth`, {}",
-                        depth / 2.0
-                    ));
-                }
+                says(format!(
+                    "`bevel` stops at half its `depth`, {}",
+                    depth / 2.0
+                ));
             }
         }
         // A flat clip keeps to the frame where a parent goes off into depth, which is easy to
@@ -176,12 +176,12 @@ fn does_nothing(sequence: &Sequence, findings: &mut Vec<Finding>) {
             says("`path` holds at its first point until `along` moves".to_owned());
         }
         for (name, param) in clip.props.iter() {
-            if let Param::Animated(keys) = param {
-                if keys.last().is_some_and(|key| key.at > clip.duration) {
-                    says(format!(
-                        "`{name}` has a key past the clip's end, whose value is not reached"
-                    ));
-                }
+            if let Param::Animated(keys) = param
+                && keys.last().is_some_and(|key| key.at > clip.duration)
+            {
+                says(format!(
+                    "`{name}` has a key past the clip's end, whose value is not reached"
+                ));
             }
         }
         let Some((fx, params)) = generator else {

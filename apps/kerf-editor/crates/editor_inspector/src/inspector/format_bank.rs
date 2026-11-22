@@ -153,7 +153,7 @@ fn segment(
     selected: bool,
     enabled: bool,
     cx: &Context<FormatBank>,
-) -> impl IntoElement {
+) -> impl IntoElement + use<> {
     let tip: SharedString = format!("{name} {ratio} · {w}×{h}").into();
     let segment = theme::type_style(
         div(),

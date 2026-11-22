@@ -614,11 +614,12 @@ impl Scene {
         let light = Irradiance::of(picture);
         let mut light = Some(light);
         for each in &mut self.lights {
-            if let Light::Environment(_, wanted, table) = each {
-                if wanted == track && table.is_none() {
-                    *table = light.take();
-                    break;
-                }
+            if let Light::Environment(_, wanted, table) = each
+                && wanted == track
+                && table.is_none()
+            {
+                *table = light.take();
+                break;
             }
         }
     }

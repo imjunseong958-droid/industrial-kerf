@@ -516,15 +516,15 @@ fn paint_name(
             ));
             x += 10.0;
         }
-        if let Some(shadow) = &shadow {
-            if let Err(error) = shadow.paint(
+        if let Some(shadow) = &shadow
+            && let Err(error) = shadow.paint(
                 pen.at(x + 1.0, label_y + 1.0),
                 px(text::META.line),
                 window,
                 cx,
-            ) {
-                log::warn!("a clip name's shadow did not draw: {error}");
-            }
+            )
+        {
+            log::warn!("a clip name's shadow did not draw: {error}");
         }
         if let Err(error) = name.paint(pen.at(x, label_y), px(text::META.line), window, cx) {
             log::warn!("a clip's name did not draw: {error}");
@@ -537,21 +537,20 @@ fn paint_name(
             }
             x += f32::from(secondary.width) + 6.0;
         }
-        if let Some(fx) = &fx {
-            if let Err(error) = fx.paint(pen.at(x, label_y), px(text::MONO_SMALL.line), window, cx)
-            {
-                log::warn!("a clip's fx mark did not draw: {error}");
-            }
+        if let Some(fx) = &fx
+            && let Err(error) = fx.paint(pen.at(x, label_y), px(text::MONO_SMALL.line), window, cx)
+        {
+            log::warn!("a clip's fx mark did not draw: {error}");
         }
-        if let Some(length) = &length {
-            if let Err(error) = length.paint(
+        if let Some(length) = &length
+            && let Err(error) = length.paint(
                 pen.at(label_x, label_y + 15.0),
                 px(text::MONO_SMALL.line),
                 window,
                 cx,
-            ) {
-                log::warn!("a clip's length did not draw: {error}");
-            }
+            )
+        {
+            log::warn!("a clip's length did not draw: {error}");
         }
     });
 }

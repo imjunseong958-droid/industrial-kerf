@@ -568,10 +568,10 @@ fn run_transcription(
     if range.duration() > limit + 1e-9 {
         bail!("selected range exceeds the {limit:.0}s limit");
     }
-    if let Some(duration) = metadata.duration {
-        if !duration.is_finite() || duration <= 0.0 || range.end > duration + 1e-6 {
-            bail!("selected range must be inside source duration {duration:.3}s");
-        }
+    if let Some(duration) = metadata.duration
+        && (!duration.is_finite() || duration <= 0.0 || range.end > duration + 1e-6)
+    {
+        bail!("selected range must be inside source duration {duration:.3}s");
     }
 
     let backend = match args.backend.as_str() {

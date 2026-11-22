@@ -71,13 +71,13 @@ impl KerfMcpRouter {
                 ))
             }
         };
-        if let Some(fov) = track.fov {
-            if !track.camera || !(1.0..=170.0).contains(&fov) {
-                return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
-                    "`fov` goes with `camera`, from 1 to 170 degrees",
-                ));
-            }
+        if let Some(fov) = track.fov
+            && (!track.camera || !(1.0..=170.0).contains(&fov))
+        {
+            return Err(McpError::new(
+                "INVALID_ARGUMENTS",
+                "`fov` goes with `camera`, from 1 to 170 degrees",
+            ));
         }
         if !object && !track.outside.is_empty() {
             return Err(McpError::new(

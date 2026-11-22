@@ -280,15 +280,14 @@ pub(crate) fn render_output(
             "`{text}` is outside the project folder; choose a folder to render to"
         )));
     }
-    if let Some(part) = &inside {
-        if part
+    if let Some(part) = &inside
+        && part
             .iter()
             .any(|name| name.to_string_lossy().starts_with('.'))
-        {
-            return Err(output_error(format!(
-                "`{text}` is in a hidden folder of the project"
-            )));
-        }
+    {
+        return Err(output_error(format!(
+            "`{text}` is in a hidden folder of the project"
+        )));
     }
     let is_folder = folder_named || path.is_dir() || path.extension().is_none();
     let (folder, file) = if is_folder {

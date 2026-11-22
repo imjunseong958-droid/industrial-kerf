@@ -60,7 +60,56 @@ use super::{moves::Moves, signal::Signal};
 use crate::error::{EngineError, Result};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{PoisonError, RwLock};
+
+/// The models file this process reads in place of the one the environment
+/// names, set by [`Models::use_file`].
+static FILE: RwLock<Option<PathBuf>> = RwLock::new(None);
+
+/// What this process gives the programs models run over its own environment:
+/// variables set (`Some`) or taken away (`None`), by [`set_program_env`] and
+/// [`remove_program_env`].
+static PROGRAM_ENV: RwLock<Vec<(OsString, Option<OsString>)>> = RwLock::new(Vec::new());
+
+/// Run the programs models run from here on with `name` set to `value`,
+/// leaving this process's own environment as it is: for a host that hands
+/// them a setting of its own, as a test does.
+pub fn set_program_env(name: impl Into<OsString>, value: impl Into<OsString>) {
+    give_programs(name.into(), Some(value.into()));
+}
+
+/// Run the programs models run from here on without `name`, whatever this
+/// process's environment has: for a host that keeps a person's own setting
+/// from them, as a test does.
+pub fn remove_program_env(name: impl Into<OsString>) {
+    give_programs(name.into(), None);
+}
+
+fn give_programs(name: OsString, value: Option<OsString>) {
+    let mut given = PROGRAM_ENV.write().unwrap_or_else(PoisonError::into_inner);
+    given.retain(|(known, _)| *known != name);
+    given.push((name, value));
+}
+
+/// A command for `program`, which a model runs, with what
+/// [`set_program_env`] and [`remove_program_env`] give it.
+pub fn program(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    for (name, value) in PROGRAM_ENV
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+    {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    command
+}
 
 /// What stands for the request's file in a model's command.
 pub const REQUEST: &str = "{request}";
@@ -352,15 +401,26 @@ pub struct Models {
 }
 
 impl Models {
-    /// The person's models: the file `KERF_MODELS` names, or
-    /// `~/.kerf/models.json`. No file is no models.
+    /// The person's models: the file [`Models::default_file`] says. No file
+    /// is no models.
     pub fn load() -> Result<Self> {
         Self::read(&Self::default_file())
     }
 
-    /// Where [`Models::load`] reads: the file `KERF_MODELS` names, or
-    /// `~/.kerf/models.json`.
+    /// Read the person's models from `file` from here on, in place of the
+    /// file `KERF_MODELS` names or `~/.kerf/models.json`, leaving this
+    /// process's environment as it is: for a host that keeps them apart, as
+    /// a test does.
+    pub fn use_file(file: impl Into<PathBuf>) {
+        *FILE.write().unwrap_or_else(PoisonError::into_inner) = Some(file.into());
+    }
+
+    /// Where [`Models::load`] reads: the file [`Models::use_file`] named,
+    /// else the file `KERF_MODELS` names, or `~/.kerf/models.json`.
     pub fn default_file() -> PathBuf {
+        if let Some(file) = FILE.read().unwrap_or_else(PoisonError::into_inner).clone() {
+            return file;
+        }
         std::env::var_os("KERF_MODELS")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)

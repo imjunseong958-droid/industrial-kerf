@@ -116,7 +116,7 @@ impl LauncherView {
         hint: &'static str,
         window: &Window,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let on = mode.is_some() && mode == self.mode;
         let idle = self.busy.is_none();
         let handle = self.handle(Stop::Way(mode));
@@ -178,7 +178,7 @@ impl LauncherView {
     }
 
     /// The ways to begin, side by side.
-    pub(super) fn ways(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn ways(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .mt(px(28.0))
             .flex()
@@ -349,7 +349,12 @@ impl LauncherView {
     /// The form of the way chosen (`mode`): its rows, then why it cannot be
     /// made yet as it is typed, else where it goes, beside Create Project or
     /// Clone.
-    pub(super) fn form(&self, mode: Mode, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn form(
+        &self,
+        mode: Mode,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let idle = self.busy.is_none();
         let problem = if idle { self.form_problem(cx) } else { None };
         let location = self.location(cx);
@@ -465,7 +470,7 @@ impl LauncherView {
         idle: bool,
         window: &Window,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         // Greyed by what is typed, its tip says why.
         let act_button = ui::button(act_id, act_words)
             .primary()
@@ -484,7 +489,7 @@ impl LauncherView {
     pub(super) fn chooser<T, F>(
         cx: &Context<Self>,
         choose: F,
-    ) -> impl Fn(T, &mut Window, &mut App) + 'static
+    ) -> impl Fn(T, &mut Window, &mut App) + 'static + use<T, F>
     where
         T: Copy + 'static,
         F: Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,

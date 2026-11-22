@@ -492,14 +492,13 @@ impl VideoDecoder {
         }
         if !self.flushed {
             self.flushed = true;
-            if let Some(filter) = self.filter.as_mut() {
-                if let Some(mut src) = filter.get("in") {
-                    if let Err(error) = src.source().flush() {
-                        log::warn!(
+            if let Some(filter) = self.filter.as_mut()
+                && let Some(mut src) = filter.get("in")
+                && let Err(error) = src.source().flush()
+            {
+                log::warn!(
                             "the filters were not told the frames ended, so they may hold back their last: {error}"
                         );
-                    }
-                }
             }
         }
         Ok(())

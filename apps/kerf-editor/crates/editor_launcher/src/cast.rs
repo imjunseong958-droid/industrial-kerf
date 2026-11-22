@@ -522,7 +522,7 @@ impl CastView {
         row: &Row,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let chosen = self.chosen == Some(index);
         let kind = if row.kind == "style" { "Style" } else { "Cast" };
         div()

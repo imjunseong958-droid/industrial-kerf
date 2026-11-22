@@ -217,7 +217,7 @@ impl FinishView {
         enabled: bool,
         folder: Option<&Path>,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let srt = ui::button("finish-srt", "SRT")
             .small()
             .disabled(!enabled)
@@ -337,7 +337,7 @@ impl FinishView {
         job: &RenderJob,
         folder: Option<&Path>,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let (status, color) = job_status(job);
         let running = job.status == "running";
         let action = if job.is_active() {

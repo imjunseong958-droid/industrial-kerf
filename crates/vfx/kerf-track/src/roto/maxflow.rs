@@ -344,13 +344,13 @@ impl Graph {
                 if cap > 0 {
                     let j = arc.head;
                     let nj = self.nodes[j as usize];
-                    if nj.is_sink == sink && nj.parent != NONE {
-                        if let Some(d) = self.origin_dist(j) {
-                            if d < best_d {
-                                best = a;
-                                best_d = d;
-                            }
-                        }
+                    if nj.is_sink == sink
+                        && nj.parent != NONE
+                        && let Some(d) = self.origin_dist(j)
+                        && d < best_d
+                    {
+                        best = a;
+                        best_d = d;
                     }
                 }
                 a = arc.next;

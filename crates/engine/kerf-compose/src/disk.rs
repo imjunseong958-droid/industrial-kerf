@@ -108,11 +108,11 @@ fn files_under(folder: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
             continue;
         };
         for entry in entries.flatten() {
-            if let Ok(metadata) = entry.metadata() {
-                if metadata.is_file() {
-                    let used = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-                    found.push((entry.path(), metadata.len(), used));
-                }
+            if let Ok(metadata) = entry.metadata()
+                && metadata.is_file()
+            {
+                let used = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+                found.push((entry.path(), metadata.len(), used));
             }
         }
     }

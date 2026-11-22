@@ -1708,13 +1708,13 @@ fn parts(
                         .find(name)
                         .ok_or_else(|| format!("`{fx}` has no parameter `{name}`"))?;
                     let mut value = env.param(value, param, start)?;
-                    if param.ty == ParamType::Mask {
-                        if let Param::Static(Value::Text(local)) = &value {
-                            let id = names
-                                .get(local)
-                                .ok_or_else(|| format!("no mask `{local}` in the look"))?;
-                            value = Param::Static(Value::Text(id.to_string()));
-                        }
+                    if param.ty == ParamType::Mask
+                        && let Param::Static(Value::Text(local)) = &value
+                    {
+                        let id = names
+                            .get(local)
+                            .ok_or_else(|| format!("no mask `{local}` in the look"))?;
+                        value = Param::Static(Value::Text(id.to_string()));
                     }
                     param
                         .check(&value)
@@ -2055,7 +2055,7 @@ mod tests {
     fn every_bundled_look_expands_where_it_applies() {
         let catalog = Catalog::bundled();
         let rate = Rate::FPS_24;
-        let gen = |fx: &str| Content::Generator {
+        let r#gen = |fx: &str| Content::Generator {
             fx: Id::new(fx).unwrap(),
             version: 1,
             params: Params::new(),
@@ -2086,9 +2086,9 @@ mod tests {
                 params: Params::new(),
             };
             let content = if look.on == On::Title {
-                gen("title")
+                r#gen("title")
             } else {
-                gen("solid")
+                r#gen("solid")
             };
             let mut first = Clip::new(
                 Id::new("c1").unwrap(),

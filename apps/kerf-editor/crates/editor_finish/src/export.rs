@@ -239,7 +239,7 @@ impl ExportView {
             .collect()
     }
 
-    fn captions(&self, enabled: bool, cx: &Context<Self>) -> impl IntoElement {
+    fn captions(&self, enabled: bool, cx: &Context<Self>) -> impl IntoElement + use<> {
         let format = |id: &'static str, label: &'static str, format: &'static str| {
             ui::button(id, label)
                 .small()
@@ -461,7 +461,7 @@ impl ExportView {
         rows
     }
 
-    fn job(&self, index: usize, job: &RenderJob, cx: &Context<Self>) -> impl IntoElement {
+    fn job(&self, index: usize, job: &RenderJob, cx: &Context<Self>) -> impl IntoElement + use<> {
         let (said, color) = job_status(job);
         let running = job.status == "running";
         let file = Path::new(job.output_path.as_deref().unwrap_or_default())

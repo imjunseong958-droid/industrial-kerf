@@ -120,7 +120,7 @@ impl InspectorView {
         clip: &Inspected,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let focused = self.name.focus_handle(cx).is_focused(window);
         let timecode = |seconds: f64| editor_state::model::timecode(seconds, clip.fps);
         let times = [

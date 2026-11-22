@@ -118,11 +118,11 @@ impl IdGen {
     pub fn reserve(&mut self, id: &Id) -> bool {
         let text = id.as_str();
         let split = text.trim_end_matches(|c: char| c.is_ascii_digit()).len();
-        if split < text.len() {
-            if let Ok(number) = text[split..].parse::<u64>() {
-                let next = self.next.entry(text[..split].to_owned()).or_insert(1);
-                *next = (*next).max(number.saturating_add(1));
-            }
+        if split < text.len()
+            && let Ok(number) = text[split..].parse::<u64>()
+        {
+            let next = self.next.entry(text[..split].to_owned()).or_insert(1);
+            *next = (*next).max(number.saturating_add(1));
         }
         self.used.insert(text.to_owned())
     }

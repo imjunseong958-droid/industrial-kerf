@@ -17,13 +17,13 @@ impl Drawing {
             return frame;
         }
         let on_disk = self.disk_key(key, at, scale);
-        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
-            if let Some(frame) = disk.get(key, false) {
-                if let Some(kept) = kept {
-                    frames::put(kept, frame.clone());
-                }
-                return frame;
+        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk)
+            && let Some(frame) = disk.get(key, false)
+        {
+            if let Some(kept) = kept {
+                frames::put(kept, frame.clone());
             }
+            return frame;
         }
         let frame = self.draw_frame(at, scale);
         if let Some(kept) = kept {
@@ -62,10 +62,10 @@ impl Drawing {
             .then(|| self.frame_key(at, scale))
             .flatten();
         let on_disk = self.disk_key(key, at, scale);
-        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
-            if let Some(frame) = disk.get(key, true) {
-                return frame;
-            }
+        if let Some((disk, key)) = self.disk.as_ref().zip(on_disk)
+            && let Some(frame) = disk.get(key, true)
+        {
+            return frame;
         }
         let frame = self.draw_frame16(at, scale);
         if let Some((disk, key)) = self.disk.as_ref().zip(on_disk) {
@@ -122,10 +122,12 @@ impl Drawing {
     }
 
     pub(super) fn draw_frame(&self, at: Time, scale: f64) -> Frame {
-        if scale >= 1.0 && self.hdr.is_none() && self.pass == Pass::Picture {
-            if let Some(frame) = self.plain_frame(at) {
-                return frame;
-            }
+        if scale >= 1.0
+            && self.hdr.is_none()
+            && self.pass == Pass::Picture
+            && let Some(frame) = self.plain_frame(at)
+        {
+            return frame;
         }
         let scale = scale.clamp(1.0 / 16.0, 1.0);
         if let Some(frame) = self.gpu_frame(at, scale) {

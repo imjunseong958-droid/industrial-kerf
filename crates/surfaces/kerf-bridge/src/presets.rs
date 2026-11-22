@@ -111,11 +111,10 @@ fn looks(directory: &Path) -> Vec<LookEntry> {
             if let Some(line) = git_text(
                 directory,
                 &["log", "-1", "--format=%an%x1f%cI", "--", &path],
-            ) {
-                if let Some((author, updated)) = line.split_once('\u{1f}') {
-                    entry.author = Some(author.to_owned());
-                    entry.updated = Some(updated.to_owned());
-                }
+            ) && let Some((author, updated)) = line.split_once('\u{1f}')
+            {
+                entry.author = Some(author.to_owned());
+                entry.updated = Some(updated.to_owned());
             }
             entry
         })
@@ -154,11 +153,10 @@ fn entry(directory: &Path, relative: &Path) -> PresetEntry {
     if let Some(line) = git_text(
         directory,
         &["log", "-1", "--format=%an%x1f%cI", "--", &path],
-    ) {
-        if let Some((author, updated)) = line.split_once('\u{1f}') {
-            entry.author = Some(author.to_owned());
-            entry.updated = Some(updated.to_owned());
-        }
+    ) && let Some((author, updated)) = line.split_once('\u{1f}')
+    {
+        entry.author = Some(author.to_owned());
+        entry.updated = Some(updated.to_owned());
     }
     entry
 }

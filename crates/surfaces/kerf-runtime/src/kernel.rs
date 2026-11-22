@@ -282,10 +282,10 @@ fn prepare_queued_media() {
             };
             // The queue goes on either way; a stopped project's work says
             // only that it was stopped.
-            if let Err(error) = made {
-                if !job.cancellation.is_cancelled() {
-                    log::warn!("{}: its {what} was not made: {error}", job.path.display());
-                }
+            if let Err(error) = made
+                && !job.cancellation.is_cancelled()
+            {
+                log::warn!("{}: its {what} was not made: {error}", job.path.display());
             }
         }))
         .is_ok()

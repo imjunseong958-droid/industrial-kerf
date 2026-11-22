@@ -28,7 +28,7 @@ pub fn scroll_fades(scrolled: f32, most: f32, top: f32, rows: &[(f32, f32)]) -> 
 /// of `ground` at its top while a row is cut there, `BOTTOM_FADE` at its
 /// foot while there is more ([`scroll_fades`]). Put it after the list, in
 /// a box of the list's place (`relative`); it takes no press.
-pub fn scroll_fade(handle: &ScrollHandle, ground: Rgba) -> impl IntoElement {
+pub fn scroll_fade(handle: &ScrollHandle, ground: Rgba) -> impl IntoElement + use<> {
     let handle = handle.clone();
     canvas(
         |_, _, _| {},

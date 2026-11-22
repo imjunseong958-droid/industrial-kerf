@@ -156,11 +156,11 @@ impl ChatView {
             }
             let start = shown.len();
             shown.push_str(words);
-            if let Span::Timecode(timecode) = &span {
-                if let Some(seconds) = timecode_position(timecode, timeline) {
-                    links.push(start..shown.len());
-                    moments.push(seconds);
-                }
+            if let Span::Timecode(timecode) = &span
+                && let Some(seconds) = timecode_position(timecode, timeline)
+            {
+                links.push(start..shown.len());
+                moments.push(seconds);
             }
             runs.push(TextRun {
                 len: words.len(),

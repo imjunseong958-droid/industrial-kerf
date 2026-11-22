@@ -400,10 +400,10 @@ impl<'a> Builder<'a> {
         let Some(video) = media.video else {
             return Ok(None);
         };
-        if clip.name.is_none() {
-            if let Some(file) = std::path::Path::new(&media.path).file_name() {
-                *name = file.to_string_lossy().into_owned();
-            }
+        if clip.name.is_none()
+            && let Some(file) = std::path::Path::new(&media.path).file_name()
+        {
+            *name = file.to_string_lossy().into_owned();
         }
         self.clips.push(ClipSource {
             path: media.path.clone(),
@@ -602,14 +602,14 @@ impl<'a> Builder<'a> {
 /// The captions of subtitle track `track` that say something, onto `captions`.
 fn push_captions(track: &Track, captions: &mut Vec<CaptionPlan>) {
     for clip in track.clips.iter().filter(|clip| clip.enabled) {
-        if let Content::Caption { text } = &clip.content {
-            if !text.trim().is_empty() {
-                captions.push(CaptionPlan {
-                    text: text.clone(),
-                    from: clip.start,
-                    to: clip.end(),
-                });
-            }
+        if let Content::Caption { text } = &clip.content
+            && !text.trim().is_empty()
+        {
+            captions.push(CaptionPlan {
+                text: text.clone(),
+                from: clip.start,
+                to: clip.end(),
+            });
         }
     }
 }
@@ -777,12 +777,12 @@ pub(super) fn clip_digest(clip: &Clip, catalog: &Catalog, media: Option<&Media>)
             if !matches!(param.ty, ParamType::File(_)) {
                 continue;
             }
-            if let Some(Param::Static(Value::Text(path))) = params.get(&param.name) {
-                if !path.is_empty() {
-                    let file = std::fs::metadata(path).ok()?;
-                    file.len().hash(&mut hash);
-                    file.modified().ok()?.hash(&mut hash);
-                }
+            if let Some(Param::Static(Value::Text(path))) = params.get(&param.name)
+                && !path.is_empty()
+            {
+                let file = std::fs::metadata(path).ok()?;
+                file.len().hash(&mut hash);
+                file.modified().ok()?.hash(&mut hash);
             }
         }
     }

@@ -2,7 +2,7 @@
 name = "kerf-text"
 description = "Kerf's text engine (from FilmCraft): font database (bundled + system), shaping, bidi, line breaking, paragraph layout and anti-aliased glyph/path rasterisation"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 

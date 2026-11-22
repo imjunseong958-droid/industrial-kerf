@@ -16,7 +16,7 @@ use std::time::Instant;
 impl Collab {
     /// The chip: where the project stands, a dot for edits not committed
     /// or a sync that failed, and its tip while its menu is closed.
-    pub(super) fn chip(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn chip(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement + use<> {
         let status = self.status.clone().unwrap_or_default();
         let busy = self.busy();
         let open = self.menu != Menu::Closed;
@@ -212,7 +212,7 @@ fn branch_glyph(color: Rgba) -> impl IntoElement {
 
 /// A ring turning once each [`scene::WORK_PULSE`] while work runs; still
 /// under Reduce Motion.
-fn spinner(since: Instant, color: Rgba, window: &Window) -> impl IntoElement {
+fn spinner(since: Instant, color: Rgba, window: &Window) -> impl IntoElement + use<> {
     let phase = motion::phase(since, scene::WORK_PULSE);
     if !motion::reduced() {
         window.request_animation_frame();

@@ -578,10 +578,10 @@ fn loaded(path: &str) -> std::result::Result<Arc<super::gltf::Read>, String> {
     let mut files = FILES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((_, (length, modified, read))) = files.iter().find(|(kept, _)| kept == path) {
-        if (*length, *modified) == now {
-            return Ok(read.clone());
-        }
+    if let Some((_, (length, modified, read))) = files.iter().find(|(kept, _)| kept == path)
+        && (*length, *modified) == now
+    {
+        return Ok(read.clone());
     }
     let read = Arc::new(super::gltf::read(std::path::Path::new(path))?);
     files.retain(|(kept, _)| kept != path);

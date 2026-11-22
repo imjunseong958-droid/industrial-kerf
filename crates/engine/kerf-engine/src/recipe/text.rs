@@ -89,12 +89,12 @@ pub fn changed(text: &str, number: usize, change: Change) -> Result<String> {
             "`{key}` is not a name a step gives a value by"
         )));
     }
-    if let Change::Set { value, .. } = change {
-        if value.contains(['\n', '\r']) {
-            return Err(wrong(format!(
-                "`{key}=` takes one line, and what it is given holds a line break"
-            )));
-        }
+    if let Change::Set { value, .. } = change
+        && value.contains(['\n', '\r'])
+    {
+        return Err(wrong(format!(
+            "`{key}=` takes one line, and what it is given holds a line break"
+        )));
     }
     let mut words = steps[index].words();
     // The words that are `name=value`: all after `generate`, and after the sequence and

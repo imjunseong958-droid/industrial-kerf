@@ -1,20 +1,21 @@
 //! Rendering again after a small edit: only what changed is drawn, and the file comes out the same.
-//! The only test of this file, since it sets where frames are kept for the whole process.
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
-use kerf_engine::render::{render_program, RenderOptions};
+use kerf_engine::render::{render_program, CacheFolder, RenderOptions};
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};
 use std::path::Path;
 use std::process::Command;
 
-fn render(project: &Project, out: &Path) {
+/// `project` rendered to `out`, keeping its frames in `frames`.
+fn render(project: &Project, out: &Path, frames: &Path) {
     render_program::<fn(f64)>(
         project,
         None,
         None,
         &RenderOptions {
             output: out.to_string_lossy().into_owned(),
+            frame_cache: CacheFolder::At(frames.to_owned()),
             ..RenderOptions::default()
         },
         None,
@@ -38,7 +39,6 @@ fn frames(path: &Path) -> Vec<u8> {
 fn rendering_again_reads_what_was_drawn() {
     let dir = tempfile::tempdir().expect("a folder");
     let folder = dir.path().join("frames");
-    std::env::set_var("KERF_FRAME_CACHE", &folder);
     let source = dir.path().join("source.mp4");
     let made = Command::new(resolve_ffmpeg_bin())
         .args([
@@ -78,14 +78,14 @@ fn rendering_again_reads_what_was_drawn() {
         dir.path().join("third.mp4"),
     );
     // Every frame is drawn and kept: 24 are fewer than the writers' queue holds, so none is dropped.
-    render(&project, &first);
+    render(&project, &first, &folder);
     let stats = kerf_compose::frame_cache_stats(&folder);
     assert_eq!(
         (stats.hits, stats.writes, stats.dropped),
         (0, 24, 0),
         "{stats:?}"
     );
-    render(&project, &second);
+    render(&project, &second, &folder);
     let after = kerf_compose::frame_cache_stats(&folder);
     assert_eq!(after.hits - stats.hits, 24, "{after:?}");
     assert_eq!(after.writes, stats.writes, "{after:?}");
@@ -94,7 +94,7 @@ fn rendering_again_reads_what_was_drawn() {
     let edited = apply_script(&project, Catalog::builtin(), "fx c2 set 1 exposure=0.3")
         .expect("edits")
         .project;
-    render(&edited, &third);
+    render(&edited, &third, &folder);
     let last = kerf_compose::frame_cache_stats(&folder);
     assert_eq!(last.hits - after.hits, 12, "{last:?}");
     assert_eq!(last.writes - after.writes, 12, "{last:?}");

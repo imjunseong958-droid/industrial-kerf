@@ -221,7 +221,7 @@ impl FinishView {
 
     /// The plot: momentary loudness and short-term over it, the levels and
     /// the target ticked, and the pointer's place read out.
-    fn chart_plot(&self, loudness: &Loudness, cx: &Context<Self>) -> impl IntoElement {
+    fn chart_plot(&self, loudness: &Loudness, cx: &Context<Self>) -> impl IntoElement + use<> {
         let points = loudness.points.clone();
         let target = loudness.target as f32;
         let hover = self.hover.filter(|_| !points.is_empty());
@@ -512,10 +512,8 @@ fn paint_chart(
                     None => down = false,
                 }
             }
-            if drawn {
-                if let Ok(path) = builder.build() {
-                    window.paint_path(path, color);
-                }
+            if drawn && let Ok(path) = builder.build() {
+                window.paint_path(path, color);
             }
         };
     series(|p| p.momentary, 1.0, momentary_ink(), window);

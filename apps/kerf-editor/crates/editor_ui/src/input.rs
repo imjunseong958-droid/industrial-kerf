@@ -1763,10 +1763,10 @@ impl Element for TextElement {
         let most = (height - bounds.size.height).max(Pixels::ZERO);
         let mut scroll = input.scroll;
         let cursor_at = input.position_for_index(&layout, input.cursor_offset());
-        if input.reveal {
-            if let Some(at) = cursor_at {
-                scroll = scroll_to_show(scroll, at.y, line_height, bounds.size.height);
-            }
+        if input.reveal
+            && let Some(at) = cursor_at
+        {
+            scroll = scroll_to_show(scroll, at.y, line_height, bounds.size.height);
         }
         let scroll = scroll.clamp(Pixels::ZERO, most);
         // One line wider than the field: sideways, to the cursor when it
@@ -1910,10 +1910,10 @@ impl Element for TextElement {
                 }
                 top += line.size(line_height).height;
             }
-            if focus_handle.is_focused(window) {
-                if let Some(cursor) = prepaint.cursor.take() {
-                    window.paint_quad(cursor);
-                }
+            if focus_handle.is_focused(window)
+                && let Some(cursor) = prepaint.cursor.take()
+            {
+                window.paint_quad(cursor);
             }
         });
         let lines = std::mem::take(&mut prepaint.lines);

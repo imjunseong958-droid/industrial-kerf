@@ -125,7 +125,11 @@ impl Workspace {
         bars
     }
 
-    pub(super) fn notices(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn notices(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let mut notices = self.session.read(cx).state.notices.clone();
         // What the error bar holds is said there, not again here.
         if let Some(error) = &self.error {

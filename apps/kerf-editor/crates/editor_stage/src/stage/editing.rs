@@ -104,16 +104,16 @@ impl StageView {
             self.press_tool(tool, &shown, canvas, to_pt(event.position), cx);
             return;
         }
-        if let Some(shown) = self.shown() {
-            if self.press_overlays(&shown, canvas, to_pt(event.position), event.click_count, cx) {
-                // What is chosen takes Delete.
-                if self.chosen_mask(cx).is_some() || self.chosen_point.is_some() {
-                    ensure_keys(cx);
-                    window.focus(&self.focus_handle);
-                }
-                cx.notify();
-                return;
+        if let Some(shown) = self.shown()
+            && self.press_overlays(&shown, canvas, to_pt(event.position), event.click_count, cx)
+        {
+            // What is chosen takes Delete.
+            if self.chosen_mask(cx).is_some() || self.chosen_point.is_some() {
+                ensure_keys(cx);
+                window.focus(&self.focus_handle);
             }
+            cx.notify();
+            return;
         }
         // A press that plays or pauses, or one on the black bars, leaves the
         // keys where they were (the timeline's Space goes on playing and

@@ -364,10 +364,10 @@ impl Pictures {
     pub fn picture(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Arc<Picture>> {
         let clip = self.clips.get(index)?;
         let size = (size.0.max(1), size.1.max(1));
-        if clip.retime != Retime::Frames {
-            if let Some((first, between)) = clip.between_at(at) {
-                return self.between(clip, first, between, size);
-            }
+        if clip.retime != Retime::Frames
+            && let Some((first, between)) = clip.between_at(at)
+        {
+            return self.between(clip, first, between, size);
         }
         self.whole(clip, clip.frame_at_time(at), size)
     }

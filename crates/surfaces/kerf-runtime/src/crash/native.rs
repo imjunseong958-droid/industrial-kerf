@@ -445,76 +445,83 @@ mod unix {
         info: *mut libc::siginfo_t,
         context: *mut c_void,
     ) {
-        let at_ms = now_ms();
-        let mut path = Text::<1024>::new();
-        path.bytes(setup.folder.as_bytes())
-            .str("/")
-            .str(&setup.component)
-            .str("-")
-            .dec(at_ms)
-            .str("-");
-        path.dec(libc::getpid() as u64).str(".txt").bytes(&[0]);
-        if !path.whole() {
-            return;
-        }
-        make_folder(setup);
-        let fd = libc::open(
-            path.as_bytes().as_ptr().cast(),
-            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
-            0o644 as libc::c_uint,
-        );
-        if fd < 0 {
-            return;
-        }
-        let mut head = Text::<2048>::new();
-        let location = |text: &mut Text<2048>| {
-            if info.is_null() || signal == libc::SIGABRT {
-                text.str("unknown");
-            } else {
-                // SAFETY: the kernel's siginfo for a fault names its address.
-                let address = unsafe { (*info).si_addr() } as u64;
-                text.str(if matches!(signal, libc::SIGSEGV | libc::SIGBUS) {
-                    "address "
-                } else {
-                    "at "
-                })
-                .hex(address);
+        unsafe {
+            let at_ms = now_ms();
+            let mut path = Text::<1024>::new();
+            path.bytes(setup.folder.as_bytes())
+                .str("/")
+                .str(&setup.component)
+                .str("-")
+                .dec(at_ms)
+                .str("-");
+            path.dec(libc::getpid() as u64).str(".txt").bytes(&[0]);
+            if !path.whole() {
+                return;
             }
-        };
-        report_head(&mut head, setup, at_ms, &location, name(signal).as_bytes());
-        write_all(fd, head.as_bytes());
-        // Written before the backtrace, whose walk could fault again and end the process.
-        backtrace(fd, context);
-        write_all(fd, b"\n");
-        libc::close(fd);
+            make_folder(setup);
+            let fd = libc::open(
+                path.as_bytes().as_ptr().cast(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_CLOEXEC,
+                0o644 as libc::c_uint,
+            );
+            if fd < 0 {
+                return;
+            }
+            let mut head = Text::<2048>::new();
+            let location = |text: &mut Text<2048>| {
+                if info.is_null() || signal == libc::SIGABRT {
+                    text.str("unknown");
+                } else {
+                    // SAFETY: the kernel's siginfo for a fault names its address.
+                    let address = (*info).si_addr() as u64;
+                    text.str(if matches!(signal, libc::SIGSEGV | libc::SIGBUS) {
+                        "address "
+                    } else {
+                        "at "
+                    })
+                    .hex(address);
+                }
+            };
+            report_head(&mut head, setup, at_ms, &location, name(signal).as_bytes());
+            write_all(fd, head.as_bytes());
+            // Written before the backtrace, whose walk could fault again and end the process.
+            backtrace(fd, context);
+            write_all(fd, b"\n");
+            libc::close(fd);
+        }
     }
 
     /// The crash folder and the folders above it, made as `mkdir -p` would.
     // SAFETY: asks nothing of the caller: `mkdir` is given only NUL-terminated paths in a buffer
     // on this stack.
     unsafe fn make_folder(setup: &Setup) {
-        let folder = setup.folder.as_bytes();
-        let mut path = Text::<1024>::new();
-        path.bytes(folder).bytes(&[0]);
-        if !path.whole() {
-            return;
-        }
-        for end in (1..=folder.len()).filter(|&end| end == folder.len() || folder[end] == b'/') {
-            let saved = path.bytes[end];
-            path.bytes[end] = 0;
-            libc::mkdir(path.bytes.as_ptr().cast(), 0o755);
-            path.bytes[end] = saved;
+        unsafe {
+            let folder = setup.folder.as_bytes();
+            let mut path = Text::<1024>::new();
+            path.bytes(folder).bytes(&[0]);
+            if !path.whole() {
+                return;
+            }
+            for end in (1..=folder.len()).filter(|&end| end == folder.len() || folder[end] == b'/')
+            {
+                let saved = path.bytes[end];
+                path.bytes[end] = 0;
+                libc::mkdir(path.bytes.as_ptr().cast(), 0o755);
+                path.bytes[end] = saved;
+            }
         }
     }
 
     // SAFETY: `fd` must be a descriptor the caller opened; `write` only reads `bytes`.
     unsafe fn write_all(fd: c_int, mut bytes: &[u8]) {
-        while !bytes.is_empty() {
-            let written = libc::write(fd, bytes.as_ptr().cast(), bytes.len());
-            if written <= 0 {
-                return;
+        unsafe {
+            while !bytes.is_empty() {
+                let written = libc::write(fd, bytes.as_ptr().cast(), bytes.len());
+                if written <= 0 {
+                    return;
+                }
+                bytes = &bytes[written as usize..];
             }
-            bytes = &bytes[written as usize..];
         }
     }
 
@@ -522,9 +529,11 @@ mod unix {
     // SAFETY: `fd` must be a descriptor the caller opened. `backtrace` fills at most the frames
     // array on this stack, and `backtrace_symbols_fd` reads only the `count` it filled.
     unsafe fn backtrace(fd: c_int, _context: *mut c_void) {
-        let mut frames = [std::ptr::null_mut::<c_void>(); 64];
-        let count = libc::backtrace(frames.as_mut_ptr(), frames.len() as c_int);
-        libc::backtrace_symbols_fd(frames.as_ptr(), count, fd);
+        unsafe {
+            let mut frames = [std::ptr::null_mut::<c_void>(); 64];
+            let count = libc::backtrace(frames.as_mut_ptr(), frames.len() as c_int);
+            libc::backtrace_symbols_fd(frames.as_ptr(), count, fd);
+        }
     }
 
     /// The interrupted code's frames, from its frame pointer: Apple's ABIs keep one in every
@@ -534,37 +543,39 @@ mod unix {
     // kernel gave the signal handler. The walk trusts the interrupted code's frame pointers past
     // the checks below; a bad one faults, which is why the report's head is written first.
     unsafe fn backtrace(fd: c_int, context: *mut c_void) {
-        let mut frames = [std::ptr::null_mut::<c_void>(); 64];
-        let mut count = 0;
-        if !context.is_null() {
-            let (pc, mut fp, lr) = registers(context);
-            frames[0] = pc as *mut c_void;
-            count = 1;
-            let start = fp;
-            let mut previous = 0u64;
-            while count < frames.len()
-                && fp != 0
-                && fp.is_multiple_of(8)
-                && fp > previous
-                && fp - start < (64 << 20)
-            {
-                let next = *(fp as *const u64);
-                let returned = strip(*((fp + 8) as *const u64));
-                if returned == 0 {
-                    break;
-                }
-                // A leaf function keeps its caller in the link register, not in a frame.
-                if count == 1 && lr != 0 && lr != returned {
-                    frames[count] = lr as *mut c_void;
+        unsafe {
+            let mut frames = [std::ptr::null_mut::<c_void>(); 64];
+            let mut count = 0;
+            if !context.is_null() {
+                let (pc, mut fp, lr) = registers(context);
+                frames[0] = pc as *mut c_void;
+                count = 1;
+                let start = fp;
+                let mut previous = 0u64;
+                while count < frames.len()
+                    && fp != 0
+                    && fp.is_multiple_of(8)
+                    && fp > previous
+                    && fp - start < (64 << 20)
+                {
+                    let next = *(fp as *const u64);
+                    let returned = strip(*((fp + 8) as *const u64));
+                    if returned == 0 {
+                        break;
+                    }
+                    // A leaf function keeps its caller in the link register, not in a frame.
+                    if count == 1 && lr != 0 && lr != returned {
+                        frames[count] = lr as *mut c_void;
+                        count += 1;
+                    }
+                    frames[count] = returned as *mut c_void;
                     count += 1;
+                    previous = fp;
+                    fp = next;
                 }
-                frames[count] = returned as *mut c_void;
-                count += 1;
-                previous = fp;
-                fp = next;
             }
+            libc::backtrace_symbols_fd(frames.as_ptr(), count as c_int, fd);
         }
-        libc::backtrace_symbols_fd(frames.as_ptr(), count as c_int, fd);
     }
 
     /// Return addresses without a pointer authentication code.
@@ -627,17 +638,21 @@ mod unix {
     // SAFETY: `context` must be the non-null ucontext the kernel gave the signal handler; this
     // reads its machine context's thread state.
     unsafe fn registers(context: *mut c_void) -> (u64, u64, u64) {
-        let state = &(*(*context.cast::<DarwinContext>()).mcontext).thread;
-        #[cfg(target_arch = "aarch64")]
-        return (state.pc, state.fp, strip(state.lr));
-        #[cfg(target_arch = "x86_64")]
-        return (state.rip, state.rbp, 0);
+        unsafe {
+            let state = &(*(*context.cast::<DarwinContext>()).mcontext).thread;
+            #[cfg(target_arch = "aarch64")]
+            return (state.pc, state.fp, strip(state.lr));
+            #[cfg(target_arch = "x86_64")]
+            return (state.rip, state.rbp, 0);
+        }
     }
 
     #[cfg(not(any(all(target_os = "linux", target_env = "gnu"), target_vendor = "apple")))]
     // SAFETY: `fd` must be a descriptor the caller opened, as for `write_all`.
     unsafe fn backtrace(fd: c_int, _context: *mut c_void) {
-        write_all(fd, b"(this platform gives none)\n");
+        unsafe {
+            write_all(fd, b"(this platform gives none)\n");
+        }
     }
 }
 
@@ -705,41 +720,45 @@ mod windows {
     // valid for the call. `PREVIOUS_FILTER` holds 0 or the filter `SetUnhandledExceptionFilter`
     // returned, so the transmute below gives back the function it was.
     unsafe extern "system" fn on_exception(pointers: *const EXCEPTION_POINTERS) -> i32 {
-        if let Some(setup) = SETUP.get() {
-            if !pointers.is_null() && !(*pointers).ExceptionRecord.is_null() && first_report(false)
-            {
-                let record = &*(*pointers).ExceptionRecord;
-                let code = record.ExceptionCode as u32;
-                let mut message = Text::<96>::new();
-                message
-                    .str(exception_name(code))
-                    .str(" (exception ")
-                    .hex(u64::from(code))
-                    .str(")");
-                let location = |text: &mut Text<2048>| {
-                    module_and_offset(text, record.ExceptionAddress as usize);
-                    // An access violation says what it tried, and where.
-                    if code == 0xC000_0005 && record.NumberParameters >= 2 {
-                        let what = match record.ExceptionInformation[0] {
-                            0 => " reading ",
-                            8 => " executing ",
-                            _ => " writing ",
-                        };
-                        text.str(what).hex(record.ExceptionInformation[1] as u64);
-                    }
-                };
-                write_report(setup, &location, message.as_bytes());
+        unsafe {
+            if let Some(setup) = SETUP.get() {
+                if !pointers.is_null()
+                    && !(*pointers).ExceptionRecord.is_null()
+                    && first_report(false)
+                {
+                    let record = &*(*pointers).ExceptionRecord;
+                    let code = record.ExceptionCode as u32;
+                    let mut message = Text::<96>::new();
+                    message
+                        .str(exception_name(code))
+                        .str(" (exception ")
+                        .hex(u64::from(code))
+                        .str(")");
+                    let location = |text: &mut Text<2048>| {
+                        module_and_offset(text, record.ExceptionAddress as usize);
+                        // An access violation says what it tried, and where.
+                        if code == 0xC000_0005 && record.NumberParameters >= 2 {
+                            let what = match record.ExceptionInformation[0] {
+                                0 => " reading ",
+                                8 => " executing ",
+                                _ => " writing ",
+                            };
+                            text.str(what).hex(record.ExceptionInformation[1] as u64);
+                        }
+                    };
+                    write_report(setup, &location, message.as_bytes());
+                }
             }
+            let previous = PREVIOUS_FILTER.load(Ordering::SeqCst);
+            if previous == 0 {
+                return EXCEPTION_CONTINUE_SEARCH;
+            }
+            let previous: LPTOP_LEVEL_EXCEPTION_FILTER = Some(std::mem::transmute::<
+                usize,
+                unsafe extern "system" fn(*const EXCEPTION_POINTERS) -> i32,
+            >(previous));
+            previous.map_or(EXCEPTION_CONTINUE_SEARCH, |filter| filter(pointers))
         }
-        let previous = PREVIOUS_FILTER.load(Ordering::SeqCst);
-        if previous == 0 {
-            return EXCEPTION_CONTINUE_SEARCH;
-        }
-        let previous: LPTOP_LEVEL_EXCEPTION_FILTER = Some(std::mem::transmute::<
-            usize,
-            unsafe extern "system" fn(*const EXCEPTION_POINTERS) -> i32,
-        >(previous));
-        previous.map_or(EXCEPTION_CONTINUE_SEARCH, |filter| filter(pointers))
     }
 
     /// The C runtime has put back the default handler before calling this one, and ends the
@@ -774,80 +793,86 @@ mod windows {
     // SAFETY: asks nothing of the caller: each buffer it gives Windows is on this stack and
     // outlives the call, the path NUL-terminated, and the file it opens is closed once.
     unsafe fn write_report(setup: &Setup, location: &dyn Fn(&mut Text<2048>), message: &[u8]) {
-        let at_ms = now_ms();
-        let mut path = [0u16; 1024];
-        let mut length = 0;
-        let mut push = |units: &mut dyn Iterator<Item = u16>| {
-            for unit in units {
-                if length + 1 < path.len() {
-                    path[length] = unit;
-                    length += 1;
+        unsafe {
+            let at_ms = now_ms();
+            let mut path = [0u16; 1024];
+            let mut length = 0;
+            let mut push = |units: &mut dyn Iterator<Item = u16>| {
+                for unit in units {
+                    if length + 1 < path.len() {
+                        path[length] = unit;
+                        length += 1;
+                    }
                 }
+            };
+            let mut name = Text::<96>::new();
+            name.str("\\")
+                .str(&setup.component)
+                .str("-")
+                .dec(at_ms)
+                .str("-")
+                .dec(u64::from(GetCurrentProcessId()))
+                .str(".txt");
+            push(&mut setup.folder.iter().copied());
+            push(&mut name.as_bytes().iter().map(|&byte| u16::from(byte)));
+            if !name.whole() || length + 1 >= path.len() {
+                return;
             }
-        };
-        let mut name = Text::<96>::new();
-        name.str("\\")
-            .str(&setup.component)
-            .str("-")
-            .dec(at_ms)
-            .str("-")
-            .dec(u64::from(GetCurrentProcessId()))
-            .str(".txt");
-        push(&mut setup.folder.iter().copied());
-        push(&mut name.as_bytes().iter().map(|&byte| u16::from(byte)));
-        if !name.whole() || length + 1 >= path.len() {
-            return;
+            make_folder(setup);
+            let file = CreateFileW(
+                path.as_ptr(),
+                GENERIC_WRITE,
+                0,
+                std::ptr::null(),
+                CREATE_NEW,
+                FILE_ATTRIBUTE_NORMAL,
+                std::ptr::null_mut(),
+            );
+            if file == INVALID_HANDLE_VALUE {
+                return;
+            }
+            let mut head = Text::<2048>::new();
+            report_head(&mut head, setup, at_ms, location, message);
+            write_all(file, head.as_bytes());
+            let mut frames = [std::ptr::null_mut::<core::ffi::c_void>(); 62];
+            let count = RtlCaptureStackBackTrace(
+                0,
+                frames.len() as u32,
+                frames.as_mut_ptr(),
+                std::ptr::null_mut(),
+            );
+            for (index, &frame) in frames[..usize::from(count)].iter().enumerate() {
+                let mut line = Text::<640>::new();
+                line.dec(index as u64).str(": ");
+                module_and_offset(&mut line, frame as usize);
+                line.str("\n");
+                write_all(file, line.as_bytes());
+            }
+            write_all(file, b"\n");
+            CloseHandle(file);
         }
-        make_folder(setup);
-        let file = CreateFileW(
-            path.as_ptr(),
-            GENERIC_WRITE,
-            0,
-            std::ptr::null(),
-            CREATE_NEW,
-            FILE_ATTRIBUTE_NORMAL,
-            std::ptr::null_mut(),
-        );
-        if file == INVALID_HANDLE_VALUE {
-            return;
-        }
-        let mut head = Text::<2048>::new();
-        report_head(&mut head, setup, at_ms, location, message);
-        write_all(file, head.as_bytes());
-        let mut frames = [std::ptr::null_mut::<core::ffi::c_void>(); 62];
-        let count = RtlCaptureStackBackTrace(
-            0,
-            frames.len() as u32,
-            frames.as_mut_ptr(),
-            std::ptr::null_mut(),
-        );
-        for (index, &frame) in frames[..usize::from(count)].iter().enumerate() {
-            let mut line = Text::<640>::new();
-            line.dec(index as u64).str(": ");
-            module_and_offset(&mut line, frame as usize);
-            line.str("\n");
-            write_all(file, line.as_bytes());
-        }
-        write_all(file, b"\n");
-        CloseHandle(file);
     }
 
     /// The crash folder and the folders above it.
     // SAFETY: asks nothing of the caller: `CreateDirectoryW` is given only NUL-terminated paths in
     // a buffer on this stack, and the folder has no NUL of its own (`folder_for_handler`).
     unsafe fn make_folder(setup: &Setup) {
-        let folder = &setup.folder;
-        let mut path = [0u16; 1024];
-        if folder.len() + 1 >= path.len() {
-            return;
-        }
-        path[..folder.len()].copy_from_slice(folder);
-        let separator = |unit: u16| unit == u16::from(b'\\') || unit == u16::from(b'/');
-        for end in (3..=folder.len()).filter(|&end| end == folder.len() || separator(folder[end])) {
-            let saved = path[end];
-            path[end] = 0;
-            CreateDirectoryW(path.as_ptr(), std::ptr::null());
-            path[end] = saved;
+        unsafe {
+            let folder = &setup.folder;
+            let mut path = [0u16; 1024];
+            if folder.len() + 1 >= path.len() {
+                return;
+            }
+            path[..folder.len()].copy_from_slice(folder);
+            let separator = |unit: u16| unit == u16::from(b'\\') || unit == u16::from(b'/');
+            for end in
+                (3..=folder.len()).filter(|&end| end == folder.len() || separator(folder[end]))
+            {
+                let saved = path[end];
+                path[end] = 0;
+                CreateDirectoryW(path.as_ptr(), std::ptr::null());
+                path[end] = saved;
+            }
         }
     }
 
@@ -855,55 +880,60 @@ mod windows {
     // SAFETY: asks nothing of the caller: `address` is only looked up among the loaded modules,
     // never read, and `GetModuleFileNameW` is given a buffer on this stack and its length.
     unsafe fn module_and_offset<const N: usize>(text: &mut Text<N>, address: usize) {
-        let mut module: HMODULE = std::ptr::null_mut();
-        let found = GetModuleHandleExW(
-            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-            address as *const u16,
-            &mut module,
-        ) != 0;
-        let mut name = [0u16; 520];
-        let length = if found {
-            GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize
-        } else {
-            0
-        };
-        if length == 0 {
-            text.hex(address as u64);
-            return;
+        unsafe {
+            let mut module: HMODULE = std::ptr::null_mut();
+            let found = GetModuleHandleExW(
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                    | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                address as *const u16,
+                &mut module,
+            ) != 0;
+            let mut name = [0u16; 520];
+            let length = if found {
+                GetModuleFileNameW(module, name.as_mut_ptr(), name.len() as u32) as usize
+            } else {
+                0
+            };
+            if length == 0 {
+                text.hex(address as u64);
+                return;
+            }
+            let name = &name[..length.min(name.len())];
+            let base = name
+                .iter()
+                .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))
+                .map_or(0, |at| at + 1);
+            for decoded in char::decode_utf16(name[base..].iter().copied()) {
+                let mut utf8 = [0u8; 4];
+                text.str(
+                    decoded
+                        .unwrap_or(char::REPLACEMENT_CHARACTER)
+                        .encode_utf8(&mut utf8),
+                );
+            }
+            text.str("+").hex((address - module as usize) as u64);
         }
-        let name = &name[..length.min(name.len())];
-        let base = name
-            .iter()
-            .rposition(|&unit| unit == u16::from(b'\\') || unit == u16::from(b'/'))
-            .map_or(0, |at| at + 1);
-        for decoded in char::decode_utf16(name[base..].iter().copied()) {
-            let mut utf8 = [0u8; 4];
-            text.str(
-                decoded
-                    .unwrap_or(char::REPLACEMENT_CHARACTER)
-                    .encode_utf8(&mut utf8),
-            );
-        }
-        text.str("+").hex((address - module as usize) as u64);
     }
 
     // SAFETY: `file` must be a handle the caller opened for synchronous writes; `WriteFile` only
     // reads `bytes`.
     unsafe fn write_all(file: windows_sys::Win32::Foundation::HANDLE, mut bytes: &[u8]) {
-        while !bytes.is_empty() {
-            let mut written = 0u32;
-            if WriteFile(
-                file,
-                bytes.as_ptr(),
-                bytes.len() as u32,
-                &mut written,
-                std::ptr::null_mut(),
-            ) == 0
-                || written == 0
-            {
-                return;
+        unsafe {
+            while !bytes.is_empty() {
+                let mut written = 0u32;
+                if WriteFile(
+                    file,
+                    bytes.as_ptr(),
+                    bytes.len() as u32,
+                    &mut written,
+                    std::ptr::null_mut(),
+                ) == 0
+                    || written == 0
+                {
+                    return;
+                }
+                bytes = &bytes[written as usize..];
             }
-            bytes = &bytes[written as usize..];
         }
     }
 }

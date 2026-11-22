@@ -235,7 +235,7 @@ impl TimelineView {
     /// stage's are. It fades in over `FADE` each time it comes. Without
     /// `ends` (a narrow strip, [`StripFit`]) it has no Go to start and Go
     /// to end, and the strip's own gap to the timecode.
-    fn strip_transport(&self, ends: bool, cx: &Context<Self>) -> impl IntoElement {
+    fn strip_transport(&self, ends: bool, cx: &Context<Self>) -> impl IntoElement + use<> {
         let reasons = self.transport_reasons();
         let playing = self.session.read(cx).state.playing;
         let buttons: Vec<_> = stage::TRANSPORT
@@ -318,7 +318,12 @@ impl TimelineView {
     /// closed), the timecode where the playhead is and the cut's length,
     /// the tools; at its right Snap and the zoom. As much shows as fits
     /// ([`StripFit`]), from how wide it and its pieces were last laid out.
-    pub(super) fn strip(&self, shown: f64, skimming: bool, cx: &Context<Self>) -> impl IntoElement {
+    pub(super) fn strip(
+        &self,
+        shown: f64,
+        skimming: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let has_transport = strip_has_transport(self.session.read(cx).picture_open);
         let shows = self.strip_shows(has_transport);
         let widths = self.strip_widths.clone();
@@ -367,7 +372,7 @@ impl TimelineView {
         has_transport: bool,
         shows: StripFit,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         let widths = &self.strip_widths;
         let transport = has_transport.then(|| self.strip_transport(shows.transport_ends, cx));
         let lanes = self.lanes.clone();
@@ -438,7 +443,7 @@ impl TimelineView {
     }
 
     /// The strip's right: Snap, then − (the slider while it fits) + and Fit.
-    fn strip_right(&self, shows: StripFit, cx: &Context<Self>) -> impl IntoElement {
+    fn strip_right(&self, shows: StripFit, cx: &Context<Self>) -> impl IntoElement + use<> {
         let snap_key = self.keys_of("sequence.snap", cx);
         let zoom_in = editor_state::shortcuts::shown_keys("Ctrl+=");
         let zoom_out = editor_state::shortcuts::shown_keys("Ctrl+-");
@@ -547,7 +552,7 @@ impl TimelineView {
 
     /// The zoom's slider: a rail, its fill to the knob, the knob; pressed
     /// or dragged, the zoom follows it on a log scale.
-    fn slider(&self, share: f32, cx: &Context<Self>) -> impl IntoElement {
+    fn slider(&self, share: f32, cx: &Context<Self>) -> impl IntoElement + use<> {
         let cell = self.slider.clone();
         let knob = 10.0;
         let travel = SLIDER - knob;

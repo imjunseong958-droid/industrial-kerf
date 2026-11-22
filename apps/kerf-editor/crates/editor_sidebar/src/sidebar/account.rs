@@ -81,7 +81,7 @@ impl SidebarView {
         title: String,
         below: String,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         div()
             .h(px(layout::SIDEBAR_FOOT))
             .flex_none()
@@ -104,7 +104,12 @@ impl SidebarView {
     /// The account at the foot: a disc with its first letter, who chat
     /// runs on, and under it the plan or the model. Pressed, the app's menu
     /// opens above it.
-    fn account(&self, title: String, below: String, cx: &mut Context<Self>) -> impl IntoElement {
+    fn account(
+        &self,
+        title: String,
+        below: String,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let open = self.app_menu_open;
         let letter = title
             .chars()

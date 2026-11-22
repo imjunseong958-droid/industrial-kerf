@@ -720,14 +720,14 @@ impl ProposalBand {
                 }
             }
             band.clips.push(change.clip.clone());
-            if change.leaves_ghost() {
-                if let Some((start, end)) = change.old {
-                    let track = change
-                        .old_track
-                        .clone()
-                        .unwrap_or_else(|| change.track.clone());
-                    band.ghosts.push((track, start, end));
-                }
+            if change.leaves_ghost()
+                && let Some((start, end)) = change.old
+            {
+                let track = change
+                    .old_track
+                    .clone()
+                    .unwrap_or_else(|| change.track.clone());
+                band.ghosts.push((track, start, end));
             }
         }
         ranged.then_some(band)

@@ -340,12 +340,12 @@ impl SolvedShot {
                     worst = (off, Some(index));
                 }
             }
-            if let (off, Some(index)) = worst {
-                if off > tolerance {
-                    keep[index] = true;
-                    spans.push((low, index));
-                    spans.push((index, high));
-                }
+            if let (off, Some(index)) = worst
+                && off > tolerance
+            {
+                keep[index] = true;
+                spans.push((low, index));
+                spans.push((index, high));
             }
         }
         (0..count).filter(|index| keep[*index]).collect()

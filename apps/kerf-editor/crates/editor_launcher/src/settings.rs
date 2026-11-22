@@ -368,7 +368,10 @@ impl SettingsView {
     }
 
     /// A segmented control's or a switch's choice, carried to `this`.
-    fn chooser<T, F>(cx: &Context<Self>, choose: F) -> impl Fn(T, &mut Window, &mut App) + 'static
+    fn chooser<T, F>(
+        cx: &Context<Self>,
+        choose: F,
+    ) -> impl Fn(T, &mut Window, &mut App) + 'static + use<T, F>
     where
         T: Copy + 'static,
         F: Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
@@ -934,13 +937,13 @@ impl SettingsView {
                 // not there yet, its folder (made), to put it in.
                 ui::button("settings-models-open", open_words).on_click(move |_, _, cx| {
                     let (_, opened) = models_opener(&shown, shown.is_file());
-                    if !shown.is_file() {
-                        if let Err(error) = std::fs::create_dir_all(&opened) {
-                            log::warn!(
-                                "{}: the folder could not be made: {error}",
-                                opened.display()
-                            );
-                        }
+                    if !shown.is_file()
+                        && let Err(error) = std::fs::create_dir_all(&opened)
+                    {
+                        log::warn!(
+                            "{}: the folder could not be made: {error}",
+                            opened.display()
+                        );
                     }
                     cx.open_with_system(&opened);
                 }),
@@ -1671,7 +1674,7 @@ impl SettingsView {
 
     // ------------------------------------------------------------ drawing
 
-    fn head(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn head(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .h(px(HEAD))
             .flex_none()
@@ -1689,7 +1692,7 @@ impl SettingsView {
             )
     }
 
-    fn nav(&self, cx: &Context<Self>) -> impl IntoElement {
+    fn nav(&self, cx: &Context<Self>) -> impl IntoElement + use<> {
         div()
             .w(px(NAV))
             .h_full()
@@ -1737,7 +1740,12 @@ impl SettingsView {
             }))
     }
 
-    fn page_body(&self, page: Page, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    fn page_body(
+        &self,
+        page: Page,
+        window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
         let content = match page {
             Page::Account => self.account_page(window, cx),
             Page::Chat => self.chat_page(window, cx),
@@ -1767,7 +1775,7 @@ impl SettingsView {
             )
     }
 
-    fn pages(&mut self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    fn pages(&mut self, window: &Window, cx: &Context<Self>) -> impl IntoElement + use<> {
         // The page left stays under the chosen one while that fades in.
         let fading = self
             .previous
@@ -1909,7 +1917,7 @@ fn in_face<E: Styled>(element: E, family: &'static str, style: theme::TypeStyle)
 }
 
 /// A shortcut ("Ctrl+Shift+Z", "Ctrl+K, Ctrl+S") as keycaps, one a chord.
-fn keycaps(shortcut: &str) -> impl IntoElement {
+fn keycaps(shortcut: &str) -> impl IntoElement + use<> {
     div()
         .flex()
         .items_center()
@@ -2214,8 +2222,8 @@ pub fn model_summary(model: &Value) -> String {
     }
 }
 
-/// The person's models file, as kerf-engine finds it: `KERF_MODELS`, else
-/// `~/.kerf/models.json`.
+/// The person's models file: `KERF_MODELS`, else `~/.kerf/models.json`, as
+/// kerf-engine finds it when nothing in the process named another.
 pub fn models_file() -> PathBuf {
     std::env::var_os("KERF_MODELS")
         .filter(|path| !path.is_empty())

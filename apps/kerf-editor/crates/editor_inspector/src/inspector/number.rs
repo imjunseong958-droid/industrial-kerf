@@ -263,7 +263,7 @@ impl InspectorView {
         ink: Rgba,
         scrub: Drag,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + use<> {
         theme::type_style(div(), text::TIMECODE)
             .id(field.id("value"))
             .w(px(VALUE))

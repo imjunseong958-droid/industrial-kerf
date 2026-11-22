@@ -123,6 +123,13 @@ pub fn secret(request: &Value) -> Value {
     secrets::request(request)
 }
 
+/// Keep this process out of the system keychain from here on, as `KERF_SECRETS=off` does, without
+/// changing its environment: [`secret`] then refuses everything, and the agent and Kerf Cloud keep
+/// their keys and token as they do where there is no keychain.
+pub fn keychain_off() {
+    secrets::turn_off();
+}
+
 // ---- project launcher ------------------------------------------------------------
 
 /// What the launcher shows of a project folder, before any bridge exists; synchronous and

@@ -360,10 +360,10 @@ fn sync_rows(input: &AppMenuInput) -> Vec<AppRow> {
         branches.push(current.clone());
     }
     for branch in status["branches"].as_array().into_iter().flatten() {
-        if let Some(branch) = branch.as_str().filter(|branch| !branch.is_empty()) {
-            if !branches.iter().any(|known| known == branch) {
-                branches.push(branch.to_owned());
-            }
+        if let Some(branch) = branch.as_str().filter(|branch| !branch.is_empty())
+            && !branches.iter().any(|known| known == branch)
+        {
+            branches.push(branch.to_owned());
         }
     }
     let switch_reason = editor_session::palette::unavailable(input.states, "collab.switchBranch")

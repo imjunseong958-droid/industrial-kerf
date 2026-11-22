@@ -429,10 +429,10 @@ impl ShotGraph {
             .is_none_or(|old| old.media != recipe.media || old.name != recipe.name);
         let edited = event.edited;
         // A step just added is the one to set next.
-        if let Some(line) = event.added {
-            if let Some(node) = recipe.nodes.iter().find(|node| node.line == Some(line)) {
-                self.selected = Some(node.id.clone());
-            }
+        if let Some(line) = event.added
+            && let Some(node) = recipe.nodes.iter().find(|node| node.line == Some(line))
+        {
+            self.selected = Some(node.id.clone());
         }
         let pending = self.pending_node.take();
         self.recipe = Some(recipe);
