@@ -75,7 +75,11 @@ impl PictureEffect for Warp {
 
 /// What turns a point of the document, in fractions of the picture, into its pixels, moved with the
 /// picture by the effect's `move_x` and `move_y`.
-fn placing(picture: &Image, effect: &Effect, run: &EffectRun) -> impl Fn([f64; 2]) -> [f32; 2] {
+fn placing(
+    picture: &Image,
+    effect: &Effect,
+    run: &EffectRun,
+) -> impl Fn([f64; 2]) -> [f32; 2] + use<> {
     let (w, h) = (picture.w as f64, picture.h as f64);
     let moved = [run.number(effect, "move_x"), run.number(effect, "move_y")];
     move |point| {
@@ -151,10 +155,10 @@ impl PictureEffect for Fill {
         let patch = run.number(effect, "patch").round() as usize;
         let key = fill_key(picture, &hole, &run_method(effect, run), patch, run.seed);
         let pixels = kept_or(key, || {
-            if method.as_deref() == Some("video") {
-                if let Some(pixels) = fill_run(picture, effect, run, patch, &hole) {
-                    return pixels;
-                }
+            if method.as_deref() == Some("video")
+                && let Some(pixels) = fill_run(picture, effect, run, patch, &hole)
+            {
+                return pixels;
             }
             let source = encoded(picture);
             let filled = match method.as_deref() {
@@ -165,7 +169,9 @@ impl PictureEffect for Fill {
         });
         let holes = picture
             .px
-            .as_chunks_mut::<4>().0.iter_mut()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .zip(&hole)
             .filter(|(_, hole)| **hole);
         for ((pixel, _), value) in holes.zip(pixels.iter()) {
@@ -256,10 +262,13 @@ fn fill_run(
     here_pixels
 }
 
+/// Fills kept, each with the key it was made for ([`fill_key`]).
+type KeptFills = Vec<(u64, Arc<Vec<[f32; 4]>>)>;
+
 /// What the fills made and may be asked for again, newest last. A still, or
 /// a stretch of identical frames, fills once rather than once a frame: filling
 /// a large area takes over a second.
-static FILLS: Mutex<Vec<(u64, Arc<Vec<[f32; 4]>>)>> = Mutex::new(Vec::new());
+static FILLS: Mutex<KeptFills> = Mutex::new(Vec::new());
 
 /// The most pixels [`FILLS`] keeps: 512 MB of them.
 const MOST_KEPT_PIXELS: usize = 512 << 20 >> 4;
@@ -336,7 +345,9 @@ fn hole(picture: &Image, effect: &Effect, run: &EffectRun, at: Time) -> Option<V
 fn encoded(picture: &Image) -> Raster {
     let data = picture
         .px
-        .as_chunks::<4>().0.iter()
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|pixel| {
             let a = pixel[3];
             if a <= 1e-6 {

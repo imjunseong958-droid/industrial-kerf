@@ -24,7 +24,7 @@
 //! editor started for links alone hands them to the editor already open
 //! (its link inbox) and ends.
 
-use kerf_editor::{app, commands, icons, links, motion, prefs, prefs::Prefs, theme};
+use kerf_editor::{app, icons, keymap, links, motion, prefs, prefs::Prefs, session, theme};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -56,8 +56,7 @@ impl Arguments {
 
     /// A run that says nothing on its own at launch (no crash notice, no
     /// question to GitHub) and neither hands links over nor takes them: a
-    /// smoke run, or one that renders a preview, as the Qt editor's
-    /// `!smoke && !renderPreview` had it.
+    /// smoke run, or one that renders a preview.
     fn quiet(&self) -> bool {
         self.smoke() || self.render_preview
     }
@@ -92,9 +91,6 @@ fn arguments(raw: &[String]) -> Result<Arguments, String> {
             "--settings-dir" => {
                 let folder = value("a folder")?;
                 let folder = std::path::absolute(&folder).unwrap_or_else(|_| folder.into());
-                // Before anything reads them: the settings there, and no keychain.
-                std::env::set_var("KERF_EDITOR_PREFS", folder.join("editor.json"));
-                std::env::set_var("KERF_SECRETS", "off");
                 settings_dir = Some(folder);
             }
             "--quit-after-ms" => {
@@ -143,17 +139,46 @@ fn arguments(raw: &[String]) -> Result<Arguments, String> {
     })
 }
 
+/// Start this editor again in this process, with the same arguments and `path` as its PATH.
+/// Returns only when it cannot.
+#[cfg(unix)]
+fn start_again_with_path(path: &str) -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let program = match std::env::current_exe() {
+        Ok(program) => program,
+        Err(error) => return error,
+    };
+    let mut arguments = std::env::args_os();
+    let mut command = std::process::Command::new(program);
+    if let Some(name) = arguments.next() {
+        command.arg0(name);
+    }
+    command.args(arguments).env("PATH", path).exec()
+}
+
+#[cfg(not(unix))]
+fn start_again_with_path(_path: &str) -> std::io::Error {
+    std::io::ErrorKind::Unsupported.into()
+}
+
 fn main() {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     if let Some(code) = kerf_bridge::serve_mcp(&raw) {
         std::process::exit(code);
     }
     // Before any thread starts, and for every tool the editor and kerfd
-    // run: Finder and the Dock give an app no shell PATH.
-    if cfg!(target_os = "macos") {
-        if let Some(home) = prefs::home() {
-            let path = std::env::var("PATH").unwrap_or_default();
-            std::env::set_var("PATH", app::path_with_tool_folders(&path, &home));
+    // run: Finder and the Dock give an app no shell PATH. The editor starts
+    // again on one with the folders tools are installed in, so that all it
+    // runs, and all it looks for on PATH, finds them. It starts again only
+    // when the second start would not change PATH again, so it does once.
+    if cfg!(target_os = "macos")
+        && let Some(home) = prefs::home()
+    {
+        let path = std::env::var("PATH").unwrap_or_default();
+        let with_tools = app::path_with_tool_folders(&path, &home);
+        if with_tools != path && app::path_with_tool_folders(&with_tools, &home) == with_tools {
+            let error = start_again_with_path(&with_tools);
+            eprintln!("kerf-editor: cannot start again with the tool folders on PATH: {error}");
         }
     }
     // Settings someone else put in place (a test's) are theirs alone.
@@ -165,10 +190,15 @@ fn main() {
             std::process::exit(2);
         }
     };
+    // Before anything reads them: the settings there, and no keychain.
+    if let Some(folder) = &arguments.settings_dir {
+        prefs::keep_settings_in(folder);
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     kerf_bridge::crash_install();
     motion::init_from_env();
-    // Before anything reads them: the Qt editor's settings, the first time.
+    // Before anything reads them, the first time: the settings the editor
+    // before 0.1.5 (Qt) kept, so an update loses none of them.
     if !settings_given || arguments.settings_dir.is_some() {
         let taken = prefs::import_qt_once(arguments.settings_dir.as_deref());
         if !taken.is_empty() {
@@ -193,13 +223,12 @@ fn main() {
     } else {
         None
     };
-    if let Some(address) = &inbox {
-        if !arguments.links.is_empty()
-            && !arguments.named_project
-            && links::hand_off(address, &arguments.links, Duration::from_secs(2))
-        {
-            return;
-        }
+    if let Some(address) = &inbox
+        && !arguments.links.is_empty()
+        && !arguments.named_project
+        && links::hand_off(address, &arguments.links, Duration::from_secs(2))
+    {
+        return;
     }
 
     // The first link opens its project, unless a project is named: then
@@ -249,7 +278,7 @@ fn main() {
             log::warn!("bundled fonts did not load: {error}");
         }
         app::install_prompts(cx);
-        commands::bind(prefs.keymap.wire(), cx);
+        keymap::bind(prefs.keymap.wire(), cx);
         // The editor is its windows: the last one closed, it quits.
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -259,7 +288,7 @@ fn main() {
         .detach();
         // Every window opened later keeps the kerfd given here; the first
         // alone takes the size.
-        app::set_kerfd(kerfd.clone(), cx);
+        session::set_kerfd(kerfd.clone(), cx);
         app::set_window_size(window_size, cx);
         match link {
             Some(link) => app::follow(&link, kerfd.clone(), cx),
@@ -296,14 +325,13 @@ fn main() {
         .detach();
         cx.activate(true);
         if smoke {
-            // A capture with no time of its own quits as the Qt editor's did,
-            // its window grabbed as it does.
             let after = quit_after.unwrap_or(Duration::from_millis(500));
             match screenshot {
                 Some(file) => app::screenshot_then_quit(file, after, cx),
                 None => cx
                     .spawn(async move |cx| {
                         cx.background_executor().timer(after).await;
+                        // Refused only once the editor has ended already.
                         let _ = cx.update(|cx| cx.quit());
                     })
                     .detach(),

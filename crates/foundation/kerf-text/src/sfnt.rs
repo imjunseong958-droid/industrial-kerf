@@ -37,7 +37,12 @@ fn be16(b: &[u8], o: usize) -> Option<u16> {
     Some(u16::from_be_bytes([*b.get(o)?, *b.get(o + 1)?]))
 }
 fn be32(b: &[u8], o: usize) -> Option<u32> {
-    Some(u32::from_be_bytes([*b.get(o)?, *b.get(o + 1)?, *b.get(o + 2)?, *b.get(o + 3)?]))
+    Some(u32::from_be_bytes([
+        *b.get(o)?,
+        *b.get(o + 1)?,
+        *b.get(o + 2)?,
+        *b.get(o + 3)?,
+    ]))
 }
 
 fn read_at<R: Read + Seek>(r: &mut R, off: u64, len: usize) -> Option<Vec<u8>> {
@@ -53,15 +58,23 @@ fn read_at<R: Read + Seek>(r: &mut R, off: u64, len: usize) -> Option<Vec<u8>> {
 /// Read the names of every face in a font file (a single font or a collection). Faces with none
 /// of the `OUTLINE_TABLES` or `COLOR_BITMAP_TABLES` are left out.
 pub fn read_faces<R: Read + Seek>(r: &mut R) -> Vec<FaceNames> {
-    face_offsets(r).iter().enumerate().filter_map(|(i, &o)| read_face(r, o as u64, i as u32)).collect()
+    face_offsets(r)
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &o)| read_face(r, o as u64, i as u32))
+        .collect()
 }
 
 /// Where each face of a font file starts: one for a single font, each of a collection's.
 fn face_offsets<R: Read + Seek>(r: &mut R) -> Vec<u32> {
-    let Some(head) = read_at(r, 0, 12) else { return Vec::new() };
+    let Some(head) = read_at(r, 0, 12) else {
+        return Vec::new();
+    };
     if &head[0..4] == b"ttcf" {
         let n = be32(&head, 8).unwrap_or(0).min(256) as usize;
-        let Some(t) = read_at(r, 12, n * 4) else { return Vec::new() };
+        let Some(t) = read_at(r, 12, n * 4) else {
+            return Vec::new();
+        };
         (0..n).filter_map(|i| be32(&t, i * 4)).collect()
     } else {
         vec![0]
@@ -77,17 +90,37 @@ fn table_directory<R: Read + Seek>(r: &mut R, off: u64) -> Option<Vec<([u8; 4], 
     }
     let n = be16(&h, 4)? as usize;
     let dir = read_at(r, off + 12, n * 16)?;
-    dir.as_chunks::<16>().0.iter().map(|rec| Some(([rec[0], rec[1], rec[2], rec[3]], be32(rec, 8)? as u64, be32(rec, 12)? as usize))).collect()
+    dir.as_chunks::<16>()
+        .0
+        .iter()
+        .map(|rec| {
+            Some((
+                [rec[0], rec[1], rec[2], rec[3]],
+                be32(rec, 8)? as u64,
+                be32(rec, 12)? as usize,
+            ))
+        })
+        .collect()
 }
 
 /// The characters a face maps, as sorted, disjoint ranges of code points, and whether it draws in
 /// colour ([`COLOR_TABLES`]). Only the face's table directory, `maxp` and `cmap` are read.
-pub(crate) fn read_charset<R: Read + Seek>(r: &mut R, index: u32) -> Option<(Vec<(u32, u32)>, bool)> {
+pub(crate) fn read_charset<R: Read + Seek>(
+    r: &mut R,
+    index: u32,
+) -> Option<(Vec<(u32, u32)>, bool)> {
     let off = *face_offsets(r).get(index as usize)?;
     let dir = table_directory(r, u64::from(off))?;
-    let find = |tag: &[u8; 4]| dir.iter().find(|(t, _, _)| t == tag).map(|&(_, o, l)| (o, l));
+    let find = |tag: &[u8; 4]| {
+        dir.iter()
+            .find(|(t, _, _)| t == tag)
+            .map(|&(_, o, l)| (o, l))
+    };
     let color = COLOR_TABLES.iter().any(|tag| find(tag).is_some());
-    let glyphs = find(b"maxp").and_then(|(o, l)| read_at(r, o, l.min(6))).and_then(|b| be16(&b, 4)).map_or(u32::from(u16::MAX), u32::from);
+    let glyphs = find(b"maxp")
+        .and_then(|(o, l)| read_at(r, o, l.min(6)))
+        .and_then(|b| be16(&b, 4))
+        .map_or(u32::from(u16::MAX), u32::from);
     let (o, l) = find(b"cmap")?;
     let cmap = read_at(r, o, l)?;
     Some((charset_of(&cmap, glyphs), color))
@@ -98,10 +131,17 @@ pub(crate) fn read_charset<R: Read + Seek>(r: &mut R, index: u32) -> Option<(Vec
 pub(crate) fn charset_of(cmap: &[u8], glyphs: u32) -> Vec<(u32, u32)> {
     use skrifa::raw::tables::cmap::{Cmap, CmapIterLimits};
     use skrifa::raw::{FontData, FontRead};
-    let Ok(table) = Cmap::read(FontData::new(cmap)) else { return Vec::new() };
-    let Some((_, _, subtable)) = table.best_subtable() else { return Vec::new() };
+    let Ok(table) = Cmap::read(FontData::new(cmap)) else {
+        return Vec::new();
+    };
+    let Some((_, _, subtable)) = table.best_subtable() else {
+        return Vec::new();
+    };
     let mut points: Vec<u32> = subtable
-        .iter_with_limits(CmapIterLimits { max_char: char::MAX as u32, glyph_count: glyphs })
+        .iter_with_limits(CmapIterLimits {
+            max_char: char::MAX as u32,
+            glyph_count: glyphs,
+        })
         .filter(|(_, glyph)| glyph.to_u32() != 0)
         .map(|(c, _)| c)
         .collect();
@@ -123,20 +163,32 @@ pub fn read_faces_bytes(data: &[u8]) -> Vec<FaceNames> {
 
 fn read_face<R: Read + Seek>(r: &mut R, off: u64, index: u32) -> Option<FaceNames> {
     let dir = table_directory(r, off)?;
-    if !dir.iter().any(|(tag, _, _)| OUTLINE_TABLES.contains(&tag) || COLOR_BITMAP_TABLES.contains(&tag)) {
+    if !dir
+        .iter()
+        .any(|(tag, _, _)| OUTLINE_TABLES.contains(&tag) || COLOR_BITMAP_TABLES.contains(&tag))
+    {
         return None;
     }
-    let find = |tag: &[u8; 4]| dir.iter().find(|(t, _, _)| t == tag).map(|&(_, o, l)| (o, l));
+    let find = |tag: &[u8; 4]| {
+        dir.iter()
+            .find(|(t, _, _)| t == tag)
+            .map(|&(_, o, l)| (o, l))
+    };
     let (name, os2) = (find(b"name"), find(b"OS/2"));
     let (no, nl) = name?;
     let nb = read_at(r, no, nl)?;
     let get = |id: u16| name_string(&nb, id);
     let family = get(16).or_else(|| get(1))?;
-    let style = get(17).or_else(|| get(2)).unwrap_or_else(|| "Regular".into());
+    let style = get(17)
+        .or_else(|| get(2))
+        .unwrap_or_else(|| "Regular".into());
     let full_name = get(4).unwrap_or_else(|| format!("{family} {style}"));
     let legacy = get(1).filter(|_| get(2).is_none_or(|sub| sub.eq_ignore_ascii_case("Regular")));
     let mut names: Vec<String> = Vec::new();
-    for n in [Some(full_name.clone()), get(6), legacy].into_iter().flatten() {
+    for n in [Some(full_name.clone()), get(6), legacy]
+        .into_iter()
+        .flatten()
+    {
         if !n.eq_ignore_ascii_case(&family) && !names.iter().any(|m| m.eq_ignore_ascii_case(&n)) {
             names.push(n);
         }
@@ -151,7 +203,16 @@ fn read_face<R: Read + Seek>(r: &mut R, off: u64, index: u32) -> Option<FaceName
     let sl = style.to_ascii_lowercase();
     italic |= sl.contains("italic") || sl.contains("oblique");
     let color = dir.iter().any(|(tag, _, _)| COLOR_TABLES.contains(&tag));
-    Some(FaceNames { index, family, style, full_name, names, weight, italic, color })
+    Some(FaceNames {
+        index,
+        family,
+        style,
+        full_name,
+        names,
+        weight,
+        italic,
+        color,
+    })
 }
 
 /// A name-table string by id, preferring Windows Unicode English, then any Unicode, then Mac Roman.
@@ -161,17 +222,30 @@ fn name_string(b: &[u8], id: u16) -> Option<String> {
     let mut best: Option<(u8, String)> = None;
     for i in 0..count {
         let r = 6 + i * 12;
-        let (plat, enc, lang, nid, len, off) =
-            (be16(b, r)?, be16(b, r + 2)?, be16(b, r + 4)?, be16(b, r + 6)?, be16(b, r + 8)? as usize, be16(b, r + 10)? as usize);
+        let (plat, enc, lang, nid, len, off) = (
+            be16(b, r)?,
+            be16(b, r + 2)?,
+            be16(b, r + 4)?,
+            be16(b, r + 6)?,
+            be16(b, r + 8)? as usize,
+            be16(b, r + 10)? as usize,
+        );
         if nid != id {
             continue;
         }
         let rank = match plat {
             3 if enc == 1 || enc == 10 => {
-                if best.as_ref().is_some_and(|(current, _)| *current <= if lang == 0x409 { 0 } else { 1 }) {
+                if best
+                    .as_ref()
+                    .is_some_and(|(current, _)| *current <= if lang == 0x409 { 0 } else { 1 })
+                {
                     continue;
                 }
-                if lang == 0x409 { 0 } else { 1 }
+                if lang == 0x409 {
+                    0
+                } else {
+                    1
+                }
             }
             0 => {
                 if best.as_ref().is_some_and(|(current, _)| *current <= 2) {
@@ -192,14 +266,27 @@ fn name_string(b: &[u8], id: u16) -> Option<String> {
         let raw = b.get(storage + off..storage + off + len)?;
         let s = match plat {
             3 => {
-                let u: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                let u: Vec<u16> = raw
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
                 String::from_utf16_lossy(&u)
             }
             0 => {
-                let u: Vec<u16> = raw.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                let u: Vec<u16> = raw
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
                 String::from_utf16_lossy(&u)
             }
-            1 => raw.iter().map(|&c| if c < 128 { c as char } else { '?' }).collect(),
+            1 => raw
+                .iter()
+                .map(|&c| if c < 128 { c as char } else { '?' })
+                .collect(),
             _ => return None,
         };
         best = Some((rank, s));
@@ -219,12 +306,18 @@ mod tests {
         // The new tag keeps the table directory sorted.
         let font = crate::fonts::INTER_REGULAR;
         let n = usize::from(be16(font, 4).unwrap());
-        let glyf = (0..n).map(|i| 12 + 16 * i).find(|&r| &font[r..r + 4] == b"glyf").unwrap();
+        let glyf = (0..n)
+            .map(|i| 12 + 16 * i)
+            .find(|&r| &font[r..r + 4] == b"glyf")
+            .unwrap();
         let mut renamed = font.to_vec();
         renamed[glyf..glyf + 4].copy_from_slice(b"gxyz");
         // skrifa maps 'A' to a glyph of the copy and reads no outline for it.
         let copy = skrifa::FontRef::new(&renamed).unwrap();
-        assert!(copy.outline_glyphs().get(copy.charmap().map('A').unwrap()).is_none());
+        assert!(copy
+            .outline_glyphs()
+            .get(copy.charmap().map('A').unwrap())
+            .is_none());
         assert!(read_faces_bytes(&renamed).is_empty());
         assert_eq!(read_faces_bytes(font).len(), 1);
         // A collection holds both faces, which share one copy of the tables. Table offsets count
@@ -241,12 +334,26 @@ mod tests {
         };
         // The header holds the tag, version 1.0, the number of faces and where each face's table
         // directory starts.
-        let mut ttc = [*b"ttcf", [0, 1, 0, 0], 2u32.to_be_bytes(), 20u32.to_be_bytes(), (20 + dir as u32).to_be_bytes()].concat();
+        let mut ttc = [
+            *b"ttcf",
+            [0, 1, 0, 0],
+            2u32.to_be_bytes(),
+            20u32.to_be_bytes(),
+            (20 + dir as u32).to_be_bytes(),
+        ]
+        .concat();
         ttc.extend(shifted(&renamed));
         ttc.extend(shifted(font));
         ttc.extend_from_slice(font);
         let faces = read_faces_bytes(&ttc);
         assert_eq!(faces.len(), 1);
-        assert_eq!((faces[0].index, faces[0].family.as_str(), faces[0].style.as_str()), (1, "Inter", "Regular"));
+        assert_eq!(
+            (
+                faces[0].index,
+                faces[0].family.as_str(),
+                faces[0].style.as_str()
+            ),
+            (1, "Inter", "Regular")
+        );
     }
 }

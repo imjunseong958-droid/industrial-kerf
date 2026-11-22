@@ -1,10 +1,10 @@
 //! Projective warps composited straight into a destination (the layer transform step).
 
-use kerf_color::{BlendMode, blend_pixel};
-use kerf_geom::{Bounds, Mat3, vec2};
+use kerf_color::{blend_pixel, BlendMode};
+use kerf_geom::{vec2, Bounds, Mat3};
 use rayon::prelude::*;
 
-use crate::{Image, Px, hash_noise};
+use crate::{hash_noise, Image, Px};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Sampling {
@@ -26,7 +26,13 @@ pub struct WarpOpts {
 
 impl Default for WarpOpts {
     fn default() -> Self {
-        WarpOpts { sampling: Sampling::Bilinear, opacity: 1.0, mode: BlendMode::Normal, seed: 0, clip: None }
+        WarpOpts {
+            sampling: Sampling::Bilinear,
+            opacity: 1.0,
+            mode: BlendMode::Normal,
+            seed: 0,
+            clip: None,
+        }
     }
 }
 
@@ -63,18 +69,24 @@ pub fn composite_warp(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts) {
 /// `dst += warp(src) · weight` (plain sum, no blending): motion-blur sub-samples accumulate
 /// straight into one buffer instead of one full-size image per sample.
 pub fn accumulate_warp(dst: &mut Image, src: &Image, m: &Mat3, sampling: Sampling, weight: f32) {
-    let opts = WarpOpts { sampling, ..Default::default() };
+    let opts = WarpOpts {
+        sampling,
+        ..Default::default()
+    };
     if m.is_affine() && m.inverse().is_some_and(|i| i.is_affine()) {
         composite_warp_impl(dst, src, m, &opts, true, Some(weight));
         return;
     }
     let mut tmp = Image::new(dst.width, dst.height);
     composite_warp(&mut tmp, src, m, &opts);
-    dst.data.par_iter_mut().zip(tmp.data.par_iter()).for_each(|(d, s)| {
-        for c in 0..4 {
-            d[c] += s[c] * weight;
-        }
-    });
+    dst.data
+        .par_iter_mut()
+        .zip(tmp.data.par_iter())
+        .for_each(|(d, s)| {
+            for c in 0..4 {
+                d[c] += s[c] * weight;
+            }
+        });
 }
 
 #[cfg(test)]
@@ -119,13 +131,21 @@ fn sample_bilinear_fast(img: &Image, x: f64, y: f64) -> Px {
 /// (conservative by one step on each side; callers still check per pixel).
 fn span(p0: f64, s: f64, min: f64, max: f64, n: usize) -> (usize, usize) {
     if s.abs() < 1e-12 {
-        return if p0 >= min - 1e-9 && p0 <= max + 1e-9 { (0, n) } else { (0, 0) };
+        return if p0 >= min - 1e-9 && p0 <= max + 1e-9 {
+            (0, n)
+        } else {
+            (0, 0)
+        };
     }
     let (a, b) = ((min - p0) / s, (max - p0) / s);
     let (a, b) = if a < b { (a, b) } else { (b, a) };
     let lo = (a.floor() - 1.0).max(0.0);
     let hi = (b.ceil() + 2.0).min(n as f64);
-    if hi <= lo { (0, 0) } else { (lo as usize, hi as usize) }
+    if hi <= lo {
+        (0, 0)
+    } else {
+        (lo as usize, hi as usize)
+    }
 }
 
 /// Fast affine rows: `blend(dst, src, x, y)` is only called for visible source pixels.
@@ -148,31 +168,68 @@ fn affine_rows(
     let step = vec2(m[0][0], m[1][0]);
     // Pure integer translation: every sample lands on a pixel centre, so all filters return the
     // source pixel itself (bicubic still clamps negatives, as in the reference).
-    let int_tx = m[0][0] == 1.0 && m[1][1] == 1.0 && m[0][1] == 0.0 && m[1][0] == 0.0 && m[0][2].fract() == 0.0 && m[1][2].fract() == 0.0;
-    dst.data.par_chunks_mut(w).enumerate().skip(y0).take(y1 - y0).for_each(|(y, row)| {
-        let fy = y as f64 + 0.5;
-        let p0 = vec2(m[0][0] * (x0 as f64 + 0.5) + m[0][1] * fy + m[0][2], m[1][0] * (x0 as f64 + 0.5) + m[1][1] * fy + m[1][2]);
-        let n = x1 - x0;
-        let (ax, bx) = span(p0.x, step.x, -1.0, iw + 1.0, n);
-        let (ay, by) = span(p0.y, step.y, -1.0, ih + 1.0, n);
-        let (lo, hi) = (ax.max(ay), bx.min(by));
-        if lo >= hi {
-            return;
-        }
-        if int_tx {
-            let sy = y as i64 + m[1][2] as i64;
-            if sy < 0 || sy >= img.height as i64 {
+    let int_tx = m[0][0] == 1.0
+        && m[1][1] == 1.0
+        && m[0][1] == 0.0
+        && m[1][0] == 0.0
+        && m[0][2].fract() == 0.0
+        && m[1][2].fract() == 0.0;
+    dst.data
+        .par_chunks_mut(w)
+        .enumerate()
+        .skip(y0)
+        .take(y1 - y0)
+        .for_each(|(y, row)| {
+            let fy = y as f64 + 0.5;
+            let p0 = vec2(
+                m[0][0] * (x0 as f64 + 0.5) + m[0][1] * fy + m[0][2],
+                m[1][0] * (x0 as f64 + 0.5) + m[1][1] * fy + m[1][2],
+            );
+            let n = x1 - x0;
+            let (ax, bx) = span(p0.x, step.x, -1.0, iw + 1.0, n);
+            let (ay, by) = span(p0.y, step.y, -1.0, ih + 1.0, n);
+            let (lo, hi) = (ax.max(ay), bx.min(by));
+            if lo >= hi {
                 return;
             }
-            let dx = m[0][2] as i64;
-            let srow = &img.data[sy as usize * img.width as usize..(sy as usize + 1) * img.width as usize];
-            let xa = (x0 as i64 + lo as i64).max(-dx).max(0) as usize;
-            let xb = ((x0 + hi) as i64).min(img.width as i64 - dx).max(0) as usize;
-            for x in xa..xb.max(xa) {
-                let mut s = srow[(x as i64 + dx) as usize];
-                if sampling == Sampling::Bicubic {
-                    s = [s[0].max(0.0), s[1].max(0.0), s[2].max(0.0), s[3].max(0.0)];
+            if int_tx {
+                let sy = y as i64 + m[1][2] as i64;
+                if sy < 0 || sy >= img.height as i64 {
+                    return;
                 }
+                let dx = m[0][2] as i64;
+                let srow = &img.data
+                    [sy as usize * img.width as usize..(sy as usize + 1) * img.width as usize];
+                let xa = (x0 as i64 + lo as i64).max(-dx).max(0) as usize;
+                let xb = ((x0 + hi) as i64).min(img.width as i64 - dx).max(0) as usize;
+                for x in xa..xb.max(xa) {
+                    let mut s = srow[(x as i64 + dx) as usize];
+                    if sampling == Sampling::Bicubic {
+                        s = [s[0].max(0.0), s[1].max(0.0), s[2].max(0.0), s[3].max(0.0)];
+                    }
+                    if s[3] <= 0.0 {
+                        continue;
+                    }
+                    if op < 1.0 {
+                        for c in s.iter_mut() {
+                            *c *= op;
+                        }
+                    }
+                    row[x] = blend(row[x], s, x as u32, y as u32);
+                }
+                return;
+            }
+            for i in lo..hi {
+                let x = x0 + i;
+                let p = vec2(p0.x + step.x * i as f64, p0.y + step.y * i as f64);
+                if p.x < -1.0 || p.y < -1.0 || p.x > iw + 1.0 || p.y > ih + 1.0 {
+                    continue;
+                }
+                let mut s = match sampling {
+                    Sampling::Nearest => img.get(p.x.floor() as i64, p.y.floor() as i64),
+                    Sampling::Bilinear => sample_bilinear_fast(img, p.x, p.y),
+                    Sampling::Bicubic => img.sample_bicubic(p.x, p.y),
+                };
                 if s[3] <= 0.0 {
                     continue;
                 }
@@ -183,33 +240,17 @@ fn affine_rows(
                 }
                 row[x] = blend(row[x], s, x as u32, y as u32);
             }
-            return;
-        }
-        for i in lo..hi {
-            let x = x0 + i;
-            let p = vec2(p0.x + step.x * i as f64, p0.y + step.y * i as f64);
-            if p.x < -1.0 || p.y < -1.0 || p.x > iw + 1.0 || p.y > ih + 1.0 {
-                continue;
-            }
-            let mut s = match sampling {
-                Sampling::Nearest => img.get(p.x.floor() as i64, p.y.floor() as i64),
-                Sampling::Bilinear => sample_bilinear_fast(img, p.x, p.y),
-                Sampling::Bicubic => img.sample_bicubic(p.x, p.y),
-            };
-            if s[3] <= 0.0 {
-                continue;
-            }
-            if op < 1.0 {
-                for c in s.iter_mut() {
-                    *c *= op;
-                }
-            }
-            row[x] = blend(row[x], s, x as u32, y as u32);
-        }
-    });
+        });
 }
 
-fn composite_warp_impl(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts, allow_fast: bool, accumulate: Option<f32>) {
+fn composite_warp_impl(
+    dst: &mut Image,
+    src: &Image,
+    m: &Mat3,
+    opts: &WarpOpts,
+    allow_fast: bool,
+    accumulate: Option<f32>,
+) {
     if src.is_empty() || dst.is_empty() || opts.opacity <= 0.0 {
         return;
     }
@@ -233,7 +274,10 @@ fn composite_warp_impl(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts, 
         img = &level_img;
         inv = Mat3::scale(vec2(f, f)) * inv;
     }
-    let bounds = m.map_rect(&Bounds::from_size(src.width as f64, src.height as f64)).inflate(1.0).round_out();
+    let bounds = m
+        .map_rect(&Bounds::from_size(src.width as f64, src.height as f64))
+        .inflate(1.0)
+        .round_out();
     let full = Bounds::from_size(dst.width as f64, dst.height as f64);
     let mut area = bounds.intersect(&full);
     if let Some(c) = opts.clip {
@@ -242,8 +286,14 @@ fn composite_warp_impl(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts, 
     if area.is_empty() {
         return;
     }
-    let (x0, x1) = (area.x0.max(0.0) as usize, area.x1.min(dst.width as f64) as usize);
-    let (y0, y1) = (area.y0.max(0.0) as usize, area.y1.min(dst.height as f64) as usize);
+    let (x0, x1) = (
+        area.x0.max(0.0) as usize,
+        area.x1.min(dst.width as f64) as usize,
+    );
+    let (y0, y1) = (
+        area.y0.max(0.0) as usize,
+        area.y1.min(dst.height as f64) as usize,
+    );
     let w = dst.width as usize;
     let affine = inv.is_affine();
     let mode = opts.mode;
@@ -251,58 +301,127 @@ fn composite_warp_impl(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts, 
     if let Some(k) = accumulate
         && affine
     {
-        affine_rows(dst, img, &inv, opts.sampling, 1.0, x0, x1, y0, y1, |d, s, _, _| [d[0] + s[0] * k, d[1] + s[1] * k, d[2] + s[2] * k, d[3] + s[3] * k]);
+        affine_rows(
+            dst,
+            img,
+            &inv,
+            opts.sampling,
+            1.0,
+            x0,
+            x1,
+            y0,
+            y1,
+            |d, s, _, _| {
+                [
+                    d[0] + s[0] * k,
+                    d[1] + s[1] * k,
+                    d[2] + s[2] * k,
+                    d[3] + s[3] * k,
+                ]
+            },
+        );
         return;
     }
     if allow_fast && affine && !mode.is_stencil() {
         match mode {
-            BlendMode::Normal => affine_rows(dst, img, &inv, opts.sampling, op, x0, x1, y0, y1, |d, s, _, _| {
-                let k = 1.0 - s[3];
-                [s[0] + d[0] * k, s[1] + d[1] * k, s[2] + d[2] * k, s[3] + d[3] * k]
-            }),
+            BlendMode::Normal => affine_rows(
+                dst,
+                img,
+                &inv,
+                opts.sampling,
+                op,
+                x0,
+                x1,
+                y0,
+                y1,
+                |d, s, _, _| {
+                    let k = 1.0 - s[3];
+                    [
+                        s[0] + d[0] * k,
+                        s[1] + d[1] * k,
+                        s[2] + d[2] * k,
+                        s[3] + d[3] * k,
+                    ]
+                },
+            ),
             BlendMode::Dissolve | BlendMode::DancingDissolve => {
                 let seed = opts.seed;
-                affine_rows(dst, img, &inv, opts.sampling, op, x0, x1, y0, y1, |d, s, x, y| blend_pixel(mode, d, s, hash_noise(x, y, seed)))
+                affine_rows(
+                    dst,
+                    img,
+                    &inv,
+                    opts.sampling,
+                    op,
+                    x0,
+                    x1,
+                    y0,
+                    y1,
+                    |d, s, x, y| blend_pixel(mode, d, s, hash_noise(x, y, seed)),
+                )
             }
-            _ => affine_rows(dst, img, &inv, opts.sampling, op, x0, x1, y0, y1, |d, s, _, _| blend_pixel(mode, d, s, 0.5)),
+            _ => affine_rows(
+                dst,
+                img,
+                &inv,
+                opts.sampling,
+                op,
+                x0,
+                x1,
+                y0,
+                y1,
+                |d, s, _, _| blend_pixel(mode, d, s, 0.5),
+            ),
         }
         return;
     }
-    dst.data.par_chunks_mut(w).enumerate().skip(y0).take(y1 - y0).for_each(|(y, row)| {
-        let fy = y as f64 + 0.5;
-        let mut sp = inv.apply(vec2(x0 as f64 + 0.5, fy));
-        let step = inv.apply_vec(vec2(1.0, 0.0));
-        for x in x0..x1 {
-            let p = if affine {
-                let p = sp;
-                sp += step;
-                p
-            } else {
-                inv.apply(vec2(x as f64 + 0.5, fy))
-            };
-            if p.x < -1.0 || p.y < -1.0 || p.x > img.width as f64 + 1.0 || p.y > img.height as f64 + 1.0 {
-                if mode.is_stencil() {
-                    row[x] = blend_pixel(mode, row[x], [0.0; 4], 0.5);
+    dst.data
+        .par_chunks_mut(w)
+        .enumerate()
+        .skip(y0)
+        .take(y1 - y0)
+        .for_each(|(y, row)| {
+            let fy = y as f64 + 0.5;
+            let mut sp = inv.apply(vec2(x0 as f64 + 0.5, fy));
+            let step = inv.apply_vec(vec2(1.0, 0.0));
+            for x in x0..x1 {
+                let p = if affine {
+                    let p = sp;
+                    sp += step;
+                    p
+                } else {
+                    inv.apply(vec2(x as f64 + 0.5, fy))
+                };
+                if p.x < -1.0
+                    || p.y < -1.0
+                    || p.x > img.width as f64 + 1.0
+                    || p.y > img.height as f64 + 1.0
+                {
+                    if mode.is_stencil() {
+                        row[x] = blend_pixel(mode, row[x], [0.0; 4], 0.5);
+                    }
+                    continue;
                 }
-                continue;
-            }
-            let mut s = match opts.sampling {
-                Sampling::Nearest => img.get(p.x.floor() as i64, p.y.floor() as i64),
-                Sampling::Bilinear => img.sample_bilinear(p.x, p.y),
-                Sampling::Bicubic => img.sample_bicubic(p.x, p.y),
-            };
-            if s[3] <= 0.0 && !mode.is_stencil() {
-                continue;
-            }
-            if op < 1.0 {
-                for c in s.iter_mut() {
-                    *c *= op;
+                let mut s = match opts.sampling {
+                    Sampling::Nearest => img.get(p.x.floor() as i64, p.y.floor() as i64),
+                    Sampling::Bilinear => img.sample_bilinear(p.x, p.y),
+                    Sampling::Bicubic => img.sample_bicubic(p.x, p.y),
+                };
+                if s[3] <= 0.0 && !mode.is_stencil() {
+                    continue;
                 }
+                if op < 1.0 {
+                    for c in s.iter_mut() {
+                        *c *= op;
+                    }
+                }
+                let n = if matches!(mode, BlendMode::Dissolve | BlendMode::DancingDissolve) {
+                    hash_noise(x as u32, y as u32, opts.seed)
+                } else {
+                    0.5
+                };
+                row[x] = blend_pixel(mode, row[x], s, n);
             }
-            let n = if matches!(mode, BlendMode::Dissolve | BlendMode::DancingDissolve) { hash_noise(x as u32, y as u32, opts.seed) } else { 0.5 };
-            row[x] = blend_pixel(mode, row[x], s, n);
-        }
-    });
+        });
     // Stencil modes also clear everything outside the layer bounds.
     if mode.is_stencil() && matches!(mode, BlendMode::StencilAlpha | BlendMode::StencilLuma) {
         for (y, row) in dst.data.chunks_mut(w).enumerate() {
@@ -323,8 +442,21 @@ mod tests {
         let mut img = Image::new(w, h);
         for y in 0..h {
             for x in 0..w {
-                let a = if (x + y) % 7 == 0 { 0.0 } else { hash_noise(x, y, seed) };
-                img.set(x, y, [hash_noise(x, y, seed + 1) * a, hash_noise(x, y, seed + 2) * a, hash_noise(x, y, seed + 3) * a, a]);
+                let a = if (x + y) % 7 == 0 {
+                    0.0
+                } else {
+                    hash_noise(x, y, seed)
+                };
+                img.set(
+                    x,
+                    y,
+                    [
+                        hash_noise(x, y, seed + 1) * a,
+                        hash_noise(x, y, seed + 2) * a,
+                        hash_noise(x, y, seed + 3) * a,
+                        a,
+                    ],
+                );
             }
         }
         img
@@ -339,17 +471,34 @@ mod tests {
             Mat3::translate(vec2(5.0, -3.0)),
             Mat3::translate(vec2(-40.0, 2.0)),
             Mat3::translate(vec2(3.25, 7.5)),
-            Mat3::translate(vec2(20.0, 10.0)) * Mat3::rotate_deg(23.0) * Mat3::scale(vec2(1.3, 0.8)),
-            Mat3::translate(vec2(30.0, 5.0)) * Mat3::rotate_deg(-120.0) * Mat3::scale(vec2(0.7, 0.7)),
+            Mat3::translate(vec2(20.0, 10.0))
+                * Mat3::rotate_deg(23.0)
+                * Mat3::scale(vec2(1.3, 0.8)),
+            Mat3::translate(vec2(30.0, 5.0))
+                * Mat3::rotate_deg(-120.0)
+                * Mat3::scale(vec2(0.7, 0.7)),
             Mat3::translate(vec2(10.0, 10.0)) * Mat3::scale(vec2(-1.0, 1.0)),
             Mat3::scale(vec2(0.3, 0.3)),
         ];
-        let modes = [BlendMode::Normal, BlendMode::Add, BlendMode::Multiply, BlendMode::Screen, BlendMode::Dissolve, BlendMode::Overlay];
+        let modes = [
+            BlendMode::Normal,
+            BlendMode::Add,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+            BlendMode::Dissolve,
+            BlendMode::Overlay,
+        ];
         for (mi, m) in mats.iter().enumerate() {
             for mode in modes {
                 for sampling in [Sampling::Nearest, Sampling::Bilinear, Sampling::Bicubic] {
                     for opacity in [1.0, 0.6] {
-                        let opts = WarpOpts { sampling, opacity, mode, seed: 9, clip: None };
+                        let opts = WarpOpts {
+                            sampling,
+                            opacity,
+                            mode,
+                            seed: 9,
+                            clip: None,
+                        };
                         let mut a = test_image(48, 40, 77);
                         let mut b = a.clone();
                         composite_warp(&mut a, &src, m, &opts);
@@ -369,8 +518,17 @@ mod tests {
     #[test]
     fn accumulate_matches_per_sample_images() {
         let src = test_image(30, 20, 11);
-        let persp = Mat3::square_to_quad([vec2(5.0, 4.0), vec2(40.0, 2.0), vec2(44.0, 30.0), vec2(2.0, 35.0)]) * Mat3::scale(vec2(1.0 / 30.0, 1.0 / 20.0));
-        let mats = [Mat3::translate(vec2(3.0, 4.0)), Mat3::translate(vec2(5.5, 4.25)) * Mat3::rotate_deg(12.0), persp];
+        let persp = Mat3::square_to_quad([
+            vec2(5.0, 4.0),
+            vec2(40.0, 2.0),
+            vec2(44.0, 30.0),
+            vec2(2.0, 35.0),
+        ]) * Mat3::scale(vec2(1.0 / 30.0, 1.0 / 20.0));
+        let mats = [
+            Mat3::translate(vec2(3.0, 4.0)),
+            Mat3::translate(vec2(5.5, 4.25)) * Mat3::rotate_deg(12.0),
+            persp,
+        ];
         let k = 1.0 / mats.len() as f32;
         let mut fast = Image::new(48, 40);
         let mut slow = Image::new(48, 40);

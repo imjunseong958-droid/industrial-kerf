@@ -93,7 +93,13 @@ impl BlendMode {
 
     /// Modes that act on everything below (the accumulated comp) rather than compositing on top.
     pub fn is_stencil(self) -> bool {
-        matches!(self, BlendMode::StencilAlpha | BlendMode::StencilLuma | BlendMode::SilhouetteAlpha | BlendMode::SilhouetteLuma)
+        matches!(
+            self,
+            BlendMode::StencilAlpha
+                | BlendMode::StencilLuma
+                | BlendMode::SilhouetteAlpha
+                | BlendMode::SilhouetteLuma
+        )
     }
 
     /// Modes whose formulas are defined for over-range (HDR, 32 bpc) values. The others clamp
@@ -175,12 +181,20 @@ fn soft_light(cb: f32, cs: f32) -> f32 {
     if cs <= 0.5 {
         cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb)
     } else {
-        let d = if cb <= 0.25 { ((16.0 * cb - 12.0) * cb + 4.0) * cb } else { cb.max(0.0).sqrt() };
+        let d = if cb <= 0.25 {
+            ((16.0 * cb - 12.0) * cb + 4.0) * cb
+        } else {
+            cb.max(0.0).sqrt()
+        };
         cb + (2.0 * cs - 1.0) * (d - cb)
     }
 }
 fn vivid(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 { burn(cb, 2.0 * cs) } else { dodge(cb, 2.0 * (cs - 0.5)) }
+    if cs <= 0.5 {
+        burn(cb, 2.0 * cs)
+    } else {
+        dodge(cb, 2.0 * (cs - 0.5))
+    }
 }
 
 fn separable(mode: BlendMode, cb: f32, cs: f32) -> f32 {
@@ -190,7 +204,11 @@ fn separable(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         BlendMode::ColorBurn => burn(cb, cs),
         BlendMode::ClassicColorBurn => {
             // (negative results are kept, as in After Effects)
-            if cs <= 0.0 { 0.0 } else { 1.0 - (1.0 - cb) / cs }
+            if cs <= 0.0 {
+                0.0
+            } else {
+                1.0 - (1.0 - cb) / cs
+            }
         }
         BlendMode::LinearBurn => (cb + cs - 1.0).max(0.0),
         BlendMode::Add | BlendMode::LinearDodge => cb + cs,
@@ -228,7 +246,11 @@ fn separable(mode: BlendMode, cb: f32, cs: f32) -> f32 {
         BlendMode::Subtract => (cb - cs).max(0.0),
         BlendMode::Divide => {
             if cs <= 0.0 {
-                if cb > 0.0 { 1.0 } else { 0.0 }
+                if cb > 0.0 {
+                    1.0
+                } else {
+                    0.0
+                }
             } else {
                 cb / cs
             }
@@ -294,7 +316,11 @@ fn non_separable(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
                 cb
             }
         }
-        _ => [separable(mode, cb[0], cs[0]), separable(mode, cb[1], cs[1]), separable(mode, cb[2], cs[2])],
+        _ => [
+            separable(mode, cb[0], cs[0]),
+            separable(mode, cb[1], cs[1]),
+            separable(mode, cb[2], cs[2]),
+        ],
     }
 }
 
@@ -309,7 +335,12 @@ pub fn blend_pixel(mode: BlendMode, dst: [f32; 4], src: [f32; 4], noise: f32) ->
     match mode {
         BlendMode::Normal => {
             let k = 1.0 - sa;
-            return [src[0] + dst[0] * k, src[1] + dst[1] * k, src[2] + dst[2] * k, sa + da * k];
+            return [
+                src[0] + dst[0] * k,
+                src[1] + dst[1] * k,
+                src[2] + dst[2] * k,
+                sa + da * k,
+            ];
         }
         BlendMode::Dissolve | BlendMode::DancingDissolve => {
             if sa <= 0.0 || noise >= sa {
@@ -322,14 +353,28 @@ pub fn blend_pixel(mode: BlendMode, dst: [f32; 4], src: [f32; 4], noise: f32) ->
         BlendMode::SilhouetteAlpha => return dst.map(|v| v * (1.0 - sa)),
         BlendMode::StencilLuma | BlendMode::SilhouetteLuma => {
             let l = luminance(src[0], src[1], src[2]);
-            let k = if mode == BlendMode::StencilLuma { l } else { 1.0 - l };
+            let k = if mode == BlendMode::StencilLuma {
+                l
+            } else {
+                1.0 - l
+            };
             return dst.map(|v| v * k);
         }
         BlendMode::AlphaAdd => {
-            return [src[0] + dst[0] * (1.0 - sa), src[1] + dst[1] * (1.0 - sa), src[2] + dst[2] * (1.0 - sa), (sa + da).min(1.0)];
+            return [
+                src[0] + dst[0] * (1.0 - sa),
+                src[1] + dst[1] * (1.0 - sa),
+                src[2] + dst[2] * (1.0 - sa),
+                (sa + da).min(1.0),
+            ];
         }
         BlendMode::LuminescentPremul => {
-            return [src[0] + dst[0] * (1.0 - sa), src[1] + dst[1] * (1.0 - sa), src[2] + dst[2] * (1.0 - sa), sa + da - sa * da];
+            return [
+                src[0] + dst[0] * (1.0 - sa),
+                src[1] + dst[1] * (1.0 - sa),
+                src[2] + dst[2] * (1.0 - sa),
+                sa + da - sa * da,
+            ];
         }
         _ => {}
     }
@@ -395,28 +440,55 @@ mod tests {
     /// k = opacity (premultiplied into the source, as the compositor passes it).
     #[test]
     fn after_effects_32bpc_formulas() {
-        let at = |m, b: f32, o: f32, k: f32| blend_pixel(m, opaque(b), [o * k, o * k, o * k, k], 0.5)[0];
+        let at =
+            |m, b: f32, o: f32, k: f32| blend_pixel(m, opaque(b), [o * k, o * k, o * k, k], 0.5)[0];
         let close = |a: f32, e: f32| (a - e).abs() < 1e-5;
         // Classic modes fade the source toward their neutral colour first.
         for (b, o) in [(0.4, 0.5), (0.8, 0.9), (0.1, 0.3)] {
             let k = 0.15;
-            assert!(close(at(BlendMode::ClassicColorDodge, b, o, k), (b / (1.0 - k * o)).min(1.0)));
-            assert!(close(at(BlendMode::ClassicDifference, b, o, k), (b - k * o).abs()));
-            assert!(close(at(BlendMode::ClassicColorBurn, b, o, k), 1.0 - (1.0 - b) / (1.0 - k * (1.0 - o))));
+            assert!(close(
+                at(BlendMode::ClassicColorDodge, b, o, k),
+                (b / (1.0 - k * o)).min(1.0)
+            ));
+            assert!(close(
+                at(BlendMode::ClassicDifference, b, o, k),
+                (b - k * o).abs()
+            ));
+            assert!(close(
+                at(BlendMode::ClassicColorBurn, b, o, k),
+                1.0 - (1.0 - b) / (1.0 - k * (1.0 - o))
+            ));
         }
         // At full opacity the classic formulas are unchanged.
         assert!(close(at(BlendMode::ClassicDifference, 0.6, 0.3, 1.0), 0.3));
         // Over-range top layers keep the plain formulas.
         let (b, o) = (0.7, 3.0);
-        assert!(close(at(BlendMode::Exclusion, b, o, 1.0), b + o - 2.0 * b * o));
+        assert!(close(
+            at(BlendMode::Exclusion, b, o, 1.0),
+            b + o - 2.0 * b * o
+        ));
         let s = 2.0 * b - 1.0;
         assert!(close(at(BlendMode::Overlay, b, o, 1.0), o + s - o * s));
-        assert!(close(at(BlendMode::ColorBurn, 0.0, 1.35, 0.15), 0.15 * (1.0 - 1.0 / 1.35)));
-        assert!(close(at(BlendMode::ClassicColorBurn, 0.0, 0.1, 1.0), -9.0), "negative results are kept");
+        assert!(close(
+            at(BlendMode::ColorBurn, 0.0, 1.35, 0.15),
+            0.15 * (1.0 - 1.0 / 1.35)
+        ));
+        assert!(
+            close(at(BlendMode::ClassicColorBurn, 0.0, 0.1, 1.0), -9.0),
+            "negative results are kept"
+        );
         // Luminosity: SetLum + ClipColor on the unclamped top layer.
-        let l = blend_pixel(BlendMode::Luminosity, [0.2, 0.4, 0.6, 1.0], [2.0, 2.0, 2.0, 1.0], 0.5);
+        let l = blend_pixel(
+            BlendMode::Luminosity,
+            [0.2, 0.4, 0.6, 1.0],
+            [2.0, 2.0, 2.0, 1.0],
+            0.5,
+        );
         let e = set_lum([0.2, 0.4, 0.6], 2.0);
         assert!((0..3).all(|i| close(l[i], e[i])), "{l:?} {e:?}");
-        assert!((l[0] - 1.0).abs() > 0.1, "not the white of a top layer clamped to 1: {l:?}");
+        assert!(
+            (l[0] - 1.0).abs() > 0.1,
+            "not the white of a top layer clamped to 1: {l:?}"
+        );
     }
 }

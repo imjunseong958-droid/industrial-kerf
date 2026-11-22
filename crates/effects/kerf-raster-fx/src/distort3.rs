@@ -5,12 +5,25 @@
 //! All warps are inverse mapped: every output pixel finds the source point that lands on it.
 //! Pixel-sized parameters are multiplied by the buffer scale (downsampled previews).
 use crate::Value;
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
+use crate::{num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 use kerf_raster::{Image, Px};
 use rayon::prelude::*;
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Distort", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Distort",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 // ---------------------------------------------------------------- CC Bender
@@ -56,8 +69,18 @@ fn bicubic(img: &Image, x: f64, y: f64) -> Px {
     let fy = y - 0.5;
     let (x0, y0) = (fx.floor(), fy.floor());
     let (tx, ty) = (fx - x0, fy - y0);
-    let wx = [cubic_w(1.0 + tx), cubic_w(tx), cubic_w(1.0 - tx), cubic_w(2.0 - tx)];
-    let wy = [cubic_w(1.0 + ty), cubic_w(ty), cubic_w(1.0 - ty), cubic_w(2.0 - ty)];
+    let wx = [
+        cubic_w(1.0 + tx),
+        cubic_w(tx),
+        cubic_w(1.0 - tx),
+        cubic_w(2.0 - tx),
+    ];
+    let wy = [
+        cubic_w(1.0 + ty),
+        cubic_w(ty),
+        cubic_w(1.0 - ty),
+        cubic_w(2.0 - ty),
+    ];
     let mut o = [0.0f64; 4];
     for (j, wyj) in wy.iter().enumerate() {
         for (i, wxi) in wx.iter().enumerate() {
@@ -69,7 +92,12 @@ fn bicubic(img: &Image, x: f64, y: f64) -> Px {
         }
     }
     let a = o[3].clamp(0.0, 1.0) as f32;
-    [(o[0] as f32).clamp(0.0, a.max(o[0] as f32)), (o[1] as f32).clamp(0.0, a.max(o[1] as f32)), (o[2] as f32).clamp(0.0, a.max(o[2] as f32)), a]
+    [
+        (o[0] as f32).clamp(0.0, a.max(o[0] as f32)),
+        (o[1] as f32).clamp(0.0, a.max(o[1] as f32)),
+        (o[2] as f32).clamp(0.0, a.max(o[2] as f32)),
+        a,
+    ]
 }
 
 fn upscale(ctx: &EffectCtx, mut b: Buf) -> Buf {
@@ -79,7 +107,11 @@ fn upscale(ctx: &EffectCtx, mut b: Buf) -> Buf {
     }
     let detail = (ctx.params.f("detail") / 100.0) as f32;
     let noise = ctx.params.f("reduceNoise") / 100.0;
-    let src = if noise > 0.0 { kerf_raster::gaussian_blur(&b.img, noise * 1.5, noise * 1.5, true) } else { b.img.clone() };
+    let src = if noise > 0.0 {
+        kerf_raster::gaussian_blur(&b.img, noise * 1.5, noise * 1.5, true)
+    } else {
+        b.img.clone()
+    };
     let lc = [ctx.layer_size[0] * 0.5, ctx.layer_size[1] * 0.5];
     // Alpha: Bilinear (index 0) resamples the alpha channel bilinearly, Bicubic like the colour.
     let bilinear_alpha = ctx.params.e("alpha") == 0;
@@ -100,7 +132,11 @@ fn upscale(ctx: &EffectCtx, mut b: Buf) -> Buf {
             for (x, px) in row.iter_mut().enumerate() {
                 let sx = c.0 + (x as f64 + 0.5 - c.0) / k;
                 let sy = c.1 + (y as f64 + 0.5 - c.1) / k;
-                *px = if sx < 0.0 || sy < 0.0 || sx > src.width as f64 || sy > src.height as f64 { [0.0; 4] } else { up(&src, sx, sy) };
+                *px = if sx < 0.0 || sy < 0.0 || sx > src.width as f64 || sy > src.height as f64 {
+                    [0.0; 4]
+                } else {
+                    up(&src, sx, sy)
+                };
             }
         });
         o
@@ -115,18 +151,24 @@ fn upscale(ctx: &EffectCtx, mut b: Buf) -> Buf {
             }
         });
         let c_sc = [lc[0] * b.scale, lc[1] * b.scale];
-        b.offset = [b.offset[0] * kx + c_sc[0] * (kx - 1.0), b.offset[1] * ky + c_sc[1] * (ky - 1.0)];
+        b.offset = [
+            b.offset[0] * kx + c_sc[0] * (kx - 1.0),
+            b.offset[1] * ky + c_sc[1] * (ky - 1.0),
+        ];
         o
     };
     if detail > 0.0 {
         let sigma = 0.6 * k;
         let blur = kerf_raster::gaussian_blur(&out, sigma, sigma, true);
-        out.data.par_iter_mut().zip(blur.data.par_iter()).for_each(|(p, q)| {
-            let a = p[3];
-            for c in 0..3 {
-                p[c] = (p[c] + (p[c] - q[c]) * detail * 1.5).clamp(0.0, a.max(p[c]));
-            }
-        });
+        out.data
+            .par_iter_mut()
+            .zip(blur.data.par_iter())
+            .for_each(|(p, q)| {
+                let a = p[3];
+                for c in 0..3 {
+                    p[c] = (p[c] + (p[c] - q[c]) * detail * 1.5).clamp(0.0, a.max(p[c]));
+                }
+            });
     }
     b.img = out;
     b
@@ -140,10 +182,20 @@ pub fn specs() -> Vec<EffectSpec> {
         "ec.distort.upscale",
         "Detail-preserving Upscale",
         vec![
-            p("scale", "Scale", num(100.0), slider(100.0, 1000.0, 100.0, 400.0, 1)),
+            p(
+                "scale",
+                "Scale",
+                num(100.0),
+                slider(100.0, 1000.0, 100.0, 400.0, 1),
+            ),
             p("reduceNoise", "Reduce Noise", num(0.0), pct()),
             p("detail", "Detail", num(20.0), pct()),
-            p("alpha", "Alpha", Value::Enum(1), popup(&["Bilinear", "Bicubic"])),
+            p(
+                "alpha",
+                "Alpha",
+                Value::Enum(1),
+                popup(&["Bilinear", "Bicubic"]),
+            ),
         ],
         upscale,
     )]

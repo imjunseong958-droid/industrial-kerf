@@ -85,8 +85,7 @@ impl Made<'_> {
 }
 
 fn ends_a_sentence(text: &str) -> bool {
-    text.trim_end()
-        .ends_with(['.', '?', '!', '。', '？', '！'])
+    text.trim_end().ends_with(['.', '?', '!', '。', '？', '！'])
 }
 
 /// Whether `text` is a transcriber's note of a sound, such as whisper's
@@ -165,7 +164,9 @@ pub fn caption_script(
         let starts_new = match groups.last() {
             None => true,
             Some(group) => {
-                let last = group.last().expect("groups are never empty");
+                let last = group
+                    .last()
+                    .expect("each group starts with a word and only grows");
                 group.len() >= max_words.max(1)
                     || word.start - last.end > PAUSE_SECONDS
                     || ends_a_sentence(&last.text)
@@ -174,7 +175,10 @@ pub fn caption_script(
         if starts_new {
             groups.push(vec![word]);
         } else {
-            groups.last_mut().expect("just pushed").push(word);
+            groups
+                .last_mut()
+                .expect("starts_new is false only when there is a group")
+                .push(word);
         }
     }
     let rate = sequence.rate;
@@ -203,13 +207,19 @@ pub fn caption_script(
         .into_iter()
         .map(|(start, group)| Made {
             start,
-            spoken: place(group.last().expect("groups are never empty").end),
+            spoken: place(
+                group
+                    .last()
+                    .expect("each group starts with a word and only grows")
+                    .end,
+            ),
             lines: vec![group],
         })
         .collect();
     // No caption outlasts the clip whose speech it is.
     let last_frame = rate.round(found.end());
-    let until = |made: &[Made], index: usize| made.get(index + 1).map_or(last_frame, |next| next.start);
+    let until =
+        |made: &[Made], index: usize| made.get(index + 1).map_or(last_frame, |next| next.start);
     // Two that follow each other in one breath can be one caption of two
     // lines.
     let joins = |made: &[Made], first: usize| {

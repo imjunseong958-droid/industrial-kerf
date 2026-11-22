@@ -9,8 +9,8 @@ use super::{
     bell, disc_offsets, ease_in, ease_in_out, ease_out, hash, mid_mix, smoothstep, Fx, Tx,
     MOST_MOMENTS,
 };
-use crate::filmcraft::gpu::run as run_ops;
-use crate::filmcraft::gpufx::FxOp;
+use crate::video::gpu::run as run_ops;
+use crate::video::gpufx::FxOp;
 use kerf_draw::Image;
 use kerf_gpu::{wgpu, Frame, Gpu, Picture};
 use std::f32::consts::{FRAC_PI_2, PI};

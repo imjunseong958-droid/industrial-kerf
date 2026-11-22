@@ -399,7 +399,8 @@ impl Ask {
         if !self.prompt.is_empty() {
             words.push(format!("prompt={}", self.prompt));
         }
-        let mut named = |name: &str, source: &Source| words.push(format!("{name}={}", source.shown()));
+        let mut named =
+            |name: &str, source: &Source| words.push(format!("{name}={}", source.shown()));
         if let Some(guide) = &self.guide {
             named("guide", guide);
         }
@@ -417,7 +418,11 @@ impl Ask {
         }
         words.extend(self.cast.iter().map(|name| format!("cast={name}")));
         words.extend(self.styles.iter().map(|name| format!("style={name}")));
-        words.extend(self.signals.iter().map(|signal| format!("{SIGNAL}={signal}")));
+        words.extend(
+            self.signals
+                .iter()
+                .map(|signal| format!("{SIGNAL}={signal}")),
+        );
         words.extend(self.moves.iter().map(|clip| format!("{MOVES}={clip}")));
         if let Some(from) = self.from {
             words.push(format!("from={from}"));
@@ -434,7 +439,11 @@ impl Ask {
         if let Some(workflow) = &self.workflow {
             words.push(format!("{WORKFLOW}={}", workflow.shown()));
         }
-        words.extend(self.more.iter().map(|(name, value)| format!("{name}={value}")));
+        words.extend(
+            self.more
+                .iter()
+                .map(|(name, value)| format!("{name}={value}")),
+        );
         if self.out != OUT {
             words.push(format!("out={{{}}}", self.out));
         }
@@ -522,7 +531,9 @@ impl Step {
                 let (parts, to, lap) = joined(words, made)?;
                 Ok(Self::Join { parts, to, lap })
             }
-            "generate" if !words.is_empty() => Ok(Self::Generate(Box::new(Ask::parse(words, made)?))),
+            "generate" if !words.is_empty() => {
+                Ok(Self::Generate(Box::new(Ask::parse(words, made)?)))
+            }
             "render" | "generate" | "join" => Err(format!("`{verb}` is {SHAPES}")),
             other => Err(format!(
                 "`{other}` is not a step; one is `render`, `generate`, or `join`"
@@ -707,12 +718,12 @@ pub fn check(steps: &[Step]) -> Result<(), String> {
                 ));
             }
         }
-        if let Step::Join { parts, to, .. } = step {
-            if parts.contains(to) {
-                return Err(format!(
-                    "step {number} writes `{{{to}}}`, which is one of the parts it joins"
-                ));
-            }
+        if let Step::Join { parts, to, .. } = step
+            && parts.contains(to)
+        {
+            return Err(format!(
+                "step {number} writes `{{{to}}}`, which is one of the parts it joins"
+            ));
         }
         made.push(step.makes());
     }
@@ -731,14 +742,23 @@ pub fn size_of(value: &str) -> Option<Size> {
 
 /// What the words after `render <sequence> {name}` name: the size, the rate, the pass, the
 /// clip a matte is of, and the part of the sequence.
-type Drawn = (Option<Size>, Option<Rate>, Pass, Option<String>, Option<f64>, Option<f64>);
+type Drawn = (
+    Option<Size>,
+    Option<Rate>,
+    Pass,
+    Option<String>,
+    Option<f64>,
+    Option<f64>,
+);
 
 /// A number of seconds a line gives as `name=value`: `least` or more.
 fn seconds_of(name: &str, value: &str, least: f64) -> Result<f64, String> {
     value
         .parse()
         .ok()
-        .filter(|seconds: &f64| seconds.is_finite() && *seconds >= least && (least == 0.0 || *seconds > 0.0))
+        .filter(|seconds: &f64| {
+            seconds.is_finite() && *seconds >= least && (least == 0.0 || *seconds > 0.0)
+        })
         .ok_or_else(|| format!("`{name}={value}` is not a number of seconds, such as 5 or 5.0625"))
 }
 
@@ -771,7 +791,9 @@ fn joined(words: &[String], made: &[String]) -> Result<(Vec<String>, String, u32
         }
     }
     if names.contains(&to) {
-        return Err(format!("`join` writes `{{{to}}}`, which is one of its parts"));
+        return Err(format!(
+            "`join` writes `{{{to}}}`, which is one of its parts"
+        ));
     }
     Ok((names, to, lap))
 }
@@ -816,7 +838,10 @@ fn drawn_at(words: &[String]) -> Result<Drawn, String> {
         }
     }
     if matte.is_some() && pass != Pass::Picture {
-        return Err("`matte=` is one clip in white on black, in place of a pass: give one of the two".to_owned());
+        return Err(
+            "`matte=` is one clip in white on black, in place of a pass: give one of the two"
+                .to_owned(),
+        );
     }
     Ok((size, rate, pass, matte, from, seconds))
 }
@@ -858,9 +883,29 @@ mod tests {
     #[test]
     fn a_step_is_read_from_its_words_and_written_as_them_again() {
         let steps = read(&[
-            &["render", "s2", "{guide.mp4}", "size=832x480", "rate=16", "pass=depth"],
-            &["render", "s2", "{mask.mp4}", "matte=crate", "from=5", "seconds=5.0625"],
-            &["generate", "model=still", "prompt=an orange \"game\" ball", "seed=3", "out={ball.png}"],
+            &[
+                "render",
+                "s2",
+                "{guide.mp4}",
+                "size=832x480",
+                "rate=16",
+                "pass=depth",
+            ],
+            &[
+                "render",
+                "s2",
+                "{mask.mp4}",
+                "matte=crate",
+                "from=5",
+                "seconds=5.0625",
+            ],
+            &[
+                "generate",
+                "model=still",
+                "prompt=an orange \"game\" ball",
+                "seed=3",
+                "out={ball.png}",
+            ],
             &[
                 "generate",
                 "seed=7",
@@ -889,9 +934,29 @@ mod tests {
         assert_eq!(
             steps.iter().map(Step::words).collect::<Vec<_>>(),
             [
-                words(&["render", "s2", "{guide.mp4}", "pass=depth", "size=832x480", "rate=16"]),
-                words(&["render", "s2", "{mask.mp4}", "matte=crate", "from=5", "seconds=5.0625"]),
-                words(&["generate", "model=still", "prompt=an orange \"game\" ball", "seed=3", "out={ball.png}"]),
+                words(&[
+                    "render",
+                    "s2",
+                    "{guide.mp4}",
+                    "pass=depth",
+                    "size=832x480",
+                    "rate=16"
+                ]),
+                words(&[
+                    "render",
+                    "s2",
+                    "{mask.mp4}",
+                    "matte=crate",
+                    "from=5",
+                    "seconds=5.0625"
+                ]),
+                words(&[
+                    "generate",
+                    "model=still",
+                    "prompt=an orange \"game\" ball",
+                    "seed=3",
+                    "out={ball.png}"
+                ]),
                 words(&[
                     "generate",
                     "model=video",

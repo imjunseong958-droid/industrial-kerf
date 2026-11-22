@@ -23,19 +23,18 @@ pub use catalog::{Area, Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamT
 pub use diag::{Diagnostic, Severity, Span};
 pub use features::parse_features;
 pub use id::{Id, IdGen, InvalidId};
-pub use model::{
-    Retime,
-    track_role, Align, AudioInfo, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask,
-    Bus, MaskMode, MaskShape, Media, OutlineKey, Params, Project, Sequence, Synced, Track, TrackKind, Transition, VideoInfo,
-    TRACK_ROLES,
-};
 pub use kerf_color::ColorSpace;
 pub use making::Pass;
-pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
-pub use ops::{
-    apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report, SequenceChange,
-    Steps, TrackChange, TrackRoleChange,
+pub use model::{
+    track_role, Align, AudioInfo, Bus, Clip, ClipAt, Content, Effect, Marker, MarkerColor, Mask,
+    MaskMode, MaskShape, Media, OutlineKey, Params, Project, Retime, Sequence, Synced, Track,
+    TrackKind, Transition, VideoInfo, TRACK_ROLES,
 };
+pub use ops::{
+    apply, BusChange, BusFx, ClipChange, Edge, MarkerChange, NewClip, Op, Rejected, Report,
+    SequenceChange, Steps, TrackChange, TrackRoleChange,
+};
+pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
 pub use speed::{Ramp, RampKey, Speed};
 pub use time::{Rate, Ratio, Time, TimeError};
 pub use validate::validate;
@@ -60,7 +59,9 @@ pub const TITLE_AXES: [[u8; 4]; 5] = [*b"wght", *b"wdth", *b"slnt", *b"opsz", *b
 pub fn title_face(style: &str, weight: f64) -> String {
     let style = style.trim();
     if weight > 0.0 && weight.is_finite() {
-        format!("{} {style}", weight.round() as u32).trim_end().to_owned()
+        format!("{} {style}", weight.round() as u32)
+            .trim_end()
+            .to_owned()
     } else {
         style.to_owned()
     }

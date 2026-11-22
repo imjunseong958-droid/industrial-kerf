@@ -543,10 +543,8 @@ impl Clip {
         let reverse = self.speed().is_reverse();
         self.start += delta;
         self.duration -= delta;
-        if !reverse {
-            if let Some(source_in) = self.source_in_mut() {
-                *source_in += played;
-            }
+        if !reverse && let Some(source_in) = self.source_in_mut() {
+            *source_in += played;
         }
         if let Content::Media { speed, .. } | Content::Sequence { speed, .. } = &mut self.content {
             speed.shift(-delta);
@@ -566,10 +564,8 @@ impl Clip {
         let reverse = speed.is_reverse();
         let played = speed.played(self.duration + delta) - speed.played(self.duration);
         self.duration += delta;
-        if reverse {
-            if let Some(source_in) = self.source_in_mut() {
-                *source_in -= played;
-            }
+        if reverse && let Some(source_in) = self.source_in_mut() {
+            *source_in -= played;
         }
     }
 
@@ -1013,7 +1009,9 @@ impl Project {
                 return true;
             }
             let next = self.media(id.as_str());
-            on = next.and_then(|next| next.sync.as_ref()).map(|sync| &sync.with);
+            on = next
+                .and_then(|next| next.sync.as_ref())
+                .map(|sync| &sync.with);
         }
         // Others go round among themselves, and never reach it.
         false

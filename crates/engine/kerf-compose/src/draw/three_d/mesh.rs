@@ -578,10 +578,10 @@ fn loaded(path: &str) -> std::result::Result<Arc<super::gltf::Read>, String> {
     let mut files = FILES
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some((_, (length, modified, read))) = files.iter().find(|(kept, _)| kept == path) {
-        if (*length, *modified) == now {
-            return Ok(read.clone());
-        }
+    if let Some((_, (length, modified, read))) = files.iter().find(|(kept, _)| kept == path)
+        && (*length, *modified) == now
+    {
+        return Ok(read.clone());
     }
     let read = Arc::new(super::gltf::read(std::path::Path::new(path))?);
     files.retain(|(kept, _)| kept != path);
@@ -1037,7 +1037,9 @@ impl Standing {
         time: Time,
         opacity: f32,
     ) -> Self {
-        let InWorld { points, triangles, .. } = in_the_world(scene, plan, to_output, time);
+        let InWorld {
+            points, triangles, ..
+        } = in_the_world(scene, plan, to_output, time);
         let corners = triangles
             .iter()
             .map(|triangle| triangle.map(|corner| points[corner as usize]))
@@ -1076,10 +1078,12 @@ impl Standing {
 
     /// The box about all of it: nowhere, for a mesh of no triangles.
     fn about(&self) -> (Vector, Vector) {
-        self.tree.boxes.first().map_or(
-            ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]),
-            |boxed| (boxed.least, boxed.most),
-        )
+        self.tree
+            .boxes
+            .first()
+            .map_or(([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]), |boxed| {
+                (boxed.least, boxed.most)
+            })
     }
 
     /// How much of a light gets past it to `at`, going along `way`, a unit long, for `reach`,
@@ -1485,7 +1489,10 @@ mod tests {
             }
             // Closed: every edge between two different places is one of two triangles, counted by
             // where its ends are, since a corner is told again for each way it faces.
-            assert!(super::super::gltf::closes(&mesh.points, &mesh.triangles), "an edge is open");
+            assert!(
+                super::super::gltf::closes(&mesh.points, &mesh.triangles),
+                "an edge is open"
+            );
             assert!(mesh.closed());
         }
         // One with no size one way has nothing inside it, and one with a side taken off is open.
@@ -1535,7 +1542,8 @@ mod tests {
             ];
             let way = unit(minus(toward, at));
             for reach in [f64::INFINITY, 140.0] {
-                let every = (0..ball.triangles.len()).any(|which| ball.stops(which, at, way, reach));
+                let every =
+                    (0..ball.triangles.len()).any(|which| ball.stops(which, at, way, reach));
                 let found = ball.meets(at, way, &over(way), reach);
                 assert_eq!(found.is_some(), every, "from {at:?} along {way:?}");
                 if every {

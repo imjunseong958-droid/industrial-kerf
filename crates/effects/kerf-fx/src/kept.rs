@@ -75,8 +75,8 @@ pub fn radial_zoom_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     let spec = spec("blur.radialzoom")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -111,8 +111,8 @@ pub fn optics_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     use std::f64::consts::FRAC_PI_2;
     let spec = spec("distort.opticscompensation")?;
     let per_source = per_source.max(1e-6);
@@ -175,8 +175,8 @@ pub fn choker_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     let spec = spec("matte.simplechoker")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -213,8 +213,8 @@ pub fn key_cleaner_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::Kernel;
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::Kernel;
     let spec = spec("key.keycleaner")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -259,8 +259,8 @@ pub fn grain_kernel(
     size: (usize, usize),
     per_source: f64,
     seed: u32,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::{grain_gains, Grain, Kernel};
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::{grain_gains, Grain, Kernel};
     let spec = spec("noise.addgrain")?;
     let per_source = per_source.max(1e-6);
     let layer_size = [size.0 as f64 / per_source, size.1 as f64 / per_source];
@@ -317,8 +317,8 @@ pub fn color_kernel(
     at: Time,
     size: (usize, usize),
     per_source: f64,
-) -> Option<crate::filmcraft::vfx::gpu::Kernel> {
-    use crate::filmcraft::vfx::gpu::{curves_table, KeptColor, Kernel};
+) -> Option<crate::video::vfx::gpu::Kernel> {
+    use crate::video::vfx::gpu::{curves_table, KeptColor, Kernel};
     let id = effect.fx.as_str();
     let spec = spec(id)?;
     let per_source = per_source.max(1e-6);
@@ -407,9 +407,8 @@ pub fn color_kernel(
         }
         "color.selectivecolor" => {
             let take: [[f32; 4]; 9] = std::array::from_fn(|range| {
-                kerf_raster_fx::SC_IDS[range].map(|leaf| {
-                    values.f(&kerf_raster_fx::sc_param_id(range, leaf)) as f32 / 100.0
-                })
+                kerf_raster_fx::SC_IDS[range]
+                    .map(|leaf| values.f(&kerf_raster_fx::sc_param_id(range, leaf)) as f32 / 100.0)
             });
             if take.iter().flatten().all(|value| *value == 0.0) {
                 KeptColor::Through
@@ -537,7 +536,11 @@ fn text(param: Option<&Param>) -> Option<String> {
 /// Kerf's picture as EffectCraft's: premultiplied, sRGB-encoded.
 fn encoded(picture: &kerf_draw::Image) -> Image {
     let mut image = Image::new(picture.w as u32, picture.h as u32);
-    for (pixel, linear) in image.data.iter_mut().zip(picture.px.as_chunks::<4>().0.iter()) {
+    for (pixel, linear) in image
+        .data
+        .iter_mut()
+        .zip(picture.px.as_chunks::<4>().0.iter())
+    {
         let alpha = linear[3];
         *pixel = if alpha <= 1e-6 {
             [0.0; 4]
@@ -630,7 +633,11 @@ mod tests {
                 let bright = (x / 9 + y / 7) % 3 == 0;
                 let a = if y % 11 == 0 { 0.5 } else { 1.0 };
                 let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
-                let c = if bright { [1.0, 0.9, 0.7] } else { [u, v, 1.0 - u] };
+                let c = if bright {
+                    [1.0, 0.9, 0.7]
+                } else {
+                    [u, v, 1.0 - u]
+                };
                 px.extend_from_slice(&[c[0] * a, c[1] * a, c[2] * a, a]);
             }
         }
@@ -641,15 +648,24 @@ mod tests {
         // A lens's curve put in, taken out, measured each way, off its center, and fitted.
         let cases: Vec<Vec<(&str, kerf_model::Param)>> = vec![
             vec![("fieldOfView", number(70.0))],
-            vec![("fieldOfView", number(90.0)), ("reverseLensDistortion", flag(true))],
-            vec![("fieldOfView", number(120.0)), ("fovOrientation", choice("vertical"))],
+            vec![
+                ("fieldOfView", number(90.0)),
+                ("reverseLensDistortion", flag(true)),
+            ],
+            vec![
+                ("fieldOfView", number(120.0)),
+                ("fovOrientation", choice("vertical")),
+            ],
             vec![
                 ("fieldOfView", number(60.0)),
                 ("fovOrientation", choice("diagonal")),
                 ("viewCenter_x", number(0.3)),
                 ("viewCenter_y", number(0.6)),
             ],
-            vec![("fieldOfView", number(100.0)), ("optimalPixels", flag(true))],
+            vec![
+                ("fieldOfView", number(100.0)),
+                ("optimalPixels", flag(true)),
+            ],
             vec![
                 ("fieldOfView", number(80.0)),
                 ("reverseLensDistortion", flag(true)),
@@ -663,7 +679,10 @@ mod tests {
                 enabled: true,
                 params: Default::default(),
             };
-            let said = format!("{:?}", params.iter().map(|(name, _)| *name).collect::<Vec<_>>());
+            let said = format!(
+                "{:?}",
+                params.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+            );
             for (name, value) in params {
                 effect.params.insert(name.into(), value);
             }
@@ -706,10 +725,12 @@ mod tests {
         };
         assert!(matches!(
             optics_kernel(&effect, Time::ZERO, (w, h), 1.0),
-            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+            Some(crate::video::vfx::gpu::Kernel::Nothing)
         ));
         effect.params.insert("fieldOfView".into(), number(60.0));
-        effect.params.insert("reverseLensDistortion".into(), flag(true));
+        effect
+            .params
+            .insert("reverseLensDistortion".into(), flag(true));
         effect.params.insert("resize".into(), choice("max-2x"));
         assert!(optics_kernel(&effect, Time::ZERO, (w, h), 1.0).is_none());
     }
@@ -753,7 +774,10 @@ mod tests {
             ("1", vec![("chokeMatte", number(1.0))]),
             ("2.4", vec![("chokeMatte", number(2.4))]),
             ("7.5", vec![("chokeMatte", number(7.5))]),
-            ("3, its matte", vec![("chokeMatte", number(3.0)), ("view", choice("matte"))]),
+            (
+                "3, its matte",
+                vec![("chokeMatte", number(3.0)), ("view", choice("matte"))],
+            ),
             ("its matte", vec![("view", choice("matte"))]),
         ] {
             let effect = choker(params);
@@ -790,10 +814,15 @@ mod tests {
         // Nothing asked is nothing done, and a matte spread is the CPU's.
         assert!(matches!(
             choker_kernel(&choker(vec![]), Time::ZERO, (w, h), 1.0),
-            Some(crate::filmcraft::vfx::gpu::Kernel::Nothing)
+            Some(crate::video::vfx::gpu::Kernel::Nothing)
         ));
-        assert!(choker_kernel(&choker(vec![("chokeMatte", number(-2.0))]), Time::ZERO, (w, h), 1.0)
-            .is_none());
+        assert!(choker_kernel(
+            &choker(vec![("chokeMatte", number(-2.0))]),
+            Time::ZERO,
+            (w, h),
+            1.0
+        )
+        .is_none());
     }
 
     #[test]
@@ -811,7 +840,12 @@ mod tests {
                 let a = ((22.0 - (dx * dx + dy * dy).sqrt()) / 8.0).clamp(0.0, 1.0);
                 let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
                 let edge = 1.0 - a;
-                px.extend_from_slice(&[u * a, (v * (1.0 - edge) + 0.8 * edge) * a, (1.0 - u) * a, a]);
+                px.extend_from_slice(&[
+                    u * a,
+                    (v * (1.0 - edge) + 0.8 * edge) * a,
+                    (1.0 - u) * a,
+                    a,
+                ]);
             }
         }
         let image = kerf_draw::Image { w, h, px };
@@ -833,7 +867,10 @@ mod tests {
             ("as it comes", vec![]),
             (
                 "wide",
-                vec![("additionalEdgeRadius", number(12.0)), ("strength", number(50.0))],
+                vec![
+                    ("additionalEdgeRadius", number(12.0)),
+                    ("strength", number(50.0)),
+                ],
             ),
             (
                 "contrast",
@@ -1070,10 +1107,16 @@ mod tests {
                 let (u, v) = (x as f32 / (w - 1) as f32, y as f32 / (h - 1) as f32);
                 let c = match x % 7 {
                     0 => [v, v, v],
-                    1 => [f32::from(y % 2 == 0), f32::from(y % 3 == 0), f32::from(y % 5 == 0)],
+                    1 => [
+                        f32::from(y % 2 == 0),
+                        f32::from(y % 3 == 0),
+                        f32::from(y % 5 == 0),
+                    ],
                     2 => [u, u, 0.02],
-                    _ => kerf_color::hsl_to_rgb(u, 0.2 + 0.8 * v, 0.1 + 0.8 * ((y % 9) as f32 / 8.0))
-                        .map(kerf_color::srgb_to_linear),
+                    _ => {
+                        kerf_color::hsl_to_rgb(u, 0.2 + 0.8 * v, 0.1 + 0.8 * ((y % 9) as f32 / 8.0))
+                            .map(kerf_color::srgb_to_linear)
+                    }
                 };
                 let a = match y % 11 {
                     0 => 0.0,
@@ -1096,7 +1139,10 @@ mod tests {
             ("color.photofilter", vec![]),
             (
                 "color.photofilter",
-                vec![("filter", choice("cooling-filter-80")), ("density", number(80.0))],
+                vec![
+                    ("filter", choice("cooling-filter-80")),
+                    ("density", number(80.0)),
+                ],
             ),
             (
                 "color.photofilter",
@@ -1189,7 +1235,10 @@ mod tests {
                 "key.advancedspill",
                 vec![
                     ("method", choice("ultra")),
-                    ("ultraSettings/keyColor", Value::Color(kerf_model::Rgba::rgb(20, 40, 230))),
+                    (
+                        "ultraSettings/keyColor",
+                        Value::Color(kerf_model::Rgba::rgb(20, 40, 230)),
+                    ),
                     ("suppression", number(80.0)),
                     ("ultraSettings/spillRange", number(20.0)),
                     ("ultraSettings/lumaCorrection", number(60.0)),
@@ -1200,7 +1249,10 @@ mod tests {
                 "key.advancedspill",
                 vec![
                     ("method", choice("ultra")),
-                    ("ultraSettings/keyColor", Value::Color(kerf_model::Rgba::rgb(230, 30, 20))),
+                    (
+                        "ultraSettings/keyColor",
+                        Value::Color(kerf_model::Rgba::rgb(230, 30, 20)),
+                    ),
                     ("ultraSettings/tolerance", number(30.0)),
                     ("ultraSettings/desaturate", number(70.0)),
                 ],
@@ -1275,12 +1327,15 @@ mod tests {
     /// there and back, they come to the very values the effects come to, with no GPU to say so.
     #[test]
     fn color_kernels_from_one_source_are_the_effects_to_the_bit() {
-        use crate::filmcraft::vfx::gpu::{KeptColor, Kernel};
+        use crate::video::vfx::gpu::{KeptColor, Kernel};
         let image = colors(96, 54);
         let number = Value::Number;
         // A hard edge too, which a kernel on a GPU may put a pixel either side of.
         let hard = [
-            ("key.unmult", vec![("softness", number(0.0)), ("blackLevel", number(30.0))]),
+            (
+                "key.unmult",
+                vec![("softness", number(0.0)), ("blackLevel", number(30.0))],
+            ),
             (
                 "key.unmult",
                 vec![
@@ -1292,7 +1347,8 @@ mod tests {
         let mut held = 0;
         for (id, params) in color_cases().into_iter().chain(hard) {
             let effect = set(id, &params);
-            let Some(Kernel::Kept(kept)) = color_kernel(&effect, Time::ZERO, (image.w, image.h), 1.0)
+            let Some(Kernel::Kept(kept)) =
+                color_kernel(&effect, Time::ZERO, (image.w, image.h), 1.0)
             else {
                 panic!("{id} has no kernel");
             };

@@ -3,8 +3,8 @@
 
 // The names a request hands things under are the workflow's to know too, and are kept with it.
 pub use kerf_workflow::names::{
-    guide_named, names_a_file, names_a_signal, names_points, names_what_is_handed, reference, signal_named,
-    signal_video_named, INSIDE, MOVES, MOVES_BOX, MOVES_VIDEO, OUTSIDE,
+    guide_named, names_a_file, names_a_signal, names_points, names_what_is_handed, reference,
+    signal_named, signal_video_named, INSIDE, MOVES, MOVES_BOX, MOVES_VIDEO, OUTSIDE,
 };
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -123,7 +123,8 @@ impl Moves {
                         });
                     let fills = (f64::from(width) / wide).max(f64::from(height) / tall);
                     let pixel = |share: f64, own: f64, side: u32| {
-                        (((share - 0.5) * own * fills + f64::from(side) / 2.0) * 10.0).round() / 10.0
+                        (((share - 0.5) * own * fills + f64::from(side) / 2.0) * 10.0).round()
+                            / 10.0
                     };
                     [pixel(x, wide, width), pixel(y, tall, height)]
                 })
@@ -188,7 +189,10 @@ pub fn tracks_of_boxes(moves: &[Moves], frames: u32, fps: f64, size: (u32, u32))
 fn tracks_at(at: &[[f64; 2]], moves: &[Moves], frames: u32, fps: f64, size: (u32, u32)) -> String {
     let tracks: Vec<Vec<serde_json::Value>> = moves
         .iter()
-        .flat_map(|clip| at.iter().filter_map(move |at| clip.points_at(*at, frames, fps, size)))
+        .flat_map(|clip| {
+            at.iter()
+                .filter_map(move |at| clip.points_at(*at, frames, fps, size))
+        })
         .map(|points| {
             points
                 .into_iter()
@@ -203,7 +207,12 @@ impl Moves {
     /// Its box on each of `frames` frames at `fps` a second, in pixels of a picture `width`
     /// by `height`, left, top, right, bottom: none on a frame it does not show on. A
     /// sequence of another shape fills the picture as its guide does.
-    pub fn boxes(&self, frames: u32, fps: f64, (width, height): (u32, u32)) -> Vec<Option<[f64; 4]>> {
+    pub fn boxes(
+        &self,
+        frames: u32,
+        fps: f64,
+        (width, height): (u32, u32),
+    ) -> Vec<Option<[f64; 4]>> {
         let Some(last) = self.places.len().checked_sub(1) else {
             return vec![None; frames as usize];
         };
@@ -339,7 +348,8 @@ impl Request {
         let mut request: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
         // A part of a longer shot: what its sequences say before it starts is not its own.
         if let Some(from) = request.from.filter(|from| from.is_finite() && *from > 0.0) {
-            let skipped = |rate: f64, frames: usize| ((from * rate).round().max(0.0) as usize).min(frames);
+            let skipped =
+                |rate: f64, frames: usize| ((from * rate).round().max(0.0) as usize).min(frames);
             for signal in &mut request.signals {
                 // One past its end is what it ended on, so its last value is kept.
                 let skip = skipped(signal.rate, signal.values.len().saturating_sub(1));

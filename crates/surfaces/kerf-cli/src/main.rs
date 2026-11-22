@@ -289,7 +289,7 @@ enum PresetAction {
 
 fn main() {
     kerf_runtime::crash::install("kerf");
-    kerf_engine::sidecar::forward_termination_signals();
+    kerf_engine::process::sidecar::forward_termination_signals();
     if let Err(error) = run() {
         eprintln!("kerf: {error:#}");
         std::process::exit(1);
@@ -515,7 +515,7 @@ fn finish_renders(router: &KerfMcpRouter) {
     if making > 0 {
         eprintln!("waiting for {making} making(s) to finish; Ctrl-C to stop");
         let stop = kerf_engine::CancellationToken::new();
-        let _held = kerf_engine::sidecar::stop_on_termination(&stop);
+        let _held = kerf_engine::process::sidecar::stop_on_termination(&stop);
         while router.running_makings() > 0 && !stop.is_cancelled() {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
@@ -663,7 +663,7 @@ fn preset_request(action: &PresetAction) -> Result<(&'static str, Value)> {
 
 fn run_new(new: &NewArgs) -> Result<()> {
     // A terminal can answer git's prompts (an ssh passphrase, say).
-    env::set_var(git::INTERACTIVE_ENV, "1");
+    git::set_env(git::INTERACTIVE_ENV, "1");
     let created = create_project(new)?;
     println!("created {}", created.path.display());
     if let Some(remote) = &created.remote {
@@ -683,7 +683,7 @@ fn create_project(new: &NewArgs) -> Result<Created> {
 /// editor's Sync Now does: staging and the network run here, and kerfd,
 /// which owns `project.kerf`, commits and merges.
 fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Result<()> {
-    env::set_var(git::INTERACTIVE_ENV, "1");
+    git::set_env(git::INTERACTIVE_ENV, "1");
     if !git::is_repository(directory) {
         if let Some(top) = git::enclosing_repository(directory) {
             bail!(
@@ -735,6 +735,7 @@ fn confirmed(question: &str) -> bool {
         return false;
     }
     print!("{question} [y/N] ");
+    // Should the question not show, the answer is still read.
     let _ = std::io::stdout().flush();
     let mut answer = String::new();
     stdin.lock().read_line(&mut answer).is_ok()
@@ -772,9 +773,10 @@ fn run_export(
     let mut project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     // Another editor finds a file by where it is, not by where the project is.
     kerf_runtime::resolve_media_paths(&mut project, runtime.directory());
-    let output = std::path::absolute(file).with_context(|| format!("resolve {}", file.display()))?;
-    let written =
-        kerf_interchange::export(&project, sequence, &output, format).map_err(|error| anyhow!(error))?;
+    let output =
+        std::path::absolute(file).with_context(|| format!("resolve {}", file.display()))?;
+    let written = kerf_interchange::export(&project, sequence, &output, format)
+        .map_err(|error| anyhow!(error))?;
     print!("{}", export_report(&written));
     Ok(())
 }
@@ -875,7 +877,7 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
     // program takes back what it asked a server for and says so, and nothing of the take is
     // left. A second Ctrl-C ends it at once.
     let cancellation = kerf_engine::CancellationToken::new();
-    let stop = kerf_engine::sidecar::stop_on_termination(&cancellation);
+    let stop = kerf_engine::process::sidecar::stop_on_termination(&cancellation);
     let mut made = Vec::new();
     let mut ended = None;
     for roll in 0..rolls {
@@ -905,7 +907,8 @@ fn run_make(directory: &Path, kerfd: Option<&Path>, id: &str, yes: bool, rolls: 
     }
     drop(stop);
     let Some(last) = made.last() else {
-        let error = ended.expect("no take is an error");
+        let error =
+            ended.expect("clap takes --rolls from 1, so only a take that failed leaves none");
         if error.to_string() == "stopped" {
             bail!("stopped: no take was made, and {id} is as it was");
         }
@@ -1009,7 +1012,13 @@ fn run_shots(directory: &Path, kerfd: Option<&Path>) -> Result<()> {
 /// document: what would be written is shown first, and a person says yes. It is one edit,
 /// which undo takes back, and the takes each recipe made are then held to the steps it
 /// became, so that none is asked for again for being carried.
-fn run_carry(directory: &Path, kerfd: Option<&Path>, ids: &[String], all: bool, yes: bool) -> Result<()> {
+fn run_carry(
+    directory: &Path,
+    kerfd: Option<&Path>,
+    ids: &[String],
+    all: bool,
+    yes: bool,
+) -> Result<()> {
     let runtime = runtime_for(directory, kerfd)?;
     let state = runtime.get_state().map_err(runtime_error)?;
     in_step(&state)?;
@@ -1058,7 +1067,12 @@ fn run_carry(directory: &Path, kerfd: Option<&Path>, ids: &[String], all: bool, 
         bail!("not carried: say yes at the terminal, or pass --yes");
     }
     let state = runtime
-        .apply_script_request("ui", &operation_key("carry"), &script.join("\n"), state.revision)
+        .apply_script_request(
+            "ui",
+            &operation_key("carry"),
+            &script.join("\n"),
+            state.revision,
+        )
         .map_err(runtime_error)?;
     let after = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
     for (id, recipe) in &carried {
@@ -1385,8 +1399,7 @@ fn sync_report(
 }
 
 fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
-    let llm = resolve_llm(args)?;
-    configure_gui_agent(&llm);
+    let agent = gui_agent_env(&resolve_llm(args)?);
 
     if let (Some(media), Some(directory)) = (args.media.as_deref(), directory) {
         let path = import_media(
@@ -1405,6 +1418,7 @@ fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
     let status = editor_command(&editor, directory, &kerfd)
+        .envs(agent)
         .status()
         .with_context(|| format!("could not launch {}", editor.display()))?;
     if !status.success() {
@@ -1434,26 +1448,31 @@ fn editor_command(editor: &Path, project: Option<&Path>, kerfd: &Path) -> std::p
     command
 }
 
-fn configure_gui_agent(llm: &LlmConfig) {
-    env::set_var("KERF_PROVIDER", llm.provider.name());
-
+/// What the editor's own agent reads from its environment, as `llm` has it:
+/// the editor is started with these set.
+fn gui_agent_env(llm: &LlmConfig) -> Vec<(&'static str, String)> {
+    let mut env = vec![("KERF_PROVIDER", llm.provider.name().to_owned())];
     if let Some(api_key) = llm.api_key.as_deref() {
         let key_name = match llm.provider {
             ProviderName::Anthropic => "ANTHROPIC_API_KEY",
             ProviderName::Openai => "OPENAI_API_KEY",
         };
-        env::set_var(key_name, api_key);
+        env.push((key_name, api_key.to_owned()));
     }
     if let Some(model) = llm.model.as_deref() {
-        env::set_var("KERF_MODEL", model);
+        env.push(("KERF_MODEL", model.to_owned()));
     }
     if let Some(base_url) = llm.base_url.as_deref() {
-        env::set_var("OPENAI_BASE_URL", base_url);
+        env.push(("OPENAI_BASE_URL", base_url.to_owned()));
     }
-    env::set_var("OPENAI_API_MODE", llm.api_mode.name());
+    env.push(("OPENAI_API_MODE", llm.api_mode.name().to_owned()));
     if let Some(reasoning_effort) = llm.reasoning_effort {
-        env::set_var("OPENAI_REASONING_EFFORT", reasoning_effort.name());
+        env.push((
+            "OPENAI_REASONING_EFFORT",
+            reasoning_effort.name().to_owned(),
+        ));
     }
+    env
 }
 
 #[derive(Debug)]
@@ -1695,6 +1714,7 @@ fn media_file(
                 kerf_collab::media::copy_into_media(directory, &fetched.path)
                     .with_context(|| format!("copy {} into media/", fetched.path.display()))
             });
+        // What stays in the incoming folder is swept as stale later.
         let _ = fs::remove_dir_all(&folder);
         return Ok(directory.join(copied?));
     }
@@ -1731,6 +1751,7 @@ fn run_prompt(session: &mut AgentSession, prompt: &str) -> Result<String> {
     let result = session.run_with_events(prompt, |event| match event {
         AgentEvent::TextDelta(delta) => {
             print!("{delta}");
+            // Left in the buffer, it shows with the next line.
             let _ = io::stdout().flush();
             text.push_str(&delta);
         }
@@ -1780,6 +1801,7 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
                 println!("saved conversation.json");
             }
             prompt => {
+                // Its answer was printed as it streamed in.
                 let _ = run_prompt(session, prompt)?;
                 println!();
             }
@@ -1818,11 +1840,7 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        create_project,
-        in_step,
-        run_sync, Args, Command,
-    };
+    use super::{create_project, git, in_step, run_sync, Args, Command};
     use clap::Parser;
 
     use serde_json::json;
@@ -1882,12 +1900,12 @@ mod tests {
         ONCE.call_once(|| {
             let empty = std::env::temp_dir().join("kerf-cli-empty-gitconfig");
             fs::write(&empty, "").unwrap();
-            std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-            std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-            std::env::set_var("GIT_AUTHOR_NAME", "Test");
-            std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
-            std::env::set_var("GIT_COMMITTER_NAME", "Test");
-            std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
+            git::set_env("GIT_CONFIG_GLOBAL", &empty);
+            git::set_env("GIT_CONFIG_NOSYSTEM", "1");
+            git::set_env("GIT_AUTHOR_NAME", "Test");
+            git::set_env("GIT_AUTHOR_EMAIL", "test@example.com");
+            git::set_env("GIT_COMMITTER_NAME", "Test");
+            git::set_env("GIT_COMMITTER_EMAIL", "test@example.com");
         });
     }
 

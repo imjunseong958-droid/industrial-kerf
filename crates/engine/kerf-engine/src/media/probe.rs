@@ -1,0 +1,1540 @@
+//! Probe parsers and ffmpeg/ffprobe wrappers.
+
+use regex::Regex;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::fs;
+use std::io::Read;
+use std::path::Path;
+use std::process::{Child, ChildStderr, Stdio};
+use std::sync::{LazyLock, Mutex, OnceLock};
+use std::time::SystemTime;
+
+use crate::error::{EngineError, Result};
+use crate::media::derivatives::DerivativeCache;
+use crate::process::ffmpeg::{
+    resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, run_in, video_decode_prefix,
+};
+use crate::process::resources::extract_job_count;
+
+static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
+});
+static PTS_TIME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"pts_time:(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
+});
+static SCENE_SCORE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"lavfi\.scene_score=(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
+});
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ProbeInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+    #[serde(rename = "hasAudio", skip_serializing_if = "Option::is_none")]
+    pub has_audio: Option<bool>,
+    /// Whether the picture's pixel format carries transparency.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<bool>,
+    /// Bits per picture component.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u32>,
+    /// How its code values become light, as a color space's id, when it is not BT.709.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(rename = "videoCodec", skip_serializing_if = "Option::is_none")]
+    pub video_codec: Option<String>,
+    #[serde(rename = "audioCodec", skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SilenceRange {
+    pub start: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneRange {
+    pub start: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExtractedFrame {
+    pub time: f64,
+    pub path: String,
+}
+
+/// One exact timestamp frame stored in the derivative cache.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameGrab {
+    pub time: f64,
+    pub path: String,
+    pub media_type: String,
+}
+
+/// Cached result of an exact frame request.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameGrabSet {
+    pub key: String,
+    pub frames: Vec<FrameGrab>,
+    pub cached: bool,
+}
+
+/// Cached contact sheet built from exact timestamp frames.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilmstripResult {
+    pub key: String,
+    pub path: String,
+    pub frame_paths: Vec<String>,
+    pub times: Vec<f64>,
+    pub columns: usize,
+    pub cached: bool,
+}
+
+/// One deterministic min/max/RMS bucket in a waveform envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformBucket {
+    pub min: f64,
+    pub max: f64,
+    pub rms: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WaveformPayload {
+    #[serde(default)]
+    pub start: f64,
+    #[serde(default)]
+    pub end: f64,
+    pub duration: f64,
+    pub sample_rate: u32,
+    pub buckets: Vec<WaveformBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+}
+
+/// Cached waveform envelope and optional waveform image.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaveformResult {
+    pub key: String,
+    /// Source time covered by this waveform. Full-source requests use
+    /// `0..duration`; ranged requests retain their selected interval.
+    pub start: f64,
+    pub end: f64,
+    pub duration: f64,
+    pub sample_rate: u32,
+    pub buckets: Vec<WaveformBucket>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+    pub cached: bool,
+}
+
+pub const MAX_FRAME_TIMES: usize = 128;
+/// Exact frames and contact sheets are JPEG: a fraction of the size of PNG
+/// for footage, which keeps several of them within what a model accepts.
+pub const FRAME_MEDIA_TYPE: &str = "image/jpeg";
+/// FFmpeg's JPEG quality scale runs from 2 (best) to 31.
+const FRAME_QUALITY: &str = "3";
+pub const MAX_WAVEFORM_BUCKETS: usize = 4096;
+const WAVEFORM_SAMPLE_RATE: u32 = 8_000;
+
+#[derive(Debug, Deserialize)]
+struct FfprobeStream {
+    codec_type: Option<String>,
+    codec_name: Option<String>,
+    width: Option<u32>,
+    height: Option<u32>,
+    pix_fmt: Option<String>,
+    avg_frame_rate: Option<String>,
+    r_frame_rate: Option<String>,
+    bits_per_raw_sample: Option<String>,
+    color_transfer: Option<String>,
+    color_primaries: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeFormat {
+    duration: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FfprobeOutput {
+    format: Option<FfprobeFormat>,
+    streams: Option<Vec<FfprobeStream>>,
+}
+
+pub fn parse_rate(rate: Option<&str>) -> Option<f64> {
+    let rate = rate?;
+    let mut parts = rate.split('/');
+    let numerator: f64 = parts.next()?.parse().ok()?;
+    let denominator: f64 = parts.next()?.parse().ok()?;
+    if !numerator.is_finite() || !denominator.is_finite() || denominator == 0.0 {
+        return None;
+    }
+    Some(numerator / denominator)
+}
+
+/// How many frames a second a picture plays: its average, as FFmpeg counts it from the
+/// frames the file holds. An average that no rate counts time in exactly, as a file one of
+/// whose frames is short or missing has (288000/12019, of a 24 a second file), is not one
+/// the file was made at: there the rate it was made at, FFmpeg's `r_frame_rate`, is taken
+/// where it is a rate and within a percent of the average. Variable-rate footage, whose
+/// `r_frame_rate` is often a timebase such as 90000, keeps its average.
+fn frame_rate(average: Option<&str>, made_at: Option<&str>) -> Option<f64> {
+    let average = parse_rate(average).filter(|fps| *fps > 0.0);
+    let made_at = parse_rate(made_at).filter(|fps| *fps > 0.0);
+    match (average, made_at) {
+        (Some(average), Some(made_at))
+            if kerf_model::Rate::from_fps(average).is_err()
+                && kerf_model::Rate::from_fps(made_at).is_ok()
+                && (made_at - average).abs() <= average * 0.01 =>
+        {
+            Some(made_at)
+        }
+        (Some(average), _) => Some(average),
+        (None, made_at) => made_at,
+    }
+}
+
+/// The color space a file's tags say it is in, when that is not BT.709. Log footage rarely tags
+/// itself, so that is for a person or an agent to write in the document.
+fn input_color(transfer: Option<&str>, primaries: Option<&str>) -> Option<kerf_model::ColorSpace> {
+    use kerf_model::ColorSpace;
+    match (transfer, primaries) {
+        (Some("smpte2084"), _) => Some(ColorSpace::Rec2100Pq),
+        (Some("arib-std-b67"), _) => Some(ColorSpace::Rec2100Hlg),
+        (_, Some("bt2020")) => Some(ColorSpace::Rec2020),
+        (_, Some("smpte432")) => Some(ColorSpace::P3D65),
+        _ => None,
+    }
+}
+
+impl ProbeInfo {
+    /// What a document holds about a picture of this size with these properties.
+    pub fn video_info(&self, width: u32, height: u32) -> kerf_model::VideoInfo {
+        kerf_model::VideoInfo {
+            width,
+            height,
+            alpha: self.alpha == Some(true),
+            bits: self
+                .bits
+                .map(|bits| match bits {
+                    0..=8 => 8,
+                    9 | 10 => 10,
+                    11 | 12 => 12,
+                    _ => 16,
+                })
+                .unwrap_or(8),
+            color: self
+                .color
+                .as_deref()
+                .and_then(kerf_model::ColorSpace::from_id)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// Whether an FFmpeg pixel format carries transparency: `yuva420p`,
+/// `rgba`, `bgra`, `argb`, `gbrap`, `ya8`, and their deeper variants.
+fn has_alpha(pix_fmt: &str) -> bool {
+    ["yuva", "gbrap", "ya", "rgba", "bgra", "argb", "abgr"]
+        .iter()
+        .any(|prefix| pix_fmt.starts_with(prefix))
+}
+
+pub fn parse_ffprobe_json(stdout: &str) -> Result<ProbeInfo> {
+    let parsed: FfprobeOutput = serde_json::from_str(stdout)?;
+    let streams = parsed.streams.unwrap_or_default();
+    let video = streams
+        .iter()
+        .find(|stream| stream.codec_type.as_deref() == Some("video"));
+    let audio = streams
+        .iter()
+        .find(|stream| stream.codec_type.as_deref() == Some("audio"));
+    let mut result = ProbeInfo {
+        has_audio: Some(audio.is_some()),
+        ..ProbeInfo::default()
+    };
+    if let Some(duration) = parsed.format.and_then(|format| format.duration)
+        && let Ok(value) = duration.parse::<f64>()
+    {
+        result.duration = Some(value);
+    }
+    if let Some(video) = video {
+        result.width = video.width;
+        result.height = video.height;
+        result.fps = frame_rate(
+            video.avg_frame_rate.as_deref(),
+            video.r_frame_rate.as_deref(),
+        );
+        result.video_codec = video.codec_name.clone();
+        result.alpha = video.pix_fmt.as_deref().map(has_alpha);
+        result.bits = video
+            .bits_per_raw_sample
+            .as_deref()
+            .and_then(|bits| bits.parse().ok())
+            .filter(|bits| *bits > 0)
+            .or_else(|| video.pix_fmt.as_deref().and_then(pix_fmt_bit_depth));
+        result.color = input_color(
+            video.color_transfer.as_deref(),
+            video.color_primaries.as_deref(),
+        )
+        .map(|space| space.id().to_owned());
+    }
+    if let Some(audio) = audio {
+        result.audio_codec = audio.codec_name.clone();
+    }
+    Ok(result)
+}
+
+/// Parse silencedetect stderr output into ranges. Missing trailing silence_end is EOF.
+pub fn parse_silencedetect(stderr: &str) -> Vec<SilenceRange> {
+    let mut ranges = Vec::new();
+    let mut open_start: Option<f64> = None;
+    for capture in SILENCE_RE.captures_iter(stderr) {
+        let kind = capture.get(1).map(|value| value.as_str()).unwrap_or("");
+        let time: f64 = capture
+            .get(2)
+            .and_then(|value| value.as_str().parse().ok())
+            .unwrap_or(0.0);
+        if kind == "start" {
+            open_start = Some(time);
+        } else if let Some(start) = open_start.take() {
+            ranges.push(SilenceRange {
+                start,
+                end: Some(time),
+            });
+        }
+    }
+    if let Some(start) = open_start {
+        ranges.push(SilenceRange { start, end: None });
+    }
+    ranges
+}
+
+/// Parse scene-cut timestamps from lavfi.scene_score metadata print output.
+pub fn parse_scene_times(stderr: &str) -> Vec<SceneRange> {
+    let mut cuts = Vec::new();
+    let mut pending_time: Option<f64> = None;
+    for line in stderr.lines() {
+        if let Some(capture) = PTS_TIME_RE.captures(line) {
+            pending_time = capture.get(1).and_then(|value| value.as_str().parse().ok());
+            continue;
+        }
+        if SCENE_SCORE_RE.is_match(line)
+            && let Some(time) = pending_time.take()
+        {
+            cuts.push(time);
+        }
+    }
+    cuts.iter()
+        .enumerate()
+        .map(|(index, &start)| SceneRange {
+            start,
+            end: cuts.get(index + 1).copied(),
+        })
+        .collect()
+}
+
+struct ProbeCacheEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    info: ProbeInfo,
+}
+
+fn probe_cache() -> &'static Mutex<HashMap<String, ProbeCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, ProbeCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn probe_identity(src: &str) -> Option<(u64, Option<SystemTime>)> {
+    let meta = std::fs::metadata(src).ok()?;
+    Some((meta.len(), meta.modified().ok()))
+}
+
+pub fn info(src: &str) -> Result<ProbeInfo> {
+    let identity = probe_identity(src);
+    if let Some((len, modified)) = identity {
+        let cache = probe_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get(src)
+            && entry.len == len
+            && entry.modified == modified
+        {
+            return Ok(entry.info.clone());
+        }
+    }
+    let output = run(
+        resolve_ffprobe_bin(),
+        &[
+            "-v".into(),
+            "quiet".into(),
+            "-print_format".into(),
+            "json".into(),
+            "-show_format".into(),
+            "-show_streams".into(),
+            src.into(),
+        ],
+    )?;
+    let info = parse_ffprobe_json(&output.stdout)?;
+    if let Some((len, modified)) = identity.or_else(|| probe_identity(src)) {
+        let mut cache = probe_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        cache.insert(
+            src.to_string(),
+            ProbeCacheEntry {
+                len,
+                modified,
+                info: info.clone(),
+            },
+        );
+    }
+    Ok(info)
+}
+
+/// Facts about a media file a bin or an inspector shows: its codecs, its
+/// picture's pixel format, bit depth and colour tags, and the camera, lens,
+/// reel and timecode tags the file carries. Each field is present only when
+/// the file says it: an untagged colour space is absent, not guessed.
+///
+/// These are facts about the file, not the edit, so they belong in a cache
+/// beside the project, never in the document.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaInfo {
+    /// The picture's codec, or the sound's for a file with no picture.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    /// The codec profile, such as `HQ` for ProRes 422 HQ or `High` for H.264.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pix_fmt: Option<String>,
+    /// Bits per picture component: the stream's `bits_per_raw_sample`, or
+    /// what its pixel format holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bit_depth: Option<u32>,
+    /// The YUV matrix, such as `bt709`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_space: Option<String>,
+    /// The transfer characteristic, such as `bt709` or `arib-std-b67`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transfer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primaries: Option<String>,
+    /// `tv` (limited) or `pc` (full).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_range: Option<String>,
+    /// The camera's make and model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lens: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reel: Option<String>,
+    /// The start timecode, such as `01:00:00:00`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timecode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_codec: Option<String>,
+    /// The sound's sample format, such as `s24le` or `fltp`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_sample_fmt: Option<String>,
+    /// Bits per sound sample, when the file states it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_bit_depth: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_channels: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_sample_rate: Option<u32>,
+}
+
+/// Tags that name the camera's make, then its model, most specific first.
+const MAKE_TAGS: [&str; 3] = [
+    "com.apple.quicktime.make",
+    "com.android.manufacturer",
+    "make",
+];
+const MODEL_TAGS: [&str; 3] = ["com.apple.quicktime.model", "com.android.model", "model"];
+const LENS_TAGS: [&str; 4] = [
+    "com.apple.quicktime.camera.lens_model",
+    "com.apple.quicktime.lens_model",
+    "lens_model",
+    "lens",
+];
+const REEL_TAGS: [&str; 4] = ["reel_name", "com.apple.proapps.reel", "reel", "tape_name"];
+
+/// A tag's value, looked up without regard to case, when it is not blank.
+fn tag(tags: &serde_json::Map<String, serde_json::Value>, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        tags.iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .and_then(|(_, value)| match value {
+                serde_json::Value::String(text) => Some(text.trim().to_owned()),
+                serde_json::Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .filter(|text| !text.is_empty())
+    })
+}
+
+/// A colour tag FFmpeg reports, or nothing when it says the file has none.
+fn colour_tag(value: Option<&serde_json::Value>) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    (!text.is_empty() && !matches!(text, "unknown" | "unspecified" | "reserved"))
+        .then(|| text.to_owned())
+}
+
+/// A count FFmpeg gives as a number or as a decimal string; 0 is "unknown".
+fn count(value: Option<&serde_json::Value>) -> Option<u32> {
+    let value = value?;
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+        .and_then(|number| u32::try_from(number).ok())
+        .filter(|number| *number > 0)
+}
+
+/// Bits per component a pixel format holds: `yuv422p10le` 10, `p010le`
+/// 10, `nv12` 8, `rgb48le` 16. Nothing for a format it does not know.
+pub fn pix_fmt_bit_depth(pix_fmt: &str) -> Option<u32> {
+    let name = pix_fmt
+        .strip_suffix("le")
+        .or_else(|| pix_fmt.strip_suffix("be"))
+        .unwrap_or(pix_fmt);
+    let digits = |text: &str| -> Option<u32> { text.parse().ok() };
+    // Semi-planar 4:2:0, 4:2:2 and 4:4:4: p010, p210, p416, and y210.
+    if let Some(rest) = name
+        .strip_prefix('p')
+        .or_else(|| name.strip_prefix('y'))
+        .filter(|rest| rest.len() == 3 && rest.chars().all(|c| c.is_ascii_digit()))
+    {
+        return digits(&rest[1..]);
+    }
+    if let Some(index) = name.rfind('p') {
+        let tail = &name[index + 1..];
+        if !tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit()) {
+            return digits(tail);
+        }
+    }
+    if let Some(tail) = name
+        .strip_prefix("gray")
+        .or_else(|| name.strip_prefix("ya"))
+    {
+        return if tail.is_empty() {
+            Some(8)
+        } else {
+            digits(tail)
+        };
+    }
+    match name {
+        "rgb48" | "bgr48" | "rgba64" | "bgra64" | "ayuv64" => Some(16),
+        "x2rgb10" | "x2bgr10" | "v30x" | "xv30" => Some(10),
+        "xv36" => Some(12),
+        _ if name.starts_with("yuv")
+            || name.starts_with("yuvj")
+            || name.starts_with("nv")
+            || name.starts_with("gbrp")
+            || matches!(
+                name,
+                "rgb24"
+                    | "bgr24"
+                    | "rgba"
+                    | "bgra"
+                    | "argb"
+                    | "abgr"
+                    | "rgb0"
+                    | "bgr0"
+                    | "0rgb"
+                    | "0bgr"
+                    | "uyvy422"
+                    | "yuyv422"
+                    | "yvyu422"
+                    | "vuya"
+                    | "vuyx"
+            ) =>
+        {
+            Some(8)
+        }
+        _ => None,
+    }
+}
+
+/// [`MediaInfo`] from `ffprobe -print_format json -show_format
+/// -show_streams` output.
+pub fn parse_media_info_json(stdout: &str) -> Result<MediaInfo> {
+    let parsed: serde_json::Value = serde_json::from_str(stdout)?;
+    let empty = serde_json::Map::new();
+    let streams = parsed
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let of_type = |kind: &str| {
+        streams.iter().find(|stream| {
+            stream.get("codec_type").and_then(serde_json::Value::as_str) == Some(kind)
+                // Cover art is a picture stream too; it is not the media's picture.
+                && stream
+                    .get("disposition")
+                    .and_then(|disposition| disposition.get("attached_pic"))
+                    .and_then(serde_json::Value::as_u64)
+                    != Some(1)
+        })
+    };
+    let tags_of = |value: Option<&serde_json::Value>| {
+        value
+            .and_then(|value| value.get("tags"))
+            .and_then(serde_json::Value::as_object)
+            .unwrap_or(&empty)
+            .clone()
+    };
+    let text = |value: Option<&serde_json::Value>, key: &str| {
+        value
+            .and_then(|value| value.get(key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty() && *text != "unknown")
+            .map(str::to_owned)
+    };
+    let video = of_type("video");
+    let audio = of_type("audio");
+    let format_tags = tags_of(parsed.get("format"));
+    // Camera and reel tags live on the container, on the picture, or on a
+    // timecode track, depending on who wrote the file.
+    let mut every = vec![format_tags, tags_of(video)];
+    every.extend(streams.iter().map(|stream| tags_of(Some(stream))));
+    let any = |names: &[&str]| every.iter().find_map(|tags| tag(tags, names));
+    let make = any(&MAKE_TAGS);
+    let model = any(&MODEL_TAGS);
+    let camera = match (make, model) {
+        // "Apple" + "iPhone 16 Pro", but "Canon" + "Canon EOS R5" once.
+        (Some(make), Some(model)) if model.to_lowercase().starts_with(&make.to_lowercase()) => {
+            Some(model)
+        }
+        (Some(make), Some(model)) => Some(format!("{make} {model}")),
+        (make, model) => model.or(make),
+    };
+    let pix_fmt = text(video, "pix_fmt");
+    let bit_depth = count(video.and_then(|video| video.get("bits_per_raw_sample")))
+        .or_else(|| pix_fmt.as_deref().and_then(pix_fmt_bit_depth));
+    Ok(MediaInfo {
+        codec: text(video, "codec_name").or_else(|| text(audio, "codec_name")),
+        profile: text(video, "profile").or_else(|| text(audio, "profile")),
+        pix_fmt,
+        bit_depth,
+        color_space: colour_tag(video.and_then(|video| video.get("color_space"))),
+        transfer: colour_tag(video.and_then(|video| video.get("color_transfer"))),
+        primaries: colour_tag(video.and_then(|video| video.get("color_primaries"))),
+        color_range: colour_tag(video.and_then(|video| video.get("color_range"))),
+        camera,
+        lens: any(&LENS_TAGS),
+        reel: any(&REEL_TAGS),
+        timecode: any(&["timecode"]),
+        audio_codec: text(audio, "codec_name"),
+        audio_sample_fmt: text(audio, "sample_fmt"),
+        audio_bit_depth: count(audio.and_then(|audio| audio.get("bits_per_raw_sample")))
+            .or_else(|| count(audio.and_then(|audio| audio.get("bits_per_sample")))),
+        audio_channels: count(audio.and_then(|audio| audio.get("channels"))),
+        audio_sample_rate: count(audio.and_then(|audio| audio.get("sample_rate"))),
+    })
+}
+
+struct MediaInfoCacheEntry {
+    len: u64,
+    modified: Option<SystemTime>,
+    info: MediaInfo,
+}
+
+fn media_info_cache() -> &'static Mutex<HashMap<String, MediaInfoCacheEntry>> {
+    static CACHE: OnceLock<Mutex<HashMap<String, MediaInfoCacheEntry>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The [`MediaInfo`] of `src`, probed once per version of the file.
+pub fn media_info(src: &str) -> Result<MediaInfo> {
+    let identity = probe_identity(src);
+    if let Some((len, modified)) = identity {
+        let cache = media_info_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(entry) = cache.get(src)
+            && entry.len == len
+            && entry.modified == modified
+        {
+            return Ok(entry.info.clone());
+        }
+    }
+    let output = run(
+        resolve_ffprobe_bin(),
+        &[
+            "-v".into(),
+            "quiet".into(),
+            "-print_format".into(),
+            "json".into(),
+            "-show_format".into(),
+            "-show_streams".into(),
+            src.into(),
+        ],
+    )?;
+    let info = parse_media_info_json(&output.stdout)?;
+    if let Some((len, modified)) = identity.or_else(|| probe_identity(src)) {
+        media_info_cache()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(
+                src.to_string(),
+                MediaInfoCacheEntry {
+                    len,
+                    modified,
+                    info: info.clone(),
+                },
+            );
+    }
+    Ok(info)
+}
+
+pub fn silence_detect(
+    src: &str,
+    threshold_db: f64,
+    min_duration_sec: f64,
+) -> Result<Vec<SilenceRange>> {
+    let output = run(
+        resolve_ffmpeg_bin(),
+        &[
+            "-hide_banner".into(),
+            "-nostats".into(),
+            "-i".into(),
+            src.into(),
+            "-af".into(),
+            format!("silencedetect=noise={threshold_db}dB:d={min_duration_sec}"),
+            "-f".into(),
+            "null".into(),
+            "-".into(),
+        ],
+    )?;
+    Ok(parse_silencedetect(&output.stderr))
+}
+
+pub fn detect_scenes(src: &str, threshold: f64) -> Result<Vec<SceneRange>> {
+    let mut args = video_decode_prefix().to_vec();
+    args.extend([
+        "-hide_banner".into(),
+        "-nostats".into(),
+        "-i".into(),
+        src.into(),
+        "-vf".into(),
+        format!("select='gt(scene,{threshold})',metadata=print"),
+        "-an".into(),
+        "-f".into(),
+        "null".into(),
+        "-".into(),
+    ]);
+    let output = run(resolve_ffmpeg_bin(), &args)?;
+    Ok(parse_scene_times(&output.stderr))
+}
+
+fn extract_one_frame(
+    ffmpeg: &str,
+    src: &str,
+    time: f64,
+    scale: &str,
+    out_path_str: String,
+) -> Result<ExtractedFrame> {
+    let mut args = video_decode_prefix().to_vec();
+    args.extend([
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-ss".into(),
+        time.to_string(),
+        "-i".into(),
+        src.into(),
+        "-an".into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-vf".into(),
+        scale.into(),
+        "-y".into(),
+        out_path_str.clone(),
+    ]);
+    run(ffmpeg, &args)?;
+    Ok(ExtractedFrame {
+        time,
+        path: out_path_str,
+    })
+}
+
+pub fn extract_frames(
+    src: &str,
+    times: &[f64],
+    out_dir: &str,
+    max_width: u32,
+) -> Result<Vec<ExtractedFrame>> {
+    if max_width == 0 {
+        return Err(EngineError::msg(format!(
+            "extractFrames maxWidth must be finite and positive, got {max_width}"
+        )));
+    }
+    std::fs::create_dir_all(out_dir)?;
+    let scale = format!("scale=w='min(iw,{max_width})':h=-2");
+    let ffmpeg = resolve_ffmpeg_bin();
+    extract_in_parallel(times.len(), |slot| {
+        let out_path = Path::new(out_dir).join(format!("frame_{slot}.png"));
+        extract_one_frame(
+            ffmpeg,
+            src,
+            times[slot],
+            &scale,
+            out_path.to_string_lossy().into_owned(),
+        )
+    })
+}
+
+/// Run `extract(slot)` for every slot in `0..count`, at most
+/// `extract_job_count()` at a time, and return the results in slot order.
+fn extract_in_parallel<T, F>(count: usize, extract: F) -> Result<Vec<T>>
+where
+    T: Send,
+    F: Fn(usize) -> Result<T> + Sync,
+{
+    let jobs = extract_job_count().max(1);
+    let mut results = Vec::with_capacity(count);
+    let extract = &extract;
+    for start in (0..count).step_by(jobs) {
+        std::thread::scope(|scope| {
+            let handles = (start..count.min(start + jobs))
+                .map(|slot| scope.spawn(move || extract(slot)))
+                .collect::<Vec<_>>();
+            for handle in handles {
+                let result = handle
+                    .join()
+                    .map_err(|_| EngineError::msg("frame extraction thread panicked"))?;
+                results.push(result?);
+            }
+            Ok::<(), EngineError>(())
+        })?;
+    }
+    Ok(results)
+}
+
+fn validate_frame_request(times: &[f64], max_width: u32) -> Result<()> {
+    if max_width == 0 {
+        return Err(EngineError::msg("maxWidth must be finite and positive"));
+    }
+    if times.is_empty() {
+        return Err(EngineError::msg("at least one frame timestamp is required"));
+    }
+    if times.len() > MAX_FRAME_TIMES {
+        return Err(EngineError::msg(format!(
+            "frame timestamp count exceeds {MAX_FRAME_TIMES}"
+        )));
+    }
+    if times.iter().any(|time| !time.is_finite() || *time < 0.0) {
+        return Err(EngineError::msg(
+            "frame timestamps must be finite and nonnegative",
+        ));
+    }
+    Ok(())
+}
+
+/// The name of the `index`th exact frame in a derivative directory.
+pub fn frame_file_name(index: usize) -> String {
+    format!("frame-{index:03}.jpg")
+}
+
+fn frame_file_names(count: usize) -> Vec<String> {
+    (0..count).map(frame_file_name).collect()
+}
+
+fn extract_one_exact_frame(
+    ffmpeg: &str,
+    src: &str,
+    time: f64,
+    scale: &str,
+    output: String,
+) -> Result<FrameGrab> {
+    let preroll = 0.5_f64.min(time);
+    let mut args = video_decode_prefix().to_vec();
+    args.extend([
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-ss".into(),
+        (time - preroll).to_string(),
+        "-i".into(),
+        src.into(),
+        "-ss".into(),
+        preroll.to_string(),
+        "-an".into(),
+        "-frames:v".into(),
+        "1".into(),
+        "-vf".into(),
+        scale.into(),
+        "-q:v".into(),
+        FRAME_QUALITY.into(),
+        "-y".into(),
+        output.clone(),
+    ]);
+    run(ffmpeg, &args)?;
+    Ok(FrameGrab {
+        time,
+        path: output,
+        media_type: FRAME_MEDIA_TYPE.into(),
+    })
+}
+
+/// Extract exact timestamp frames into a caller-selected derivative directory.
+pub fn extract_exact_frames(
+    src: &str,
+    times: &[f64],
+    out_dir: &Path,
+    max_width: u32,
+) -> Result<Vec<FrameGrab>> {
+    validate_frame_request(times, max_width)?;
+    fs::create_dir_all(out_dir)?;
+    let scale = format!("scale=w='min(iw,{max_width})':h=-2");
+    let ffmpeg = resolve_ffmpeg_bin();
+    let names = frame_file_names(times.len());
+    extract_in_parallel(times.len(), |slot| {
+        let output = out_dir.join(&names[slot]).to_string_lossy().into_owned();
+        extract_one_exact_frame(ffmpeg, src, times[slot], &scale, output)
+    })
+}
+
+/// Extract frames at exact requested timestamps and cache the result below the
+/// project's `.kerf/cache/derived` directory.
+pub fn cached_exact_frames(
+    src: &str,
+    cache: &DerivativeCache,
+    times: &[f64],
+    max_width: u32,
+) -> Result<FrameGrabSet> {
+    validate_frame_request(times, max_width)?;
+    let options = json!({
+        "exact": true,
+        "times": times,
+        "maxWidth": max_width,
+    });
+    let entry = cache.source_entry(Path::new(src), "frames", &options)?;
+    let names = frame_file_names(times.len());
+    let required = names.iter().map(String::as_str).collect::<Vec<_>>();
+    let cached = entry.is_complete(&required);
+    if !cached {
+        extract_exact_frames(src, times, &entry.directory, max_width)?;
+        entry.mark_complete(&required)?;
+    }
+    let frames = times
+        .iter()
+        .zip(names)
+        .map(|(time, name)| FrameGrab {
+            time: *time,
+            path: entry.path(&name).to_string_lossy().into_owned(),
+            media_type: FRAME_MEDIA_TYPE.into(),
+        })
+        .collect();
+    Ok(FrameGrabSet {
+        key: entry.key,
+        frames,
+        cached,
+    })
+}
+
+/// Build a JPEG contact sheet from exact frames named by `frame_file_name`.
+pub fn create_contact_sheet(frame_paths: &[String], output: &Path, columns: usize) -> Result<()> {
+    create_labelled_contact_sheet(frame_paths, output, columns, &[], Path::new(""))
+}
+
+/// Whether this ffmpeg has `drawtext`, which wants a build with FreeType.
+fn draws_text() -> bool {
+    static DRAWS: OnceLock<bool> = OnceLock::new();
+    *DRAWS.get_or_init(|| {
+        run_allow_failure(
+            resolve_ffmpeg_bin(),
+            &["-hide_banner".into(), "-filters".into()],
+        )
+        .is_ok_and(|output| output.stdout.contains(" drawtext "))
+    })
+}
+
+/// Text as a quoted option of an ffmpeg filter takes it.
+fn filter_text(text: &str) -> String {
+    text.replace('\\', "/")
+        .replace('\'', "\u{2019}")
+        .replace(':', "\\:")
+        .replace('%', "\\%")
+}
+
+/// [`create_contact_sheet`] with a label in the corner of each frame, one for each in
+/// order: its time, so that whoever reads the sheet sees which moment a tile is without
+/// counting tiles. Drawn in the font file `font`; left off where this ffmpeg has no
+/// `drawtext`, or the labels are not one a frame.
+pub fn create_labelled_contact_sheet(
+    frame_paths: &[String],
+    output: &Path,
+    columns: usize,
+    labels: &[String],
+    font: &Path,
+) -> Result<()> {
+    if frame_paths.is_empty() {
+        return Err(EngineError::msg(
+            "contact sheet requires at least one frame",
+        ));
+    }
+    if !(1..=16).contains(&columns) {
+        return Err(EngineError::msg(
+            "contact sheet columns must be between 1 and 16",
+        ));
+    }
+    let first = Path::new(&frame_paths[0]);
+    let parent = first
+        .parent()
+        .ok_or_else(|| EngineError::msg("frame path has no parent directory"))?;
+    if frame_paths
+        .iter()
+        .any(|path| Path::new(path).parent() != Some(parent))
+    {
+        return Err(EngineError::msg(
+            "contact sheet frames must share a directory",
+        ));
+    }
+    let rows = frame_paths.len().div_ceil(columns);
+    let mut pattern = parent.join("frame-%03d.jpg");
+    let mut output = output.to_path_buf();
+    // Each label on its own frame, before they are laid out: white on a dark box, an
+    // eleventh of the frame high.
+    let mut labelled = String::new();
+    // The folder ffmpeg runs in when it draws labels: the font's.
+    let mut beside = None;
+    if labels.len() == frame_paths.len()
+        && font.is_file()
+        && draws_text()
+        && let (Some(name), Some(folder)) = (font.file_name(), font.parent())
+    {
+        // The font by its name alone, read from its folder. `drawtext` cannot be
+        // given every path: a filter's quotes hold no apostrophe, and on Windows it
+        // opens the font in the system's code page, where a folder named in hangul
+        // is not found.
+        if !folder.as_os_str().is_empty() {
+            pattern = std::path::absolute(&pattern)?;
+            output = std::path::absolute(&output)?;
+            beside = Some(folder);
+        }
+        let font = filter_text(&name.to_string_lossy());
+        for (index, label) in labels.iter().enumerate() {
+            labelled.push_str(&format!(
+                "drawtext=fontfile='{font}':text='{}':enable='eq(n\\,{index})':x=w/40:\
+                     y=w/40:fontsize=h/11:fontcolor=white:box=1:boxcolor=black@0.6:\
+                     boxborderw=6,",
+                filter_text(label)
+            ));
+        }
+    }
+    let args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-framerate".into(),
+        "1".into(),
+        "-start_number".into(),
+        "0".into(),
+        "-i".into(),
+        pattern.to_string_lossy().into_owned(),
+        "-vf".into(),
+        format!("{labelled}tile={columns}x{rows}:padding=0:margin=0"),
+        "-frames:v".into(),
+        "1".into(),
+        "-q:v".into(),
+        FRAME_QUALITY.into(),
+        "-y".into(),
+        output.to_string_lossy().into_owned(),
+    ];
+    run_in(resolve_ffmpeg_bin(), &args, beside)?;
+    Ok(())
+}
+
+/// Extract exact frames and assemble a cached filmstrip/contact sheet.
+pub fn cached_filmstrip(
+    src: &str,
+    cache: &DerivativeCache,
+    times: &[f64],
+    max_width: u32,
+    columns: usize,
+) -> Result<FilmstripResult> {
+    validate_frame_request(times, max_width)?;
+    let columns = columns.clamp(1, 16);
+    let options = json!({
+        "exact": true,
+        "times": times,
+        "maxWidth": max_width,
+        "columns": columns,
+    });
+    let entry = cache.source_entry(Path::new(src), "filmstrip", &options)?;
+    let names = frame_file_names(times.len());
+    let mut required = names.iter().map(String::as_str).collect::<Vec<_>>();
+    required.push("filmstrip.jpg");
+    let cached = entry.is_complete(&required);
+    if !cached {
+        extract_exact_frames(src, times, &entry.directory, max_width)?;
+        let frame_paths = names
+            .iter()
+            .map(|name| entry.path(name).to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        create_contact_sheet(&frame_paths, &entry.path("filmstrip.jpg"), columns)?;
+        entry.mark_complete(&required)?;
+    }
+    Ok(FilmstripResult {
+        key: entry.key.clone(),
+        path: entry.path("filmstrip.jpg").to_string_lossy().into_owned(),
+        frame_paths: names
+            .iter()
+            .map(|name| entry.path(name).to_string_lossy().into_owned())
+            .collect(),
+        times: times.to_vec(),
+        columns,
+        cached,
+    })
+}
+
+fn decode_waveform_buckets(
+    src: &str,
+    duration: f64,
+    bucket_count: usize,
+    start: f64,
+) -> Result<Vec<WaveformBucket>> {
+    let bucket_count = bucket_count.max(1);
+    let expected = if duration.is_finite() && duration > 0.0 {
+        (duration * f64::from(WAVEFORM_SAMPLE_RATE))
+            .round()
+            .max(1.0) as usize
+    } else {
+        0
+    };
+    let mut mins = vec![f64::INFINITY; bucket_count];
+    let mut maxs = vec![f64::NEG_INFINITY; bucket_count];
+    let mut sums = vec![0.0_f64; bucket_count];
+    let mut counts = vec![0_usize; bucket_count];
+    let sample_rate = WAVEFORM_SAMPLE_RATE.to_string();
+    let start = start.to_string();
+    let duration = duration.to_string();
+    let mut child = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            start.as_str(),
+            "-t",
+            duration.as_str(),
+            "-i",
+            src,
+            "-vn",
+            "-ac",
+            "1",
+            "-ar",
+            sample_rate.as_str(),
+            "-f",
+            "f32le",
+            "pipe:1",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            reap_waveform_child(&mut child);
+            return Err(EngineError::msg(
+                "ffmpeg waveform decoder did not expose stdout",
+            ));
+        }
+    };
+    let stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            reap_waveform_child(&mut child);
+            return Err(EngineError::msg(
+                "ffmpeg waveform decoder did not expose stderr",
+            ));
+        }
+    };
+    let stderr_reader = drain_waveform_stderr(stderr);
+    let mut buf = vec![0_u8; 64 * 1024];
+    let mut leftover = Vec::new();
+    let mut index = 0usize;
+    let mut read_error = None;
+    loop {
+        let read = match stdout.read(&mut buf) {
+            Ok(read) => read,
+            Err(error) => {
+                read_error = Some(error);
+                break;
+            }
+        };
+        if read == 0 {
+            break;
+        }
+        leftover.extend_from_slice(&buf[..read]);
+        let usable = leftover.len() / 4 * 4;
+        for chunk in leftover[..usable].as_chunks::<4>().0 {
+            let sample = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) as f64;
+            if sample.is_finite() {
+                let bucket = index
+                    .saturating_mul(bucket_count)
+                    .checked_div(expected)
+                    .unwrap_or(0)
+                    .min(bucket_count - 1);
+                mins[bucket] = mins[bucket].min(sample);
+                maxs[bucket] = maxs[bucket].max(sample);
+                sums[bucket] += sample * sample;
+                counts[bucket] += 1;
+            }
+            index += 1;
+        }
+        leftover.drain(..usable);
+    }
+    drop(stdout);
+    if let Some(error) = read_error {
+        reap_waveform_child_with_stderr(&mut child, stderr_reader);
+        return Err(error.into());
+    }
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            reap_waveform_child_with_stderr(&mut child, stderr_reader);
+            return Err(error.into());
+        }
+    };
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| EngineError::msg("ffmpeg stderr reader panicked"))??;
+    if !status.success() {
+        return Err(EngineError::msg(waveform_decode_error(&stderr)));
+    }
+    if index == 0 {
+        return Err(EngineError::msg(
+            "audio stream did not produce waveform samples",
+        ));
+    }
+    Ok(waveform_buckets_from_counts(&mins, &maxs, &sums, &counts))
+}
+
+const MAX_WAVEFORM_STDERR_BYTES: usize = 16 * 1024;
+
+fn drain_waveform_stderr(stderr: ChildStderr) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || drain_waveform_stderr_tail(stderr))
+}
+
+fn drain_waveform_stderr_tail(mut stderr: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::with_capacity(MAX_WAVEFORM_STDERR_BYTES);
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = stderr.read(&mut buffer)?;
+        if read == 0 {
+            return Ok(retained);
+        }
+        if read >= MAX_WAVEFORM_STDERR_BYTES {
+            retained.clear();
+            retained.extend_from_slice(&buffer[read - MAX_WAVEFORM_STDERR_BYTES..read]);
+            continue;
+        }
+        let overflow = retained
+            .len()
+            .saturating_add(read)
+            .saturating_sub(MAX_WAVEFORM_STDERR_BYTES);
+        if overflow > 0 {
+            retained.drain(..overflow);
+        }
+        retained.extend_from_slice(&buffer[..read]);
+    }
+}
+
+/// End a decoder given up on. Best effort, on a way out with an error of its own: the
+/// decoder may have ended already.
+fn reap_waveform_child(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn reap_waveform_child_with_stderr(
+    child: &mut Child,
+    stderr_reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+) {
+    reap_waveform_child(child);
+    // Its stderr is not told: the error being returned is what went wrong.
+    let _ = stderr_reader.join();
+}
+
+fn waveform_decode_error(stderr: &[u8]) -> String {
+    let diagnostics = String::from_utf8_lossy(stderr);
+    let diagnostics = diagnostics.trim();
+    if diagnostics.is_empty() {
+        "ffmpeg failed while decoding waveform samples".to_string()
+    } else {
+        format!("ffmpeg failed while decoding waveform samples: {diagnostics}")
+    }
+}
+
+fn waveform_buckets_from_counts(
+    mins: &[f64],
+    maxs: &[f64],
+    sums: &[f64],
+    counts: &[usize],
+) -> Vec<WaveformBucket> {
+    let finite_or_zero = |value: f64| if value.is_finite() { value } else { 0.0 };
+    (0..counts.len())
+        .map(|slot| WaveformBucket {
+            min: finite_or_zero(mins[slot]),
+            max: finite_or_zero(maxs[slot]),
+            rms: (sums[slot] / counts[slot].max(1) as f64).sqrt(),
+        })
+        .collect()
+}
+
+fn create_waveform_image(
+    src: &str,
+    output: &Path,
+    width: u32,
+    height: u32,
+    start: f64,
+    duration: f64,
+) -> Result<()> {
+    let args = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-ss".into(),
+        start.to_string(),
+        "-t".into(),
+        duration.to_string(),
+        "-i".into(),
+        src.into(),
+        "-filter_complex".into(),
+        format!("showwavespic=s={width}x{height}:colors=white"),
+        "-frames:v".into(),
+        "1".into(),
+        "-y".into(),
+        output.to_string_lossy().into_owned(),
+    ];
+    run(resolve_ffmpeg_bin(), &args)?;
+    Ok(())
+}
+
+/// Generate a deterministic waveform envelope and optional image in the
+/// project-local derivative cache.
+pub fn cached_waveform(
+    src: &str,
+    cache: &DerivativeCache,
+    bucket_count: usize,
+    include_image: bool,
+    image_width: u32,
+    image_height: u32,
+) -> Result<WaveformResult> {
+    let metadata = info(src)?;
+    let end = metadata
+        .duration
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .unwrap_or(1.0);
+    cached_waveform_range(
+        src,
+        cache,
+        bucket_count,
+        include_image,
+        image_width,
+        image_height,
+        0.0,
+        end,
+    )
+}
+
+/// Generate a cached waveform for one bounded source interval.
+///
+/// The range is included in the cache identity and passed to both the audio
+/// decoder and optional waveform image, so a targeted observation never
+/// accidentally reuses a full-source derivative.
+#[allow(clippy::too_many_arguments)]
+pub fn cached_waveform_range(
+    src: &str,
+    cache: &DerivativeCache,
+    bucket_count: usize,
+    include_image: bool,
+    image_width: u32,
+    image_height: u32,
+    start: f64,
+    end: f64,
+) -> Result<WaveformResult> {
+    let bucket_count = bucket_count.clamp(1, MAX_WAVEFORM_BUCKETS);
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end <= start {
+        return Err(EngineError::msg(
+            "waveform range must be finite with 0 <= start < end",
+        ));
+    }
+    if image_width == 0 || image_height == 0 {
+        return Err(EngineError::msg(
+            "waveform image dimensions must be finite and positive",
+        ));
+    }
+    let options = json!({
+        "bucketCount": bucket_count,
+        "includeImage": include_image,
+        "imageWidth": image_width,
+        "imageHeight": image_height,
+        "sampleRate": WAVEFORM_SAMPLE_RATE,
+        "start": start,
+        "end": end,
+    });
+    let entry = cache.source_entry(Path::new(src), "waveform", &options)?;
+    let mut required = vec!["waveform.json"];
+    if include_image {
+        required.push("waveform.png");
+    }
+    let cached = entry.is_complete(&required);
+    let payload = if cached {
+        entry.read_json::<WaveformPayload>("waveform.json")?
+    } else {
+        let meta = info(src)?;
+        if meta.has_audio == Some(false) {
+            return Err(EngineError::msg("media does not contain an audio stream"));
+        }
+        let source_duration = meta
+            .duration
+            .filter(|duration| duration.is_finite() && *duration >= 0.0)
+            .unwrap_or(0.0);
+        if source_duration > 0.0 && end > source_duration + 1e-6 {
+            return Err(EngineError::msg("waveform range exceeds source duration"));
+        }
+        let duration = end - start;
+        let buckets = decode_waveform_buckets(src, duration, bucket_count, start)?;
+        let duration = if duration > 0.0 {
+            duration
+        } else {
+            buckets.len() as f64 / WAVEFORM_SAMPLE_RATE as f64
+        };
+        let image_path = if include_image {
+            let path = entry.path("waveform.png");
+            create_waveform_image(src, &path, image_width, image_height, start, duration)?;
+            Some(path.to_string_lossy().into_owned())
+        } else {
+            None
+        };
+        let payload = WaveformPayload {
+            start,
+            end: start + duration,
+            duration,
+            sample_rate: WAVEFORM_SAMPLE_RATE,
+            buckets,
+            image_path,
+        };
+        entry.write_json("waveform.json", &payload)?;
+        entry.mark_complete(&required)?;
+        payload
+    };
+    Ok(WaveformResult {
+        key: entry.key,
+        start: payload.start,
+        end: payload.end,
+        duration: payload.duration,
+        sample_rate: payload.sample_rate,
+        buckets: payload.buckets,
+        image_path: payload.image_path,
+        cached,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A temp folder is named for the person, and that is where a surface keeps the font:
+    // `drawtext` takes no apostrophe in a path, nor on Windows a name in hangul.
+    #[test]
+    fn a_sheets_labels_are_drawn_from_a_font_in_a_folder_of_any_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let frames = dir.path().join("frames");
+        fs::create_dir_all(&frames).unwrap();
+        let pattern = frames.join("frame-%03d.jpg").to_string_lossy().into_owned();
+        let made = [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=1:duration=2",
+            "-start_number",
+            "0",
+            pattern.as_str(),
+        ]
+        .map(String::from);
+        run(resolve_ffmpeg_bin(), &made).unwrap();
+        let paths = ["frame-000.jpg", "frame-001.jpg"]
+            .map(|name| frames.join(name).to_string_lossy().into_owned());
+        let labels = ["00:00:00:15", "00:00:01:15"].map(String::from);
+        let sheet = |folder: &str| {
+            let folder = dir.path().join(folder);
+            fs::create_dir_all(&folder).unwrap();
+            let font = folder.join("font.ttf");
+            let inter = include_bytes!("../../../../foundation/kerf-text/fonts/Inter-Medium.ttf");
+            fs::write(&font, inter).unwrap();
+            let sheet = folder.join("sheet.jpg");
+            create_labelled_contact_sheet(&paths, &sheet, 2, &labels, &font).unwrap();
+            fs::read(sheet).unwrap()
+        };
+        let plain = sheet("plain");
+        assert!(
+            sheet("O'Brien \u{c784}\u{c2dc}") == plain,
+            "the labels of a font in a folder with an apostrophe and hangul are not those of the same font in a plain one"
+        );
+        let bare = dir.path().join("bare.jpg");
+        create_contact_sheet(&paths, &bare, 2).unwrap();
+        if draws_text() {
+            assert!(plain != fs::read(bare).unwrap(), "no label was drawn");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn waveform_stderr_is_drained_while_stdout_is_read() {
+        let mut child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "head -c 131072 /dev/zero >&2; printf '\\000\\000\\000\\000'; exit 1",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn test child");
+        let stderr = child.stderr.take().expect("stderr pipe");
+        let stderr_reader = drain_waveform_stderr(stderr);
+        let mut stdout = child.stdout.take().expect("stdout pipe");
+        let mut output = Vec::new();
+        stdout.read_to_end(&mut output).expect("read stdout");
+        let status = child.wait().expect("wait test child");
+        let stderr = stderr_reader
+            .join()
+            .expect("stderr reader thread")
+            .expect("read stderr");
+
+        assert!(!status.success());
+        assert_eq!(output.len(), 4);
+        assert_eq!(stderr.len(), MAX_WAVEFORM_STDERR_BYTES);
+    }
+}

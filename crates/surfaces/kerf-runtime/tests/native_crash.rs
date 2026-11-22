@@ -9,6 +9,7 @@ use std::process::{Command, ExitStatus, Stdio};
 /// What the child does, as `KERF_CRASH_ON_PURPOSE` says; run only as a child of the tests below.
 #[test]
 #[ignore = "crashes on purpose: the other tests run it in a process of its own"]
+#[allow(unsafe_code)]
 fn crash_on_purpose() {
     let Ok(how) = std::env::var("KERF_CRASH_ON_PURPOSE") else {
         return;
@@ -18,7 +19,9 @@ fn crash_on_purpose() {
     without_a_crash_dialog();
     match how.as_str() {
         // SAFETY: none; this is the crash. Address 16 is never mapped.
-        "segfault" => unsafe { std::ptr::write_volatile(std::ptr::without_provenance_mut::<u8>(16), 1) },
+        "segfault" => unsafe {
+            std::ptr::write_volatile(std::ptr::without_provenance_mut::<u8>(16), 1)
+        },
         // SAFETY: abort takes nothing; it is what C++'s std::terminate ends a process with.
         "abort" => unsafe { libc::abort() },
         "fatal" => {
@@ -36,13 +39,14 @@ fn crash_on_purpose() {
 }
 
 /// Windows would otherwise ask, on a desktop, whether to look for a solution online.
+#[allow(unsafe_code)]
 fn without_a_crash_dialog() {
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::Diagnostics::Debug::{
             SetErrorMode, SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX,
         };
-        extern "C" {
+        unsafe extern "C" {
             fn _set_abort_behavior(flags: u32, mask: u32) -> u32;
         }
         // SAFETY: both only set how this process reports its own end.
@@ -63,7 +67,13 @@ struct Crashed {
 fn crash(how: &str) -> Crashed {
     let folder = tempfile::tempdir().expect("a folder");
     let output = Command::new(std::env::current_exe().expect("this test binary"))
-        .args(["crash_on_purpose", "--exact", "--ignored", "--nocapture", "--test-threads=1"])
+        .args([
+            "crash_on_purpose",
+            "--exact",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env("KERF_CRASH_ON_PURPOSE", how)
         .env("KERF_CRASH_DIR", folder.path())
         .stdin(Stdio::null())
@@ -91,7 +101,8 @@ fn only_report(crashed: &Crashed) -> (crash::Report, String) {
 }
 
 fn backtrace(text: &str) -> &str {
-    text.split_once("\nbacktrace:\n").map_or("", |(_, frames)| frames)
+    text.split_once("\nbacktrace:\n")
+        .map_or("", |(_, frames)| frames)
 }
 
 /// Each platform's backtrace names the binary a frame is in.
@@ -111,19 +122,35 @@ fn died_of(status: ExitStatus) -> Option<i32> {
 fn a_bad_memory_access_leaves_a_report_with_where_and_a_backtrace() {
     let crashed = crash("segfault");
     #[cfg(unix)]
-    assert_eq!(died_of(crashed.status), Some(libc::SIGSEGV), "{}", crashed.stderr);
+    assert_eq!(
+        died_of(crashed.status),
+        Some(libc::SIGSEGV),
+        "{}",
+        crashed.stderr
+    );
     #[cfg(windows)]
-    assert_eq!(crashed.status.code(), Some(0xC000_0005_u32 as i32), "{}", crashed.stderr);
+    assert_eq!(
+        crashed.status.code(),
+        Some(0xC000_0005_u32 as i32),
+        "{}",
+        crashed.stderr
+    );
     let (report, text) = only_report(&crashed);
     assert_eq!(report.component, "editor");
     if cfg!(windows) {
-        assert_eq!(report.message, "Access violation (exception 0xc0000005)", "{text}");
+        assert_eq!(
+            report.message, "Access violation (exception 0xc0000005)",
+            "{text}"
+        );
         assert!(text.contains(" writing 0x10\n"), "{text}");
     } else {
         assert_eq!(report.message, "Segmentation fault (SIGSEGV)", "{text}");
         assert!(text.contains("\nlocation: address 0x10\n"), "{text}");
     }
-    assert!(text.contains(&format!("\nversion: {}\n", env!("CARGO_PKG_VERSION"))), "{text}");
+    assert!(
+        text.contains(&format!("\nversion: {}\n", env!("CARGO_PKG_VERSION"))),
+        "{text}"
+    );
     assert!(text.contains("\nthread: main\n"), "{text}");
     let frames = backtrace(&text);
     assert!(frames.lines().count() >= 3, "{text}");
@@ -135,7 +162,12 @@ fn an_abort_leaves_a_report_with_a_backtrace() {
     let crashed = crash("abort");
     assert!(!crashed.status.success());
     #[cfg(unix)]
-    assert_eq!(died_of(crashed.status), Some(libc::SIGABRT), "{}", crashed.stderr);
+    assert_eq!(
+        died_of(crashed.status),
+        Some(libc::SIGABRT),
+        "{}",
+        crashed.stderr
+    );
     let (report, text) = only_report(&crashed);
     assert_eq!(report.component, "editor");
     assert_eq!(report.message, "Aborted (SIGABRT)", "{text}");
@@ -148,8 +180,14 @@ fn a_fatal_error_is_reported_once_with_its_message() {
     let crashed = crash("fatal");
     assert!(!crashed.status.success());
     let (report, text) = only_report(&crashed);
-    assert_eq!(report.message, "QWidget: Must construct a QApplication before a QWidget");
-    assert!(text.contains("crash_on_purpose"), "the backtrace names the function: {text}");
+    assert_eq!(
+        report.message,
+        "QWidget: Must construct a QApplication before a QWidget"
+    );
+    assert!(
+        text.contains("crash_on_purpose"),
+        "the backtrace names the function: {text}"
+    );
 }
 
 // A panic that cannot unwind out of an extern "C" function aborts: its report is the one.

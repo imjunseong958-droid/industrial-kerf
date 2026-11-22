@@ -27,8 +27,8 @@ Default resource limits:
 
 A render encodes its picture a stretch of about four seconds at a time and keeps the stretches,
 and its sound beside them (each clip's decoded, and the AAC in pieces of 22 seconds), so rendering
-again after an edit encodes only what the edit touched and joins the rest (`src/sections.rs`,
-`src/kept_sound.rs`). `KERF_SECTION_CACHE` names their folder, or `off` encodes every render
+again after an edit encodes only what the edit touched and joins the rest (`src/render/sections.rs`,
+`src/render/kept_sound.rs`). `KERF_SECTION_CACHE` names their folder, or `off` encodes every render
 whole; `KERF_SECTION_CACHE_GB` is how much they may take, 10 unless told. `cargo run --release
 --example export_bench` says where a render's time goes.
 
@@ -49,8 +49,8 @@ Commands:
 | `proxy-key` / `proxy-args` / `proxy-run` | deterministic proxy cache keys, proxy ffmpeg argv, and proxy transcodes |
 | `probe media-info` | codec, profile, pixel format, bit depth, colour tags, and the camera, lens, reel and timecode tags a file carries |
 | `render --preset standard\|review\|prores_hq` | a program render; `review` is full-size H.264 at 12 Mb/s, `prores_hq` the ProRes 422 HQ master in QuickTime with 24-bit PCM |
-| `loudness` | programme EBU R128 loudness (`loudness::measure_program`): integrated, LRA, true peak per channel, momentary/short-term series every 100 ms |
-| `qc` | the picture QC pass (`qc::picture_qc`): Rec.709 gamut (BRNG), Y′ 64–940, flashing, black |
+| `loudness` | programme EBU R128 loudness (`analysis::loudness::measure_program`): integrated, LRA, true peak per channel, momentary/short-term series every 100 ms |
+| `qc` | the picture QC pass (`analysis::qc::picture_qc`): Rec.709 gamut (BRNG), Y′ 64–940, flashing, black |
 
 Loudness mixes the program's sound with the render graph and runs FFmpeg's
 `ebur128` over it; levels with no signal are `-inf` in Rust and `null` in

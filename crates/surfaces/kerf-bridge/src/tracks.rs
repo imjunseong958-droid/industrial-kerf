@@ -9,17 +9,17 @@
 //! editor, and its edit is one of the project like any other: `shot_followed`
 //! once it is in, or `error`.
 
+use crate::event::{ErrorEvent, Event};
+use crate::wake::Outbox;
 use crate::Shared;
 use kerf_shots::tracks::For;
-use serde::Deserialize;
-use serde_json::{json, Value};
-use std::sync::mpsc::SyncSender;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// What to read a clip from footage for, as the editor names it.
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum Of {
+pub enum Of {
     Moves,
     Matte,
 }
@@ -42,8 +42,8 @@ impl Of {
 
 /// What the person pointed at: for `moves` the one point the clip follows, and for `matte`
 /// points on what to cut out, with points off it.
-#[derive(Clone, Debug, Deserialize, PartialEq)]
-pub(crate) struct Follow {
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Follow {
     pub clip: String,
     pub of: Of,
     pub points: Vec<[f64; 2]>,
@@ -51,10 +51,16 @@ pub(crate) struct Follow {
     pub outside: Vec<[f64; 2]>,
 }
 
-fn failed(tx: &SyncSender<Value>, command: &str, clip: &str, of: Of, why: String) {
+fn failed(tx: &Outbox, command: &str, clip: &str, of: Of, why: String) {
     crate::emit(
         tx,
-        json!({"type": "error", "message": why, "command": command, "clip": clip, "of": of.word()}),
+        Event::Error(ErrorEvent {
+            message: why,
+            command: Some(command.to_owned()),
+            clip: Some(clip.to_owned()),
+            of: Some(of),
+            ..ErrorEvent::default()
+        }),
     );
 }
 
@@ -75,7 +81,7 @@ pub(crate) fn picture(
     client: &kerf_runtime::RuntimeClient,
     clip: String,
     of: Of,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) {
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
     std::thread::spawn(move || {
@@ -86,16 +92,16 @@ pub(crate) fn picture(
                 std::process::id(),
                 of.word()
             ));
-            kerf_engine::still::write_png(&frame, &path).map_err(|error| error.to_string())?;
-            Ok(json!({
-                "type": "shot_picture",
-                "clip": clip,
-                "of": of.word(),
-                "path": path,
-                "width": frame.width,
-                "height": frame.height,
-                "revision": revision,
-            }))
+            kerf_engine::render::still::write_png(&frame, &path)
+                .map_err(|error| error.to_string())?;
+            Ok(Event::ShotPicture {
+                clip: clip.clone(),
+                of,
+                path,
+                width: frame.width,
+                height: frame.height,
+                revision,
+            })
         });
         match drawn {
             Ok(event) => crate::emit(&tx, event),
@@ -109,7 +115,7 @@ pub(crate) fn follow(
     shared: &Arc<Shared>,
     client: &kerf_runtime::RuntimeClient,
     asked: Follow,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) {
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
     std::thread::spawn(move || {
@@ -133,15 +139,14 @@ pub(crate) fn follow(
         match done {
             Ok(read) => crate::emit(
                 &tx,
-                json!({
-                    "type": "shot_followed",
-                    "clip": clip,
-                    "of": of.word(),
-                    "frames": read.frames,
-                    "keyframes": read.keyframes,
-                    "lostAt": read.lost_at,
-                    "says": read.says(),
-                }),
+                Event::ShotFollowed {
+                    clip: clip.clone(),
+                    of,
+                    frames: read.frames,
+                    keyframes: read.keyframes,
+                    lost_at: read.lost_at,
+                    says: read.says(),
+                },
             ),
             Err(why) => failed(&tx, "shot_follow", &clip, of, why),
         }

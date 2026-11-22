@@ -178,7 +178,11 @@ impl Validator<'_> {
                 );
             }
             if let Err(why) = crate::making::check(&media.steps) {
-                self.error("step.order", &media.id, format!("media `{}`: {why}", media.id));
+                self.error(
+                    "step.order",
+                    &media.id,
+                    format!("media `{}`: {why}", media.id),
+                );
             }
             if let (Some(recipe), false) = (&media.recipe, media.steps.is_empty()) {
                 self.error(
@@ -245,14 +249,14 @@ impl Validator<'_> {
                     format!("`{id}` has two buses `{}`", bus.id),
                 );
             }
-            if let Some(to) = &bus.to {
-                if sequence.bus(to.as_str()).is_none() {
-                    self.error(
-                        "bus.unknown",
-                        &bus.id,
-                        format!("bus `{}` feeds `{to}`, which `{id}` does not have", bus.id),
-                    );
-                }
+            if let Some(to) = &bus.to
+                && sequence.bus(to.as_str()).is_none()
+            {
+                self.error(
+                    "bus.unknown",
+                    &bus.id,
+                    format!("bus `{}` feeds `{to}`, which `{id}` does not have", bus.id),
+                );
             }
             // Following where it goes comes to an end, or round again.
             let mut seen = std::collections::HashSet::new();
@@ -542,17 +546,17 @@ impl Validator<'_> {
                     format!("clip `{}` does not start and end on {rate} frames", clip.id),
                 );
             }
-            if let Some(previous) = previous {
-                if clip.start < previous.end() {
-                    self.error(
-                        "clip.overlap",
-                        &clip.id,
-                        format!(
-                            "clip `{}` overlaps `{}` on track {}",
-                            clip.id, previous.id, track.id
-                        ),
-                    );
-                }
+            if let Some(previous) = previous
+                && clip.start < previous.end()
+            {
+                self.error(
+                    "clip.overlap",
+                    &clip.id,
+                    format!(
+                        "clip `{}` overlaps `{}` on track {}",
+                        clip.id, previous.id, track.id
+                    ),
+                );
             }
             previous = Some(clip);
             self.clip(sequence, track, clip);
@@ -700,12 +704,11 @@ impl Validator<'_> {
         }
         match domain {
             Some(domain) => {
-                if let Some(Param::Static(Value::Text(text))) = clip.props.get("path") {
-                    if !text.is_empty() {
-                        if let Err(problem) = crate::path::parse_path_points(text) {
-                            self.error("param.invalid", &clip.id, format!("`path`: {problem}"));
-                        }
-                    }
+                if let Some(Param::Static(Value::Text(text))) = clip.props.get("path")
+                    && !text.is_empty()
+                    && let Err(problem) = crate::path::parse_path_points(text)
+                {
+                    self.error("param.invalid", &clip.id, format!("`path`: {problem}"));
                 }
                 for (name, param) in &clip.props {
                     match self.catalog.prop(domain, name) {
@@ -730,7 +733,8 @@ impl Validator<'_> {
                         &effect.params,
                     );
                     if effect.fx == crate::SHAPE_OUTLINE {
-                        if !matches!(&clip.content, Content::Generator { fx, .. } if fx == "shape") {
+                        if !matches!(&clip.content, Content::Generator { fx, .. } if fx == "shape")
+                        {
                             self.error(
                                 "shape.outline",
                                 id,
@@ -738,26 +742,29 @@ impl Validator<'_> {
                             );
                         }
                         let path = matches!(effect.params.get("kind"), Some(Param::Static(Value::Enum(kind))) if kind == "path");
-                        if let (true, Some(Param::Static(Value::Text(points)))) = (path, effect.params.get("points")) {
-                            if crate::path::parse_points(points).is_ok_and(|points| points.len() < 3) {
-                                self.error(
+                        if let (true, Some(Param::Static(Value::Text(points)))) =
+                            (path, effect.params.get("points"))
+                            && crate::path::parse_points(points)
+                                .is_ok_and(|points| points.len() < 3)
+                        {
+                            self.error(
                                     "param.invalid",
                                     id,
                                     format!("`{id}`: an outline's `points` need at least three to hold an area"),
                                 );
-                            }
                         }
                     }
                     let title =
                         matches!(&clip.content, Content::Generator { fx, .. } if fx == "title");
-                    if let Some(look) = self.catalog.look(effect.fx.as_str(), effect.version) {
-                        if look.on == crate::look::On::Title && !title {
-                            self.error(
-                                "look.on",
-                                id,
-                                format!("`{id}`: `{}` is a look for titles", effect.fx),
-                            );
-                        }
+                    if let Some(look) = self.catalog.look(effect.fx.as_str(), effect.version)
+                        && look.on == crate::look::On::Title
+                        && !title
+                    {
+                        self.error(
+                            "look.on",
+                            id,
+                            format!("`{id}`: `{}` is a look for titles", effect.fx),
+                        );
                     }
                 }
             }

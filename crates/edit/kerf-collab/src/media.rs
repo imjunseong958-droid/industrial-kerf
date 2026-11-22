@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -80,7 +80,7 @@ fn ignored(directory: &Path, paths: &[&str]) -> BTreeSet<String> {
     if paths.is_empty() || !directory.join(".git").exists() {
         return BTreeSet::new();
     }
-    let child = Command::new("git")
+    let child = crate::git::program("git")
         .arg("-C")
         .arg(directory)
         .args(["check-ignore", "-z", "--stdin"])
@@ -101,11 +101,13 @@ fn ignored(directory: &Path, paths: &[&str]) -> BTreeSet<String> {
     // Written beside the read, so a long answer never blocks the question.
     let writer = child.stdin.take().map(|mut stdin| {
         thread::spawn(move || {
+            // Git that stopped reading has failed, which its status says.
             let _ = stdin.write_all(&input);
         })
     });
     let output = child.wait_with_output();
     if let Some(writer) = writer {
+        // Its only work is the write above, which does not panic.
         let _ = writer.join();
     }
     // 0 when something is ignored, 1 when nothing is.
@@ -198,6 +200,7 @@ fn sweep(folder: &Path, now: SystemTime) {
             .and_then(|at| now.duration_since(at).ok())
             .is_some_and(|age| age > STALE);
         if stale {
+            // One that stays is tried again next time.
             let _ = if metadata.is_dir() {
                 fs::remove_dir_all(&path)
             } else {
@@ -278,11 +281,14 @@ pub fn copy_into_media(directory: &Path, source: &Path) -> io::Result<String> {
     let (digest, length) = match copied {
         Ok(copied) => copied,
         Err(error) => {
+            // One that stays in the incoming folder is swept as stale.
             let _ = fs::remove_file(&temporary);
             return Err(error);
         }
     };
     let result = place(&folder, &temporary, source, &digest, length);
+    // Gone already where it was moved into place; as above, one that stays
+    // is swept.
     let _ = fs::remove_file(&temporary);
     result.map(|name| format!("{MEDIA_DIR}/{name}"))
 }
@@ -335,6 +341,7 @@ fn move_into_place(temporary: &Path, target: &Path) -> io::Result<()> {
     let beside = target.with_file_name(format!(".kerf-copy-{}.part", unique()));
     let moved = fs::copy(temporary, &beside).and_then(|_| fs::rename(&beside, target));
     if moved.is_err() {
+        // There may be none; the move's own error is what to tell.
         let _ = fs::remove_file(&beside);
     }
     moved
@@ -412,6 +419,7 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::{git, scaffold};
+    use std::process::Command;
 
     fn names(folder: &Path) -> Vec<std::ffi::OsString> {
         fs::read_dir(folder)

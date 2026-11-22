@@ -36,7 +36,10 @@ impl Value {
     }
     pub fn as_vec2(&self) -> [f64; 2] {
         let c = self.components();
-        [c.first().copied().unwrap_or(0.0), c.get(1).copied().unwrap_or(0.0)]
+        [
+            c.first().copied().unwrap_or(0.0),
+            c.get(1).copied().unwrap_or(0.0),
+        ]
     }
     pub fn as_color(&self) -> [f32; 4] {
         let c = self.components();
@@ -56,7 +59,11 @@ impl Value {
         }
     }
     pub fn as_layer(&self) -> Option<u64> {
-        if let Value::Layer(l) = self { *l } else { None }
+        if let Value::Layer(l) = self {
+            *l
+        } else {
+            None
+        }
     }
 }
 

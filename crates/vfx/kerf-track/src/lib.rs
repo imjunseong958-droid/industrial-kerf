@@ -181,12 +181,12 @@ pub fn simplified(points: &[Point], tolerance: f64) -> Vec<usize> {
                 worst = (off, Some(index));
             }
         }
-        if let (off, Some(index)) = worst {
-            if off > tolerance {
-                keep[index] = true;
-                spans.push((low, index));
-                spans.push((index, high));
-            }
+        if let (off, Some(index)) = worst
+            && off > tolerance
+        {
+            keep[index] = true;
+            spans.push((low, index));
+            spans.push((index, high));
         }
     }
     (0..points.len()).filter(|index| keep[*index]).collect()

@@ -24,6 +24,13 @@ pub struct Author {
     pub role: Option<String>,
 }
 
+impl Default for Author {
+    /// Kerf's own agent ([`Author::kerf`]).
+    fn default() -> Self {
+        Self::kerf()
+    }
+}
+
 impl Author {
     pub fn new(kind: impl Into<String>, name: impl Into<String>) -> Self {
         Self {

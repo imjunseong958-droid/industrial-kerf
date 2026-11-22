@@ -4,13 +4,26 @@
 
 use crate::ParamUi;
 use crate::Value;
-use crate::{Buf, EffectCtx, EffectSpec, num, p, slider};
+use crate::{num, p, slider, Buf, EffectCtx, EffectSpec};
 use kerf_color::luma709;
 use kerf_raster::{Image, Px};
 use rayon::prelude::*;
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Blur & Sharpen", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Blur & Sharpen",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 #[inline]
@@ -44,9 +57,16 @@ fn edge_preserving(src: &Image, r: f64, range: f32, hard: bool) -> Image {
                     if d2 <= r * r + 0.5 {
                         let q = src.get_clamped(x as i64 + dx, y as i64 + dy);
                         let w = if hard {
-                            if (plum(q) - cl).abs() <= range { 1.0 } else { 0.0 }
+                            if (plum(q) - cl).abs() <= range {
+                                1.0
+                            } else {
+                                0.0
+                            }
                         } else {
-                            let dc = (q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2) + (q[2] - c[2]).powi(2) + (q[3] - c[3]).powi(2);
+                            let dc = (q[0] - c[0]).powi(2)
+                                + (q[1] - c[1]).powi(2)
+                                + (q[2] - c[2]).powi(2)
+                                + (q[3] - c[3]).powi(2);
                             ((-d2 / sig_s2) as f32 - dc / sig_r2).exp()
                         };
                         if w > 0.0 {
@@ -105,8 +125,18 @@ pub fn specs() -> Vec<EffectSpec> {
         "ec.blur.bilateral",
         "Bilateral Blur",
         vec![
-            p("radius", "Radius", num(5.0), slider(0.0, 200.0, 0.0, 50.0, 1)),
-            p("threshold", "Threshold", num(10.0), slider(0.0, 100.0, 0.0, 100.0, 1)),
+            p(
+                "radius",
+                "Radius",
+                num(5.0),
+                slider(0.0, 200.0, 0.0, 50.0, 1),
+            ),
+            p(
+                "threshold",
+                "Threshold",
+                num(10.0),
+                slider(0.0, 100.0, 0.0, 100.0, 1),
+            ),
             p("colorize", "Colorize", Value::Bool(true), ParamUi::Checkbox),
         ],
         bilateral,

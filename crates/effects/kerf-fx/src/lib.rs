@@ -1,7 +1,7 @@
 //! Kerf's effects and transitions.
 //!
 //! [`transitions`] are the transitions carried from FilmCraft, which Kerf's
-//! own renderer draws from both clips across a cut, and [`filmcraft`] the
+//! own renderer draws from both clips across a cut, and [`video`] the
 //! video effects carried from FilmCraft, which it runs on a clip's picture.
 //! The rest of this crate is the EffectCraft effects Kerf keeps ([`kept`]),
 //! which FilmCraft has nothing like.
@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::sync::OnceLock;
 
-pub mod filmcraft;
 mod guide;
 pub mod kept;
 pub mod picture;
 pub mod transitions;
+pub mod video;
 
 pub use kerf_draw::mask::cuts;
 
@@ -169,7 +169,8 @@ pub fn catalog_table() -> String {
             .iter()
             .find(|(guided, _)| *guided == id)
             .map_or("", |(_, guidance)| guidance);
-        writeln!(out, "effect\t{id}\t{}\t{name}\t{guidance}", spec.category).unwrap();
+        writeln!(out, "effect\t{id}\t{}\t{name}\t{guidance}", spec.category)
+            .expect("writing to a String cannot fail");
         let listed = spec.params.iter().filter(|p| p.ui != ParamUi::Hidden);
         for param in listed {
             assert!(
@@ -194,13 +195,13 @@ pub fn catalog_table() -> String {
                     "\tnumber\t{x_name}\t{x}\t\tpicture widths\t{} (0 left, 1 right)",
                     param.name
                 )
-                .unwrap();
+                .expect("writing to a String cannot fail");
                 writeln!(
                     out,
                     "\tnumber\t{y_name}\t{y}\t\tpicture heights\t{} (0 top, 1 bottom)",
                     param.name
                 )
-                .unwrap();
+                .expect("writing to a String cannot fail");
                 continue;
             }
             let (ty, default, constraint, unit) = match (&param.ui, &param.default) {
@@ -254,7 +255,7 @@ pub fn catalog_table() -> String {
                 "\t{ty}\t{}\t{default}\t{constraint}\t{unit}\t{}",
                 param.id, param.name
             )
-            .unwrap();
+            .expect("writing to a String cannot fail");
         }
     }
     out
@@ -344,7 +345,12 @@ impl RasterStack {
             kerf_draw::mask::coverage(&flat, width as usize, height as usize)
         };
         let mut image = Image::new(width, height);
-        for (index, (pixel, bytes)) in image.data.iter_mut().zip(rgba.as_chunks::<4>().0.iter()).enumerate() {
+        for (index, (pixel, bytes)) in image
+            .data
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0.iter())
+            .enumerate()
+        {
             let cover = covered.as_ref().map_or(1.0, |covered| covered[index]);
             let alpha = f32::from(bytes[3]) / 255.0 * cover;
             let channel = |value: u8| f32::from(value) / 255.0 * alpha;

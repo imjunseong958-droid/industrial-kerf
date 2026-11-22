@@ -89,7 +89,13 @@ impl BusStream {
         );
         frame.set_rate(SAMPLE_RATE);
         frame.set_pts(Some(at));
-        for (out, sample) in frame.data_mut(0).as_chunks_mut::<4>().0.iter_mut().zip(input) {
+        for (out, sample) in frame
+            .data_mut(0)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(input)
+        {
             out.copy_from_slice(&sample.to_ne_bytes());
         }
         let added = graph
@@ -158,7 +164,9 @@ impl Mixer {
         let mut index = 0;
         while index < self.voices.len() {
             let target = self.sounds[self.voices[index].sound].bus.unwrap_or(master);
-            let into = mixes.get_mut(target).expect("a bus of the program");
+            let into = mixes.get_mut(target).expect(
+                "kerf-core places a sound's bus in the buses all its program's sounds share",
+            );
             if !self.voices[index].add(into, self.cursor) {
                 index += 1;
                 continue;
@@ -166,10 +174,10 @@ impl Mixer {
             // A backward clip plays on in its next part.
             let voice = self.voices.swap_remove(index);
             let sound = &self.sounds[voice.sound];
-            if voice.until < sound.end {
-                if let Some(next) = Voice::open(sound, voice.sound, voice.until) {
-                    self.voices.push(next);
-                }
+            if voice.until < sound.end
+                && let Some(next) = Voice::open(sound, voice.sound, voice.until)
+            {
+                self.voices.push(next);
             }
         }
         for (place, bus) in self.buses.iter_mut().enumerate() {
@@ -328,6 +336,7 @@ impl Source {
         // As FFmpeg's `-ss` reads it: the source time past the file's own
         // start, in microseconds.
         // SAFETY: `input` owns a valid, opened format context.
+        #[allow(unsafe_code)]
         let first = unsafe { (*input.as_ptr()).start_time };
         let start = micros(cut.source.0)
             + if first == ffmpeg::ffi::AV_NOPTS_VALUE {
@@ -391,8 +400,12 @@ impl Source {
     fn pump(&mut self) -> Result<(), PlaybackError> {
         if self.eof {
             self.flushed = true;
-            if let Some(mut source) = self.graph.get("in") {
-                let _ = source.source().flush();
+            if let Some(mut source) = self.graph.get("in")
+                && let Err(error) = source.source().flush()
+            {
+                log::warn!(
+                        "the filters were not told the sound ended, so they may hold back its last: {error}"
+                    );
             }
             return Ok(());
         }
@@ -419,7 +432,11 @@ impl Source {
             Some(_) => Ok(()),
             None => {
                 self.eof = true;
-                let _ = self.decoder.send_eof();
+                if let Err(error) = self.decoder.send_eof() {
+                    log::warn!(
+                        "the decoder was not told its input ended, so it may hold back its last sound: {error}"
+                    );
+                }
                 self.drain()
             }
         }
@@ -543,7 +560,13 @@ impl Resampler {
         frame.set_rate(SAMPLE_RATE);
         frame.set_pts(Some(self.pts));
         self.pts += frames as i64;
-        for (bytes, sample) in frame.data_mut(0).as_chunks_mut::<4>().0.iter_mut().zip(mixed) {
+        for (bytes, sample) in frame
+            .data_mut(0)
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(mixed)
+        {
             bytes.copy_from_slice(&sample.to_ne_bytes());
         }
         self.graph
@@ -638,7 +661,9 @@ mod tests {
         run(ffmpeg, &args);
         std::fs::read(out)
             .expect("rendered sound")
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
             .collect()
     }

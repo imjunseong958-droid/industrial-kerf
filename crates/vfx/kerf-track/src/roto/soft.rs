@@ -55,17 +55,21 @@ fn in_light(picture: &Picture, matte: &[u8], reach: f64, channel: usize) -> Vec<
     let (x0, x1) = (left.saturating_sub(margin), (right + margin).min(w));
     let (y0, y1) = (top.saturating_sub(margin), (bottom + margin).min(h));
     let of_byte: [f32; 256] = std::array::from_fn(|byte| linear(byte as f32 / 255.0));
-    out.par_chunks_mut(w.max(1)).enumerate().skip(y0).take(y1 - y0).for_each(|(y, row)| {
-        for (x, value) in row.iter_mut().enumerate().skip(x0).take(x1 - x0) {
-            let code = picture.rgb[y * w + x][channel];
-            let byte = (code * 255.0).round();
-            *value = if (0.0..=255.0).contains(&byte) && byte / 255.0 == code {
-                of_byte[byte as usize]
-            } else {
-                linear(code)
-            };
-        }
-    });
+    out.par_chunks_mut(w.max(1))
+        .enumerate()
+        .skip(y0)
+        .take(y1 - y0)
+        .for_each(|(y, row)| {
+            for (x, value) in row.iter_mut().enumerate().skip(x0).take(x1 - x0) {
+                let code = picture.rgb[y * w + x][channel];
+                let byte = (code * 255.0).round();
+                *value = if (0.0..=255.0).contains(&byte) && byte / 255.0 == code {
+                    of_byte[byte as usize]
+                } else {
+                    linear(code)
+                };
+            }
+        });
     out
 }
 
@@ -179,7 +183,11 @@ pub(super) fn measured(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) ->
 /// [`measured`] as it was worked out before: the distance over the whole frame, and every pixel put in
 /// light by itself. What [`measured`] is held against.
 #[cfg(test)]
-pub(super) fn measured_everywhere(picture: &Picture, matte: &[u8], corners: &[[f64; 2]]) -> Vec<Across> {
+pub(super) fn measured_everywhere(
+    picture: &Picture,
+    matte: &[u8],
+    corners: &[[f64; 2]],
+) -> Vec<Across> {
     let (w, h) = (picture.width, picture.height);
     let reach = (w.max(h) as f64 / 8.0).clamp(16.0, 120.0);
     let signed = matting::signed_distance(matte, w, h);

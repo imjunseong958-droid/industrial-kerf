@@ -6,9 +6,9 @@
 //! the blocks heard since the one before), so the media worker owns the
 //! only [`Meter`] and polls it on its loop.
 
+use crate::event::{Event, MeterReading};
+use crate::wake::Outbox;
 use kerf_playback::Levels;
-use serde_json::{json, Value};
-use std::sync::mpsc::SyncSender;
 use std::time::{Duration, Instant};
 
 /// How often the meter is read while playing: 20 Hz.
@@ -27,38 +27,28 @@ pub(crate) fn dbfs(value: f32) -> f64 {
     (value.max(FLOOR_DB) * 100.0).round() / 100.0
 }
 
-fn lufs(value: Option<f32>) -> Value {
+fn lufs(value: Option<f32>) -> Option<f64> {
     value
         .filter(|value| value.is_finite())
-        .map_or(Value::Null, |value| {
-            json!((f64::from(value) * 100.0).round() / 100.0)
-        })
+        .map(|value| (f64::from(value) * 100.0).round() / 100.0)
 }
 
 /// One reading as the editor gets it: peak and RMS of left and right in
 /// dBFS (the tap's own values, at least the floor), BS.1770 momentary and short-term loudness in LUFS (`null` until
 /// 400 ms or 3 s have been heard), and the program time it reaches.
-pub(crate) fn event(levels: &Levels) -> Value {
-    json!({
-        "type": "meter",
-        "peak": [dbfs(levels.peak[0]), dbfs(levels.peak[1])],
-        "rms": [dbfs(levels.rms[0]), dbfs(levels.rms[1])],
-        "momentary": lufs(levels.momentary),
-        "shortTerm": lufs(levels.short_term),
-        "at": levels.at,
+pub(crate) fn event(levels: &Levels) -> Event {
+    Event::Meter(MeterReading {
+        peak: Some([dbfs(levels.peak[0]), dbfs(levels.peak[1])]),
+        rms: Some([dbfs(levels.rms[0]), dbfs(levels.rms[1])]),
+        momentary: lufs(levels.momentary),
+        short_term: lufs(levels.short_term),
+        at: Some(levels.at),
     })
 }
 
 /// What the meter says once nothing plays.
-pub(crate) fn silent() -> Value {
-    json!({
-        "type": "meter",
-        "peak": Value::Null,
-        "rms": Value::Null,
-        "momentary": Value::Null,
-        "shortTerm": Value::Null,
-        "at": Value::Null,
-    })
+pub(crate) fn silent() -> Event {
+    Event::Meter(MeterReading::default())
 }
 
 /// Reads the levels on the media worker's loop and sends them.
@@ -82,13 +72,14 @@ impl Meter {
         now: Instant,
         playing: bool,
         levels: impl FnOnce() -> Option<Levels>,
-        tx: &SyncSender<Value>,
+        tx: &Outbox,
     ) {
         if !playing {
             if self.live {
                 self.live = false;
                 self.sent = None;
                 self.read = None;
+                // Nobody takes events any more only once the editor has closed the bridge.
                 let _ = tx.send(silent());
             }
             return;
@@ -117,8 +108,6 @@ impl Meter {
 mod tests {
     use super::*;
 
-    use std::sync::mpsc;
-
     fn levels(peak: f32, at: f64) -> Levels {
         Levels {
             peak: [peak, peak - 6.0],
@@ -131,8 +120,8 @@ mod tests {
 
     #[test]
     fn a_full_queue_never_holds_the_media_worker_up() {
-        let (tx, _rx) = mpsc::sync_channel(1);
-        tx.send(json!({"type": "clock"})).unwrap();
+        let (tx, _rx) = crate::wake::outbox(1);
+        tx.send(Event::ViewerReset).unwrap();
         let mut meter = Meter::default();
         let start = Instant::now();
         meter.tick(start, true, || Some(levels(-6.4, 1.0)), &tx);

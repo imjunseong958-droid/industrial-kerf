@@ -3,13 +3,14 @@
 //! [`kerf_collab::media`]), and which media are offline, not downloaded, or
 //! not carried by the project's repository.
 
+use crate::event::{CastToMake, ErrorEvent, Event, MediaMakePlan};
+use crate::wake::Outbox;
 use crate::{emit, Command, Shared};
 use kerf_collab::git::is_lfs_pointer;
 use kerf_collab::media::{absolute, external, relative_to};
 pub(crate) use kerf_collab::media::{copy_into_media, needs_copy};
 use kerf_model::{Catalog, Id, Op, Project};
 use serde::Serialize;
-use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -27,7 +28,7 @@ pub(crate) fn copy_then(
     shared: &Arc<Shared>,
     path: &str,
     commands: &SyncSender<Command>,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
     probe: impl FnOnce(&Path) -> Result<(), String> + Send + 'static,
     then: impl FnOnce(String) -> Command + Send + 'static,
 ) {
@@ -44,6 +45,8 @@ pub(crate) fn copy_then(
         drop(copying);
         match copied {
             Ok(copy) => {
+                // The runtime worker is gone only as the bridge closes; the copy then stays in
+                // media/, not imported.
                 let _ = commands.send(then(copy));
             }
             Err(error) => crate::error(
@@ -68,7 +71,7 @@ pub(crate) fn make(
     confirmed: bool,
     rolls: u32,
     commands: &SyncSender<Command>,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) {
     let directory = shared.directory.as_path();
     let planned = client
@@ -97,17 +100,16 @@ pub(crate) fn make(
     if !confirmed {
         return crate::emit(
             tx,
-            json!({
-                "type": "media_make_plan",
-                "media": id,
+            Event::MediaMakePlan(MediaMakePlan {
+                media: id.to_owned(),
                 // No file says how a media is made: its steps are the document's own.
-                "recipe": "",
-                "command": plan.command,
-                "steps": plan.steps,
-                "notes": plan.notes,
-                "take": plan.take,
-                "file": plan.file.to_string_lossy(),
-                "rolls": rolls,
+                recipe: String::new(),
+                command: plan.command.clone(),
+                steps: plan.steps.clone(),
+                notes: plan.notes.clone(),
+                take: plan.take,
+                file: plan.file.to_string_lossy().into_owned(),
+                rolls,
             }),
         );
     }
@@ -179,8 +181,13 @@ pub(crate) fn make(
         if let Some(made) = last_made {
             crate::emit(
                 &tx,
-                json!({"type": "media_made", "media": id, "take": made.take}),
+                Event::MediaMade {
+                    media: id.clone(),
+                    take: made.take,
+                },
             );
+            // The runtime worker is gone only as the bridge closes; the take's file is kept
+            // either way.
             let _ = commands.send(Command::MediaReplace {
                 media: id.clone(),
                 path: made.stored,
@@ -189,7 +196,7 @@ pub(crate) fn make(
         match ended {
             Ok(()) => {}
             Err(kerf_engine::EngineError::Cancelled) => {
-                crate::emit(&tx, json!({"type": "media_make_cancelled", "media": id}));
+                crate::emit(&tx, Event::MediaMakeCancelled { media: id.clone() });
             }
             Err(error) => make_failed(&tx, &id, error),
         }
@@ -197,15 +204,16 @@ pub(crate) fn make(
 }
 
 /// One of a project's cast, as the editor shows and sets it.
-#[derive(Clone, Debug, serde::Deserialize)]
-pub(crate) struct CastEntry {
+#[derive(Clone, Debug, Default, Serialize, serde::Deserialize, PartialEq)]
+pub struct CastEntry {
     /// `cast` or `style`.
-    kind: String,
-    name: String,
+    pub kind: String,
+    pub name: String,
     #[serde(default)]
-    words: String,
+    pub words: String,
+    /// The files it refers to.
     #[serde(default)]
-    refs: Vec<String>,
+    pub refs: Vec<String>,
 }
 
 /// Read the cast of the project, or with `set` write it first: `cast {entries, toMake}`, each
@@ -216,14 +224,18 @@ pub(crate) fn cast(
     shared: &Arc<Shared>,
     client: &kerf_runtime::RuntimeClient,
     set: Option<Vec<CastEntry>>,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) {
     use kerf_engine::recipe::cast::{Cast, Entry, Kind};
     let directory = shared.directory.as_path();
     let failed = |error: String| {
         crate::emit(
             tx,
-            json!({"type": "error", "message": error, "command": "cast"}),
+            Event::Error(ErrorEvent {
+                message: error,
+                command: Some("cast".to_owned()),
+                ..ErrorEvent::default()
+            }),
         );
     };
     let saved = set.is_some();
@@ -259,33 +271,45 @@ pub(crate) fn cast(
         Ok(cast) => cast,
         Err(error) => return failed(error.to_string()),
     };
-    let entries: Vec<Value> = cast
+    let entries: Vec<CastEntry> = cast
         .entries()
-        .map(|(kind, name, entry)| {
-            json!({"kind": kind.word(), "name": name, "words": entry.words, "refs": entry.references})
+        .map(|(kind, name, entry)| CastEntry {
+            kind: kind.word().to_owned(),
+            name: name.to_owned(),
+            words: entry.words.clone(),
+            refs: entry.references.clone(),
         })
         .collect();
     // The shots that want making as the cast stands, so a change to it says what it costs.
-    let to_make: Vec<Value> = client
+    let to_make: Vec<CastToMake> = client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
         .map(|project| {
             kerf_engine::recipe::shots(&project, directory)
                 .into_iter()
-                .filter_map(|shot| Some(json!({"media": shot.media, "why": shot.wants?.reason()})))
+                .filter_map(|shot| {
+                    Some(CastToMake {
+                        media: shot.media,
+                        why: shot.wants?.reason(),
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();
     crate::emit(
         tx,
-        json!({"type": "cast", "entries": entries, "toMake": to_make, "saved": saved}),
+        Event::Cast(crate::event::Cast {
+            entries,
+            to_make,
+            saved,
+        }),
     );
 }
 
 /// Who shows the makings an agent's session runs on its own, where the person lets it: the
 /// events a person's making sends, so the toolbar says what is being made and the bin can
 /// stop it. The session's router places the take itself, so nothing is replaced here.
-pub(crate) fn agent_makings(shared: Arc<Shared>, tx: SyncSender<Value>) -> kerf_mcp::MakingWatcher {
+pub(crate) fn agent_makings(shared: Arc<Shared>, tx: Outbox) -> kerf_mcp::MakingWatcher {
     use kerf_mcp::MakingEvent;
     let ended = |shared: &Shared, media: &str| {
         if let Ok(mut makings) = shared.makings.lock() {
@@ -302,14 +326,11 @@ pub(crate) fn agent_makings(shared: Arc<Shared>, tx: SyncSender<Value>) -> kerf_
         MakingEvent::Said { media, take, line } => crate::emit(&tx, making(&media, take, &line)),
         MakingEvent::Made { media, take } => {
             ended(&shared, &media);
-            crate::emit(
-                &tx,
-                json!({"type": "media_made", "media": media, "take": take}),
-            );
+            crate::emit(&tx, Event::MediaMade { media, take });
         }
         MakingEvent::Stopped { media } => {
             ended(&shared, &media);
-            crate::emit(&tx, json!({"type": "media_make_cancelled", "media": media}));
+            crate::emit(&tx, Event::MediaMakeCancelled { media });
         }
         MakingEvent::Failed { media, why } => {
             ended(&shared, &media);
@@ -320,17 +341,25 @@ pub(crate) fn agent_makings(shared: Arc<Shared>, tx: SyncSender<Value>) -> kerf_
 
 /// A making of media `id` under way: the take it is making, and the line its steps last
 /// said, empty when it has only begun.
-fn making(id: &str, take: u32, line: &str) -> Value {
-    json!({"type": "media_making", "media": id, "take": take, "line": line})
+fn making(id: &str, take: u32, line: &str) -> Event {
+    Event::MediaMaking {
+        media: id.to_owned(),
+        take,
+        line: line.to_owned(),
+    }
 }
 
 /// A making of media `id` that did not end with a take: an `error` that names the media,
 /// so that what shows it being made stops.
-fn make_failed(tx: &SyncSender<Value>, id: &str, why: impl std::fmt::Display) {
+fn make_failed(tx: &Outbox, id: &str, why: impl std::fmt::Display) {
     crate::emit(
         tx,
-        json!({"type": "error", "message": format!("cannot make {id}: {why}"),
-            "command": "media_make", "media": id}),
+        Event::Error(ErrorEvent {
+            message: format!("cannot make {id}: {why}"),
+            command: Some("media_make".to_owned()),
+            media: Some(id.to_owned()),
+            ..ErrorEvent::default()
+        }),
     );
 }
 
@@ -340,7 +369,7 @@ fn make_failed(tx: &SyncSender<Value>, id: &str, why: impl std::fmt::Display) {
 /// the media. Each says what it is doing in the project's folder
 /// (`kerf_engine::recipe::told`); the ones `this_program` runs show by themselves. One that
 /// ended before it was ever shown is not news.
-pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &SyncSender<Value>) {
+pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Outbox) {
     use kerf_engine::recipe::Going;
     let told: Vec<kerf_engine::recipe::Told> = kerf_engine::recipe::told(&shared.directory)
         .into_iter()
@@ -363,10 +392,18 @@ pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Syn
             Going::Making => make_failed(tx, media, "the program making it has gone"),
             Going::Made => crate::emit(
                 tx,
-                json!({"type": "media_made", "media": media, "take": told.take}),
+                Event::MediaMade {
+                    media: media.to_owned(),
+                    take: told.take,
+                },
             ),
             Going::Stopped => {
-                crate::emit(tx, json!({"type": "media_make_cancelled", "media": media}));
+                crate::emit(
+                    tx,
+                    Event::MediaMakeCancelled {
+                        media: media.to_owned(),
+                    },
+                );
             }
             Going::Failed => make_failed(
                 tx,
@@ -391,7 +428,7 @@ pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Syn
 /// `media_make_cancelled` once it has. One another program is making is asked through the
 /// project's folder, and shows as stopped when that program says it has. One that is not
 /// being made is an `error`.
-pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &SyncSender<Value>) {
+pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &Outbox) {
     let running = shared
         .makings
         .lock()
@@ -435,21 +472,11 @@ impl Drop for Copying {
     }
 }
 
-/// Media that cannot play as the project names them, or that collaborators
-/// do not get: offline (no file), Git LFS pointers (the file was not
-/// downloaded), and external files (outside the project folder, or ignored
-/// by Git). Each media id is in at most one list, in that order.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct MediaStatus {
-    pub missing: Vec<String>,
-    pub pointers: Vec<String>,
-    pub external: Vec<String>,
-}
+pub(crate) use crate::event::MediaStatus;
 
 impl MediaStatus {
-    pub fn event(&self) -> Value {
-        json!({"type": "media_status", "missing": self.missing,
-            "pointers": self.pointers, "external": self.external})
+    pub fn event(&self) -> Event {
+        Event::MediaStatus(self.clone())
     }
 }
 
@@ -480,7 +507,7 @@ pub(crate) fn status(project: &Project, directory: &Path) -> MediaStatus {
 
 /// Emit `media_status` for `project` when it differs from the last one the
 /// bridge emitted.
-pub(crate) fn publish_status(shared: &Shared, tx: &SyncSender<Value>, project: &Project) {
+pub(crate) fn publish_status(shared: &Shared, tx: &Outbox, project: &Project) {
     let status = status(project, &shared.directory);
     let Ok(mut last) = shared.media_status.lock() else {
         return;
@@ -618,7 +645,7 @@ mod tests {
         let source = root.path().join("notes.txt");
         fs::write(&source, b"my secret notes").unwrap();
         let (commands, imports) = mpsc::sync_channel(1);
-        let (tx, events) = mpsc::sync_channel(4);
+        let (tx, events) = crate::wake::outbox(4);
         copy_then(
             &shared,
             &source.to_string_lossy(),
@@ -630,7 +657,8 @@ mod tests {
                 media_only: false,
             },
         );
-        let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+        let event =
+            serde_json::to_value(events.recv_timeout(Duration::from_secs(10)).unwrap()).unwrap();
         assert_eq!(event["type"], "error", "{event}");
         assert!(imports.try_recv().is_err());
         assert_eq!(fs::read_dir(project.join("media")).unwrap().count(), 0);

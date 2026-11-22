@@ -419,7 +419,10 @@ fn a_subject_under_an_open_shutter_is_kept_up_with() {
 
 /// The frames of the real footage `scripts/fetch-real-footage.sh` fetches, `width` across, as 0 to 1
 /// RGB, or `None` when `KERF_REAL_FOOTAGE` does not say where it is.
-fn footage(names: impl Iterator<Item = String>, width: usize) -> Option<(usize, usize, Vec<Vec<[f32; 3]>>)> {
+fn footage(
+    names: impl Iterator<Item = String>,
+    width: usize,
+) -> Option<(usize, usize, Vec<Vec<[f32; 3]>>)> {
     let folder = std::path::PathBuf::from(std::env::var_os("KERF_REAL_FOOTAGE")?);
     let mut size = (width, 0);
     let mut frames = Vec::new();
@@ -428,13 +431,23 @@ fn footage(names: impl Iterator<Item = String>, width: usize) -> Option<(usize, 
         let decoded = std::process::Command::new("ffmpeg")
             .args(["-v", "error", "-i"])
             .arg(&path)
-            .args(["-vf", &format!("scale={width}:-2:flags=area"), "-f", "rawvideo", "-pix_fmt", "rgb48le", "pipe:"])
+            .args([
+                "-vf",
+                &format!("scale={width}:-2:flags=area"),
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "rgb48le",
+                "pipe:",
+            ])
             .output()
             .expect("ffmpeg");
         assert!(decoded.status.success(), "{}", path.display());
         let frame: Vec<[f32; 3]> = decoded
             .stdout
-            .as_chunks::<6>().0.iter()
+            .as_chunks::<6>()
+            .0
+            .iter()
             .map(|c| [0, 2, 4].map(|i| f32::from(u16::from_le_bytes([c[i], c[i + 1]])) / 65535.0))
             .collect();
         size.1 = frame.len() / width;
@@ -452,7 +465,9 @@ fn footage(names: impl Iterator<Item = String>, width: usize) -> Option<(usize, 
 #[test]
 #[ignore = "needs scripts/fetch-real-footage.sh"]
 fn real_footage_roto_under_a_shutter() {
-    let Some((w, h, frames)) = footage((2874..=2897).map(|f| format!("traffic/1080/{f}.png")), 1024) else {
+    let Some((w, h, frames)) =
+        footage((2874..=2897).map(|f| format!("traffic/1080/{f}.png")), 1024)
+    else {
         eprintln!("KERF_REAL_FOOTAGE is not set");
         return;
     };
@@ -474,10 +489,20 @@ fn real_footage_roto_under_a_shutter() {
         .collect();
     lit.sort_by(|a, b| luma(*b).total_cmp(&luma(*a)));
     let take = (lit.len() / 10).max(1);
-    let white = lit[..take].iter().fold([0.0f32; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]]).map(|v| v / take as f32);
+    let white = lit[..take]
+        .iter()
+        .fold([0.0f32; 3], |s, p| [s[0] + p[0], s[1] + p[1], s[2] + p[2]])
+        .map(|v| v / take as f32);
     // Coverage: how far from the plate towards the white, along the line between them.
     let coverage = |frame: &[[f32; 3]], i: usize| -> f64 {
-        let (b, d) = (plate[i], [white[0] - plate[i][0], white[1] - plate[i][1], white[2] - plate[i][2]]);
+        let (b, d) = (
+            plate[i],
+            [
+                white[0] - plate[i][0],
+                white[1] - plate[i][1],
+                white[2] - plate[i][2],
+            ],
+        );
         let len = d.iter().map(|v| v * v).sum::<f32>();
         if len < 0.02 * 0.02 {
             return 0.0;
@@ -501,7 +526,12 @@ fn real_footage_roto_under_a_shutter() {
             while let Some(i) = stack.pop() {
                 size += 1;
                 let (x, y) = (i % w, i / w);
-                let around = [(x > 0).then(|| i - 1), (x + 1 < w).then(|| i + 1), (y > 0).then(|| i - w), (y + 1 < h).then(|| i + w)];
+                let around = [
+                    (x > 0).then(|| i - 1),
+                    (x + 1 < w).then(|| i + 1),
+                    (y > 0).then(|| i - w),
+                    (y + 1 < h).then(|| i + w),
+                ];
                 for j in around.into_iter().flatten() {
                     if half[j] && piece[j] == 0 {
                         piece[j] = next;
@@ -513,38 +543,81 @@ fn real_footage_roto_under_a_shutter() {
                 (largest, largest_size) = (next, size);
             }
         }
-        truths.push(piece.iter().map(|p| *p == largest && largest > 0).collect::<Vec<bool>>());
+        truths.push(
+            piece
+                .iter()
+                .map(|p| *p == largest && largest > 0)
+                .collect::<Vec<bool>>(),
+        );
     }
     // From the first frame the box is in, a twentieth of the frame or more.
-    let first = truths.iter().position(|t| t.iter().filter(|v| **v).count() > w * h / 20).expect("the box");
+    let first = truths
+        .iter()
+        .position(|t| t.iter().filter(|v| **v).count() > w * h / 20)
+        .expect("the box");
     let (frames, truths) = (&frames[first..], &truths[first..]);
     let n = frames.len();
     // The camera's shutter, from the box's front edge against the sky: a row a fifth of the way down
     // the box, read where coverage passes 0.1, 0.5 and 0.9.
     let mut edges = Vec::new();
     for (frame, truth) in frames.iter().zip(truths) {
-        let top = (0..h).find(|&y| (0..w).any(|x| truth[y * w + x])).unwrap_or(0);
-        let bottom = (0..h).rev().find(|&y| (0..w).any(|x| truth[y * w + x])).unwrap_or(0);
+        let top = (0..h)
+            .find(|&y| (0..w).any(|x| truth[y * w + x]))
+            .unwrap_or(0);
+        let bottom = (0..h)
+            .rev()
+            .find(|&y| (0..w).any(|x| truth[y * w + x]))
+            .unwrap_or(0);
         let y = top + (bottom - top) / 5;
-        let Some(front) = (0..w).rev().find(|&x| truth[y * w + x]) else { continue };
-        let crossing = |level: f64| (front.saturating_sub(40)..(front + 40).min(w)).rev().find(|&x| coverage(frame, y * w + x) >= level);
-        if let (Some(a), Some(b), Some(c)) = (crossing(0.9), crossing(0.5), crossing(0.1)) {
-            if front + 40 < w {
-                edges.push((b as f64, (c - a) as f64 / 0.8));
-            }
+        let Some(front) = (0..w).rev().find(|&x| truth[y * w + x]) else {
+            continue;
+        };
+        let crossing = |level: f64| {
+            (front.saturating_sub(40)..(front + 40).min(w))
+                .rev()
+                .find(|&x| coverage(frame, y * w + x) >= level)
+        };
+        if let (Some(a), Some(b), Some(c)) = (crossing(0.9), crossing(0.5), crossing(0.1))
+            && front + 40 < w
+        {
+            edges.push((b as f64, (c - a) as f64 / 0.8));
         }
     }
-    let speeds: Vec<f64> = edges.windows(2).map(|pair| pair[1].0 - pair[0].0).filter(|v| *v > 0.0).collect();
-    let mut opens: Vec<f64> = edges.iter().skip(1).zip(&speeds).map(|((_, blur), speed)| blur / speed).collect();
+    let speeds: Vec<f64> = edges
+        .windows(2)
+        .map(|pair| pair[1].0 - pair[0].0)
+        .filter(|v| *v > 0.0)
+        .collect();
+    let mut opens: Vec<f64> = edges
+        .iter()
+        .skip(1)
+        .zip(&speeds)
+        .map(|((_, blur), speed)| blur / speed)
+        .collect();
     opens.sort_by(f64::total_cmp);
     let speed = speeds.iter().sum::<f64>() / speeds.len().max(1) as f64;
     let open = opens.get(opens.len() / 2).copied().unwrap_or(f64::NAN);
 
-    let start = truths[0].iter().enumerate().filter(|(_, t)| **t).fold((0.0, 0.0, 0.0), |(x, y, k), (i, _)| (x + (i % w) as f64, y + (i / w) as f64, k + 1.0));
-    let hints = Hints { inside: vec![[start.0 / start.2 / w as f64, start.1 / start.2 / h as f64]], ..Hints::default() };
+    let start = truths[0]
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| **t)
+        .fold((0.0, 0.0, 0.0), |(x, y, k), (i, _)| {
+            (x + (i % w) as f64, y + (i / w) as f64, k + 1.0)
+        });
+    let hints = Hints {
+        inside: vec![[start.0 / start.2 / w as f64, start.1 / start.2 / h as f64]],
+        ..Hints::default()
+    };
     let rgba = |frame: usize| -> Option<(usize, usize, Vec<u8>)> {
         let f = frames.get(frame)?;
-        Some((w, h, f.iter().flat_map(|p| [p[0], p[1], p[2], 1.0].map(|v| (v * 255.0).round() as u8)).collect()))
+        Some((
+            w,
+            h,
+            f.iter()
+                .flat_map(|p| [p[0], p[1], p[2], 1.0].map(|v| (v * 255.0).round() as u8))
+                .collect(),
+        ))
     };
     let begun = std::time::Instant::now();
     let traced = trace(n, &hints, rgba);
@@ -556,11 +629,17 @@ fn real_footage_roto_under_a_shutter() {
     let of = |followed: &FollowedObject| {
         let (mut sum, mut worst, mut area) = (0.0, 1.0f64, 0.0);
         for (outline, truth) in followed.outlines.iter().zip(truths) {
-            let polygon: Vec<[f64; 2]> = outline.iter().map(|at| [at[0] * w as f64, at[1] * h as f64]).collect();
+            let polygon: Vec<[f64; 2]> = outline
+                .iter()
+                .map(|at| [at[0] * w as f64, at[1] * h as f64])
+                .collect();
             let (mut both, mut either, mut mine, mut theirs) = (0usize, 0usize, 0usize, 0usize);
             for y in 0..h {
                 for x in 0..w {
-                    let (a, b) = (in_polygon(&polygon, [x as f64 + 0.5, y as f64 + 0.5]), truth[y * w + x]);
+                    let (a, b) = (
+                        in_polygon(&polygon, [x as f64 + 0.5, y as f64 + 0.5]),
+                        truth[y * w + x],
+                    );
                     both += usize::from(a && b);
                     either += usize::from(a || b);
                     mine += usize::from(a);
@@ -576,9 +655,12 @@ fn real_footage_roto_under_a_shutter() {
         (sum / k, worst, area / k, followed.outlines.len())
     };
     let plain = of(&traced.by_the_measure());
-    let with = found
-        .or(let_in.as_ref().ok().copied())
-        .map(|shutter| (shutter.open, of(&trace(n, &hints, rgba).under_a_shutter(shutter))));
+    let with = found.or(let_in.as_ref().ok().copied()).map(|shutter| {
+        (
+            shutter.open,
+            of(&trace(n, &hints, rgba).under_a_shutter(shutter)),
+        )
+    });
     println!(
         "roto on a real shutter, {w}x{h}, from frame {first}: the box's front goes {speed:.1} px a frame, its blur says the shutter was open {open:.2} of a frame ({} edges); \
          {took:.3} s a frame; by the measure overlap {:.3}, worst {:.3}, area {:.2} of the truth's over {} frames; shutter found {:?}; let in, open and drawn {:?}",
@@ -601,7 +683,12 @@ fn real_footage_roto_under_a_shutter() {
 }
 
 /// The warp as it was worked out before only the pixels the matte can come to were: every pixel.
-fn warped_everywhere(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [i64; 2]) -> Vec<f32> {
+fn warped_everywhere(
+    flow: &Flow,
+    matte: &[u8],
+    (w, h): (usize, usize),
+    moved: [i64; 2],
+) -> Vec<f32> {
     let source: Vec<f32> = matte.iter().map(|v| f32::from(*v)).collect();
     let (went_x, went_y) = (moved[0] as f64, moved[1] as f64);
     (0..w * h)
@@ -609,8 +696,18 @@ fn warped_everywhere(flow: &Flow, matte: &[u8], (w, h): (usize, usize), moved: [
             let (x, y) = ((i % w) as f64 + 0.5, (i / w) as f64 + 0.5);
             let v = flow.at(x, y);
             let (vx, vy) = (f64::from(v[0]), f64::from(v[1]));
-            let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) { (0.0, 0.0) } else { (vx, vy) };
-            matting::sample(&source, w, h, x + vx - moved[0] as f64, y + vy - moved[1] as f64)
+            let (vx, vy) = if vx.hypot(vy) > (vx - went_x).hypot(vy - went_y) {
+                (0.0, 0.0)
+            } else {
+                (vx, vy)
+            };
+            matting::sample(
+                &source,
+                w,
+                h,
+                x + vx - moved[0] as f64,
+                y + vy - moved[1] as f64,
+            )
         })
         .collect()
 }
@@ -628,7 +725,8 @@ fn a_distance_measured_near_the_matte_is_the_distance_measured_everywhere() {
             .map(|i| u8::from(((i % w) as f64 - cx).hypot((i / w) as f64 - cy) < r))
             .collect()
     };
-    let both = |a: Vec<u8>, b: Vec<u8>| -> Vec<u8> { a.iter().zip(&b).map(|(a, b)| a | b).collect() };
+    let both =
+        |a: Vec<u8>, b: Vec<u8>| -> Vec<u8> { a.iter().zip(&b).map(|(a, b)| a | b).collect() };
     let mut holed = disk(40.0, 30.0, 18.0);
     for (at, inner) in disk(43.0, 28.0, 5.0).iter().enumerate() {
         holed[at] &= 1 - inner;
@@ -636,7 +734,10 @@ fn a_distance_measured_near_the_matte_is_the_distance_measured_everywhere() {
     let mattes = [
         ("a disk", disk(40.0, 30.0, 12.0)),
         ("a disk with a hole", holed),
-        ("a disk and a speck far from it", both(disk(20.0, 20.0, 9.0), disk(90.0, 55.0, 1.5))),
+        (
+            "a disk and a speck far from it",
+            both(disk(20.0, 20.0, 9.0), disk(90.0, 55.0, 1.5)),
+        ),
         ("one over the frame's corner", disk(0.0, 0.0, 14.0)),
         ("one over its far corner", disk(96.0, 60.0, 14.0)),
         ("one pixel", disk(50.0, 30.0, 0.5)),
@@ -650,9 +751,16 @@ fn a_distance_measured_near_the_matte_is_the_distance_measured_everywhere() {
             for (at, (near, all)) in near.iter().zip(&everywhere).enumerate() {
                 if *near == matting::FAR_OUTSIDE {
                     // Not measured: outside, and further than was asked for.
-                    assert!(f64::from(*all) < -reach, "{name}, reach {reach}, pixel {at}: {all}");
+                    assert!(
+                        f64::from(*all) < -reach,
+                        "{name}, reach {reach}, pixel {at}: {all}"
+                    );
                 } else {
-                    assert_eq!(near.to_bits(), all.to_bits(), "{name}, reach {reach}, pixel {at}");
+                    assert_eq!(
+                        near.to_bits(),
+                        all.to_bits(),
+                        "{name}, reach {reach}, pixel {at}"
+                    );
                 }
             }
         }
@@ -673,7 +781,11 @@ fn a_matte_cleaned_in_its_box_is_the_matte_cleaned_everywhere() {
         // Blobs, holes in them, specks, and seeds of both kinds, anywhere, the frame's edge included.
         let mut labels = vec![0u8; w * h];
         let mut paint = |value: u8, most: u64, labels: &mut Vec<u8>| {
-            let (cx, cy, r) = ((next() % w as u64) as i64, (next() % h as u64) as i64, (next() % most) as i64);
+            let (cx, cy, r) = (
+                (next() % w as u64) as i64,
+                (next() % h as u64) as i64,
+                (next() % most) as i64,
+            );
             for y in (cy - r).max(0)..(cy + r + 1).min(h as i64) {
                 for x in (cx - r).max(0)..(cx + r + 1).min(w as i64) {
                     if (x - cx).pow(2) + (y - cy).pow(2) <= r * r {
@@ -729,7 +841,10 @@ fn a_frame_is_cut_as_it_was_before_less_of_it_was_worked_out() {
             let flow = block_flow(&next.image, &previous.image, 8, 4);
             for moved in [[0, 0], [9, -4], [-30, 17]] {
                 assert!(
-                    same_bits(&warped_by(&flow, &matte, size, moved), &warped_everywhere(&flow, &matte, size, moved)),
+                    same_bits(
+                        &warped_by(&flow, &matte, size, moved),
+                        &warped_everywhere(&flow, &matte, size, moved)
+                    ),
                     "the warp at {speed} px a frame, frame {frame}, moved {moved:?}"
                 );
             }
@@ -739,8 +854,14 @@ fn a_frame_is_cut_as_it_was_before_less_of_it_was_worked_out() {
             let reach = band_of(size, [0, 0]);
             let everywhere = matting::signed_distance(&flowed, w, h);
             let near = matting::signed_distance_near(&flowed, w, h, reach);
-            let free = |signed: &[f32]| -> Vec<bool> { signed.iter().map(|d| f64::from(d.abs()) <= reach).collect() };
-            assert_eq!(free(&near), free(&everywhere), "where the cut is free, frame {frame}");
+            let free = |signed: &[f32]| -> Vec<bool> {
+                signed.iter().map(|d| f64::from(d.abs()) <= reach).collect()
+            };
+            assert_eq!(
+                free(&near),
+                free(&everywhere),
+                "where the cut is free, frame {frame}"
+            );
             assert_eq!(
                 core_of(&flowed, &near, reach),
                 core_of(&flowed, &everywhere, reach),
@@ -749,15 +870,31 @@ fn a_frame_is_cut_as_it_was_before_less_of_it_was_worked_out() {
             // The cut cleaned in the box around it, against every pixel gone through.
             let blurred = matting::gauss(&soft, w, h, (reach / 4.0).max(1.0));
             let mut uncleaned = flowed.clone();
-            cut(&next.rgb, w, h, &mut uncleaned, &free(&near), &vec![0u8; w * h], &fg, &bg, Some((&blurred, PRIOR)));
+            cut(
+                &next.rgb,
+                w,
+                h,
+                &mut uncleaned,
+                &free(&near),
+                &vec![0u8; w * h],
+                &fg,
+                &bg,
+                Some((&blurred, PRIOR)),
+            );
             let seeds = core_of(&flowed, &near, reach);
             let (mut boxed, mut every) = (uncleaned.clone(), uncleaned.clone());
             clean(&mut boxed, &seeds, &vec![false; w * h], w, h);
             clean_all(&mut every, &seeds, &vec![false; w * h], w, h);
-            assert_eq!(boxed, every, "the cleaning at {speed} px a frame, frame {frame}");
+            assert_eq!(
+                boxed, every,
+                "the cleaning at {speed} px a frame, frame {frame}"
+            );
             let (labels, _) = next_matte(&previous, &matte, &next, (&fg, &bg), false);
             if moved_by(&previous, &matte, &next) == [0, 0] {
-                assert_eq!(labels, every, "the matte at {speed} px a frame, frame {frame}");
+                assert_eq!(
+                    labels, every,
+                    "the matte at {speed} px a frame, frame {frame}"
+                );
             }
             // The softness, against the picture in light pixel by pixel and the distance everywhere.
             let edge = edge_of(&labels, w, h);

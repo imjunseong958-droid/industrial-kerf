@@ -253,193 +253,117 @@ pub fn kernel_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-impl Gpu {
-    fn new() -> Option<Self> {
-        if wgpu::Instance::enabled_backend_features().is_empty() {
-            return None;
-        }
-        let instance = wgpu::Instance::default();
-        let adapter = now(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .ok()?;
-        // A driver on the CPU is slower than the reference, so it is only for checking kernels.
-        let software = std::env::var_os("KERF_GPU").is_some_and(|value| value == "software");
-        if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software {
-            return None;
-        }
-        let (device, queue) = now(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("kerf"),
-            required_limits: adapter.limits(),
-            ..Default::default()
-        }))
-        .ok()?;
-        let limits = device.limits();
-        if limits.max_storage_textures_per_shader_stage < 1
-            || limits.max_compute_invocations_per_workgroup < 256
-            || limits.max_compute_workgroup_size_x < 64
-        {
-            return None;
-        }
-        // wgpu's default handler panics on a device error. A frame then goes to the CPU.
-        let failed = Arc::new(AtomicBool::new(false));
-        let on_error = failed.clone();
-        device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
-            eprintln!("kerf-gpu: {error}; drawing on the CPU from here on");
-            on_error.store(true, Ordering::Relaxed);
-        }));
-        let on_lost = failed.clone();
-        device.set_device_lost_callback(move |_, message| {
-            eprintln!("kerf-gpu: device lost: {message}; drawing on the CPU from here on");
-            on_lost.store(true, Ordering::Relaxed);
-        });
+/// The device to draw on and its queue. `None` without a backend, an adapter, or a device that
+/// has what these kernels need, and for a driver on the CPU unless `KERF_GPU=software`.
+fn open_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    if wgpu::Instance::enabled_backend_features().is_empty() {
+        return None;
+    }
+    let instance = wgpu::Instance::default();
+    let adapter = now(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        ..Default::default()
+    }))
+    .ok()?;
+    // A driver on the CPU is slower than the reference, so it is only for checking kernels.
+    let software = std::env::var_os("KERF_GPU").is_some_and(|value| value == "software");
+    if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software {
+        return None;
+    }
+    let (device, queue) = now(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("kerf"),
+        required_limits: adapter.limits(),
+        ..Default::default()
+    }))
+    .ok()?;
+    let limits = device.limits();
+    if limits.max_storage_textures_per_shader_stage < 1
+        || limits.max_compute_invocations_per_workgroup < 256
+        || limits.max_compute_workgroup_size_x < 64
+    {
+        return None;
+    }
+    Some((device, queue))
+}
 
-        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-picture"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("picture.wgsl").into()),
-        });
-        let layout = kernel_layout(&device);
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("kerf-picture"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let kernel = |entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
-        let (decode, fill, multiply, halve, composite, correct) = (
-            kernel("decode"),
-            kernel("fill"),
-            kernel("multiply"),
-            kernel("halve"),
-            kernel("composite"),
-            kernel("correct"),
-        );
-        let (by_weight, plus) = (kernel("by_weight"), kernel("plus"));
-        let input_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-input"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("input.wgsl").into()),
-        });
-        let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("kerf-input"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
+/// What turns true when the device reports an error or is lost, in place of wgpu's handlers.
+fn watch_for_failure(device: &wgpu::Device) -> Arc<AtomicBool> {
+    // wgpu's default handler panics on a device error. A frame then goes to the CPU.
+    let failed = Arc::new(AtomicBool::new(false));
+    let on_error = failed.clone();
+    device.on_uncaptured_error(Arc::new(move |error: wgpu::Error| {
+        eprintln!("kerf-gpu: {error}; drawing on the CPU from here on");
+        on_error.store(true, Ordering::Relaxed);
+    }));
+    let on_lost = failed.clone();
+    device.set_device_lost_callback(move |_, message| {
+        eprintln!("kerf-gpu: device lost: {message}; drawing on the CPU from here on");
+        on_lost.store(true, Ordering::Relaxed);
+    });
+    failed
+}
+
+/// The kernels of `picture.wgsl` and their layout: decode, fill, multiply, halve, composite,
+/// correct, by_weight, and plus.
+fn picture_kernels(device: &wgpu::Device) -> (wgpu::BindGroupLayout, [wgpu::ComputePipeline; 8]) {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-picture"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("picture.wgsl").into()),
+    });
+    let layout = kernel_layout(device);
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kerf-picture"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let kernel = |entry: &str| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry),
+            layout: Some(&pipeline_layout),
+            module: &module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        })
+    };
+    let (decode, fill, multiply, halve, composite, correct) = (
+        kernel("decode"),
+        kernel("fill"),
+        kernel("multiply"),
+        kernel("halve"),
+        kernel("composite"),
+        kernel("correct"),
+    );
+    let (by_weight, plus) = (kernel("by_weight"), kernel("plus"));
+    (
+        layout,
+        [
+            decode, fill, multiply, halve, composite, correct, by_weight, plus,
+        ],
+    )
+}
+
+/// The kernel of `input.wgsl`, deep footage into the working picture, and its layout.
+fn input_kernel(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
+    let input_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-input"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("input.wgsl").into()),
+    });
+    let input_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("kerf-input"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Uint,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                storage_entry(2, WORKING_FORMAT),
-                texture_entry(3),
-                texture_entry(4),
-            ],
-        });
-        let input_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("kerf-input"),
-                bind_group_layouts: &[Some(&input_layout)],
-                immediate_size: 0,
-            });
-        let input = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("input"),
-            layout: Some(&input_pipeline_layout),
-            module: &input_module,
-            entry_point: Some("input"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let finish_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-finish"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("finish.wgsl").into()),
-        });
-        let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("kerf-finish"),
-            entries: &[
-                texture_entry(1),
-                storage_entry(2, wgpu::TextureFormat::Rgba8Unorm),
-            ],
-        });
-        let finish_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("kerf-finish"),
-                bind_group_layouts: &[Some(&finish_layout)],
-                immediate_size: 0,
-            });
-        let finish = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("finish"),
-            layout: Some(&finish_pipeline_layout),
-            module: &finish_module,
-            entry_point: Some("finish"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let finish16_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-finish16"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("finish16.wgsl").into()),
-        });
-        let finish16_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("kerf-finish16"),
-            entries: &[
-                texture_entry(1),
-                storage_entry(2, wgpu::TextureFormat::Rgba16Uint),
-            ],
-        });
-        let finish16_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("kerf-finish16"),
-                bind_group_layouts: &[Some(&finish16_layout)],
-                immediate_size: 0,
-            });
-        let finish16 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("finish16"),
-            layout: Some(&finish16_pipeline_layout),
-            module: &finish16_module,
-            entry_point: Some("finish"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let finish_signal_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-finish-signal"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("finish_signal.wgsl").into()),
-        });
-        let finish_signal = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("finish-signal"),
-            layout: Some(&finish16_pipeline_layout),
-            module: &finish_signal_module,
-            entry_point: Some("finish"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let planes_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-planes"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("planes.wgsl").into()),
-        });
-        let planes_kernel = |entry: &str, binding: u32, format: wgpu::TextureFormat| {
-            let plane = |binding: u32| wgpu::BindGroupLayoutEntry {
-                binding,
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
                 visibility: wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Uint,
@@ -447,51 +371,125 @@ impl Gpu {
                     multisampled: false,
                 },
                 count: None,
-            };
-            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some(entry),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    plane(1),
-                    plane(2),
-                    plane(3),
-                    storage_entry(binding, format),
-                ],
-            });
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(entry),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(&pipeline_layout),
-                module: &planes_module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            });
-            (layout, pipeline)
+            },
+            storage_entry(2, WORKING_FORMAT),
+            texture_entry(3),
+            texture_entry(4),
+        ],
+    });
+    let input_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kerf-input"),
+        bind_group_layouts: &[Some(&input_layout)],
+        immediate_size: 0,
+    });
+    let input = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("input"),
+        layout: Some(&input_pipeline_layout),
+        module: &input_module,
+        entry_point: Some("input"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    (input_layout, input)
+}
+
+/// The kernel of `finish.wgsl`, a finished picture as sRGB-encoded bytes, and its layout.
+fn finish_kernel(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
+    let finish_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-finish"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("finish.wgsl").into()),
+    });
+    let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("kerf-finish"),
+        entries: &[
+            texture_entry(1),
+            storage_entry(2, wgpu::TextureFormat::Rgba8Unorm),
+        ],
+    });
+    let finish_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kerf-finish"),
+        bind_group_layouts: &[Some(&finish_layout)],
+        immediate_size: 0,
+    });
+    let finish = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("finish"),
+        layout: Some(&finish_pipeline_layout),
+        module: &finish_module,
+        entry_point: Some("finish"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    (finish_layout, finish)
+}
+
+/// The kernels that finish a picture as 16-bit code values, which share a layout: `finish16.wgsl`
+/// and `finish_signal.wgsl`.
+fn finish16_kernels(
+    device: &wgpu::Device,
+) -> (
+    wgpu::BindGroupLayout,
+    wgpu::ComputePipeline,
+    wgpu::ComputePipeline,
+) {
+    let finish16_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-finish16"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("finish16.wgsl").into()),
+    });
+    let finish16_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("kerf-finish16"),
+        entries: &[
+            texture_entry(1),
+            storage_entry(2, wgpu::TextureFormat::Rgba16Uint),
+        ],
+    });
+    let finish16_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kerf-finish16"),
+        bind_group_layouts: &[Some(&finish16_layout)],
+        immediate_size: 0,
+    });
+    let finish16 = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("finish16"),
+        layout: Some(&finish16_pipeline_layout),
+        module: &finish16_module,
+        entry_point: Some("finish"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    let finish_signal_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-finish-signal"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("finish_signal.wgsl").into()),
+    });
+    let finish_signal = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("finish-signal"),
+        layout: Some(&finish16_pipeline_layout),
+        module: &finish_signal_module,
+        entry_point: Some("finish"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    (finish16_layout, finish16, finish_signal)
+}
+
+/// The kernels of `planes.wgsl`, each with its layout: a decoded frame's planes into the working
+/// picture (`planes_light`), then into 16-bit code values (`planes_codes`).
+fn planes_kernels(device: &wgpu::Device) -> [(wgpu::BindGroupLayout, wgpu::ComputePipeline); 2] {
+    let planes_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-planes"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("planes.wgsl").into()),
+    });
+    let planes_kernel = |entry: &str, binding: u32, format: wgpu::TextureFormat| {
+        let plane = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Uint,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
         };
-        let (planes_light_layout, planes_light) =
-            planes_kernel("planes_light", 4, wgpu::TextureFormat::Rgba32Float);
-        let (planes_codes_layout, planes_codes) =
-            planes_kernel("planes_codes", 5, wgpu::TextureFormat::Rgba16Uint);
-        let output_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("kerf-output"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("output.wgsl").into()),
-        });
-        let output_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("kerf-output"),
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(entry),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
@@ -503,50 +501,122 @@ impl Gpu {
                     },
                     count: None,
                 },
-                texture_entry(1),
-                storage_entry(2, WORKING_FORMAT),
-                texture_entry(3),
+                plane(1),
+                plane(2),
+                plane(3),
+                storage_entry(binding, format),
             ],
         });
-        let output_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("kerf-output"),
-                bind_group_layouts: &[Some(&output_layout)],
-                immediate_size: 0,
-            });
-        let output = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("output"),
-            layout: Some(&output_pipeline_layout),
-            module: &output_module,
-            entry_point: Some("output"),
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(entry),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry),
+            layout: Some(&pipeline_layout),
+            module: &planes_module,
+            entry_point: Some(entry),
             compilation_options: Default::default(),
             cache: None,
         });
+        (layout, pipeline)
+    };
+    let (planes_light_layout, planes_light) =
+        planes_kernel("planes_light", 4, wgpu::TextureFormat::Rgba32Float);
+    let (planes_codes_layout, planes_codes) =
+        planes_kernel("planes_codes", 5, wgpu::TextureFormat::Rgba16Uint);
+    [
+        (planes_light_layout, planes_light),
+        (planes_codes_layout, planes_codes),
+    ]
+}
+
+/// The kernel of `output.wgsl`, the working picture of an HDR sequence on its way out, and its
+/// layout.
+fn output_kernel(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
+    let output_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-output"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("output.wgsl").into()),
+    });
+    let output_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("kerf-output"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            texture_entry(1),
+            storage_entry(2, WORKING_FORMAT),
+            texture_entry(3),
+        ],
+    });
+    let output_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kerf-output"),
+        bind_group_layouts: &[Some(&output_layout)],
+        immediate_size: 0,
+    });
+    let output = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("output"),
+        layout: Some(&output_pipeline_layout),
+        module: &output_module,
+        entry_point: Some("output"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    (output_layout, output)
+}
+
+/// One pixel, in place of a texture a kernel has no picture for.
+fn dummy_view(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    device
+        .create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("kerf-dummy"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &[0; 4],
+        )
+        .create_view(&Default::default())
+}
+
+impl Gpu {
+    fn new() -> Option<Self> {
+        let (device, queue) = open_device()?;
+        let failed = watch_for_failure(&device);
+
+        let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let (layout, [decode, fill, multiply, halve, composite, correct, by_weight, plus]) =
+            picture_kernels(&device);
+        let (input_layout, input) = input_kernel(&device);
+        let (finish_layout, finish) = finish_kernel(&device);
+        let (finish16_layout, finish16, finish_signal) = finish16_kernels(&device);
+        let [(planes_light_layout, planes_light), (planes_codes_layout, planes_codes)] =
+            planes_kernels(&device);
+        let (output_layout, output) = output_kernel(&device);
         if let Some(error) = now(scope.pop()) {
             eprintln!("kerf-gpu: kernels did not build: {error}");
             return None;
         }
-        let dummy = device
-            .create_texture_with_data(
-                &queue,
-                &wgpu::TextureDescriptor {
-                    label: Some("kerf-dummy"),
-                    size: wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                },
-                wgpu::util::TextureDataOrder::LayerMajor,
-                &[0; 4],
-            )
-            .create_view(&Default::default());
+        let dummy = dummy_view(&device, &queue);
         Some(Self {
             device,
             queue,
@@ -1572,7 +1642,9 @@ impl<'a> Frame<'a> {
             for line in data.chunks_exact(row as usize) {
                 out.extend(
                     line[..w * 16]
-                        .as_chunks::<4>().0.iter()
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
                 );
             }
@@ -1735,6 +1807,7 @@ impl<'a> Frame<'a> {
         let slice = buffer.slice(..);
         let (sender, receiver) = std::sync::mpsc::channel();
         slice.map_async(wgpu::MapMode::Read, move |result| {
+            // The receiver is gone only once the wait below has given up on the buffer.
             let _ = sender.send(result);
         });
         self.gpu
@@ -1932,7 +2005,12 @@ mod tests {
         let picture = frame.image(&source);
         let bytes = frame.finish16(&picture).expect("finished");
         assert_eq!(bytes.len(), cpu.len());
-        for (g, c) in bytes.as_chunks::<2>().0.iter().zip(cpu.as_chunks::<2>().0.iter()) {
+        for (g, c) in bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(cpu.as_chunks::<2>().0.iter())
+        {
             let (g, c) = (
                 u16::from_le_bytes([g[0], g[1]]),
                 u16::from_le_bytes([c[0], c[1]]),
@@ -2028,7 +2106,12 @@ mod tests {
                 let picture = frame.image(&image);
                 let out = frame.hdr_output(&picture, &output, signal);
                 let floats = frame.read_floats(&out).expect("read back");
-                for (g, c) in floats.as_chunks::<4>().0.iter().zip(image.px.as_chunks::<4>().0.iter()) {
+                for (g, c) in floats
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(image.px.as_chunks::<4>().0.iter())
+                {
                     let rgb = [c[0], c[1], c[2]];
                     let want = if signal {
                         output.signal(rgb)

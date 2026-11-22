@@ -4,6 +4,23 @@
 //! pipes its frames to FFmpeg, which encodes them with the program's sound
 //! as the graph mixes it. Effects draw as part of each frame, so nothing is
 //! baked first.
+//!
+//! The modules beside it are what a render is made with. Those whose names do not say it:
+//!
+//! - [`sections`]: the picture, encoded a stretch at a time and kept by what each stretch's
+//!   frames depend on, so that a render after an edit encodes only what the edit touched.
+//! - `kept_sound`: the sound, kept the same way: each clip's decoded, and the encoded sound in
+//!   pieces.
+//! - [`ramps`]: the sound of clips that change speed, made ready for the program's graph to mix.
+//!
+//! [`encoder`] chooses how the picture is encoded, and [`still`] draws one frame as a render
+//! draws it and writes it as an image.
+
+pub mod encoder;
+mod kept_sound;
+pub mod ramps;
+pub mod sections;
+pub mod still;
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -18,18 +35,18 @@ use kerf_compose::{ComposeOptions, Compositor, Frame};
 use kerf_model::{ColorSpace, Rate, Time};
 use serde::{Deserialize, Serialize};
 
-use crate::encoder::{
+use crate::error::{EngineError, Result};
+use crate::process::ffmpeg::{
+    cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, run_allow_failure, tail,
+};
+use crate::process::resources::{budget, should_try_hardware_encode};
+use crate::process::sidecar::{self, CancellationToken};
+use crate::program::{compile_program, ProgramOptions};
+use crate::render::encoder::{
     encode_output_args, keep_encoders_that_open, parse_encoder_capabilities, select_video_encoder,
     EncoderSelection, HardwareEncoderFamily, SelectEncoderOptions, VideoCodec,
 };
-use crate::error::{EngineError, Result};
-use crate::ffmpeg::{
-    cached_encoder_listing, parse_time_seconds, resolve_ffmpeg_bin, run_allow_failure, tail,
-};
-use crate::program::{compile_program, ProgramOptions};
-use crate::resources::{budget, should_try_hardware_encode};
-use crate::sections::Kept;
-use crate::sidecar::{self, CancellationToken};
+use crate::render::sections::Kept;
 
 const CANCEL_FILE_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -240,6 +257,34 @@ pub struct RenderOptions {
     pub pass: kerf_compose::Pass,
     /// A clip of the sequence to draw alone, white on black, in place of the picture.
     pub matte: Option<String>,
+    /// Where the frames drawn are kept, and read back from when they are drawn again.
+    pub frame_cache: CacheFolder,
+    /// Where the stretches encoded are kept, and joined again where nothing in them changed.
+    pub section_cache: CacheFolder,
+}
+
+/// Where a render keeps what it can use again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CacheFolder {
+    /// The user's cache folder, or the one the environment names or turns off
+    /// (`KERF_FRAME_CACHE` for frames, `KERF_SECTION_CACHE` for stretches).
+    #[default]
+    Default,
+    /// None: nothing is kept, and nothing read back.
+    Off,
+    /// This folder.
+    At(PathBuf),
+}
+
+impl CacheFolder {
+    /// The folder, with `default` the one [`CacheFolder::Default`] is.
+    pub fn folder(&self, default: impl FnOnce() -> Option<PathBuf>) -> Option<PathBuf> {
+        match self {
+            Self::Default => default(),
+            Self::Off => None,
+            Self::At(folder) => Some(folder.clone()),
+        }
+    }
 }
 
 /// The display a picture was graded on: SMPTE ST 2086, which an HDR10 file carries.
@@ -255,7 +300,12 @@ pub struct MasteringDisplay {
 impl MasteringDisplay {
     /// Display P3 with a D65 white, as most HDR is graded on, at 1000 nits.
     pub const P3_1000: Self = Self {
-        primaries: [[0.265, 0.690], [0.150, 0.060], [0.680, 0.320], [0.3127, 0.3290]],
+        primaries: [
+            [0.265, 0.690],
+            [0.150, 0.060],
+            [0.680, 0.320],
+            [0.3127, 0.3290],
+        ],
         peak: 1000.0,
         black: 0.0001,
     };
@@ -355,6 +405,8 @@ impl Default for RenderOptions {
             sound: true,
             pass: kerf_compose::Pass::Picture,
             matte: None,
+            frame_cache: CacheFolder::Default,
+            section_cache: CacheFolder::Default,
         }
     }
 }
@@ -420,7 +472,11 @@ pub(crate) struct PassCodec {
 
 /// Whether a render of `pass`, or of a matte, is of greys: how near each pixel is.
 pub(crate) fn pass_of_greys(pass: kerf_compose::Pass, matte: bool) -> bool {
-    !matte && matches!(pass, kerf_compose::Pass::Depth | kerf_compose::Pass::Relative)
+    !matte
+        && matches!(
+            pass,
+            kerf_compose::Pass::Depth | kerf_compose::Pass::Relative
+        )
 }
 
 /// How a pass is written to `file`, of greys or of colors ([`pass_of_greys`]). No container
@@ -437,8 +493,15 @@ pub(crate) fn pass_codec(file: &Path, greys: bool) -> Result<PassCodec> {
         .to_ascii_lowercase();
     let video = |args: &[&str]| -> Vec<String> {
         // Greys are of the whole range, as a depth pass is drawn.
-        let range = if greys { &["-color_range", "pc"][..] } else { &[] };
-        args.iter().chain(range).map(|arg| (*arg).to_owned()).collect()
+        let range = if greys {
+            &["-color_range", "pc"][..]
+        } else {
+            &[]
+        };
+        args.iter()
+            .chain(range)
+            .map(|arg| (*arg).to_owned())
+            .collect()
     };
     match extension.as_str() {
         "mp4" | "mov" | "m4v" => Ok(PassCodec {
@@ -470,7 +533,11 @@ fn pass_encoding(opts: &RenderOptions) -> Result<Encoding> {
     if opts.draft || opts.preset != RenderPreset::Standard {
         return Err(EngineError::msg(format!(
             "a pass is written with no loss; it cannot be a {} render",
-            if opts.draft { "draft" } else { opts.preset.label() }
+            if opts.draft {
+                "draft"
+            } else {
+                opts.preset.label()
+            }
         )));
     }
     let greys = pass_of_greys(opts.pass, opts.matte.is_some());
@@ -661,7 +728,7 @@ fn review_codec_args(prefer_hardware: bool, force_software: bool) -> Result<Vec<
     } else {
         select_video_encoder(&[], &SelectEncoderOptions::default())
     };
-    let mut args = crate::encoder::encoder_args(&selection);
+    let mut args = crate::render::encoder::encoder_args(&selection);
     args.extend(
         [
             "-b:v",
@@ -816,7 +883,7 @@ fn sound_args(
     sample_rate: u32,
     output: &Path,
 ) -> Result<Vec<String>> {
-    let heard = crate::ramps::with_sound(project);
+    let heard = crate::render::ramps::with_sound(project);
     let sound = compile_program(
         &heard,
         kerf_model::Catalog::builtin(),
@@ -854,7 +921,7 @@ pub fn render_sound(
     if cancellation.is_cancelled() {
         return Err(EngineError::Cancelled);
     }
-    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+    let mut command = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     command.args(sound_args(project, sequence, range, sample_rate, output)?);
     let finished = sidecar::run(command, cancellation, |_| {})?;
     if !finished.status.success() {
@@ -888,7 +955,7 @@ struct CompositedRender {
 }
 
 /// FFmpeg's arguments for a render whose picture is encoded a stretch at a time
-/// ([`crate::sections`]).
+/// ([`crate::render::sections`]).
 #[derive(Debug)]
 struct SectionArgs {
     /// To encode a stretch's frames from stdin to a file with no sound; the file follows.
@@ -897,8 +964,8 @@ struct SectionArgs {
     /// render with no sound.
     sound: Option<Vec<String>>,
     /// The same sound as what it is mixed from and how it is encoded, to make from what is
-    /// kept of it ([`crate::kept_sound`]).
-    mix: Option<crate::kept_sound::Mix>,
+    /// kept of it ([`crate::render::kept_sound`]).
+    mix: Option<crate::render::kept_sound::Mix>,
     /// To copy the stretches and the sound into the render's file: what follows the inputs,
     /// which are the sound's file, when there is one, and then the list of stretches.
     join: Vec<String>,
@@ -960,7 +1027,7 @@ fn composited_render(
     // The graph mixes the sound; the picture comes from stdin.
     let mut mixed = None;
     let (mut args, duration, own_rate) = if opts.sound {
-        let heard = crate::ramps::with_sound(project);
+        let heard = crate::render::ramps::with_sound(project);
         let sound = compile_program(
             &heard,
             kerf_model::Catalog::builtin(),
@@ -980,7 +1047,7 @@ fn composited_render(
     let from = range.map_or(Time::ZERO, |(from, _)| from);
     let rate = match opts.rate {
         Some(rate) => rate,
-        None if opts.draft => Rate::new(15, 1).expect("15 fps is a rate"),
+        None if opts.draft => Rate::new(15, 1).expect("15 fps is a whole number of flicks a frame"),
         None => own_rate,
     };
     let scale = match opts.size {
@@ -1046,7 +1113,7 @@ fn composited_render(
         sound.extend(lasts.iter().cloned());
         sound
     });
-    let mix = mixed.map(|sound| crate::kept_sound::Mix {
+    let mix = mixed.map(|sound| crate::render::kept_sound::Mix {
         graph: vec![
             "-filter_complex".to_owned(),
             sound.decoded_filter,
@@ -1104,10 +1171,7 @@ fn composited_render(
         encode.extend(filters.iter().cloned());
         args.extend(filters);
     }
-    let encoded = [
-        "-pix_fmt".to_owned(),
-        encoding.pix_fmt.to_owned(),
-    ];
+    let encoded = ["-pix_fmt".to_owned(), encoding.pix_fmt.to_owned()];
     encode.extend(encoded.iter().cloned());
     encode.extend(encoding.output.iter().cloned());
     encode.extend(["-r".to_owned(), crate::program::rate_arg(rate)]);
@@ -1172,7 +1236,7 @@ where
             sequence: sequence.map(str::to_owned),
             captions: true,
             // Rendering again after a small edit draws only what it changed.
-            frame_folder: kerf_compose::default_frame_folder(),
+            frame_folder: opts.frame_cache.folder(kerf_compose::default_frame_folder),
             pass: opts.pass,
             matte: opts.matte.clone(),
             // A file of the pass is read a pixel at a time, each taken for one clip's.
@@ -1195,7 +1259,11 @@ where
     };
     let render = composited_render(project, sequence, range, opts, compositor.size())?;
     let total = render.times.len();
-    if let Some((sections, kept)) = render.sections.as_ref().zip(Kept::open()) {
+    if let Some((sections, kept)) = render
+        .sections
+        .as_ref()
+        .zip(Kept::open(&opts.section_cache))
+    {
         let mut progress = |frames: usize| {
             if let Some(callback) = on_progress.as_mut() {
                 callback(frames as f64 / total as f64);
@@ -1214,7 +1282,7 @@ where
             // Not worth doing in stretches, or it went wrong: the picture is encoded whole, which
             // says what is wrong if anything is.
             Ok(false) => {}
-            Err(_) => crate::sections::count_whole(),
+            Err(_) => crate::render::sections::count_whole(),
         }
     }
     let mut written = 0;
@@ -1245,7 +1313,7 @@ fn encode_frames(
     mut drawn: impl FnMut(),
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut child = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+    let mut child = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -1256,7 +1324,9 @@ fn encode_frames(
     let mut stderr = child.stderr.take().expect("stderr is piped");
     let reader = thread::spawn(move || {
         let mut text = String::new();
-        let _ = stderr.read_to_string(&mut text);
+        if let Err(error) = stderr.read_to_string(&mut text) {
+            log::warn!("what FFmpeg said while it encoded could not be read: {error}");
+        }
         text
     });
     let first = frames.start;
@@ -1290,6 +1360,7 @@ fn encode_frames(
     );
     drop(stdin);
     if result.is_err() {
+        // It may have ended already; the wait below reaps it either way.
         let _ = child.kill();
     }
     let status = child.wait()?;
@@ -1323,7 +1394,7 @@ fn greys(rgba: &[u8], ten: bool) -> Vec<u8> {
         .collect()
 }
 
-/// Render with the picture encoded a stretch at a time ([`crate::sections`]): the stretches
+/// Render with the picture encoded a stretch at a time ([`crate::render::sections`]): the stretches
 /// `kept` has are joined as they are, and the rest are drawn, encoded, and kept. `progress` is
 /// told how many frames are done. `Ok(false)` when the render is not one for stretches, with
 /// nothing written.
@@ -1343,7 +1414,7 @@ fn render_in_sections(
         .collect();
     // A render shorter than a stretch is not worth another FFmpeg to join it, and where most
     // frames have no number there is nothing to keep.
-    if total < crate::sections::least_frames(render.rate.fps())
+    if total < crate::render::sections::least_frames(render.rate.fps())
         || keys.iter().flatten().count() * 2 < total
     {
         return Ok(false);
@@ -1358,12 +1429,12 @@ fn render_in_sections(
     let mut scratch = Vec::new();
     let mut done = 0;
     // Each stretch, the name it is kept by if it has one, and its file if it is kept.
-    let stretches: Vec<_> = crate::sections::stretches(&keys, render.rate.fps())
+    let stretches: Vec<_> = crate::render::sections::stretches(&keys, render.rate.fps())
         .into_iter()
         .map(|stretch| {
-            let name = stretch
-                .keyed
-                .then(|| crate::sections::name(encoded.as_bytes(), &keys[stretch.frames.clone()]));
+            let name = stretch.keyed.then(|| {
+                crate::render::sections::name(encoded.as_bytes(), &keys[stretch.frames.clone()])
+            });
             let file = name
                 .as_deref()
                 .and_then(|name| kept.find(name, &sections.extension));
@@ -1392,23 +1463,29 @@ fn render_in_sections(
             (Some(args), None) => Some(scope.spawn(move || {
                 // From what is kept of it; and if that cannot be, as it was before any was.
                 let from_kept = match &sections.mix {
-                    Some(mix) => {
-                        crate::kept_sound::make(mix, kept, &sections.extension, busy, cancellation)
-                    }
+                    Some(mix) => crate::render::kept_sound::make(
+                        mix,
+                        kept,
+                        &sections.extension,
+                        busy,
+                        cancellation,
+                    ),
                     None => Err(EngineError::msg("a sound with nothing to mix")),
                 };
                 match from_kept {
                     Err(EngineError::Cancelled) => Err(EngineError::Cancelled),
                     Err(_) => {
                         let file = kept.making(&sections.extension);
-                        let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+                        let mut command =
+                            crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin());
                         command.args(args).arg(&file);
-                        let mixed = sidecar::run(command, cancellation, |_| {})
-                            .and_then(finished_well);
+                        let mixed =
+                            sidecar::run(command, cancellation, |_| {}).and_then(finished_well);
                         if mixed.is_err() {
+                            // There may be none to take away; nothing reads one that stays.
                             let _ = std::fs::remove_file(&file);
                         }
-                        mixed.map(|()| crate::kept_sound::Made {
+                        mixed.map(|()| crate::render::kept_sound::Made {
                             file,
                             used: Vec::new(),
                         })
@@ -1427,7 +1504,7 @@ fn render_in_sections(
                 return Err(EngineError::Cancelled);
             }
             if let Some(file) = file {
-                crate::sections::count_kept(frames.len());
+                crate::render::sections::count_kept(frames.len());
                 done += frames.len();
                 progress(done);
                 files.push((file, frames.len()));
@@ -1448,7 +1525,7 @@ fn render_in_sections(
                 },
                 cancellation,
             )?;
-            crate::sections::count_encoded(frames.len());
+            crate::render::sections::count_encoded(frames.len());
             // One with no name is joined from where it was made, and goes when the render ends.
             let file = match &name {
                 Some(name) => kept.keep(&making, name, &sections.extension)?,
@@ -1461,7 +1538,7 @@ fn render_in_sections(
                 let made = mixing
                     .join()
                     .map_err(|_| EngineError::msg("mixing the sound stopped"))??;
-                crate::sections::count_sound(false);
+                crate::render::sections::count_sound(false);
                 files.extend(made.used.into_iter().map(|file| (file, 0)));
                 Some(match &sound_name {
                     Some(name) => kept.keep(&made.file, name, &sections.extension)?,
@@ -1472,7 +1549,7 @@ fn render_in_sections(
                 })
             }
             (None, Some(kept)) => {
-                crate::sections::count_sound(true);
+                crate::render::sections::count_sound(true);
                 Some(kept)
             }
             (None, None) => None,
@@ -1489,7 +1566,7 @@ fn render_in_sections(
         let listed = kept.making("ffconcat");
         scratch.push(listed.clone());
         std::fs::write(&listed, list)?;
-        let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+        let mut command = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin());
         command.args(["-y", "-hide_banner"]);
         if let Some(sound) = &sound {
             command.arg("-i").arg(sound);
@@ -1501,7 +1578,10 @@ fn render_in_sections(
         finished_well(sidecar::run(command, cancellation, |_| {})?)?;
         files.extend(sound.map(|sound| (sound, 0)));
         // A join that lost or doubled a frame is no render: the picture is encoded whole.
-        let output = sections.join.last().expect("a join ends with its file");
+        let output = sections
+            .join
+            .last()
+            .expect("the section arguments push the render's file last onto `join`");
         match picture_frames(output) {
             Some(frames) if frames == total => Ok(()),
             found => Err(EngineError::msg(format!(
@@ -1511,9 +1591,14 @@ fn render_in_sections(
     });
     compositor.flush_frames();
     if made.is_err() {
-        scratch.extend(sound_made.into_inner().unwrap_or_else(PoisonError::into_inner));
+        scratch.extend(
+            sound_made
+                .into_inner()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
     }
     for file in scratch {
+        // Scratch that is not there, or stays, changes nothing the render made.
         let _ = std::fs::remove_file(file);
     }
     let joined: Vec<PathBuf> = files.into_iter().map(|(file, _)| file).collect();
@@ -1549,7 +1634,7 @@ fn sound_name(args: &[String]) -> Option<String> {
             said.push_str(&format!(" {} {}", file.len(), changed.as_nanos()));
         }
     }
-    Some(crate::sections::name(said.as_bytes(), &[]))
+    Some(crate::render::sections::name(said.as_bytes(), &[]))
 }
 
 /// How many frames the picture of the file at `path` holds, counted from its packets; none
@@ -1558,7 +1643,7 @@ fn sound_name(args: &[String]) -> Option<String> {
 /// odd times, which FFmpeg makes up for with frames of its own when it reads the file again.
 fn picture_frames(path: &str) -> Option<usize> {
     let output = run_allow_failure(
-        crate::ffmpeg::resolve_ffprobe_bin(),
+        crate::process::ffmpeg::resolve_ffprobe_bin(),
         &[
             "-v",
             "error",
@@ -1730,7 +1815,7 @@ pub(crate) fn run_ffmpeg_with_progress<F>(
 where
     F: FnMut(f64),
 {
-    let mut command = crate::ffmpeg::hidden_command(resolve_ffmpeg_bin());
+    let mut command = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin());
     command.args(args);
     let finished = sidecar::run(command, cancellation, |line| {
         let Some(seconds) = extract_time(line).and_then(parse_time_seconds) else {
@@ -1779,6 +1864,7 @@ pub fn stderr_progress_callback() -> impl FnMut(f64) {
             return;
         }
         last = rounded;
+        // Progress is only told: a closed stderr must not stop the render.
         let _ = writeln!(std::io::stderr(), r#"{{"progress":{rounded}}}"#);
     }
 }

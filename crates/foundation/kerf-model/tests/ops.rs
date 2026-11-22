@@ -369,6 +369,39 @@ fn ripple_delete_refuses_to_desync_and_succeeds_when_the_bed_is_locked() {
     assert_eq!(layout(&project, "A2"), vec![row("music", 0, 192)]);
 }
 
+#[test]
+fn ripple_deleting_clips_apart_closes_each_gap_as_one_at_a_time_would() {
+    let mut scene = scene();
+    scene.sequences[0].tracks = vec![track(
+        "V1",
+        TrackKind::Video,
+        vec![
+            media_clip("c1", "m1", 0, 0, 24, None),
+            media_clip("c2", "m1", 240, 48, 24, None),
+            media_clip("c3", "m1", 480, 96, 24, None),
+        ],
+    )];
+    let both = run(
+        &scene,
+        vec![Op::RippleDelete {
+            clips: vec![id("c1"), id("c2")],
+        }],
+    );
+    assert_eq!(layout(&both, "V1"), vec![row("c3", 48, 72)]);
+    let one_at_a_time = run(
+        &scene,
+        vec![
+            Op::RippleDelete {
+                clips: vec![id("c2")],
+            },
+            Op::RippleDelete {
+                clips: vec![id("c1")],
+            },
+        ],
+    );
+    assert_eq!(both, one_at_a_time);
+}
+
 fn sync(track: &str, on: bool) -> Op {
     Op::SetTrackRole {
         sequence: id("s1"),

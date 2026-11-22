@@ -188,7 +188,8 @@ fn decoded(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
     decoder
         .send_packet(&ffmpeg::Packet::copy(bytes))
         .map_err(failed)?;
-    // Some decoders hold a frame until they are told there are no more.
+    // Some decoders hold a frame until they are told there are no more. One not told says so
+    // when it is asked for the frame, below.
     let _ = decoder.send_eof();
     let mut frame = ffmpeg::frame::Video::empty();
     decoder.receive_frame(&mut frame).map_err(failed)?;

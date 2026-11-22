@@ -81,7 +81,10 @@ pub fn signed_distance(m: &[u8], w: usize, h: usize) -> Vec<f32> {
     let bg: Vec<bool> = m.iter().map(|v| *v == 0).collect();
     let din = distance(&bg, w, h);
     let dout = distance(&fg, w, h);
-    m.iter().enumerate().map(|(i, v)| if *v != 0 { din[i] - 0.5 } else { 0.5 - dout[i] }).collect()
+    m.iter()
+        .enumerate()
+        .map(|(i, v)| if *v != 0 { din[i] - 0.5 } else { 0.5 - dout[i] })
+        .collect()
 }
 
 /// What [`signed_distance_near`] says of a pixel it does not measure: outside, and far.
@@ -92,14 +95,21 @@ pub const FAR_OUTSIDE: f32 = -1.0e6;
 pub fn box_of(m: &[u8], w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
     let rows: Vec<Option<(usize, usize)>> = m
         .par_chunks(w.max(1))
-        .map(|row| Some((row.iter().position(|v| *v != 0)?, row.iter().rposition(|v| *v != 0)?)))
+        .map(|row| {
+            Some((
+                row.iter().position(|v| *v != 0)?,
+                row.iter().rposition(|v| *v != 0)?,
+            ))
+        })
         .collect();
     let top = rows.iter().position(Option::is_some)?;
     let bottom = rows.iter().rposition(Option::is_some)?;
     let (left, right) = rows[top..=bottom]
         .iter()
         .flatten()
-        .fold((w, 0), |(left, right), (first, last)| (left.min(*first), right.max(*last)));
+        .fold((w, 0), |(left, right), (first, last)| {
+            (left.min(*first), right.max(*last))
+        });
     Some((left, top, right + 1, (bottom + 1).min(h)))
 }
 
@@ -180,7 +190,9 @@ pub fn gauss(src: &[f32], w: usize, h: usize, sigma: f64) -> Vec<f32> {
         return src.to_vec();
     }
     // Box radius whose three passes match the variance: 3·((2r+1)² − 1)/12 = σ².
-    let r = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as usize;
+    let r = (((4.0 * sigma * sigma + 1.0).sqrt() - 1.0) / 2.0)
+        .round()
+        .max(1.0) as usize;
     let a = box_mean(src, w, h, r);
     let b = box_mean(&a, w, h, r);
     box_mean(&b, w, h, r)

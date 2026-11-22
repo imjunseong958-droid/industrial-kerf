@@ -3,7 +3,16 @@
 //! [`Image`] stores premultiplied RGBA in `f32` (values may exceed 1.0 in 32 bpc projects). Every
 //! heavy operation is row-parallel with rayon.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
+// Carried from EffectCraft, whose pixel loops index several buffers by position.
+#![allow(clippy::needless_range_loop)]
 
 pub mod blur;
 pub mod flow;
@@ -25,10 +34,18 @@ pub struct Image {
 
 impl Image {
     pub fn new(width: u32, height: u32) -> Image {
-        Image { width, height, data: vec![[0.0; 4]; width as usize * height as usize] }
+        Image {
+            width,
+            height,
+            data: vec![[0.0; 4]; width as usize * height as usize],
+        }
     }
     pub fn filled(width: u32, height: u32, px: Px) -> Image {
-        Image { width, height, data: vec![px; width as usize * height as usize] }
+        Image {
+            width,
+            height,
+            data: vec![px; width as usize * height as usize],
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.width == 0 || self.height == 0
@@ -39,7 +56,11 @@ impl Image {
     }
     #[inline]
     pub fn get(&self, x: i64, y: i64) -> Px {
-        if x < 0 || y < 0 || x >= self.width as i64 || y >= self.height as i64 { [0.0; 4] } else { self.data[y as usize * self.width as usize + x as usize] }
+        if x < 0 || y < 0 || x >= self.width as i64 || y >= self.height as i64 {
+            [0.0; 4]
+        } else {
+            self.data[y as usize * self.width as usize + x as usize]
+        }
     }
     #[inline]
     pub fn get_clamped(&self, x: i64, y: i64) -> Px {
@@ -111,7 +132,12 @@ impl Image {
         let w = |t: f64| -> [f32; 4] {
             let t2 = t * t;
             let t3 = t2 * t;
-            [(-0.5 * t3 + t2 - 0.5 * t) as f32, (1.5 * t3 - 2.5 * t2 + 1.0) as f32, (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32, (0.5 * t3 - 0.5 * t2) as f32]
+            [
+                (-0.5 * t3 + t2 - 0.5 * t) as f32,
+                (1.5 * t3 - 2.5 * t2 + 1.0) as f32,
+                (-1.5 * t3 + 2.0 * t2 + 0.5 * t) as f32,
+                (0.5 * t3 - 0.5 * t2) as f32,
+            ]
         };
         let wx = w(tx);
         let wy = w(ty);
@@ -178,7 +204,8 @@ impl Image {
 /// Deterministic per-pixel noise in 0..1.
 #[inline]
 pub fn hash_noise(x: u32, y: u32, seed: u32) -> f32 {
-    let mut h = x.wrapping_mul(0x8da6_b343) ^ y.wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
+    let mut h =
+        x.wrapping_mul(0x8da6_b343) ^ y.wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
     h ^= h >> 13;
     h = h.wrapping_mul(0x5bd1_e995);
     h ^= h >> 15;

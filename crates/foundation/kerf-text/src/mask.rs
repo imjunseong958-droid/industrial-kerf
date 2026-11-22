@@ -124,7 +124,11 @@ pub fn stroke(m: &Mask, width: f32, kind: StrokeKind) -> Mask {
                 StrokeKind::Center => (width / 2.0 + 0.5 - d.abs()).clamp(0.0, 1.0),
                 StrokeKind::Inner => (width + 0.5 + d).clamp(0.0, 1.0).min(c),
             };
-            if kind == StrokeKind::Outer { v } else { v.min(1.0) }
+            if kind == StrokeKind::Outer {
+                v
+            } else {
+                v.min(1.0)
+            }
         })
         .collect();
     Mask { w: m.w, h: m.h, a }

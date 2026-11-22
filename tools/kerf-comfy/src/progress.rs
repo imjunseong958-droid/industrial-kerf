@@ -44,9 +44,11 @@ impl Progress {
             return;
         }
         let data = &said["data"];
-        let (Some(id), Some(value), Some(max)) =
-            (data["prompt_id"].as_str(), data["value"].as_u64(), data["max"].as_u64())
-        else {
+        let (Some(id), Some(value), Some(max)) = (
+            data["prompt_id"].as_str(),
+            data["value"].as_u64(),
+            data["max"].as_u64(),
+        ) else {
             return;
         };
         if let Ok(mut steps) = self.steps.lock() {
@@ -60,8 +62,14 @@ pub fn address(url: &str, client: &str) -> Option<String> {
     let rest = url
         .strip_prefix("https://")
         .map(|rest| format!("wss://{rest}"))
-        .or_else(|| url.strip_prefix("http://").map(|rest| format!("ws://{rest}")))?;
-    Some(format!("{}/ws?clientId={client}", rest.trim_end_matches('/')))
+        .or_else(|| {
+            url.strip_prefix("http://")
+                .map(|rest| format!("ws://{rest}"))
+        })?;
+    Some(format!(
+        "{}/ws?clientId={client}",
+        rest.trim_end_matches('/')
+    ))
 }
 
 /// Listen to the server at `url` as `client`, with `key` as the header it asks for, on a
@@ -80,7 +88,11 @@ pub fn follow(url: &str, key: Option<(&str, &str)>, client: &str) -> Option<Prog
     let uri = request.uri().clone();
     let port = uri
         .port_u16()
-        .unwrap_or(if uri.scheme_str() == Some("wss") { 443 } else { 80 });
+        .unwrap_or(if uri.scheme_str() == Some("wss") {
+            443
+        } else {
+            80
+        });
     let stream = {
         use std::net::ToSocketAddrs;
         let mut found = (uri.host()?, port).to_socket_addrs().ok()?;
@@ -130,7 +142,10 @@ mod tests {
             let asked = format!(
                 "{} {}",
                 asked.lines().next().unwrap_or_default(),
-                asked.lines().find(|line| line.starts_with("x-api-key:")).unwrap_or_default()
+                asked
+                    .lines()
+                    .find(|line| line.starts_with("x-api-key:"))
+                    .unwrap_or_default()
             );
             let mut socket = tungstenite::accept(stream).unwrap();
             socket
@@ -140,8 +155,16 @@ mod tests {
             let _ = socket.flush();
             asked
         });
-        let progress = follow(&format!("http://127.0.0.1:{port}"), Some(("X-API-Key", "secret")), "kerf-9").unwrap();
-        assert_eq!(served.join().unwrap(), "get /ws?clientid=kerf-9 http/1.1 x-api-key: secret");
+        let progress = follow(
+            &format!("http://127.0.0.1:{port}"),
+            Some(("X-API-Key", "secret")),
+            "kerf-9",
+        )
+        .unwrap();
+        assert_eq!(
+            served.join().unwrap(),
+            "get /ws?clientid=kerf-9 http/1.1 x-api-key: secret"
+        );
         // What it said is there once it is read.
         let waited = std::time::Instant::now();
         while progress.step("job-1").is_none() && waited.elapsed().as_secs() < 5 {

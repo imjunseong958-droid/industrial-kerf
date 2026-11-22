@@ -11,6 +11,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+/// Send `command` as the editor writes it, in JSON. One that does not read as a command is
+/// refused, as one the bridge cannot take is.
+fn send(bridge: &mut Bridge, command: &Value) -> bool {
+    serde_json::from_value::<kerf_bridge::Command>(command.clone())
+        .is_ok_and(|command| bridge.send(command))
+}
+
+/// The next event, in JSON, as the editor reads it.
+fn poll(bridge: &mut Bridge) -> Option<Value> {
+    bridge
+        .poll()
+        .map(|event| serde_json::to_value(event).expect("an event writes as JSON"))
+}
+
 fn kerfd() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../target/debug")
@@ -58,7 +72,7 @@ impl Editor {
     }
 
     fn send(&mut self, command: Value) {
-        assert!(self.bridge.send(&command));
+        assert!(send(&mut self.bridge, &command));
     }
 
     /// The first event that `matches`, among those already sent or the
@@ -70,7 +84,7 @@ impl Editor {
         }
         let deadline = Instant::now() + Duration::from_secs(20);
         while Instant::now() < deadline {
-            let Some(event) = self.bridge.poll() else {
+            let Some(event) = poll(&mut self.bridge) else {
                 std::thread::sleep(Duration::from_millis(20));
                 continue;
             };
@@ -102,6 +116,7 @@ fn markers(snapshot: &Value) -> Vec<Value> {
 /// once read an audio DLL Windows had unloaded; that was only sometimes
 /// fatal, but it showed every time.
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn count_access_violations() -> &'static std::sync::atomic::AtomicUsize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;
@@ -111,6 +126,8 @@ fn count_access_violations() -> &'static std::sync::atomic::AtomicUsize {
 
     static VIOLATIONS: AtomicUsize = AtomicUsize::new(0);
 
+    // SAFETY: unsafe because it dereferences `info`; only Windows calls it, as a
+    // vectored exception handler, with live exception pointers.
     unsafe extern "system" fn count(info: *mut EXCEPTION_POINTERS) -> i32 {
         // SAFETY: Windows passes a live exception record for this call.
         let record = unsafe { &*(*info).ExceptionRecord };

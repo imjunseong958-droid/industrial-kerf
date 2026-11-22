@@ -10,49 +10,70 @@
 //! earlier file of that name is replaced.
 
 use crate::emit;
+use crate::event::{CaptionsExport, ErrorEvent, Event, Export, ExportStatus};
+use crate::wake::Outbox;
 use kerf_model::{Project, Sequence};
 use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 
 /// The folder paperwork goes in when no master was rendered yet.
 pub(crate) const DELIVERIES: &str = "deliveries";
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct CaptionsRequest {
+/// `export_captions {format, path?, sequence?, track?}`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct CaptionsRequest {
     /// `srt` or `vtt`.
     pub format: String,
-    #[serde(default)]
+    /// A file, or a folder for the default name, relative to the project. Else the file
+    /// goes beside the newest finished master, else in `deliveries/` named after the
+    /// project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     /// The program sequence when absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
     /// Every enabled subtitle track when absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
 }
 
 /// A paperwork export that failed: `export {status: failed, kind, format,
 /// message}`, and the error naming the command.
-fn failed(tx: &SyncSender<Value>, command: &str, kind: &str, format: &str, message: &str) {
+fn failed(tx: &Outbox, command: &str, kind: &str, format: &str, message: &str) {
     emit(
         tx,
-        json!({"type": "export", "status": "failed", "kind": kind, "format": format,
-            "message": message}),
+        Event::Export(Export::Captions(CaptionsExport {
+            status: ExportStatus::Failed,
+            kind: kind.to_owned(),
+            format: format.to_owned(),
+            path: None,
+            progress: None,
+            message: Some(message.to_owned()),
+        })),
     );
     emit(
         tx,
-        json!({"type": "error", "message": message, "command": command, "format": format}),
+        Event::Error(ErrorEvent {
+            message: message.to_owned(),
+            command: Some(command.to_owned()),
+            format: Some(format.to_owned()),
+            ..ErrorEvent::default()
+        }),
     );
 }
 
-fn completed(kind: &str, format: &str, path: &Path) -> Value {
-    json!({"type": "export", "status": "completed", "kind": kind, "format": format,
-        "path": path.to_string_lossy(), "progress": 1.0})
+fn completed(kind: &str, format: &str, path: &Path) -> Event {
+    Event::Export(Export::Captions(CaptionsExport {
+        status: ExportStatus::Completed,
+        kind: kind.to_owned(),
+        format: format.to_owned(),
+        path: Some(path.to_string_lossy().into_owned()),
+        progress: Some(1.0),
+        message: None,
+    }))
 }
 
 /// The captions of `sequence` (of `track` alone when given) as `format`.
@@ -160,6 +181,7 @@ pub(crate) fn write_atomic(directory: &Path, path: &Path, text: &str) -> Result<
         })
         .and_then(|_| fs::rename(&temporary, path));
     if let Err(error) = written {
+        // The write's error is the one to report; this only tidies the temporary file.
         let _ = fs::remove_file(&temporary);
         return Err(format!("cannot write {}: {error}", path.display()));
     }
@@ -191,7 +213,7 @@ pub(crate) fn export_captions(
     client: &RuntimeClient,
     directory: &Path,
     request: &CaptionsRequest,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let format = request.format.as_str();
     let project = project(client)?;

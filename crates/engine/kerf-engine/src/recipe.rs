@@ -63,8 +63,8 @@ pub mod text;
 pub mod told;
 
 use crate::error::{EngineError, Result};
+use crate::process::sidecar::{self, CancellationToken};
 use crate::render::{render_program_with_cancellation, RenderOptions};
-use crate::sidecar::{self, CancellationToken};
 use kerf_compose::Pass;
 use kerf_model::Media;
 use model::{Models, Source};
@@ -148,11 +148,15 @@ fn steps_of_text(
         .map(|(index, line)| (index + 1, line.trim()))
         .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'));
     if !matches!(lines.next(), Some((_, HEADER))) {
-        return Err(EngineError::msg(format!("steps as text start with the line `{HEADER}`")));
+        return Err(EngineError::msg(format!(
+            "steps as text start with the line `{HEADER}`"
+        )));
     }
     let from_project = |file: &str| -> Result<String> {
         match folder {
-            Some(folder) => within(folder, file, "file the recipe names").map(|inside| stored(&inside)),
+            Some(folder) => {
+                within(folder, file, "file the recipe names").map(|inside| stored(&inside))
+            }
             None => Ok(file.to_owned()),
         }
     };
@@ -233,7 +237,10 @@ pub fn carry(project: &kerf_model::Project, directory: &Path, id: &str) -> Resul
     let name = uncarried(media).ok_or_else(|| not_made(id))?.to_owned();
     let file = inside_project(directory, &name, "recipe")?;
     let text = std::fs::read_to_string(&file).map_err(|error| {
-        EngineError::msg(format!("cannot read the recipe {}: {error}", file.display()))
+        EngineError::msg(format!(
+            "cannot read the recipe {}: {error}",
+            file.display()
+        ))
     })?;
     let (steps, needs) = steps_of_text(&text, Some(&folder_of(&name)))
         .map_err(|error| EngineError::msg(format!("{name}: {error}")))?;
@@ -654,7 +661,9 @@ pub fn plan_rolled(
     let directory = &rooted(directory)?;
     let Read { text, recipe } = read(project, directory, id)?;
     let recipe = recipe.rolled(roll);
-    let media = project.media(id).expect("read found it");
+    let media = project
+        .media(id)
+        .expect("`read` refuses an id that is no media of the project");
     for sequence in recipe.sequences() {
         if project.sequence(sequence).is_none() {
             return Err(EngineError::msg(format!(
@@ -756,7 +765,9 @@ pub fn plan_rolled(
             }
             Step::Generate(ask) => {
                 let request = request_file(&working, &recipe.steps, index);
-                let command = models.command(&ask.model).expect("checked above");
+                let command = models
+                    .command(&ask.model)
+                    .expect("every model the steps ask for was looked up above");
                 format!(
                     "{} asks model `{}` for {}",
                     shown(
@@ -922,14 +933,14 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 }
             }
         }
-        if let (Some(asked), Some(most)) = (ask.seconds, takes.seconds) {
-            if asked > most + 1e-6 {
-                notes.push(format!(
-                    "`seconds={}` is more than model `{model}` makes at once, {} s: {IN_PARTS}",
-                    plain(asked),
-                    plain(most)
-                ));
-            }
+        if let (Some(asked), Some(most)) = (ask.seconds, takes.seconds)
+            && asked > most + 1e-6
+        {
+            notes.push(format!(
+                "`seconds={}` is more than model `{model}` makes at once, {} s: {IN_PARTS}",
+                plain(asked),
+                plain(most)
+            ));
         }
         if let Some(reads) = &takes.reads {
             let named: Vec<String> = ask
@@ -1007,7 +1018,9 @@ pub fn make(
     let media = project
         .media(&plan.media)
         .ok_or_else(|| EngineError::msg(format!("no media `{}` in this project", plan.media)))?;
-    let recipe = Recipe::parse(&plan.text)?.told(directory)?.rolled(plan.roll);
+    let recipe = Recipe::parse(&plan.text)?
+        .told(directory)?
+        .rolled(plan.roll);
     let place = takes::Place::of_media(directory, &media.path)?;
     // What the take is made from, read before anything runs.
     let from = takes::from(project, directory, &plan.text, &recipe)?;
@@ -1019,8 +1032,15 @@ pub fn make(
     let working = place.working(take);
     let making = place.making(take);
     std::fs::create_dir_all(&working)?;
-    // What an earlier run left must not pass for this one's.
-    let _ = std::fs::remove_file(&making);
+    // What an earlier run left must not pass for this one's. Most often there is none.
+    if let Err(error) = std::fs::remove_file(&making)
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        log::warn!(
+            "what an earlier making left in {} could not be taken away: {error}",
+            making.display()
+        );
+    }
     let making_it = Making {
         project,
         directory,
@@ -1044,6 +1064,8 @@ pub fn make(
                 ))),
             });
         if let Err(error) = ran {
+            // Best effort: what is told is why the run failed, and a failed run is no take
+            // whatever it left.
             let _ = std::fs::remove_file(&making);
             let _ = std::fs::remove_dir_all(&working);
             return Err(error);
@@ -1052,11 +1074,17 @@ pub fn make(
         takes::record(&place, take, from, plan.roll)?;
         // What it was made from, to go back to: not what the take stands on, so one that
         // cannot be kept is still a take.
-        let _ = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
+        let kept = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
             within(Path::new(""), named, "file")
                 .ok()
                 .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
         });
+        if let Err(error) = kept {
+            log::warn!(
+                "take {take} of `{}` is made, and what it was made from could not be kept with it: {error}",
+                plan.media
+            );
+        }
         Ok(Made {
             take,
             stored: place.stored(take),
@@ -1110,7 +1138,8 @@ impl Making<'_> {
             match step {
                 Step::Join { parts, to, lap } => {
                     on_line(&format!("joining {} parts", parts.len()));
-                    let files: Vec<PathBuf> = parts.iter().map(|part| self.file_for(part)).collect();
+                    let files: Vec<PathBuf> =
+                        parts.iter().map(|part| self.file_for(part)).collect();
                     let to = self.file_for(to);
                     let lossless = match passes_joined(&recipe.steps[..index], parts) {
                         Some(greys) => Some(crate::render::pass_codec(&to, greys)?),
@@ -1207,8 +1236,13 @@ impl Making<'_> {
                                 if end { "last" } else { "first" },
                                 file.file_name().unwrap_or_default().to_string_lossy()
                             ));
-                            self.supervised(still_command(&file, &still, end), "ffmpeg", &mut |_| {})?;
-                            asked[name] = serde_json::Value::String(still.to_string_lossy().into_owned());
+                            self.supervised(
+                                still_command(&file, &still, end),
+                                "ffmpeg",
+                                &mut |_| {},
+                            )?;
+                            asked[name] =
+                                serde_json::Value::String(still.to_string_lossy().into_owned());
                         }
                     }
                     std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
@@ -1219,7 +1253,7 @@ impl Making<'_> {
                         &asked,
                         self.models.takes(&ask.model),
                     )?;
-                    let mut command = Command::new(&words[0]);
+                    let mut command = model::program(&words[0]);
                     command.args(&words[1..]);
                     self.supervised(command, &words[0], on_line)?;
                 }
@@ -1262,11 +1296,16 @@ pub(crate) fn in_motion(file: &Path) -> bool {
 
 /// The command that writes the last frame of `file`, or its first, to `still`.
 fn still_command(file: &Path, still: &Path, last: bool) -> Command {
-    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
+    let mut command =
+        crate::process::ffmpeg::hidden_command(crate::process::ffmpeg::resolve_ffmpeg_bin());
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     if last {
         // The last second of it, each frame written over the one before: what is left is the last.
-        command.args(["-sseof", "-1"]).arg("-i").arg(file).args(["-update", "1"]);
+        command
+            .args(["-sseof", "-1"])
+            .arg("-i")
+            .arg(file)
+            .args(["-update", "1"]);
     } else {
         command.arg("-i").arg(file).args(["-frames:v", "1"]);
     }
@@ -1298,7 +1337,8 @@ fn join_command(
     lap: u32,
     lossless: Option<&crate::render::PassCodec>,
 ) -> Command {
-    let mut command = crate::ffmpeg::hidden_command(crate::ffmpeg::resolve_ffmpeg_bin());
+    let mut command =
+        crate::process::ffmpeg::hidden_command(crate::process::ffmpeg::resolve_ffmpeg_bin());
     command.args(["-hide_banner", "-loglevel", "error", "-y"]);
     for part in parts {
         command.arg("-i").arg(part);
@@ -1318,11 +1358,15 @@ fn join_command(
     filter.push_str(&format!("{joined}concat=n={}:v=1:a=0[v]", parts.len()));
     command.args(["-filter_complex", &filter, "-map", "[v]", "-an"]);
     match lossless {
-        Some(codec) => command
-            .args(&codec.video)
-            .args(["-pix_fmt", codec.pix_fmt, "-f", codec.format]),
+        Some(codec) => {
+            command
+                .args(&codec.video)
+                .args(["-pix_fmt", codec.pix_fmt, "-f", codec.format])
+        }
         None => command
-            .args(["-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p"])
+            .args([
+                "-c:v", "libx264", "-preset", "medium", "-crf", "14", "-pix_fmt", "yuv420p",
+            ])
             .args(["-f", "mp4"]),
     };
     command.arg(to);

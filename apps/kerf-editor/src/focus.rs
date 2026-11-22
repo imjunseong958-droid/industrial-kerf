@@ -1,4 +1,4 @@
-//! Edit ▸ Focus Region… (`clip.focusRegion`), as Qt's: over a frame of the
+//! Edit ▸ Focus Region… (`clip.focusRegion`): over a frame of the
 //! chosen picture clip a box is dragged round what to enlarge, a time range
 //! is chosen within the clip, and a moving subject can be followed. Chosen,
 //! the clip is split where the range starts and ends and the part between
@@ -17,17 +17,19 @@
 //!
 //! [`Workspace::open_modal`]: crate::workspace::Workspace::open_modal
 
-use crate::input::{InputEvent, TextInput};
-use crate::model::{self, Clip, TrackKind};
-use crate::session::{BridgeEvent, Session};
-use crate::store::Change;
-use crate::theme::{self, over_picture, text};
-use crate::ui;
+use editor_session::artwork::ffmpeg_bin;
+use editor_session::session::{BridgeEvent, Session};
+use editor_state::model::{self, Clip, ClipShow, TrackKind};
+use editor_state::store::Change;
+use editor_ui::input::{InputEvent, TextInput};
+use editor_ui::theme::{self, over_picture, text};
+use editor_ui::ui;
 use gpui::{
     canvas, div, point, prelude::*, px, App, Bounds, Context, DismissEvent, Entity, EventEmitter,
     FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
     RenderImage, SharedString, Subscription, Task, Window,
 };
+use kerf_bridge::Event;
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -41,7 +43,7 @@ gpui::actions!(focus_region, [CloseFocus, ApplyFocus]);
 /// Tab goes round it only ([`ui::PANEL`]).
 const CONTEXT: &str = "FocusRegion";
 
-/// What a refusal says, in Qt's words.
+/// What a refusal says.
 pub const PENDING: &str = "Review the pending suggestion before changing the crop.";
 pub const NO_FRAME: &str = "Could not read a source frame from this clip.";
 pub const INVALID: &str = "Select a box and a valid time range within the clip.";
@@ -146,9 +148,9 @@ pub fn crop_box(props: &Value) -> Option<Region> {
 }
 
 /// The edit that focuses clip `clip` (its frames `clip_frames`, first and
-/// past its last) on `region` over the frames `range`, as Qt wrote it: the
-/// clip split where the range starts (a new part, `<clip>-focus-<suffix>`)
-/// unless it starts with the clip, that part cropped to the box; each step
+/// past its last) on `region` over the frames `range`: the clip split
+/// where the range starts (a new part, `<clip>-focus-<suffix>`) unless it
+/// starts with the clip, that part cropped to the box; each step
 /// of a followed subject (`tracked`, its frame and box, the first being the
 /// start) split off in turn (`<clip>-track-<n>-<suffix>`) with its own box;
 /// and the clip split where the range ends unless it ends with the clip,
@@ -226,12 +228,12 @@ pub struct Tracked {
 
 /// Follows the subject in `seed` through `frames` (grey, `width` ×
 /// `height` each, back to back, the first at `start` of the program and
-/// [`TRACK_RATE`] a second after it), as Qt's trackRegion: in each frame
-/// the box nearest where it was last that looks most like it did at the
-/// start. A step is kept where it moved more than a pixel. The subject is
-/// lost where nothing looks enough like it ([`LOST_ABOVE`]). None when it
-/// cannot be followed: fewer than two frames, a box too small, or one with
-/// too little in it to find.
+/// [`TRACK_RATE`] a second after it): in each frame the box nearest where
+/// it was last that looks most like it did at the start. A step is kept
+/// where it moved more than a pixel. The subject is lost where nothing
+/// looks enough like it ([`LOST_ABOVE`]). None when it cannot be followed:
+/// fewer than two frames, a box too small, or one with too little in it to
+/// find.
 pub fn track_region(
     frames: &[u8],
     (width, height): (usize, usize),
@@ -355,8 +357,8 @@ pub struct Target {
 
 /// The frame of `clip` at program second `at` that a box is drawn on: its
 /// media's file and the second in it. [`NO_FRAME`] for a clip with no
-/// media to read (a title, a solid) or whose file is not there, as Qt
-/// refused before opening its dialog.
+/// media to read (a title, a solid) or whose file is not there, refused
+/// before the dialog opens, which would have no frame to draw the box on.
 pub fn readable_frame(
     file: Option<PathBuf>,
     clip: &Clip,
@@ -372,8 +374,8 @@ pub fn readable_frame(
 
 /// The clip Focus Region would work on in `session` now: the chosen clip,
 /// on a picture track, longer than a frame, with a frame of its media to
-/// draw the box on. Qt's refusals: while a proposal waits ([`PENDING`]),
-/// with no such clip ([`INVALID`]), with no frame to read ([`NO_FRAME`]).
+/// draw the box on. Refused while a proposal waits ([`PENDING`]), with no
+/// such clip ([`INVALID`]), with no frame to read ([`NO_FRAME`]).
 pub fn target(session: &Session) -> Result<Target, &'static str> {
     if session.state.snapshot.pending().is_some() {
         return Err(PENDING);
@@ -409,17 +411,6 @@ pub fn target(session: &Session) -> Result<Target, &'static str> {
         at,
         seconds,
     })
-}
-
-/// The FFmpeg the editor runs: the one kerfd runs
-/// ([`kerf_bridge::ffmpeg_bin`]: `KERF_FFMPEG`, beside the editor, where
-/// each package puts it, Homebrew's ffmpeg-full, then the PATH), found
-/// once (off the window's thread, the first time a frame is read);
-/// `ffmpeg` when none runs, to say so as it fails. Focus Region, the
-/// artwork (posters, filmstrips, peaks) and a shot's graph's pictures read
-/// with it.
-pub fn ffmpeg_bin() -> &'static Path {
-    Path::new(kerf_bridge::ffmpeg_bin())
 }
 
 /// On Windows a console tool the editor starts opens no window of its own.
@@ -472,8 +463,10 @@ fn decode_frame(file: &Path, seconds: f64) -> Option<Arc<RenderImage>> {
     .map(str::to_owned)
     .to_vec();
     let out = run_ffmpeg(&args)?;
-    let picture = crate::artwork::parse_pam_stream(&out).into_iter().next()?;
-    crate::artwork::render_image(&picture)
+    let picture = editor_session::artwork::parse_pam_stream(&out)
+        .into_iter()
+        .next()?;
+    editor_session::artwork::render_image(&picture)
 }
 
 /// The grey frames a subject is followed in: `clip`'s media from program
@@ -553,7 +546,7 @@ impl Focusable for FocusRegion {
 /// Binds Esc and Return in the dialog, unless they are (binding a keymap
 /// clears them).
 fn bind_keys(cx: &mut App) {
-    if !crate::settings::escape_bound(cx, &CloseFocus) {
+    if !editor_launcher::settings::escape_bound(cx, &CloseFocus) {
         cx.bind_keys([
             KeyBinding::new("escape", CloseFocus, Some(CONTEXT)),
             KeyBinding::new("enter", ApplyFocus, Some(CONTEXT)),
@@ -570,7 +563,7 @@ impl FocusRegion {
     ) -> Self {
         bind_keys(cx);
         let clip = &target.clip;
-        let old_crop = crop_box(&clip.props);
+        let old_crop = crop_box(&Value::Object(clip.props.clone()));
         let start_at = if old_crop.is_none() {
             target.at
         } else {
@@ -620,11 +613,12 @@ impl FocusRegion {
             &session,
             window,
             |this, _, event: &BridgeEvent, window, cx| {
-                let kind = event.0["type"].as_str().unwrap_or_default();
-                if this.stage == Stage::Checking
-                    && (kind == "media_index"
-                        || (kind == "error" && event.0["command"] == "media_index"))
-                {
+                let indexed = match &*event.0 {
+                    Event::MediaIndex(_) => true,
+                    Event::Error(error) => error.command.as_deref() == Some("media_index"),
+                    _ => false,
+                };
+                if this.stage == Stage::Checking && indexed {
                     this.apply(window, cx);
                 }
             },
@@ -893,9 +887,8 @@ impl FocusRegion {
     }
 
     /// Follow a moving subject: it is followed from the frame the box is
-    /// drawn on, so Start is that frame's and cannot be typed (Qt's
-    /// start->setEnabled(!enabled)); off, Start can be typed again, from
-    /// there.
+    /// drawn on, so Start is that frame's and cannot be typed; off, Start
+    /// can be typed again, from there.
     fn set_follow(&mut self, follow: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.follow = follow;
         if follow {
@@ -912,11 +905,11 @@ impl FocusRegion {
     }
 
     /// The frame with the box over it, drawn by dragging.
-    fn picker(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn picker(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let frame = self.shown_frame(cx);
         let aspect = frame
             .as_ref()
-            .map(|frame| crate::artwork::image_size(frame))
+            .map(|frame| editor_session::artwork::image_size(frame))
             .filter(|(width, height)| *width > 0 && *height > 0)
             .map_or(16.0 / 9.0, |(width, height)| width as f32 / height as f32);
         let tall = (PICKER_WIDE / aspect).clamp(160.0, 360.0);
@@ -939,18 +932,20 @@ impl FocusRegion {
                     move |bounds, _, window, _| {
                         let placed = match &frame {
                             Some(frame) => {
-                                let placed = crate::artwork::fitted(
+                                let placed = editor_session::artwork::fitted(
                                     bounds,
-                                    crate::artwork::image_size(frame),
+                                    editor_session::artwork::image_size(frame),
                                     false,
                                 );
-                                let _ = window.paint_image(
+                                if let Err(error) = window.paint_image(
                                     placed,
                                     gpui::Corners::default(),
                                     frame.clone(),
                                     0,
                                     false,
-                                );
+                                ) {
+                                    log::warn!("Focus Region's frame did not draw: {error}");
+                                }
                                 placed
                             }
                             None => bounds,
@@ -968,7 +963,7 @@ impl FocusRegion {
                                 Bounds::from_corners(point(x0, y0), point(x1, y1)),
                                 theme::with_alpha(over_picture::line(), 0.14),
                             ));
-                            crate::stage::stroke_over(
+                            editor_stage::stage::stroke_over(
                                 window,
                                 &[point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1)],
                                 true,
@@ -1029,7 +1024,7 @@ impl FocusRegion {
             .h(px(theme::height::H28))
             .flex()
             .items_center()
-            .px(px(8.0))
+            .px(px(theme::space::S8))
             .rounded(px(theme::radius::CONTROL))
             .bg(theme::card())
             .border_1()
@@ -1043,7 +1038,7 @@ impl FocusRegion {
         div()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .child(
                 ui::line(words, text::CONTROL, theme::ink2())
                     .w(px(40.0))
@@ -1070,9 +1065,9 @@ impl Render for FocusRegion {
             .track_focus(&self.focus)
             .on_action(cx.listener(|_, _: &CloseFocus, _, cx| cx.emit(DismissEvent)))
             .on_action(cx.listener(|this, _: &ApplyFocus, window, cx| this.apply(window, cx)))
-            // A press on the dim around it does nothing (Qt's was modal):
-            // the box drawn and the range typed stay until Esc or its own
-            // buttons close it.
+            // A press on the dim around it does nothing, so a stray click
+            // does not lose the box drawn and the range typed: they stay
+            // until Esc or its own buttons close it.
             .w(px(DIALOG_WIDE))
             .p(px(20.0))
             .flex()
@@ -1083,7 +1078,7 @@ impl Render for FocusRegion {
                 div()
                     .flex()
                     .items_baseline()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(ui::label("Focus region", text::TITLE, theme::ink()))
                     .child(ui::line(clip, text::CONTROL, theme::ink3()).min_w_0()),
             )
@@ -1109,7 +1104,7 @@ impl Render for FocusRegion {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(ui::switch("focus-follow", follow, {
                         let this = cx.entity().downgrade();
                         move |on, window, cx| {

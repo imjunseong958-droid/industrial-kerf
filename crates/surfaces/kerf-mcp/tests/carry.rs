@@ -5,10 +5,11 @@
 //! next change are of steps in the document. Nothing is made from a recipe's
 //! file, so the take one made is written here as such a making left it.
 //!
-//! In a file of its own: it names a models file of its own in `KERF_MODELS`,
-//! which the other tests' process must not see.
+//! In a file of its own: it reads a models file of its own for the whole
+//! process ([`Models::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
 
+use kerf_engine::recipe::model::Models;
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -50,7 +51,10 @@ fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
 fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
-    response["error"]["message"].as_str().unwrap_or_default().to_owned()
+    response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn to_make<'a>(answer: &'a Value, id: &str) -> Option<&'a Value> {
@@ -85,7 +89,11 @@ fn legacy_take(dir: &Path) {
             "file footage/walk.mp4": sha256(&footage),
         },
     });
-    std::fs::write(takes.join("001.take.json"), serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+    std::fs::write(
+        takes.join("001.take.json"),
+        serde_json::to_vec_pretty(&record).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -101,7 +109,14 @@ fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
     let made = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
         .args(["-i", "testsrc=size=160x90:rate=16:duration=1"])
-        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
         .arg(dir.join("footage/walk.mp4"))
         .status()
         .expect("ffmpeg");
@@ -116,7 +131,7 @@ fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
         format!(r#"{{"matte": {{"run": {ANSWERS_ITS_GUIDE}}}, "plate": {{"run": {ANSWERS_ITS_GUIDE}}}}}"#),
     )
     .unwrap();
-    std::env::set_var("KERF_MODELS", &models);
+    Models::use_file(&models);
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(Permissions {
@@ -130,9 +145,18 @@ fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
     let looked = ok(&router, "look", json!({}));
     let wants = to_make(&looked, "gone").unwrap_or_else(|| panic!("{looked}"));
     assert_eq!(wants["recipe"], "shots/gone.kerfrecipe");
-    assert!(wants["carry"].as_str().unwrap().contains("carry: [\"gone\"]"), "{wants}");
+    assert!(
+        wants["carry"]
+            .as_str()
+            .unwrap()
+            .contains("carry: [\"gone\"]"),
+        "{wants}"
+    );
     let unmade = refused(&router, "make", json!({"media": "gone", "wait": true}));
-    assert!(unmade.contains("are in the recipe file `shots/gone.kerfrecipe`"), "{unmade}");
+    assert!(
+        unmade.contains("are in the recipe file `shots/gone.kerfrecipe`"),
+        "{unmade}"
+    );
     assert!(unmade.contains("`carry: [\"gone\"]`"), "{unmade}");
     assert!(!dir.join("shots/gone.takes/002.mp4").exists());
 
@@ -156,18 +180,31 @@ fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
     assert!(to_make(&carried, "gone").is_none(), "{carried}");
     assert!(to_make(&ok(&router, "look", json!({})), "gone").is_none());
     // The recipe's file is left where it was, and nothing names it.
-    assert_eq!(std::fs::read_to_string(dir.join("shots/gone.kerfrecipe")).unwrap(), GONE);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shots/gone.kerfrecipe")).unwrap(),
+        GONE
+    );
     let listed = ok(&router, "look", json!({"media": "gone"}));
     let takes = listed["takes"]["made"].as_array().unwrap();
     assert_eq!(takes.len(), 1, "{listed}");
-    assert!(takes[0].get("changedSince").is_none() && takes[0].get("steps").is_none(), "{listed}");
+    assert!(
+        takes[0].get("changedSince").is_none() && takes[0].get("steps").is_none(),
+        "{listed}"
+    );
 
     // From here it is a media made by steps in the document: a name set by a script, and
     // the next take beside the one the recipe made.
     let seeded = ok(&router, "edit", json!({"script": "step gone set 2 seed=8"}));
-    assert_eq!(to_make(&seeded, "gone").unwrap()["why"], "its steps changed after its file was made");
+    assert_eq!(
+        to_make(&seeded, "gone").unwrap()["why"],
+        "its steps changed after its file was made"
+    );
     let second = ok(&router, "make", json!({"media": "gone", "wait": true}));
-    assert_eq!((second["status"].as_str(), second["take"].as_u64()), (Some("made"), Some(2)), "{second}");
+    assert_eq!(
+        (second["status"].as_str(), second["take"].as_u64()),
+        (Some("made"), Some(2)),
+        "{second}"
+    );
     assert_eq!(second["path"], "shots/gone.takes/002.mp4");
     assert!(dir.join("shots/gone.takes/001.mp4").is_file());
     // Going back to the take the recipe made sets the steps it was made from, read as
@@ -179,18 +216,42 @@ fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
         "generate model=plate prompt=\"an empty dirt path\" guide=footage/walk.mp4 guide_mask={man.mp4} seed=7 reach=72",
         "{listed}"
     );
-    let back = ok(&router, "edit", json!({"restoreTake": {"media": "gone", "take": 1}}));
-    assert!(back["script"].as_str().unwrap().contains("step gone set 2 generate model=plate"), "{back}");
+    let back = ok(
+        &router,
+        "edit",
+        json!({"restoreTake": {"media": "gone", "take": 1}}),
+    );
+    assert!(
+        back["script"]
+            .as_str()
+            .unwrap()
+            .contains("step gone set 2 generate model=plate"),
+        "{back}"
+    );
     let document = router.runtime().get_state().unwrap().document;
-    assert!(document.contains("guide_mask={man.mp4} seed=7 reach=72\n"), "{document}");
+    assert!(
+        document.contains("guide_mask={man.mp4} seed=7 reach=72\n"),
+        "{document}"
+    );
 
     // A recipe that runs a program is not carried: a document names none, and the media
     // still names its file. Nor is a recipe carried twice.
     let ran = refused(&router, "edit", json!({"carry": ["open"]}));
-    assert!(ran.contains("`run vork` runs a program, and a document names none"), "{ran}");
-    assert!(router.runtime().get_state().unwrap().document.contains("recipe=\"shots/open.kerfrecipe\""));
+    assert!(
+        ran.contains("`run vork` runs a program, and a document names none"),
+        "{ran}"
+    );
+    assert!(router
+        .runtime()
+        .get_state()
+        .unwrap()
+        .document
+        .contains("recipe=\"shots/open.kerfrecipe\""));
     let done = refused(&router, "edit", json!({"carry": ["gone"]}));
-    assert!(done.contains("has its steps under its line in the document already"), "{done}");
+    assert!(
+        done.contains("has its steps under its line in the document already"),
+        "{done}"
+    );
 }
 
 /// Carried in the same edit as the lines that change its steps: the carry comes first.
@@ -204,7 +265,11 @@ fn a_recipe_is_carried_and_its_steps_changed_in_one_edit() {
         "kerf 1\nproject name=\"Shots\"\nmedia m1 path=\"shots/open.mp4\" rate=24 dur=24f video=320x180 recipe=\"shots/open.kerfrecipe\"\nsequence s1 rate=24 size=320x180\n  track V1 video\n    clip slate gen=solid@1 at=0f dur=24f\n",
     )
     .unwrap();
-    std::fs::write(dir.join("shots/open.kerfrecipe"), "kerf-recipe 1\n# The slate.\nrender s1 {out} size=160x90\n").unwrap();
+    std::fs::write(
+        dir.join("shots/open.kerfrecipe"),
+        "kerf-recipe 1\n# The slate.\nrender s1 {out} size=160x90\n",
+    )
+    .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(Permissions::default()));
@@ -216,9 +281,25 @@ fn a_recipe_is_carried_and_its_steps_changed_in_one_edit() {
     assert_eq!(staged["status"], "awaiting_review", "{staged}");
     assert_eq!(staged["carried"][0]["takesHeld"], 0);
     let script = staged["script"].as_str().unwrap();
-    assert!(script.contains("media replace m1 path=\"shots/open.mp4\" rate=24 dur=00:00:01:00 video=320x180\n"), "{script}");
-    assert!(script.contains("step m1 add render s1 {out} size=160x90\n"), "{script}");
-    assert!(script.contains("step m1 set 1 render s1 {out} size=160x90 rate=12"), "{script}");
+    assert!(
+        script.contains(
+            "media replace m1 path=\"shots/open.mp4\" rate=24 dur=00:00:01:00 video=320x180\n"
+        ),
+        "{script}"
+    );
+    assert!(
+        script.contains("step m1 add render s1 {out} size=160x90\n"),
+        "{script}"
+    );
+    assert!(
+        script.contains("step m1 set 1 render s1 {out} size=160x90 rate=12"),
+        "{script}"
+    );
     // Until the person says yes the project names its recipe, as it did.
-    assert!(router.runtime().get_state().unwrap().document.contains("recipe=\"shots/open.kerfrecipe\""));
+    assert!(router
+        .runtime()
+        .get_state()
+        .unwrap()
+        .document
+        .contains("recipe=\"shots/open.kerfrecipe\""));
 }

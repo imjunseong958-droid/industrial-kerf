@@ -1,0 +1,24 @@
+[package]
+name = "editor_state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The editor's data, which names no gpui: the project as the bridge's events leave it, the settings, links"
+
+[lib]
+path = "src/editor_state.rs"
+# No unit tests of its own: no test binary to build (tests/editor/layers.rs
+# fails once it has one).
+test = false
+
+[dependencies]
+kerf-bridge.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+idna.workspace = true
+unicode-normalization.workspace = true
+sha1_smol.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

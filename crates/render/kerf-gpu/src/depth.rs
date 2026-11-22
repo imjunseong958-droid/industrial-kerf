@@ -828,10 +828,10 @@ impl Frame<'_> {
             .kept
             .as_ref()
             .map(|kept| format!("{kept}|distance|{crop:?}|{jumps:?}|{far}|{stretch}"));
-        if let Some(key) = &key {
-            if let Some(Kept::Distance(distance)) = self.gpu.kept().get(key) {
-                return Some(distance);
-            }
+        if let Some(key) = &key
+            && let Some(Kept::Distance(distance)) = self.gpu.kept().get(key)
+        {
+            return Some(distance);
         }
         let gpu = self.gpu;
         let kernels = gpu.depth_kernels()?;
@@ -963,7 +963,9 @@ impl Frame<'_> {
     /// [`Frame::project`] would write. A mesh is drawn so.
     pub fn lay_depths(&mut self, layers: &Layers, depths: &[f32], w: u32) {
         let bytes: Vec<u8> = depths.iter().flat_map(|far| far.to_le_bytes()).collect();
-        let h = layers.h.min((depths.len() as u32).checked_div(w).unwrap_or(0));
+        let h = layers
+            .h
+            .min((depths.len() as u32).checked_div(w).unwrap_or(0));
         if w == 0 || h == 0 {
             return;
         }

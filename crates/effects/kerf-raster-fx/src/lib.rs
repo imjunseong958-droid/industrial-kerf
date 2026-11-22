@@ -6,7 +6,16 @@
 //! [`instantiate`]), so parameters animate, take expressions and are addressable like any other
 //! property.
 
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unimplemented,
+    clippy::todo,
+    clippy::unreachable
+)]
+// Carried from EffectCraft, whose pixel loops index several buffers by position.
+#![allow(clippy::needless_range_loop)]
 
 mod blur2;
 mod blur3;
@@ -30,9 +39,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 pub use kerf_raster::Image;
+pub use noise::GrainLook;
 /// The box passes a Gaussian blur is made of here, for a kernel that makes the same ones.
 pub use util::box_radii;
-pub use noise::GrainLook;
 // What a kernel reads of these effects' numbers, as the effects themselves read them.
 pub use color2::{sc_param_id, Curve, SC_IDS};
 pub use color_fx::{huesat_ranges, HueRange, PHOTO_FILTERS, PHOTO_FILTER_CUSTOM};
@@ -111,13 +120,24 @@ pub struct Buf {
 
 impl Buf {
     pub fn to_px(&self, p: [f64; 2]) -> (f64, f64) {
-        (p[0] * self.scale + self.offset[0], p[1] * self.scale + self.offset[1])
+        (
+            p[0] * self.scale + self.offset[0],
+            p[1] * self.scale + self.offset[1],
+        )
     }
     /// Grow the buffer so it covers a `size`-layer-pixel region starting at its offset (see
     /// [`cover_plan`]): the whole layer rectangle a sized source's buffer already is. Content
     /// keeps its place; the new area is transparent. No-op when the buffer already covers it.
     pub fn cover(&mut self, size: [f64; 2]) {
-        let Some((dx, dy, w, h)) = cover_plan(self.offset, self.scale, size, self.img.width, self.img.height) else { return };
+        let Some((dx, dy, w, h)) = cover_plan(
+            self.offset,
+            self.scale,
+            size,
+            self.img.width,
+            self.img.height,
+        ) else {
+            return;
+        };
         let src = std::mem::replace(&mut self.img, Image::new(w, h));
         let (sw, sh) = (src.width as usize, src.height as usize);
         for y in 0..sh {
@@ -143,12 +163,27 @@ impl Buf {
 /// `width` × `height` so it spans the `size`-layer-pixel region that starts at its offset — the
 /// whole layer rectangle, which a sized source's buffer already is. `None` when the buffer
 /// already covers that region unchanged (footage, solids, the comp below an adjustment).
-pub fn cover_plan(offset: [f64; 2], scale: f64, size: [f64; 2], width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
-    if scale <= 0.0 || !scale.is_finite() || !offset[0].is_finite() || !offset[1].is_finite() || !size[0].is_finite() || !size[1].is_finite() {
+pub fn cover_plan(
+    offset: [f64; 2],
+    scale: f64,
+    size: [f64; 2],
+    width: u32,
+    height: u32,
+) -> Option<(u32, u32, u32, u32)> {
+    if scale <= 0.0
+        || !scale.is_finite()
+        || !offset[0].is_finite()
+        || !offset[1].is_finite()
+        || !size[0].is_finite()
+        || !size[1].is_finite()
+    {
         return None;
     }
     // Region and content, both as pixel ranges in the buffer's own coordinates.
-    let (rw, rh) = (offset[0] + (size[0] * scale).ceil(), offset[1] + (size[1] * scale).ceil());
+    let (rw, rh) = (
+        offset[0] + (size[0] * scale).ceil(),
+        offset[1] + (size[1] * scale).ceil(),
+    );
     let (lo_x, lo_y) = (offset[0].min(0.0).floor(), offset[1].min(0.0).floor());
     let (hi_x, hi_y) = (rw.max(width as f64).ceil(), rh.max(height as f64).ceil());
     let (nw_f, nh_f) = (hi_x - lo_x, hi_y - lo_y);
@@ -253,7 +288,11 @@ pub struct EffectCtx<'a> {
 impl EffectCtx<'_> {
     /// Frame rate for frame-based maths (comp rate, else 30).
     pub fn fps(&self) -> f64 {
-        if self.env.frame_rate > 0.0 { self.env.frame_rate } else { 30.0 }
+        if self.env.frame_rate > 0.0 {
+            self.env.frame_rate
+        } else {
+            30.0
+        }
     }
 }
 
@@ -272,13 +311,26 @@ pub struct EffectSpec {
 }
 
 pub(crate) fn p(id: &'static str, name: &'static str, default: Value, ui: ParamUi) -> ParamSpec {
-    ParamSpec { id, name, default, ui }
+    ParamSpec {
+        id,
+        name,
+        default,
+        ui,
+    }
 }
 pub(crate) fn slider(min: f64, max: f64, smin: f64, smax: f64, decimals: u8) -> ParamUi {
-    ParamUi::Slider { min, max, slider_min: smin, slider_max: smax, decimals }
+    ParamUi::Slider {
+        min,
+        max,
+        slider_min: smin,
+        slider_max: smax,
+        decimals,
+    }
 }
 pub(crate) fn popup(opts: &[&str]) -> ParamUi {
-    ParamUi::Popup { options: opts.iter().map(|s| s.to_string()).collect() }
+    ParamUi::Popup {
+        options: opts.iter().map(|s| s.to_string()).collect(),
+    }
 }
 pub(crate) fn num(v: f64) -> Value {
     Value::Scalar(v)
@@ -318,7 +370,9 @@ pub fn find(id: &str) -> Option<&'static EffectSpec> {
 /// layer size).
 pub fn default_value(ps: &ParamSpec, layer_size: [f64; 2]) -> Value {
     match (&ps.ui, &ps.default) {
-        (ParamUi::Point, Value::Vec2(f)) => Value::Vec2([f[0] * layer_size[0], f[1] * layer_size[1]]),
+        (ParamUi::Point, Value::Vec2(f)) => {
+            Value::Vec2([f[0] * layer_size[0], f[1] * layer_size[1]])
+        }
         _ => ps.default.clone(),
     }
 }
@@ -331,16 +385,43 @@ pub fn apply(spec: &EffectSpec, ctx: &EffectCtx, buf: Buf) -> Buf {
 /// Test helper: run effect `id` on `img` (scale 1, layer size = image size) with its defaults
 /// overridden by `vals`, at layer time `time`, with an optional environment.
 #[cfg(test)]
-pub(crate) fn run_fx(id: &str, vals: &[(&str, Value)], img: Image, time: f64, env: EffectEnv) -> Buf {
+pub(crate) fn run_fx(
+    id: &str,
+    vals: &[(&str, Value)],
+    img: Image,
+    time: f64,
+    env: EffectEnv,
+) -> Buf {
     let s = find(id).unwrap_or_else(|| panic!("no effect {id}"));
     let size = [img.width as f64, img.height as f64];
-    let mut params = Params { values: s.params.iter().map(|p| (p.id.to_string(), default_value(p, size))).collect() };
+    let mut params = Params {
+        values: s
+            .params
+            .iter()
+            .map(|p| (p.id.to_string(), default_value(p, size)))
+            .collect(),
+    };
     for (k, v) in vals {
         assert!(params.values.contains_key(*k), "{id}: unknown param {k}");
         params.values.insert(k.to_string(), v.clone());
     }
-    let ctx = EffectCtx { params: &params, time, layer_size: [img.width as f64, img.height as f64], seed: 1, adjustment: false, env };
-    apply(s, &ctx, Buf { img, offset: [0.0, 0.0], scale: 1.0 })
+    let ctx = EffectCtx {
+        params: &params,
+        time,
+        layer_size: [img.width as f64, img.height as f64],
+        seed: 1,
+        adjustment: false,
+        env,
+    };
+    apply(
+        s,
+        &ctx,
+        Buf {
+            img,
+            offset: [0.0, 0.0],
+            scale: 1.0,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -354,16 +435,48 @@ mod tests {
         let mut img = Image::new(48, 32);
         for y in 0..32 {
             for x in 0..48 {
-                let a = if (8..40).contains(&x) && (6..26).contains(&y) { 1.0 } else { 0.0 };
+                let a = if (8..40).contains(&x) && (6..26).contains(&y) {
+                    1.0
+                } else {
+                    0.0
+                };
                 img.set(x, y, [x as f32 / 48.0 * a, y as f32 / 32.0 * a, 0.5 * a, a]);
             }
         }
         for s in registry() {
-            let params = Params { values: s.params.iter().map(|p| (p.id.to_string(), p.default.clone())).collect() };
-            let ctx = EffectCtx { params: &params, time: 0.5, layer_size: [48.0, 32.0], seed: 1, adjustment: false, env: Default::default() };
-            let out = apply(s, &ctx, Buf { img: img.clone(), offset: [0.0, 0.0], scale: 1.0 });
+            let params = Params {
+                values: s
+                    .params
+                    .iter()
+                    .map(|p| (p.id.to_string(), p.default.clone()))
+                    .collect(),
+            };
+            let ctx = EffectCtx {
+                params: &params,
+                time: 0.5,
+                layer_size: [48.0, 32.0],
+                seed: 1,
+                adjustment: false,
+                env: Default::default(),
+            };
+            let out = apply(
+                s,
+                &ctx,
+                Buf {
+                    img: img.clone(),
+                    offset: [0.0, 0.0],
+                    scale: 1.0,
+                },
+            );
             assert!(!out.img.is_empty(), "{}", s.id);
-            assert!(out.img.data.iter().all(|p| p[3].is_finite() && p[3] >= -1e-4 && p[3] <= 1.0001), "{} alpha out of range", s.id);
+            assert!(
+                out.img
+                    .data
+                    .iter()
+                    .all(|p| p[3].is_finite() && p[3] >= -1e-4 && p[3] <= 1.0001),
+                "{} alpha out of range",
+                s.id
+            );
         }
     }
 }

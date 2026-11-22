@@ -207,7 +207,11 @@ impl Num for Traced {
     }
     fn log10(self) -> Traced {
         // WGSL has the logarithm to 2 and none to 10.
-        Traced::of(&format!("log2({}) * {:?}", self.name(), std::f32::consts::LOG10_2))
+        Traced::of(&format!(
+            "log2({}) * {:?}",
+            self.name(),
+            std::f32::consts::LOG10_2
+        ))
     }
     fn rem_euclid(self, by: Traced) -> Traced {
         let (a, b) = (self.name(), by.name());
@@ -404,11 +408,9 @@ pub fn unmult<N: Num>(p: [N; 4], told: &Unmult<N>) -> [N; 4] {
         || [p[0] / a, p[1] / a, p[2] / a, a],
     );
     // How far it is from the background.
-    let [d] = told.white.if_at_most(
-        zero,
-        || [r.max(g).max(b)],
-        || [one - r.min(g).min(b)],
-    );
+    let [d] = told
+        .white
+        .if_at_most(zero, || [r.max(g).max(b)], || [one - r.min(g).min(b)]);
     let d = d.clamp(zero, one);
     let [m] = told.width.if_at_most(
         least,
@@ -704,7 +706,10 @@ pub fn grid<N: Num>(p: [N; 4], x: N, y: N, told: &Grid<N>) -> [N; 4] {
         let past = (at - middle).rem_euclid(told.size);
         past.min(told.size - past)
     };
-    let (gx, gy) = (from_a_line(x, told.middle[0]), from_a_line(y, told.middle[1]));
+    let (gx, gy) = (
+        from_a_line(x, told.middle[0]),
+        from_a_line(y, told.middle[1]),
+    );
     let a = (told.border * half - gx.min(gy) + half).clamp(zero, one) * told.opacity;
     a.if_at_most(
         zero,
@@ -1002,7 +1007,7 @@ pub fn color_balance_wgsl() -> String {
     });
     format!(
         "fn color_balance_px(q: vec4<f32>) -> vec4<f32> {{\n{body}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     )
 }
 
@@ -1031,7 +1036,7 @@ pub fn wipe_wgsl() -> String {
     });
     let wipe_px = format!(
         "fn wipe_px(a: vec4<f32>, b: vec4<f32>, d: f32) -> vec4<f32> {{\n{body}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     );
     let mut result = None;
     let body = written(|| {
@@ -1040,7 +1045,7 @@ pub fn wipe_wgsl() -> String {
     });
     format!(
         "{wipe_px}fn iris_round(x: f32, y: f32, cx: f32, cy: f32) -> f32 {{\n{body}    return {};\n}}\n",
-        result.expect("written").name()
+        result.expect("`written` runs its body once, and the body sets it").name()
     )
 }
 
@@ -1053,7 +1058,7 @@ fn at_a_pixel(name: &str, body: impl FnOnce([Traced; 4], Traced, Traced) -> [Tra
     });
     format!(
         "fn {name}(q: vec4<f32>, x: f32, y: f32) -> vec4<f32> {{\n{lines}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     )
 }
 
@@ -1063,7 +1068,7 @@ fn of_a_pixel(name: &str, body: impl FnOnce([Traced; 4]) -> [Traced; 4]) -> Stri
     let lines = written(|| result = Some(body(parts("q"))));
     format!(
         "fn {name}(q: vec4<f32>) -> vec4<f32> {{\n{lines}{}}}\n",
-        returned(result.expect("written"))
+        returned(result.expect("`written` runs its body once, and the body sets it"))
     )
 }
 
@@ -1094,11 +1099,7 @@ pub fn color_wgsl() -> String {
         };
         unmult(q, &told)
     });
-    let ways = [
-        "cineon_to_linear_px",
-        "cineon_to_log_px",
-        "cineon_log_px",
-    ];
+    let ways = ["cineon_to_linear_px", "cineon_to_log_px", "cineon_log_px"];
     let converted: String = (0u32..)
         .zip(ways)
         .map(|(way, name)| {
@@ -1127,7 +1128,13 @@ pub fn color_wgsl() -> String {
 pub fn generated_wgsl() -> String {
     let v = Traced::named;
     let gradient = at_a_pixel("four_colors_px", |q, x, y| {
-        let color = |p: &str| [v(&format!("{p}.x")), v(&format!("{p}.y")), v(&format!("{p}.z"))];
+        let color = |p: &str| {
+            [
+                v(&format!("{p}.x")),
+                v(&format!("{p}.y")),
+                v(&format!("{p}.z")),
+            ]
+        };
         let told = FourColors {
             colors: [color("u.p0"), color("u.p1"), color("u.p2"), color("u.p3")],
             power: v("u.p0.w"),

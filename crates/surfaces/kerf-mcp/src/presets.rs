@@ -3,7 +3,7 @@
 //! it carries join the project's.
 
 use crate::{KerfMcpRouter, McpError};
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_lang::preset::{self, Preset};
 use kerf_lang::Clock;
 use kerf_model::look::Look;
@@ -185,6 +185,7 @@ impl KerfMcpRouter {
             .write_all(document.as_bytes())
             .and_then(|_| output.sync_all())
         {
+            // The write's error is the one to report; this only tidies the half-written file.
             let _ = fs::remove_file(&path);
             return Err(io_error(error));
         }
@@ -343,6 +344,7 @@ fn write_looks(directory: &Path, looks: &[Look]) -> Result<(), McpError> {
             .write_all(look.text.as_bytes())
             .and_then(|_| output.sync_all())
         {
+            // The write's error is the one to report; this only tidies the half-written file.
             let _ = fs::remove_file(&path);
             return Err(io_error(error));
         }

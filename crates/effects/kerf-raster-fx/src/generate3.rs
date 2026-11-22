@@ -12,11 +12,24 @@ use kerf_raster::Px;
 use rayon::prelude::*;
 use std::f64::consts::PI;
 
-use crate::util::{Plane, poly_length, premul, smoothstep};
-use crate::{Buf, EffectCtx, EffectSpec, col, num, p, popup, slider};
+use crate::util::{poly_length, premul, smoothstep, Plane};
+use crate::{col, num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Generate", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Generate",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 fn pt(x: f64, y: f64) -> Value {
@@ -71,12 +84,20 @@ pub(crate) fn raster_segs(w: usize, h: usize, segs: &[Seg], hardness: f64) -> Pl
             let outer = s.r + 0.5;
             for (x, o) in row.iter_mut().enumerate().take(x1).skip(x0) {
                 let px = x as f64 + 0.5;
-                let t = if l2 > 1e-12 { (((px - s.a[0]) * dx + (py - s.a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                let t = if l2 > 1e-12 {
+                    (((px - s.a[0]) * dx + (py - s.a[1]) * dy) / l2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
                 let d = ((px - s.a[0] - dx * t).powi(2) + (py - s.a[1] - dy * t).powi(2)).sqrt();
                 if d >= outer {
                     continue;
                 }
-                let c = if d <= inner { 1.0 } else { 1.0 - smoothstep(inner as f32, outer as f32, d as f32) } * s.v;
+                let c = if d <= inner {
+                    1.0
+                } else {
+                    1.0 - smoothstep(inner as f32, outer as f32, d as f32)
+                } * s.v;
                 if c > *o {
                     *o = c;
                 }
@@ -90,21 +111,36 @@ pub(crate) fn raster_segs(w: usize, h: usize, segs: &[Seg], hardness: f64) -> Pl
 pub fn poly_segs(pts: &[[f64; 2]], closed: bool, r: f64, v: f32, out: &mut Vec<Seg>) {
     let n = pts.len();
     if n == 1 {
-        out.push(Seg { a: pts[0], b: pts[0], r, v });
+        out.push(Seg {
+            a: pts[0],
+            b: pts[0],
+            r,
+            v,
+        });
     }
     if n < 2 {
         return;
     }
     let segs = if closed { n } else { n - 1 };
     for i in 0..segs {
-        out.push(Seg { a: pts[i], b: pts[(i + 1) % n], r, v });
+        out.push(Seg {
+            a: pts[i],
+            b: pts[(i + 1) % n],
+            r,
+            v,
+        });
     }
 }
 
 #[inline]
 fn over(dst: Px, src: Px) -> Px {
     let k = 1.0 - src[3];
-    [src[0] + dst[0] * k, src[1] + dst[1] * k, src[2] + dst[2] * k, src[3] + dst[3] * k]
+    [
+        src[0] + dst[0] * k,
+        src[1] + dst[1] * k,
+        src[2] + dst[2] * k,
+        src[3] + dst[3] * k,
+    ]
 }
 
 /// Mask `idx` (1-based; 0 = none) mapped to buffer pixels.
@@ -113,7 +149,14 @@ pub(crate) fn mask_px(ctx: &EffectCtx, b: &Buf, idx: usize) -> Option<(Vec<[f64;
     if m.points.is_empty() {
         return None;
     }
-    Some((m.points.iter().map(|&q| [q[0] * b.scale + b.offset[0], q[1] * b.scale + b.offset[1]]).collect(), m.closed, m.inverted))
+    Some((
+        m.points
+            .iter()
+            .map(|&q| [q[0] * b.scale + b.offset[0], q[1] * b.scale + b.offset[1]])
+            .collect(),
+        m.closed,
+        m.inverted,
+    ))
 }
 
 // ---------------------------------------------------------------- Fractal
@@ -189,7 +232,10 @@ fn audio_window(ctx: &EffectCtx, dur_ms: f64, offset_ms: f64, channel: u32) -> O
     Some(
         (0..frames)
             .map(|i| {
-                let (l, r) = (*s.get(2 * i).unwrap_or(&0.0) as f64, *s.get(2 * i + 1).unwrap_or(&0.0) as f64);
+                let (l, r) = (
+                    *s.get(2 * i).unwrap_or(&0.0) as f64,
+                    *s.get(2 * i + 1).unwrap_or(&0.0) as f64,
+                );
                 match channel {
                     1 => l,
                     2 => r,
@@ -225,14 +271,31 @@ impl Baseline {
         };
         let len = poly_length(&pts, closed);
         let center = pts[0];
-        let radius = if pts.len() > 1 { ((pts[1][0] - pts[0][0]).powi(2) + (pts[1][1] - pts[0][1]).powi(2)).sqrt() } else { 1.0 };
-        Baseline { pts, closed, len, polar, center, radius }
+        let radius = if pts.len() > 1 {
+            ((pts[1][0] - pts[0][0]).powi(2) + (pts[1][1] - pts[0][1]).powi(2)).sqrt()
+        } else {
+            1.0
+        };
+        Baseline {
+            pts,
+            closed,
+            len,
+            polar,
+            center,
+            radius,
+        }
     }
     fn at(&self, u: f64) -> ([f64; 2], [f64; 2]) {
         if self.polar {
             let a = u * 2.0 * PI - PI * 0.5;
             let (s, c) = a.sin_cos();
-            return ([self.center[0] + c * self.radius * 0.5, self.center[1] + s * self.radius * 0.5], [c, s]);
+            return (
+                [
+                    self.center[0] + c * self.radius * 0.5,
+                    self.center[1] + s * self.radius * 0.5,
+                ],
+                [c, s],
+            );
         }
         let (q, d) = crate::util::poly_point_at(&self.pts, self.closed, u * self.len);
         (q, [d[1], -d[0]])
@@ -240,11 +303,29 @@ impl Baseline {
 }
 
 /// Draw line/dot marks with core (inside colour) and soft halo (outside colour).
-fn draw_marks(b: &mut Buf, segs_core: &[Seg], thickness: f64, softness: f64, inside: [f32; 4], outside: [f32; 4], composite: bool) {
+fn draw_marks(
+    b: &mut Buf,
+    segs_core: &[Seg],
+    thickness: f64,
+    softness: f64,
+    inside: [f32; 4],
+    outside: [f32; 4],
+    composite: bool,
+) {
     let (w, h) = (b.img.width as usize, b.img.height as usize);
     let core = raster_segs(w, h, segs_core, 1.0);
-    let halo_segs: Vec<Seg> = segs_core.iter().map(|s| Seg { r: s.r + thickness * softness.max(0.0) + 0.5, ..*s }).collect();
-    let halo = if softness > 0.0 { raster_segs(w, h, &halo_segs, 0.0) } else { core.clone() };
+    let halo_segs: Vec<Seg> = segs_core
+        .iter()
+        .map(|s| Seg {
+            r: s.r + thickness * softness.max(0.0) + 0.5,
+            ..*s
+        })
+        .collect();
+    let halo = if softness > 0.0 {
+        raster_segs(w, h, &halo_segs, 0.0)
+    } else {
+        core.clone()
+    };
     b.img.data.par_iter_mut().enumerate().for_each(|(i, px)| {
         let (c, hl) = (core.data[i], halo.data[i]);
         let a = c.max(hl);
@@ -254,7 +335,11 @@ fn draw_marks(b: &mut Buf, segs_core: &[Seg], thickness: f64, softness: f64, ins
             return;
         }
         let t = if a > 0.0 { c / a } else { 0.0 };
-        let col = crate::util::lerp3([outside[0], outside[1], outside[2]], [inside[0], inside[1], inside[2]], t);
+        let col = crate::util::lerp3(
+            [outside[0], outside[1], outside[2]],
+            [inside[0], inside[1], inside[2]],
+            t,
+        );
         *px = over(base, premul(col, a));
     });
 }
@@ -285,14 +370,30 @@ fn marks(ctx: &EffectCtx, segs: Vec<Seg>, thick: f64, soft: f64) -> MarksPlan {
 
 fn audio_spectrum(ctx: &EffectCtx, mut b: Buf) -> Buf {
     if let Some(m) = spectrum_plan(ctx, &b) {
-        draw_marks(&mut b, &m.segs, m.thickness, m.softness, m.inside, m.outside, m.composite);
+        draw_marks(
+            &mut b,
+            &m.segs,
+            m.thickness,
+            m.softness,
+            m.inside,
+            m.outside,
+            m.composite,
+        );
     }
     b
 }
 
 fn audio_waveform(ctx: &EffectCtx, mut b: Buf) -> Buf {
     if let Some(m) = waveform_plan(ctx, &b) {
-        draw_marks(&mut b, &m.segs, m.thickness, m.softness, m.inside, m.outside, m.composite);
+        draw_marks(
+            &mut b,
+            &m.segs,
+            m.thickness,
+            m.softness,
+            m.inside,
+            m.outside,
+            m.composite,
+        );
     }
     b
 }
@@ -355,10 +456,18 @@ fn spectrum_plan(ctx: &EffectCtx, b: &Buf) -> Option<MarksPlan> {
     let mut tops = Vec::with_capacity(bands);
     let mut segs = Vec::new();
     for i in 0..bands {
-        let u = if bands > 1 { i as f64 / (bands - 1) as f64 } else { 0.5 };
+        let u = if bands > 1 {
+            i as f64 / (bands - 1) as f64
+        } else {
+            0.5
+        };
         let fc = f0 + (f1 - f0) * u;
         let v = get_band_mag(fc);
-        let hgt = if (v * max_h).is_finite() { (v * max_h).clamp(0.0, max_h.max(0.0)) } else { 0.0 };
+        let hgt = if (v * max_h).is_finite() {
+            (v * max_h).clamp(0.0, max_h.max(0.0))
+        } else {
+            0.0
+        };
         let (q, nrm) = base.at(u);
         let (ua, ub) = match side {
             0 => (0.0, hgt),
@@ -368,22 +477,47 @@ fn spectrum_plan(ctx: &EffectCtx, b: &Buf) -> Option<MarksPlan> {
         let pa = [q[0] + nrm[0] * ua, q[1] + nrm[1] * ua];
         let pb = [q[0] + nrm[0] * ub, q[1] + nrm[1] * ub];
         match disp {
-            0 => segs.push(Seg { a: pa, b: pb, r: thick * 0.5, v: 1.0 }),
+            0 => segs.push(Seg {
+                a: pa,
+                b: pb,
+                r: thick * 0.5,
+                v: 1.0,
+            }),
             _ => tops.push((pa, pb)),
         }
     }
     if disp == 1 {
         for w2 in tops.windows(2) {
-            segs.push(Seg { a: w2[0].1, b: w2[1].1, r: thick * 0.5, v: 1.0 });
+            segs.push(Seg {
+                a: w2[0].1,
+                b: w2[1].1,
+                r: thick * 0.5,
+                v: 1.0,
+            });
             if side == 2 {
-                segs.push(Seg { a: w2[0].0, b: w2[1].0, r: thick * 0.5, v: 1.0 });
+                segs.push(Seg {
+                    a: w2[0].0,
+                    b: w2[1].0,
+                    r: thick * 0.5,
+                    v: 1.0,
+                });
             }
         }
     } else if disp == 2 {
         for &(pa, pb) in &tops {
-            segs.push(Seg { a: pb, b: pb, r: thick * 0.5, v: 1.0 });
+            segs.push(Seg {
+                a: pb,
+                b: pb,
+                r: thick * 0.5,
+                v: 1.0,
+            });
             if side == 2 {
-                segs.push(Seg { a: pa, b: pa, r: thick * 0.5, v: 1.0 });
+                segs.push(Seg {
+                    a: pa,
+                    b: pa,
+                    r: thick * 0.5,
+                    v: 1.0,
+                });
             }
         }
     }
@@ -392,7 +526,12 @@ fn spectrum_plan(ctx: &EffectCtx, b: &Buf) -> Option<MarksPlan> {
 
 fn waveform_plan(ctx: &EffectCtx, b: &Buf) -> Option<MarksPlan> {
     let pr = ctx.params;
-    let samples = audio_window(ctx, pr.f("audioDuration"), pr.f("audioOffset"), pr.e("waveformOptions"))?;
+    let samples = audio_window(
+        ctx,
+        pr.f("audioDuration"),
+        pr.f("audioOffset"),
+        pr.e("waveformOptions"),
+    )?;
     let count = pr.f("displayedSamples").round().clamp(2.0, 4096.0) as usize;
     let max_h = pr.f("maximumHeight") * b.scale;
     let thick = (pr.f("thickness") * b.scale).max(0.1);
@@ -429,7 +568,12 @@ fn waveform_plan(ctx: &EffectCtx, b: &Buf) -> Option<MarksPlan> {
     if disp == 1 {
         poly_segs(&pts, false, thick * 0.5, 1.0, &mut segs);
     } else if disp == 2 {
-        segs.extend(pts.iter().map(|&q| Seg { a: q, b: q, r: thick * 0.5, v: 1.0 }));
+        segs.extend(pts.iter().map(|&q| Seg {
+            a: q,
+            b: q,
+            r: thick * 0.5,
+            v: 1.0,
+        }));
     }
     Some(marks(ctx, segs, thick, soft))
 }
@@ -438,35 +582,98 @@ fn waveform_plan(ctx: &EffectCtx, b: &Buf) -> Option<MarksPlan> {
 
 pub fn specs() -> Vec<EffectSpec> {
     let ang = || ParamUi::Angle;
-    let check = |id: &'static str, name: &'static str, v: bool| p(id, name, Value::Bool(v), ParamUi::Checkbox);
-    let mask_idx = |id: &'static str, name: &'static str, d: f64| p(id, name, num(d), ParamUi::Mask);
+    let check = |id: &'static str, name: &'static str, v: bool| {
+        p(id, name, Value::Bool(v), ParamUi::Checkbox)
+    };
+    let mask_idx =
+        |id: &'static str, name: &'static str, d: f64| p(id, name, num(d), ParamUi::Mask);
     let display = || popup(&["Digital", "Analog lines", "Analog dots"]);
     vec![
         spec(
             "ec.generate.audiospectrum",
             "Audio Spectrum",
             vec![
-                p("audioLayer", "Audio Layer", Value::Layer(None), ParamUi::Layer),
+                p(
+                    "audioLayer",
+                    "Audio Layer",
+                    Value::Layer(None),
+                    ParamUi::Layer,
+                ),
                 p("startPoint", "Start Point", pt(0.1, 0.5), ParamUi::Point),
                 p("endPoint", "End Point", pt(0.9, 0.5), ParamUi::Point),
                 mask_idx("path", "Path", 0.0),
                 check("usePolarPath", "Use Polar Path", false),
-                p("startFrequency", "Start Frequency", num(20.0), slider(1.0, 20000.0, 1.0, 2000.0, 0)),
-                p("endFrequency", "End Frequency", num(2000.0), slider(1.0, 20000.0, 1.0, 10000.0, 0)),
-                p("frequencyBands", "Frequency bands", num(64.0), slider(1.0, 4096.0, 1.0, 256.0, 0)),
-                p("maximumHeight", "Maximum Height", num(50.0), slider(0.0, 10000.0, 0.0, 500.0, 1)),
-                p("audioDuration", "Audio Duration (milliseconds)", num(90.0), slider(1.0, 30000.0, 1.0, 1000.0, 1)),
-                p("audioOffset", "Audio Offset (milliseconds)", num(0.0), slider(-30000.0, 30000.0, -1000.0, 1000.0, 1)),
-                p("thickness", "Thickness", num(3.0), slider(0.0, 1000.0, 0.0, 50.0, 2)),
+                p(
+                    "startFrequency",
+                    "Start Frequency",
+                    num(20.0),
+                    slider(1.0, 20000.0, 1.0, 2000.0, 0),
+                ),
+                p(
+                    "endFrequency",
+                    "End Frequency",
+                    num(2000.0),
+                    slider(1.0, 20000.0, 1.0, 10000.0, 0),
+                ),
+                p(
+                    "frequencyBands",
+                    "Frequency bands",
+                    num(64.0),
+                    slider(1.0, 4096.0, 1.0, 256.0, 0),
+                ),
+                p(
+                    "maximumHeight",
+                    "Maximum Height",
+                    num(50.0),
+                    slider(0.0, 10000.0, 0.0, 500.0, 1),
+                ),
+                p(
+                    "audioDuration",
+                    "Audio Duration (milliseconds)",
+                    num(90.0),
+                    slider(1.0, 30000.0, 1.0, 1000.0, 1),
+                ),
+                p(
+                    "audioOffset",
+                    "Audio Offset (milliseconds)",
+                    num(0.0),
+                    slider(-30000.0, 30000.0, -1000.0, 1000.0, 1),
+                ),
+                p(
+                    "thickness",
+                    "Thickness",
+                    num(3.0),
+                    slider(0.0, 1000.0, 0.0, 50.0, 2),
+                ),
                 p("softness", "Softness", num(50.0), pct()),
-                p("insideColor", "Inside Color", col(1.0, 1.0, 1.0), ParamUi::Color),
-                p("outsideColor", "Outside Color", col(0.2, 0.4, 1.0), ParamUi::Color),
+                p(
+                    "insideColor",
+                    "Inside Color",
+                    col(1.0, 1.0, 1.0),
+                    ParamUi::Color,
+                ),
+                p(
+                    "outsideColor",
+                    "Outside Color",
+                    col(0.2, 0.4, 1.0),
+                    ParamUi::Color,
+                ),
                 check("blendOverlappingColors", "Blend Overlapping Colors", true),
                 p("hueInterpolation", "Hue Interpolation", num(0.0), ang()),
                 check("dynamicHuePhase", "Dynamic Hue Phase", false),
                 check("colorSymmetry", "Color Symmetry", false),
-                p("displayOptions", "Display Options", Value::Enum(0), display()),
-                p("sideOptions", "Side Options", Value::Enum(0), popup(&["Side A", "Side B", "Side A & B"])),
+                p(
+                    "displayOptions",
+                    "Display Options",
+                    Value::Enum(0),
+                    display(),
+                ),
+                p(
+                    "sideOptions",
+                    "Side Options",
+                    Value::Enum(0),
+                    popup(&["Side A", "Side B", "Side A & B"]),
+                ),
                 check("durationAveraging", "Duration Averaging", false),
                 check("compositeOnOriginal", "Composite On Original", false),
             ],
@@ -476,22 +683,77 @@ pub fn specs() -> Vec<EffectSpec> {
             "ec.generate.audiowaveform",
             "Audio Waveform",
             vec![
-                p("audioLayer", "Audio Layer", Value::Layer(None), ParamUi::Layer),
+                p(
+                    "audioLayer",
+                    "Audio Layer",
+                    Value::Layer(None),
+                    ParamUi::Layer,
+                ),
                 p("startPoint", "Start Point", pt(0.1, 0.5), ParamUi::Point),
                 p("endPoint", "End Point", pt(0.9, 0.5), ParamUi::Point),
                 mask_idx("path", "Path", 0.0),
                 check("usePolarPath", "Use Polar Path", false),
-                p("displayedSamples", "Displayed Samples", num(200.0), slider(2.0, 4096.0, 2.0, 1000.0, 0)),
-                p("maximumHeight", "Maximum Height", num(100.0), slider(0.0, 10000.0, 0.0, 500.0, 1)),
-                p("audioDuration", "Audio Duration (milliseconds)", num(200.0), slider(1.0, 30000.0, 1.0, 1000.0, 1)),
-                p("audioOffset", "Audio Offset (milliseconds)", num(0.0), slider(-30000.0, 30000.0, -1000.0, 1000.0, 1)),
-                p("thickness", "Thickness", num(2.0), slider(0.0, 1000.0, 0.0, 50.0, 2)),
+                p(
+                    "displayedSamples",
+                    "Displayed Samples",
+                    num(200.0),
+                    slider(2.0, 4096.0, 2.0, 1000.0, 0),
+                ),
+                p(
+                    "maximumHeight",
+                    "Maximum Height",
+                    num(100.0),
+                    slider(0.0, 10000.0, 0.0, 500.0, 1),
+                ),
+                p(
+                    "audioDuration",
+                    "Audio Duration (milliseconds)",
+                    num(200.0),
+                    slider(1.0, 30000.0, 1.0, 1000.0, 1),
+                ),
+                p(
+                    "audioOffset",
+                    "Audio Offset (milliseconds)",
+                    num(0.0),
+                    slider(-30000.0, 30000.0, -1000.0, 1000.0, 1),
+                ),
+                p(
+                    "thickness",
+                    "Thickness",
+                    num(2.0),
+                    slider(0.0, 1000.0, 0.0, 50.0, 2),
+                ),
                 p("softness", "Softness", num(10.0), pct()),
-                p("randomSeed", "Random Seed (Analog)", num(1.0), slider(1.0, 10000.0, 1.0, 100.0, 0)),
-                p("insideColor", "Inside Color", col(1.0, 1.0, 1.0), ParamUi::Color),
-                p("outsideColor", "Outside Color", col(0.2, 0.4, 1.0), ParamUi::Color),
-                p("waveformOptions", "Waveform Options", Value::Enum(0), popup(&["Mono", "Left", "Right"])),
-                p("displayOptions", "Display Options", Value::Enum(1), display()),
+                p(
+                    "randomSeed",
+                    "Random Seed (Analog)",
+                    num(1.0),
+                    slider(1.0, 10000.0, 1.0, 100.0, 0),
+                ),
+                p(
+                    "insideColor",
+                    "Inside Color",
+                    col(1.0, 1.0, 1.0),
+                    ParamUi::Color,
+                ),
+                p(
+                    "outsideColor",
+                    "Outside Color",
+                    col(0.2, 0.4, 1.0),
+                    ParamUi::Color,
+                ),
+                p(
+                    "waveformOptions",
+                    "Waveform Options",
+                    Value::Enum(0),
+                    popup(&["Mono", "Left", "Right"]),
+                ),
+                p(
+                    "displayOptions",
+                    "Display Options",
+                    Value::Enum(1),
+                    display(),
+                ),
                 check("compositeOnOriginal", "Composite On Original", false),
             ],
             audio_waveform,

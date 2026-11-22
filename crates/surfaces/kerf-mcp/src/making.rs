@@ -592,6 +592,7 @@ impl KerfMcpRouter {
         }
         for mut job in jobs {
             if let Some(thread) = job.thread.take() {
+                // A making thread that panicked has said so already; it is only waited for here.
                 let _ = thread.join();
             }
         }
@@ -622,4 +623,3 @@ impl KerfMcpRouter {
             .count()
     }
 }
-

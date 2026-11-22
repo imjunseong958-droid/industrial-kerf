@@ -13,7 +13,10 @@ const LARGEST: u32 = 255;
 /// Where one is named twice, the later holds, as it does in shaping.
 pub fn parse_features(text: &str) -> Result<Vec<([u8; 4], u32)>, String> {
     let mut features = Vec::new();
-    for word in text.split(|c: char| c.is_whitespace() || c == ',').filter(|word| !word.is_empty()) {
+    for word in text
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|word| !word.is_empty())
+    {
         let (sign, rest) = match word.as_bytes()[0] {
             b'+' => (Some(1), &word[1..]),
             b'-' => (Some(0), &word[1..]),
@@ -28,21 +31,32 @@ pub fn parse_features(text: &str) -> Result<Vec<([u8; 4], u32)>, String> {
             .try_into()
             .ok()
             .filter(|bytes: &[u8; 4]| bytes.iter().all(u8::is_ascii_alphanumeric))
-            .ok_or_else(|| format!("`{word}` names no feature: a tag is four letters or digits, as in `tnum`"))?;
+            .ok_or_else(|| {
+                format!("`{word}` names no feature: a tag is four letters or digits, as in `tnum`")
+            })?;
         let value = match (sign, number) {
-            (Some(_), Some(_)) => return Err(format!("`{word}` says it twice: write `{tag}=N`, or `+{tag}` or `-{tag}`")),
+            (Some(_), Some(_)) => {
+                return Err(format!(
+                    "`{word}` says it twice: write `{tag}=N`, or `+{tag}` or `-{tag}`"
+                ))
+            }
             (Some(value), None) => value,
             (None, None) => 1,
             (None, Some(number)) => number
                 .parse::<u32>()
                 .ok()
                 .filter(|value| *value <= LARGEST)
-                .ok_or_else(|| format!("`{word}`: a feature is set to a whole number from 0 to {LARGEST}"))?,
+                .ok_or_else(|| {
+                    format!("`{word}`: a feature is set to a whole number from 0 to {LARGEST}")
+                })?,
         };
         features.push((bytes, value));
     }
     if features.len() > MOST {
-        return Err(format!("{} features are more than the {MOST} a text may name", features.len()));
+        return Err(format!(
+            "{} features are more than the {MOST} a text may name",
+            features.len()
+        ));
     }
     Ok(features)
 }

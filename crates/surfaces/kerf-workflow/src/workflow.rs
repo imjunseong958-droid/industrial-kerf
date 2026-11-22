@@ -60,7 +60,9 @@
 //! ask for. `{no_picture}` is a small black picture on the server, for a
 //! node that loads a file and will not run without pictures beside it.
 
-use crate::names::{guide_named, names_a_file, names_a_signal, names_what_is_handed, MOVES, MOVES_BOX, MOVES_VIDEO};
+use crate::names::{
+    guide_named, names_a_file, names_a_signal, names_what_is_handed, MOVES, MOVES_BOX, MOVES_VIDEO,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -78,14 +80,14 @@ pub const BUNDLED: [(&str, &str); 15] = [
     ("shot-timed", include_str!("../workflows/shot-timed.json")),
     ("shot-into", include_str!("../workflows/shot-into.json")),
     ("shot-led", include_str!("../workflows/shot-led.json")),
-    ("shot-directed", include_str!("../workflows/shot-directed.json")),
+    (
+        "shot-directed",
+        include_str!("../workflows/shot-directed.json"),
+    ),
     ("still", include_str!("../workflows/still.json")),
     ("depth", include_str!("../workflows/depth.json")),
     ("set", include_str!("../workflows/set.json")),
-    (
-        "cameras",
-        include_str!("../workflows/cameras.json"),
-    ),
+    ("cameras", include_str!("../workflows/cameras.json")),
     ("set-views", include_str!("../workflows/set-views.json")),
     ("set-splats", include_str!("../workflows/set-splats.json")),
     ("moves-shown", include_str!("../workflows/moves-shown.json")),
@@ -205,7 +207,10 @@ impl Workflow {
             ));
         }
         // A still, one frame, has no rate either.
-        if workflow.of.is_none() && workflow.frames.most > 1 && !(workflow.fps.is_finite() && workflow.fps > 0.0) {
+        if workflow.of.is_none()
+            && workflow.frames.most > 1
+            && !(workflow.fps.is_finite() && workflow.fps > 0.0)
+        {
             return Err("`fps` is not a rate".to_owned());
         }
         if workflow.frames.most == 0 || workflow.frames.step == 0 {
@@ -226,7 +231,9 @@ impl Workflow {
         }
         for (id, without) in &workflow.without {
             let Some(node) = workflow.graph.get(id) else {
-                return Err(format!("`without` names node {id}, which `workflow` has not got"));
+                return Err(format!(
+                    "`without` names node {id}, which `workflow` has not got"
+                ));
             };
             for wanted in &without.wants {
                 if link(&node["inputs"][wanted]).is_none() {
@@ -242,12 +249,12 @@ impl Workflow {
                     ));
                 }
             }
-            if let Some(stand) = &without.reads {
-                if stand == id || !workflow.graph.contains_key(stand) {
-                    return Err(format!(
+            if let Some(stand) = &without.reads
+                && (stand == id || !workflow.graph.contains_key(stand))
+            {
+                return Err(format!(
                         "`without` has node {stand} stand in for node {id}: it is another node of `workflow`"
                     ));
-                }
             }
         }
         Ok(workflow)
@@ -385,10 +392,7 @@ impl Workflow {
         if signals > 0 {
             reads.push("signal");
         }
-        if blanks.contains(MOVES)
-            || blanks.contains(MOVES_VIDEO)
-            || blanks.contains(MOVES_BOX)
-        {
+        if blanks.contains(MOVES) || blanks.contains(MOVES_VIDEO) || blanks.contains(MOVES_BOX) {
             reads.push(MOVES);
         }
         let more: Map<String, Value> = self
@@ -526,7 +530,11 @@ impl Workflow {
             .collect();
         // And each the workflow says is nothing without something the request has not got:
         // a file it does not hand over, or words it has none of.
-        let given = |name: &String| values.get(name).is_some_and(|value| value.as_str() != Some(""));
+        let given = |name: &String| {
+            values
+                .get(name)
+                .is_some_and(|value| value.as_str() != Some(""))
+        };
         gone.extend(
             self.without
                 .iter()
@@ -735,8 +743,16 @@ mod tests {
             // Each blank is the request's, a file's, or one `set` fills.
             for blank in workflow.blanks() {
                 assert!(
-                    ["prompt", "seed", "width", "height", "frames", "fps", "no_picture"]
-                        .contains(&blank.as_str())
+                    [
+                        "prompt",
+                        "seed",
+                        "width",
+                        "height",
+                        "frames",
+                        "fps",
+                        "no_picture"
+                    ]
+                    .contains(&blank.as_str())
                         || names_what_is_handed(&blank)
                         || workflow.set.contains_key(&blank),
                     "{name}: nothing fills {{{blank}}}"
@@ -748,16 +764,32 @@ mod tests {
         let takes = still.takes();
         assert_eq!(takes["still"], true);
         assert_eq!(takes["reads"], json!(["ref"]));
-        assert!(takes.get("rate").is_none() && takes.get("seconds").is_none() && takes.get("frames").is_none());
-        assert_eq!((still.frames(None, None), still.frames(Some(4.0), None)), (1, 1));
-        assert!(still.graph.values().any(|node| node["class_type"] == "SaveImage"));
+        assert!(
+            takes.get("rate").is_none()
+                && takes.get("seconds").is_none()
+                && takes.get("frames").is_none()
+        );
+        assert_eq!(
+            (still.frames(None, None), still.frames(Some(4.0), None)),
+            (1, 1)
+        );
+        assert!(still
+            .graph
+            .values()
+            .any(|node| node["class_type"] == "SaveImage"));
         // A workflow of more than one frame still has to say its rate.
         let unrated = include_str!("../workflows/shot.json").replacen("\"fps\": 16,", "", 1);
-        assert_eq!(Workflow::parse(&unrated).unwrap_err(), "`fps` is not a rate");
+        assert_eq!(
+            Workflow::parse(&unrated).unwrap_err(),
+            "`fps` is not a rate"
+        );
 
         // One reads all four at once, and serves a line that gives any of them.
         let directed = Workflow::named("shot-directed").unwrap();
-        assert_eq!(directed.takes()["reads"], json!(["guide", "first", "ref", "signal", "moves"]));
+        assert_eq!(
+            directed.takes()["reads"],
+            json!(["guide", "first", "ref", "signal", "moves"])
+        );
         assert_eq!(directed.takes()["more"]["moves_strength"], json!(1.0));
         let mut needs = |class: &str| -> Result<BTreeSet<String>, String> {
             let names: &[&str] = match class {
@@ -767,7 +799,16 @@ mod tests {
                 "ImageScale" => &["image", "upscale_method", "width", "height", "crop"],
                 "ImageFromBatch" => &["image", "batch_index", "length"],
                 "ImageBatch" => &["image1", "image2"],
-                "WanVaceToVideo" => &["positive", "negative", "vae", "width", "height", "length", "batch_size", "strength"],
+                "WanVaceToVideo" => &[
+                    "positive",
+                    "negative",
+                    "vae",
+                    "width",
+                    "height",
+                    "length",
+                    "batch_size",
+                    "strength",
+                ],
                 other => return Err(format!("nothing links {other} to a node left out")),
             };
             Ok(names.iter().map(|name| (*name).to_owned()).collect())
@@ -777,15 +818,28 @@ mod tests {
             given.extend(directed.set.clone());
             directed.graph(&given, &mut needs).unwrap()
         };
-        let all = sent(&[("guide", "g.mp4"), ("first", "f.png"), ("ref", "r.png"), ("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
+        let all = sent(&[
+            ("guide", "g.mp4"),
+            ("first", "f.png"),
+            ("ref", "r.png"),
+            ("signal_video", "s.mp4"),
+            ("moves_video", "m.mp4"),
+        ]);
         assert_eq!(all.as_object().unwrap().len(), directed.graph.len());
         // With a first frame the guide starts as that picture, kept: the rest of it is followed.
         assert_eq!(all["9"]["inputs"]["control_video"], json!(["33", 0]));
         assert_eq!(all["9"]["inputs"]["control_masks"], json!(["38", 0]));
         assert_eq!(all["32"]["inputs"]["image"], json!(["24", 0]));
         // No first frame: the guide as it is, and nothing kept of it.
-        let whole = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
-        assert!(whole.get("33").is_none() && whole.get("38").is_none() && whole.get("30").is_none());
+        let whole = sent(&[
+            ("guide", "g.mp4"),
+            ("ref", "r.png"),
+            ("signal_video", "s.mp4"),
+            ("moves_video", "m.mp4"),
+        ]);
+        assert!(
+            whole.get("33").is_none() && whole.get("38").is_none() && whole.get("30").is_none()
+        );
         assert_eq!(whole["9"]["inputs"]["control_video"], json!(["24", 0]));
         assert!(whole["9"]["inputs"].get("control_masks").is_none());
         // A first frame and no signal: the part of the guide after its first frame, ungated.
@@ -797,7 +851,11 @@ mod tests {
         assert!(unled.get("38").is_none() && unled["9"]["inputs"].get("control_video").is_none());
         assert_eq!(all["12"]["inputs"]["positive"], json!(["22", 0]));
         // No signal: the guide is followed all through, with nothing laid over it in grey.
-        let unsignalled = sent(&[("guide", "g.mp4"), ("ref", "r.png"), ("moves_video", "m.mp4")]);
+        let unsignalled = sent(&[
+            ("guide", "g.mp4"),
+            ("ref", "r.png"),
+            ("moves_video", "m.mp4"),
+        ]);
         assert!(unsignalled.get("24").is_none());
         assert_eq!(unsignalled["9"]["inputs"]["control_video"], json!(["7", 0]));
         // No moves: what `shot` sends, the sampler reading the guide's node.
@@ -807,7 +865,9 @@ mod tests {
         assert_eq!(unmoved["13"]["inputs"]["trim_amount"], json!(["9", 3]));
         // A signal with no guide has nothing to let go: the prompt and the layout.
         let unguided = sent(&[("signal_video", "s.mp4"), ("moves_video", "m.mp4")]);
-        assert!(unguided.get("24").is_none() && unguided["9"]["inputs"].get("control_video").is_none());
+        assert!(
+            unguided.get("24").is_none() && unguided["9"]["inputs"].get("control_video").is_none()
+        );
         assert_eq!(unguided["22"]["inputs"]["control_video"], json!(["21", 0]));
         // One that makes a file of its guide reads a guide, and has no rate of its own.
         for name in [
@@ -855,17 +915,30 @@ mod tests {
         // There is one depth, of the frames read together, and one file of each reading: a
         // camera's path is a text, and its depth is depth's.
         let depth = Workflow::named("depth").unwrap();
-        assert!(depth.graph.values().any(|node| node["inputs"]["mode"] == "multiview"));
+        assert!(depth
+            .graph
+            .values()
+            .any(|node| node["inputs"]["mode"] == "multiview"));
         assert!(depth.classes().contains("SaveVideo") && !depth.classes().contains("SaveText"));
         let cameras = Workflow::named("cameras").unwrap();
         assert!(cameras.classes().contains("SaveText") && !cameras.classes().contains("SaveVideo"));
         assert!(Workflow::named("depth-whole").is_err());
         // A camera and a set in its space are found of frames seen beside each other, so of
         // two at the least; a depth, and a frame alone as a set, are had of one.
-        for (name, least) in [("cameras", 2), ("set-views", 2), ("depth", 1), ("set", 1), ("matte", 1)] {
+        for (name, least) in [
+            ("cameras", 2),
+            ("set-views", 2),
+            ("depth", 1),
+            ("set", 1),
+            ("matte", 1),
+        ] {
             let workflow = Workflow::named(name).unwrap();
             assert_eq!(workflow.frames.least, least, "{name}");
-            assert_eq!(workflow.takes()["frames"].get("least").is_some(), least > 1, "{name}");
+            assert_eq!(
+                workflow.takes()["frames"].get("least").is_some(),
+                least > 1,
+                "{name}"
+            );
         }
         let missing = Workflow::named("no-such").unwrap_err();
         assert!(missing.contains("shot"), "{missing}");
@@ -884,14 +957,27 @@ mod tests {
             }
         }
         // Every shot is made by one model, with its picture's coder and its words' reader.
-        let shots = vec!["shot", "shot-timed", "shot-into", "shot-led", "shot-directed", "still"];
+        let shots = vec![
+            "shot",
+            "shot-timed",
+            "shot-into",
+            "shot-led",
+            "shot-directed",
+            "still",
+        ];
         let held: BTreeMap<String, Vec<&str>> = [
             ("wan2.1_vace_14B_fp16.safetensors", shots.clone()),
             ("wan_2.1_vae.safetensors", shots.clone()),
             ("umt5_xxl_fp16.safetensors", shots),
-            ("depth_anything_3_base.safetensors", vec!["depth", "cameras", "set-views"]),
+            (
+                "depth_anything_3_base.safetensors",
+                vec!["depth", "cameras", "set-views"],
+            ),
             ("moge_3_vitl_fp16.safetensors", vec!["set"]),
-            ("sam3.1_multiplex_fp16.safetensors", vec!["matte", "matte-shown"]),
+            (
+                "sam3.1_multiplex_fp16.safetensors",
+                vec!["matte", "matte-shown"],
+            ),
             // The model that takes a thing out, in two passes, with its own coder, its own
             // words' reader, and the flow its second pass is led by.
             ("void_pass1.safetensors", vec!["plate"]),

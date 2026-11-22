@@ -16,26 +16,30 @@
 //! project is kept as the next version of it.
 
 use crate::emit;
+use crate::event::{ErrorEvent, Event};
+use crate::wake::Outbox;
 use kerf_model::look::{self, Look, On};
 use kerf_model::{Catalog, Clip, Domain, Engine, FxKind, Interp, Param, ParamType, Project, Value};
 use kerf_runtime::EditOp;
-use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 
 /// Where saved effects presets go, relative to the project.
 pub(crate) const LOOKS_DIR: &str = "presets/looks";
 const EXTENSION: &str = "kerflook";
 
 /// A refused look command: `error {command, message}`.
-pub(crate) fn refused(tx: &SyncSender<Json>, command: &str, message: &str) {
+pub(crate) fn refused(tx: &Outbox, command: &str, message: &str) {
     emit(
         tx,
-        json!({"type": "error", "message": message, "command": command}),
+        Event::Error(ErrorEvent {
+            message: message.to_owned(),
+            command: Some(command.to_owned()),
+            ..ErrorEvent::default()
+        }),
     );
 }
 
@@ -243,6 +247,7 @@ fn write(directory: &Path, relative: &str, text: &str, replace: bool) -> Result<
         .write_all(text.as_bytes())
         .and_then(|_| output.sync_all())
     {
+        // The write's error is the one to report; this only tidies the half-written file.
         let _ = fs::remove_file(&path);
         return Err(failed(error));
     }
@@ -256,15 +261,18 @@ pub(crate) fn save(
     clip: &str,
     name: &str,
     replace: bool,
-) -> Result<Json, String> {
+) -> Result<Event, String> {
     let found = find_clip(project, clip).ok_or_else(|| format!("no clip `{clip}`"))?;
     let saved = from_clip(found, name, Catalog::builtin())?;
     let relative = library_path(name)?;
     write(directory, &relative, &saved.text, replace)?;
-    Ok(
-        json!({"type": "look_saved", "path": relative, "id": saved.id, "version": 1,
-        "effects": saved.effects, "skipped": saved.skipped}),
-    )
+    Ok(Event::LookSaved {
+        path: relative,
+        id: saved.id,
+        version: 1,
+        effects: saved.effects,
+        skipped: saved.skipped,
+    })
 }
 
 /// `look_save` against the project kerfd has: `look_saved`, or `error
@@ -275,7 +283,7 @@ pub(crate) fn save_from(
     clip: &str,
     name: &str,
     replace: bool,
-    tx: &SyncSender<Json>,
+    tx: &Outbox,
 ) -> Result<(), kerf_runtime::RuntimeError> {
     let (_, document) = client.get_document(false)?;
     let saved = kerf_runtime::parse_document(&document)
@@ -371,8 +379,16 @@ pub(crate) fn keep(
     let path: PathBuf = folder.join(format!("{id}@{}.{EXTENSION}", look.version));
     write_new(&path, &look.text)?;
     if let Err(error) = look::refresh_project_looks(directory) {
-        let _ = fs::remove_file(&path);
-        let _ = look::refresh_project_looks(directory);
+        // Kept, the look would fail every refresh after this one.
+        if let Err(removing) = fs::remove_file(&path) {
+            log::warn!(
+                "{} does not install, and was not removed: {removing}",
+                path.display()
+            );
+        }
+        if let Err(again) = look::refresh_project_looks(directory) {
+            log::warn!("the project's looks did not install again: {again}");
+        }
         return Err(error);
     }
     Ok((id, look.version))
@@ -389,6 +405,7 @@ fn write_new(path: &Path, text: &str) -> Result<(), String> {
         .write_all(text.as_bytes())
         .and_then(|_| output.sync_all())
     {
+        // The write's error is the one to report; this only tidies the half-written file.
         let _ = fs::remove_file(path);
         return Err(failed(error));
     }
@@ -402,7 +419,7 @@ pub(crate) fn apply(
     project: &Project,
     clip: &str,
     path: &str,
-) -> Result<(Vec<EditOp>, Json), String> {
+) -> Result<(Vec<EditOp>, Event), String> {
     find_clip(project, clip).ok_or_else(|| format!("no clip `{clip}`"))?;
     let read = read_file(directory, path)?;
     let (fx, version) = keep(directory, read, Catalog::builtin())?;
@@ -414,7 +431,12 @@ pub(crate) fn apply(
     };
     Ok((
         vec![op],
-        json!({"type": "look_applied", "path": path, "clip": clip, "fx": fx, "version": version}),
+        Event::LookApplied {
+            path: path.to_owned(),
+            clip: clip.to_owned(),
+            fx,
+            version,
+        },
     ))
 }
 
@@ -439,7 +461,10 @@ mod tests {
     fn saving_writes_the_library_file_and_never_overwrites() {
         let directory = tempfile::tempdir().unwrap();
         let project = program();
-        let event = save(directory.path(), &project, "c1", "Harbor warm", false).unwrap();
+        let event = serde_json::to_value(
+            save(directory.path(), &project, "c1", "Harbor warm", false).unwrap(),
+        )
+        .unwrap();
         assert_eq!(event["type"], "look_saved");
         assert_eq!(event["path"], "presets/looks/Harbor warm.kerflook");
         assert_eq!(event["effects"], 2);

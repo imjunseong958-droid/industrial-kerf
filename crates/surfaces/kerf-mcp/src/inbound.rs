@@ -490,11 +490,14 @@ impl McpProcess {
         }
         self.stopped = true;
         #[cfg(unix)]
+        #[allow(unsafe_code)]
         if let Ok(group) = libc::pid_t::try_from(self.child.id()) {
             // SAFETY: the group is the unreaped child's own, so its id is
             // not reused yet.
             unsafe { libc::killpg(group, libc::SIGKILL) };
         }
+        // The group's kill may have ended it already, so this kill can fail harmlessly; the
+        // wait reaps it either way, and a server that cannot be reaped is past stopping.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -678,6 +681,7 @@ fn bounded_description(value: &str) -> String {
 }
 
 #[cfg(unix)]
+#[allow(unsafe_code)]
 fn set_nonblocking(stdout: &ChildStdout) -> Result<(), String> {
     use std::os::unix::io::AsRawFd;
     let fd = stdout.as_raw_fd();
@@ -686,6 +690,7 @@ fn set_nonblocking(stdout: &ChildStdout) -> Result<(), String> {
     if flags < 0 {
         return Err("MCP stdout flags unavailable".to_owned());
     }
+    // SAFETY: as above; F_SETFL takes an int and touches no memory.
     if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err("MCP stdout could not be made nonblocking".to_owned());
     }
@@ -693,10 +698,13 @@ fn set_nonblocking(stdout: &ChildStdout) -> Result<(), String> {
 }
 
 #[cfg(unix)]
+#[allow(unsafe_code)]
 fn set_nonblocking_stdin(stdin: &ChildStdin) -> Result<(), String> {
     use std::os::unix::io::AsRawFd;
     let fd = stdin.as_raw_fd();
+    // SAFETY: fcntl only reads the flags of this owned pipe descriptor.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    // SAFETY: F_SETFL only changes flags on the same descriptor and touches no memory.
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err("MCP stdin could not be made nonblocking".to_owned());
     }

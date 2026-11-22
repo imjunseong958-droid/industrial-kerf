@@ -6,15 +6,18 @@
 //! names, and it is the only one asked: what `~/.kerf/comfy.json` or
 //! `COMFY_URL` names on the machine this runs on is not read.
 //!
-//! In a file of its own: it names a models file of its own in `KERF_MODELS`
-//! and a server of its own in `KERF_COMFY`, which the other tests' process
-//! must not see, and what a server said is kept for as long as a process runs.
+//! In a file of its own: it reads a models file of its own for the whole
+//! process ([`Models::use_file`]) and gives the programs they run a server of
+//! its own in `KERF_COMFY` ([`model::set_program_env`]), which the other
+//! tests' process must not see, and what a server said is kept for as long
+//! as a process runs.
 //!
 //! It starts `target/debug/kerf-comfy` as the others start `target/debug/kerfd`:
 //! a run of the whole workspace builds both, and a run of this package alone
 //! comes after `cargo build -p kerf-runtime --bin kerfd` and
 //! `cargo build -p kerf-comfy`.
 
+use kerf_engine::recipe::model::{self, Models};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -40,7 +43,10 @@ fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
 fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
-    response["error"]["message"].as_str().unwrap_or_default().to_owned()
+    response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// A ComfyUI that says what each kind of node takes, and keeps what it was asked. Its
@@ -111,26 +117,34 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
         json!({"video": {"run": [program, "--workflow", "shot", "{request}"]}}).to_string(),
     )
     .unwrap();
-    std::env::set_var("KERF_MODELS", &models);
+    Models::use_file(&models);
     // The server, named as a person names theirs: in a file, which here is this test's own.
     // Nothing a shell names is read in its place.
     let (url, asked) = comfy();
     let named = dir.join("comfy.json");
     std::fs::write(&named, json!({"url": url}).to_string()).unwrap();
-    std::env::set_var("KERF_COMFY", &named);
+    model::set_program_env("KERF_COMFY", &named);
     for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
-        std::env::remove_var(names_one);
+        model::remove_program_env(names_one);
     }
     let router = KerfMcpRouter::new(dir, Some(&built.join("kerfd"))).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
 
     // The workflow, with what the server said each input takes beside it: a blank's input
     // and a value's alike.
-    let workflow = ok(&router, "look", json!({"workflow": {"media": "shot", "line": 1}}));
+    let workflow = ok(
+        &router,
+        "look",
+        json!({"workflow": {"media": "shot", "line": 1}}),
+    );
     assert_eq!(workflow["taken"], true, "{workflow}");
     assert!(workflow.get("takenError").is_none(), "{workflow}");
     assert!(
-        asked.lock().unwrap().iter().any(|line| line == "GET /object_info/UNETLoader"),
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| line == "GET /object_info/UNETLoader"),
         "the server named in KERF_COMFY was not the one asked: {asked:?}"
     );
     let loader = workflow["nodes"]
@@ -148,12 +162,16 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
             .unwrap_or_else(|| panic!("no input `{name}` in {loader}"))
     };
     assert_eq!(input("unet_name")["blanks"], json!(["unet"]));
-    assert_eq!(input("unet_name")["choices"], json!(["a.safetensors", "b.safetensors"]));
-    assert_eq!(input("weight_dtype")["choices"], json!(["default", "fp8_e4m3fn"]));
+    assert_eq!(
+        input("unet_name")["choices"],
+        json!(["a.safetensors", "b.safetensors"])
+    );
+    assert_eq!(
+        input("weight_dtype")["choices"],
+        json!(["default", "fp8_e4m3fn"])
+    );
     let loader = loader["id"].as_str().unwrap().to_owned();
-    let set = |input: &str, value: &str| {
-        json!({"workflowSet": [{"media": "shot", "line": 1, "node": loader, "input": input, "value": value}]})
-    };
+    let set = |input: &str, value: &str| json!({"workflowSet": [{"media": "shot", "line": 1, "node": loader, "input": input, "value": value}]});
 
     // A value for the blank's input is refused as the step's to fill, with where it is
     // set, and not for being off the server's list: one that is on it is refused the same.
@@ -167,8 +185,14 @@ fn a_blank_is_the_steps_to_fill_whatever_the_server_lists_for_its_input() {
     }
     // A value that is the workflow's own is held to the server's list.
     let said = refused(&router, "edit", set("weight_dtype", "fp64"));
-    assert!(said.contains("takes one of default, fp8_e4m3fn, not \"fp64\""), "{said}");
+    assert!(
+        said.contains("takes one of default, fp8_e4m3fn, not \"fp64\""),
+        "{said}"
+    );
     assert_eq!(files(), 0, "nothing is kept of what was refused");
     let kept = ok(&router, "edit", set("weight_dtype", "fp8_e4m3fn"));
-    assert_eq!(kept["workflows"][0]["keptAs"], "shots/shot.video.comfy.json", "{kept}");
+    assert_eq!(
+        kept["workflows"][0]["keptAs"], "shots/shot.video.comfy.json",
+        "{kept}"
+    );
 }

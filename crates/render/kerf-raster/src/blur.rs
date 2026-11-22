@@ -17,32 +17,42 @@ fn box_h_into(src: &[Px], out: &mut [Px], w: usize, r: usize, repeat: bool) {
         return;
     }
     let norm = 1.0 / (2 * r + 1) as f32;
-    out.par_chunks_mut(w).zip(src.par_chunks(w)).for_each(|(o, row)| {
-        let get = |i: isize| -> Px {
-            if i < 0 {
-                if repeat { row[0] } else { [0.0; 4] }
-            } else if i as usize >= w {
-                if repeat { row[w - 1] } else { [0.0; 4] }
-            } else {
-                row[i as usize]
+    out.par_chunks_mut(w)
+        .zip(src.par_chunks(w))
+        .for_each(|(o, row)| {
+            let get = |i: isize| -> Px {
+                if i < 0 {
+                    if repeat {
+                        row[0]
+                    } else {
+                        [0.0; 4]
+                    }
+                } else if i as usize >= w {
+                    if repeat {
+                        row[w - 1]
+                    } else {
+                        [0.0; 4]
+                    }
+                } else {
+                    row[i as usize]
+                }
+            };
+            let mut acc = [0.0f32; 4];
+            for i in -(r as isize)..=(r as isize) {
+                let p = get(i);
+                for c in 0..4 {
+                    acc[c] += p[c];
+                }
             }
-        };
-        let mut acc = [0.0f32; 4];
-        for i in -(r as isize)..=(r as isize) {
-            let p = get(i);
-            for c in 0..4 {
-                acc[c] += p[c];
+            for x in 0..w {
+                o[x] = acc.map(|v| v * norm);
+                let add = get(x as isize + r as isize + 1);
+                let sub = get(x as isize - r as isize);
+                for c in 0..4 {
+                    acc[c] += add[c] - sub[c];
+                }
             }
-        }
-        for x in 0..w {
-            o[x] = acc.map(|v| v * norm);
-            let add = get(x as isize + r as isize + 1);
-            let sub = get(x as isize - r as isize);
-            for c in 0..4 {
-                acc[c] += add[c] - sub[c];
-            }
-        }
-    });
+        });
 }
 
 /// One vertical box pass (same semantics as [`box_h_into`] along columns).
@@ -62,55 +72,62 @@ fn box_v_into(src: &[Px], out: &mut [Px], w: usize, h: usize, r: usize, repeat: 
             Some(&src[i as usize * w..(i as usize + 1) * w])
         }
     };
-    out.par_chunks_mut(w * block).enumerate().for_each(|(bi, chunk)| {
-        let ya = (bi * block) as isize;
-        let mut acc = vec![[0.0f32; 4]; w];
-        for i in ya - r as isize..=ya + r as isize {
-            if let Some(rw) = row(i) {
-                for (a, p) in acc.iter_mut().zip(rw) {
-                    for c in 0..4 {
-                        a[c] += p[c];
-                    }
-                }
-            }
-        }
-        for (yy, o) in chunk.chunks_mut(w).enumerate() {
-            let y = ya + yy as isize;
-            for (o, a) in o.iter_mut().zip(&acc) {
-                *o = a.map(|v| v * norm);
-            }
-            match (row(y + r as isize + 1), row(y - r as isize)) {
-                (Some(add), Some(sub)) => {
-                    for ((a, p), q) in acc.iter_mut().zip(add).zip(sub) {
-                        for c in 0..4 {
-                            a[c] += p[c] - q[c];
-                        }
-                    }
-                }
-                (Some(add), None) => {
-                    for (a, p) in acc.iter_mut().zip(add) {
+    out.par_chunks_mut(w * block)
+        .enumerate()
+        .for_each(|(bi, chunk)| {
+            let ya = (bi * block) as isize;
+            let mut acc = vec![[0.0f32; 4]; w];
+            for i in ya - r as isize..=ya + r as isize {
+                if let Some(rw) = row(i) {
+                    for (a, p) in acc.iter_mut().zip(rw) {
                         for c in 0..4 {
                             a[c] += p[c];
                         }
                     }
                 }
-                (None, Some(sub)) => {
-                    for (a, q) in acc.iter_mut().zip(sub) {
-                        for c in 0..4 {
-                            a[c] -= q[c];
+            }
+            for (yy, o) in chunk.chunks_mut(w).enumerate() {
+                let y = ya + yy as isize;
+                for (o, a) in o.iter_mut().zip(&acc) {
+                    *o = a.map(|v| v * norm);
+                }
+                match (row(y + r as isize + 1), row(y - r as isize)) {
+                    (Some(add), Some(sub)) => {
+                        for ((a, p), q) in acc.iter_mut().zip(add).zip(sub) {
+                            for c in 0..4 {
+                                a[c] += p[c] - q[c];
+                            }
                         }
                     }
+                    (Some(add), None) => {
+                        for (a, p) in acc.iter_mut().zip(add) {
+                            for c in 0..4 {
+                                a[c] += p[c];
+                            }
+                        }
+                    }
+                    (None, Some(sub)) => {
+                        for (a, q) in acc.iter_mut().zip(sub) {
+                            for c in 0..4 {
+                                a[c] -= q[c];
+                            }
+                        }
+                    }
+                    (None, None) => {}
                 }
-                (None, None) => {}
             }
-        }
-    });
+        });
 }
 
 /// Run horizontal passes with radii `rx` then vertical passes with radii `ry`.
 fn box_passes(img: &Image, rx: &[usize], ry: &[usize], repeat: bool) -> Image {
     let (w, h) = (img.width as usize, img.height as usize);
-    let passes: Vec<(bool, usize)> = rx.iter().map(|&r| (false, r)).chain(ry.iter().map(|&r| (true, r))).filter(|p| p.1 > 0).collect();
+    let passes: Vec<(bool, usize)> = rx
+        .iter()
+        .map(|&r| (false, r))
+        .chain(ry.iter().map(|&r| (true, r)))
+        .filter(|p| p.1 > 0)
+        .collect();
     if passes.is_empty() || w == 0 || h == 0 {
         return img.clone();
     }
@@ -139,9 +156,15 @@ fn box_radii(sigma: f64, n: usize) -> Vec<usize> {
         wl -= 1;
     }
     let wu = wl + 2;
-    let m_ideal = (12.0 * sigma * sigma - (n as i64 * wl * wl) as f64 - 4.0 * n as f64 * wl as f64 - 3.0 * n as f64) / (-4.0 * wl as f64 - 4.0);
+    let m_ideal = (12.0 * sigma * sigma
+        - (n as i64 * wl * wl) as f64
+        - 4.0 * n as f64 * wl as f64
+        - 3.0 * n as f64)
+        / (-4.0 * wl as f64 - 4.0);
     let m = m_ideal.round() as i64;
-    (0..n as i64).map(|i| (((if i < m { wl } else { wu }) - 1) / 2).max(0) as usize).collect()
+    (0..n as i64)
+        .map(|i| (((if i < m { wl } else { wu }) - 1) / 2).max(0) as usize)
+        .collect()
 }
 
 /// Separable box blur with given radii, `iterations` passes.
@@ -152,8 +175,16 @@ pub fn box_blur(img: &Image, rx: usize, ry: usize, iterations: usize, repeat: bo
 
 /// Gaussian blur with standard deviations in pixels (3 box passes per axis).
 pub fn gaussian_blur(img: &Image, sigma_x: f64, sigma_y: f64, repeat: bool) -> Image {
-    let rx = if sigma_x > 0.05 { box_radii(sigma_x, 3) } else { vec![] };
-    let ry = if sigma_y > 0.05 { box_radii(sigma_y, 3) } else { vec![] };
+    let rx = if sigma_x > 0.05 {
+        box_radii(sigma_x, 3)
+    } else {
+        vec![]
+    };
+    let ry = if sigma_y > 0.05 {
+        box_radii(sigma_y, 3)
+    } else {
+        vec![]
+    };
     box_passes(img, &rx, &ry, repeat)
 }
 
@@ -237,12 +268,20 @@ mod tests {
                 let mut acc = [0.0f64; 4];
                 for k in -(r as i64)..=(r as i64) {
                     let (sx, sy) = if vertical { (x, y + k) } else { (x + k, y) };
-                    let p = if repeat { img.get_clamped(sx, sy) } else { img.get(sx, sy) };
+                    let p = if repeat {
+                        img.get_clamped(sx, sy)
+                    } else {
+                        img.get(sx, sy)
+                    };
                     for c in 0..4 {
                         acc[c] += p[c] as f64;
                     }
                 }
-                out.set(x as u32, y as u32, acc.map(|v| (v / (2 * r + 1) as f64) as f32));
+                out.set(
+                    x as u32,
+                    y as u32,
+                    acc.map(|v| (v / (2 * r + 1) as f64) as f32),
+                );
             }
         }
         out
@@ -269,7 +308,10 @@ mod tests {
                 }
                 for (i, (p, q)) in fast.data.iter().zip(&slow.data).enumerate() {
                     for c in 0..4 {
-                        assert!((p[c] - q[c]).abs() < 1e-4, "r {rx},{ry} repeat {repeat} px {i}: {p:?} vs {q:?}");
+                        assert!(
+                            (p[c] - q[c]).abs() < 1e-4,
+                            "r {rx},{ry} repeat {repeat} px {i}: {p:?} vs {q:?}"
+                        );
                     }
                 }
             }

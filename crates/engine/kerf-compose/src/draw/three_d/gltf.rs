@@ -55,19 +55,22 @@ pub(super) fn closes(points: &[Vector], triangles: &[[u32; 3]]) -> bool {
             most[axis] = most[axis].max(point[axis]);
         }
     }
-    let large = (0..3).map(|axis| most[axis] - least[axis]).fold(0.0, f64::max);
+    let large = (0..3)
+        .map(|axis| most[axis] - least[axis])
+        .fold(0.0, f64::max);
     if !(large > 0.0 && large.is_finite()) {
         return false;
     }
     let place = |corner: u32| {
-        points
-            .get(corner as usize)
-            .map(|point| [0, 1, 2].map(|axis| ((point[axis] - least[axis]) / large * 1e6).round() as i64))
+        points.get(corner as usize).map(|point| {
+            [0, 1, 2].map(|axis| ((point[axis] - least[axis]) / large * 1e6).round() as i64)
+        })
     };
     let mut edges = Vec::with_capacity(triangles.len() * 3);
     for triangle in triangles {
         for side in 0..3 {
-            let (Some(from), Some(to)) = (place(triangle[side]), place(triangle[(side + 1) % 3])) else {
+            let (Some(from), Some(to)) = (place(triangle[side]), place(triangle[(side + 1) % 3]))
+            else {
                 return false;
             };
             if from != to {
@@ -76,7 +79,10 @@ pub(super) fn closes(points: &[Vector], triangles: &[[u32; 3]]) -> bool {
         }
     }
     edges.sort_unstable();
-    !edges.is_empty() && edges.chunk_by(|one, other| one == other).all(|same| same.len() == 2)
+    !edges.is_empty()
+        && edges
+            .chunk_by(|one, other| one == other)
+            .all(|same| same.len() == 2)
 }
 
 /// A camera of a file: a node that holds one.
@@ -252,7 +258,12 @@ impl Weighed {
     fn at(&self, seconds: f64) -> Vec<f64> {
         let each = self.across * if self.how == How::Cubic { 3 } else { 1 };
         let value = |key: usize| {
-            let from = key * each + if self.how == How::Cubic { self.across } else { 0 };
+            let from = key * each
+                + if self.how == How::Cubic {
+                    self.across
+                } else {
+                    0
+                };
             &self.values[from..from + self.across]
         };
         let after = self.times.partition_point(|time| *time <= seconds);

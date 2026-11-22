@@ -4,9 +4,9 @@
 //! refuses (Morph Cut, effects without a kernel) the CPU draws.
 
 use super::*;
-use kerf_fx::filmcraft::catalog::Headroom;
-use kerf_fx::filmcraft::instance::GpuEffect;
 use kerf_fx::transitions::gpu::Kernel as TransitionKernel;
+use kerf_fx::video::catalog::Headroom;
+use kerf_fx::video::instance::GpuEffect;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
@@ -31,7 +31,7 @@ fn smallest_on_gpu_of(width: u32, height: u32) -> f64 {
 /// The device, once it and every kernel are built.
 fn ready_gpu() -> Option<&'static Gpu> {
     kerf_gpu::shared().filter(|gpu| {
-        filmcraft::gpu::available(gpu)
+        video::gpu::available(gpu)
             && kerf_fx::transitions::gpu::available(gpu)
             && gpu.depth_kernels().is_some()
     })
@@ -202,13 +202,13 @@ impl Drawing {
                     continue;
                 }
                 let size = output_size(plan.width, plan.height, scale);
-                if let Some(pair) = track.pair_at(index, at) {
-                    if transition_kernel(pair, at, size, scale).is_none() {
-                        why.push(format!(
-                            "a transition at clip `{}` has no kernel",
-                            shown.plan.clip.id
-                        ));
-                    }
+                if let Some(pair) = track.pair_at(index, at)
+                    && transition_kernel(pair, at, size, scale).is_none()
+                {
+                    why.push(format!(
+                        "a transition at clip `{}` has no kernel",
+                        shown.plan.clip.id
+                    ));
                 }
                 self.why_clip_on_cpu(gpu, plan, shown, at, scale, &mut why);
             }
@@ -521,13 +521,13 @@ impl Drawing {
             if only.is_some_and(|only| only != index) {
                 continue;
             }
-            if filmcraft::instance::leaves_alone(effect, time, self.working()) {
+            if video::instance::leaves_alone(effect, time, self.working()) {
                 continue;
             }
             // Bringing a whole picture under 1 goes by its peak, which only the CPU knows before it
             // draws; each pixel under 1 needs no such thing.
             let way = if self.hdr.is_some() {
-                filmcraft::catalog::headroom(effect.fx.as_str())
+                video::catalog::headroom(effect.fx.as_str())
             } else {
                 Headroom::Keeps
             };
@@ -544,8 +544,7 @@ impl Drawing {
                     .position(|track| track.id == id)
                     .map(|place| place + 1)
             };
-            let timecode =
-                format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
+            let timecode = format_timecode(sequence.start + at, sequence.rate, sequence.drop_frame);
             let run = kerf_fx::picture::KernelRun {
                 at: time,
                 timecode: &timecode,
@@ -763,13 +762,21 @@ impl Drawing {
                 scale,
                 scene: depth.as_deref().map(|depth| &depth.scene),
             };
-            let Some(mesh) = self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
+            let Some(mesh) =
+                self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
             else {
                 return Some(canvas);
             };
             let drawn = frame.image(&mesh.picture);
             let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
-            let over = frame.composite(canvas, &drawn, &Affine::IDENTITY, whole, mesh.opacity, blend);
+            let over = frame.composite(
+                canvas,
+                &drawn,
+                &Affine::IDENTITY,
+                whole,
+                mesh.opacity,
+                blend,
+            );
             frame.release(drawn);
             return Some(over);
         }
@@ -1060,7 +1067,8 @@ impl Drawing {
                     scale,
                     scene: Some(&depth.scene),
                 };
-                let Some(mesh) = self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
+                let Some(mesh) =
+                    self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
                 else {
                     continue;
                 };
@@ -1166,7 +1174,7 @@ impl Drawing {
                 Op::Gamut(op) => op.run_in_gamut(frame, picture)?,
                 Op::Correct(correction) => frame.correct(picture, correction),
                 Op::HeldCorrect(correction) => {
-                    filmcraft::vfx::gpu::Kernel::held(frame, picture, |frame, unit| {
+                    video::vfx::gpu::Kernel::held(frame, picture, |frame, unit| {
                         Some(frame.correct(unit, correction))
                     })?
                 }
@@ -1224,7 +1232,7 @@ impl Drawing {
                 Op::Gamut(op) => op.run_in_gamut(frame, adjusted)?,
                 Op::Correct(correction) => frame.correct(adjusted, correction),
                 Op::HeldCorrect(correction) => {
-                    filmcraft::vfx::gpu::Kernel::held(frame, adjusted, |frame, unit| {
+                    video::vfx::gpu::Kernel::held(frame, adjusted, |frame, unit| {
                         Some(frame.correct(unit, correction))
                     })?
                 }

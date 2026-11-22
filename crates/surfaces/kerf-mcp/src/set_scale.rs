@@ -63,11 +63,12 @@ impl Seen<'_> {
             .flat_map(|track| &track.clips)
             .find(|clip| clip.id.as_str() == self.clip)?
             .clone();
-        let model = sequence.tracks.iter().find(|track| {
-            track.clips.iter().any(|clip| clip.id.as_str() == self.clip)
-        })?;
+        let model = sequence
+            .tracks
+            .iter()
+            .find(|track| track.clips.iter().any(|clip| clip.id.as_str() == self.clip))?;
         let track = |id: &str, clip: Clip| Track {
-            id: Id::new(id).expect("a track's name"),
+            id: Id::new(id).expect("called only with \"V1\" and \"V2\", which are valid ids"),
             clips: vec![clip],
             transitions: Vec::new(),
             ..model.clone()
@@ -75,9 +76,9 @@ impl Seen<'_> {
         let mut tracks = vec![track("V1", mesh.clone())];
         if let Some((place, fov)) = place {
             let mut camera = Clip::new(
-                Id::new("fitcamera").expect("a clip's name"),
+                Id::new("fitcamera").expect("\"fitcamera\" is a valid id"),
                 Content::Generator {
-                    fx: Id::new("camera").expect("a generator's name"),
+                    fx: Id::new("camera").expect("\"camera\" is a valid id"),
                     version: 1,
                     params: Default::default(),
                 },
@@ -151,7 +152,12 @@ impl Seen<'_> {
 fn apart(drawn: &[u8], footage: &[u8]) -> Option<f64> {
     let (mut sum, mut covered) = (0.0, 0usize);
     let pixels = drawn.len() / 4;
-    for (one, other) in drawn.as_chunks::<4>().0.iter().zip(footage.as_chunks::<4>().0) {
+    for (one, other) in drawn
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(footage.as_chunks::<4>().0)
+    {
         // What the set does not cover is drawn as nothing, which is black to the last bit.
         if one[..3] == [0, 0, 0] {
             continue;
@@ -385,9 +391,8 @@ pub(crate) fn beside(
         }
     }
     let wanted = |project: &Project, id: &str| {
-        file_in_sequence(project, sequence, id).ok_or(format!(
-            "`{id}`: it is no `gen=mesh@1` clip with a `file`"
-        ))
+        file_in_sequence(project, sequence, id)
+            .ok_or(format!("`{id}`: it is no `gen=mesh@1` clip with a `file`"))
     };
     let (to, unit) = wanted(&project, other)?;
     let (_, own) = wanted(&project, clip)?;

@@ -15,7 +15,7 @@
 //! cannot write its file is made all the same.
 
 use crate::error::EngineError;
-use crate::sidecar::CancellationToken;
+use crate::process::sidecar::CancellationToken;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -66,7 +66,8 @@ impl Told {
     /// Whether it says it is being made and has not said so for too long:
     /// the program making it has gone without saying how it ended.
     pub fn gone(&self) -> bool {
-        self.going == Going::Making && now_ms().saturating_sub(self.at_ms) > GONE_AFTER.as_millis() as u64
+        self.going == Going::Making
+            && now_ms().saturating_sub(self.at_ms) > GONE_AFTER.as_millis() as u64
     }
 }
 
@@ -81,16 +82,26 @@ fn now_ms() -> u64 {
 fn named(media: &str) -> String {
     media
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 fn file_of(directory: &Path, media: &str) -> PathBuf {
-    directory.join(FOLDER).join(format!("{}.json", named(media)))
+    directory
+        .join(FOLDER)
+        .join(format!("{}.json", named(media)))
 }
 
 fn stop_of(directory: &Path, media: &str) -> PathBuf {
-    directory.join(FOLDER).join(format!("{}.stop", named(media)))
+    directory
+        .join(FOLDER)
+        .join(format!("{}.stop", named(media)))
 }
 
 /// Write `told` whole or not at all. A making goes on whether or not it can.
@@ -106,6 +117,7 @@ fn write(file: &Path, told: &Told) {
     };
     let partial = file.with_extension(format!("{}.partial", std::process::id()));
     if std::fs::write(&partial, text).is_err() || std::fs::rename(&partial, file).is_err() {
+        // There may be no partial to take away; nothing reads one that stays.
         let _ = std::fs::remove_file(&partial);
     }
 }
@@ -130,7 +142,9 @@ impl Telling {
     ) -> Self {
         let file = file_of(directory, media);
         let stop = stop_of(directory, media);
-        // A word to stop an earlier making is not one to stop this.
+        // A word to stop an earlier making is not one to stop this. Most often there is
+        // none, and one that stays cannot stop this either: the beat stops a making only
+        // when it takes the word away.
         let _ = std::fs::remove_file(&stop);
         forget_old(directory);
         let told = Arc::new(Mutex::new(Told {
@@ -145,8 +159,12 @@ impl Telling {
         write(&file, &told.lock().unwrap_or_else(PoisonError::into_inner));
         let ended = Arc::new(AtomicBool::new(false));
         let beat = {
-            let (file, told, ended, cancellation) =
-                (file.clone(), told.clone(), ended.clone(), cancellation.clone());
+            let (file, told, ended, cancellation) = (
+                file.clone(),
+                told.clone(),
+                ended.clone(),
+                cancellation.clone(),
+            );
             thread::spawn(move || {
                 let step = Duration::from_millis(50);
                 let mut waited = Duration::ZERO;
@@ -214,6 +232,7 @@ impl Telling {
         write(&self.file, &told);
         drop(told);
         if let Some(beat) = self.beat.take() {
+            // The end is written above, whether or not the beat panicked.
             let _ = beat.join();
         }
     }
@@ -223,7 +242,11 @@ impl Drop for Telling {
     fn drop(&mut self) {
         // One let go of without a word ended somehow other than well.
         if !self.ended.load(Ordering::SeqCst) {
-            self.finish(Going::Failed, None, Some("the making ended without saying how".into()));
+            self.finish(
+                Going::Failed,
+                None,
+                Some("the making ended without saying how".into()),
+            );
         }
     }
 }
@@ -233,6 +256,7 @@ fn forget_old(directory: &Path) {
     for told in told(directory) {
         let old = now_ms().saturating_sub(told.at_ms) > KEPT.as_millis() as u64;
         if old && (told.going != Going::Making || told.gone()) {
+            // Best effort: another making may have taken it away first.
             let _ = std::fs::remove_file(file_of(directory, &told.media));
         }
     }
@@ -247,7 +271,10 @@ pub fn told(directory: &Path) -> Vec<Told> {
     let mut all: Vec<Told> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .filter_map(|path| serde_json::from_slice(&std::fs::read(path).ok()?).ok())
         .collect();
     all.sort_by(|a, b| a.media.cmp(&b.media));

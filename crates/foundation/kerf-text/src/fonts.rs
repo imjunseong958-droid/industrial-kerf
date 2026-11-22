@@ -13,15 +13,15 @@
 //! then any installed face that has it. Which characters a face has is read from its `cmap` alone
 //! ([`Face::covers`]), so looking does not load every installed font.
 
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
-use skrifa::Tag;
 use skrifa::instance::{Location, LocationRef, NormalizedCoord, Size};
+use skrifa::Tag;
 use skrifa::{FontRef, MetadataProvider};
 
-use crate::sfnt::{FaceNames, read_faces, read_faces_bytes};
+use crate::sfnt::{read_faces, read_faces_bytes, FaceNames};
 
 /// Bundled fonts (SIL OFL 1.1; see `licenses/README.md` at the repository root).
 pub static INTER_REGULAR: &[u8] = include_bytes!("../fonts/Inter-Regular.ttf");
@@ -94,7 +94,8 @@ fn instances() -> &'static Mutex<Instances> {
 
 /// `axes` at the steps they are held to, which shaping and drawing both go by.
 pub(crate) fn settled(axes: &[Axis]) -> impl Iterator<Item = ([u8; 4], f32)> + '_ {
-    axes.iter().map(|(tag, value)| (*tag, (value * AXIS_STEPS).round() / AXIS_STEPS))
+    axes.iter()
+        .map(|(tag, value)| (*tag, (value * AXIS_STEPS).round() / AXIS_STEPS))
 }
 
 /// Which instance of `face` `axes` set: 0 is the font as it comes, which is also what they come to
@@ -103,14 +104,31 @@ pub fn instance(face: FaceId, axes: &[Axis]) -> u32 {
     if axes.is_empty() {
         return 0;
     }
-    let key = (face, axes.iter().map(|(tag, value)| (*tag, (value * AXIS_STEPS).round() as i32)).collect::<Vec<_>>());
-    if let Some(id) = instances().lock().unwrap_or_else(|e| e.into_inner()).ids.get(&key) {
+    let key = (
+        face,
+        axes.iter()
+            .map(|(tag, value)| (*tag, (value * AXIS_STEPS).round() as i32))
+            .collect::<Vec<_>>(),
+    );
+    if let Some(id) = instances()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .ids
+        .get(&key)
+    {
         return *id;
     }
     let f = self::face(face);
-    let location = f.font().map(|font| font.axes().location(settled(axes).map(|(tag, value)| (Tag::new(&tag), value))));
+    let location = f.font().map(|font| {
+        font.axes()
+            .location(settled(axes).map(|(tag, value)| (Tag::new(&tag), value)))
+    });
     let mut held = instances().lock().unwrap_or_else(|e| e.into_inner());
-    let id = match location.filter(|at| at.coords().iter().any(|coord| *coord != NormalizedCoord::default())) {
+    let id = match location.filter(|at| {
+        at.coords()
+            .iter()
+            .any(|coord| *coord != NormalizedCoord::default())
+    }) {
         Some(at) => {
             held.locations.push(Arc::new(at));
             held.locations.len() as u32
@@ -124,7 +142,12 @@ pub fn instance(face: FaceId, axes: &[Axis]) -> u32 {
 /// Where instance `id` sets its axes; none for the font as it comes.
 pub(crate) fn location_of(id: u32) -> Option<Arc<Location>> {
     let index = id.checked_sub(1)? as usize;
-    instances().lock().unwrap_or_else(|e| e.into_inner()).locations.get(index).cloned()
+    instances()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .locations
+        .get(index)
+        .cloned()
 }
 
 /// Where a face's bytes come from.
@@ -176,7 +199,9 @@ impl DirectorySource {
                 dirs.push(h.join("Library/Fonts"));
             }
         } else if cfg!(windows) {
-            let win = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Windows"));
+            let win = std::env::var_os("WINDIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("C:\\Windows"));
             dirs.push(win.join("Fonts"));
             if let Some(l) = std::env::var_os("LOCALAPPDATA") {
                 dirs.push(PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
@@ -193,19 +218,34 @@ impl DirectorySource {
 }
 
 fn walk(dir: &std::path::Path, depth: u32, out: &mut Vec<PathBuf>) {
-    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in rd.flatten() {
         let p = e.path();
-        let Ok(file_type) = e.file_type() else { continue };
+        let Ok(file_type) = e.file_type() else {
+            continue;
+        };
         // Font discovery is bounded to the configured folders: never follow a symlinked folder
         // into a loop or an unrelated tree. Symlinked font files (NixOS, home-manager, Debian
         // alternatives) still count.
-        let is_file = if file_type.is_symlink() { std::fs::metadata(&p).is_ok_and(|m| m.is_file()) } else { file_type.is_file() };
+        let is_file = if file_type.is_symlink() {
+            std::fs::metadata(&p).is_ok_and(|m| m.is_file())
+        } else {
+            file_type.is_file()
+        };
         if file_type.is_dir() {
             if depth < 4 {
                 walk(&p, depth + 1, out);
             }
-        } else if is_file && p.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc")) {
+        } else if is_file
+            && p.extension().and_then(|x| x.to_str()).is_some_and(|x| {
+                matches!(
+                    x.to_ascii_lowercase().as_str(),
+                    "ttf" | "otf" | "ttc" | "otc"
+                )
+            })
+        {
             out.push(p);
         }
     }
@@ -232,7 +272,10 @@ mod directory_tests {
         let mut found = Vec::new();
         walk(&configured, 0, &mut found);
         found.sort();
-        assert_eq!(found, vec![configured.join("inside.ttf"), configured.join("linked.ttf")]);
+        assert_eq!(
+            found,
+            vec![configured.join("inside.ttf"), configured.join("linked.ttf")]
+        );
     }
 }
 
@@ -245,7 +288,9 @@ impl FontSource for DirectorySource {
         files.sort();
         let mut out = Vec::new();
         for f in files {
-            let Ok(mut file) = std::fs::File::open(&f) else { continue };
+            let Ok(mut file) = std::fs::File::open(&f) else {
+                continue;
+            };
             for n in read_faces(&mut file) {
                 out.push(info_from(n, FaceData::File(f.clone()), "system"));
             }
@@ -255,7 +300,17 @@ impl FontSource for DirectorySource {
 }
 
 fn info_from(n: FaceNames, data: FaceData, origin: &'static str) -> FaceInfo {
-    FaceInfo { family: n.family, style: n.style, weight: n.weight, italic: n.italic, index: n.index, data, origin, names: n.names, color: n.color }
+    FaceInfo {
+        family: n.family,
+        style: n.style,
+        weight: n.weight,
+        italic: n.italic,
+        index: n.index,
+        data,
+        origin,
+        names: n.names,
+        color: n.color,
+    }
 }
 
 /// A loaded (or loadable) face.
@@ -302,7 +357,9 @@ impl Face {
             .get_or_init(|| match &self.info.data {
                 FaceData::Static(b) => Some(FaceBytes::Static(b)),
                 FaceData::Shared(b) => Some(FaceBytes::Shared(b.clone())),
-                FaceData::File(p) => std::fs::read(p).ok().map(|v| FaceBytes::Shared(Arc::new(v))),
+                FaceData::File(p) => std::fs::read(p)
+                    .ok()
+                    .map(|v| FaceBytes::Shared(Arc::new(v))),
             })
             .as_ref()
             .map(FaceBytes::get)
@@ -316,33 +373,60 @@ impl Face {
         Some(self.shaper.get_or_init(|| harfrust::ShaperData::new(&f)))
     }
     pub fn units_per_em(&self) -> f32 {
-        self.font().map(|f| f.metrics(Size::unscaled(), LocationRef::default()).units_per_em as f32).filter(|u| *u > 0.0).unwrap_or(1000.0)
+        self.font()
+            .map(|f| {
+                f.metrics(Size::unscaled(), LocationRef::default())
+                    .units_per_em as f32
+            })
+            .filter(|u| *u > 0.0)
+            .unwrap_or(1000.0)
     }
     /// The axes of a variable font, in the order it lists them; none for any other.
     pub fn axes(&self) -> Vec<AxisRange> {
-        let Some(font) = self.font() else { return Vec::new() };
+        let Some(font) = self.font() else {
+            return Vec::new();
+        };
         font.axes()
             .iter()
-            .map(|axis| AxisRange { tag: axis.tag().to_be_bytes(), min: axis.min_value(), default: axis.default_value(), max: axis.max_value() })
+            .map(|axis| AxisRange {
+                tag: axis.tag().to_be_bytes(),
+                min: axis.min_value(),
+                default: axis.default_value(),
+                max: axis.max_value(),
+            })
             .collect()
     }
     /// The OpenType features the face has, substitutions and positioning alike, by tag in
     /// alphabetical order; none for a face without layout tables.
     pub fn features(&self) -> Vec<[u8; 4]> {
         use skrifa::raw::TableProvider;
-        let Some(font) = self.font() else { return Vec::new() };
+        let Some(font) = self.font() else {
+            return Vec::new();
+        };
         let mut tags = std::collections::BTreeSet::new();
         if let Ok(list) = font.gsub().and_then(|table| table.feature_list()) {
-            tags.extend(list.feature_records().iter().map(|record| record.feature_tag().to_be_bytes()));
+            tags.extend(
+                list.feature_records()
+                    .iter()
+                    .map(|record| record.feature_tag().to_be_bytes()),
+            );
         }
         if let Ok(list) = font.gpos().and_then(|table| table.feature_list()) {
-            tags.extend(list.feature_records().iter().map(|record| record.feature_tag().to_be_bytes()));
+            tags.extend(
+                list.feature_records()
+                    .iter()
+                    .map(|record| record.feature_tag().to_be_bytes()),
+            );
         }
         tags.into_iter().collect()
     }
     /// Glyph for a character (None when the face does not cover it).
     pub fn glyph(&self, c: char) -> Option<u32> {
-        self.font()?.charmap().map(c).map(|g| g.to_u32()).filter(|g| *g != 0)
+        self.font()?
+            .charmap()
+            .map(c)
+            .map(|g| g.to_u32())
+            .filter(|g| *g != 0)
     }
     pub fn has_char(&self, c: char) -> bool {
         self.glyph(c).is_some()
@@ -359,12 +443,22 @@ impl Face {
         self.charset.get_or_init(|| {
             use skrifa::raw::TableProvider;
             if let (FaceData::File(path), None) = (&self.info.data, self.bytes.get()) {
-                let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
-                return crate::sfnt::read_charset(&mut file, self.info.index).map(|(ranges, _)| ranges).unwrap_or_default();
+                let Ok(mut file) = std::fs::File::open(path) else {
+                    return Vec::new();
+                };
+                return crate::sfnt::read_charset(&mut file, self.info.index)
+                    .map(|(ranges, _)| ranges)
+                    .unwrap_or_default();
             }
-            let Some(font) = self.font() else { return Vec::new() };
-            let glyphs = font.maxp().map_or(u32::from(u16::MAX), |m| u32::from(m.num_glyphs()));
-            font.table_data(Tag::new(b"cmap")).map(|cmap| crate::sfnt::charset_of(cmap.as_bytes(), glyphs)).unwrap_or_default()
+            let Some(font) = self.font() else {
+                return Vec::new();
+            };
+            let glyphs = font
+                .maxp()
+                .map_or(u32::from(u16::MAX), |m| u32::from(m.num_glyphs()));
+            font.table_data(Tag::new(b"cmap"))
+                .map(|cmap| crate::sfnt::charset_of(cmap.as_bytes(), glyphs))
+                .unwrap_or_default()
         })
     }
     /// Height of the glyph's vertical origin above its baseline, in pixels.
@@ -376,7 +470,9 @@ impl Face {
         let units = match font.vorg() {
             Ok(table) => f32::from(table.vertical_origin_y(glyph)),
             Err(_) => {
-                let bounds = font.glyph_metrics(Size::unscaled(), LocationRef::default()).bounds(glyph)?;
+                let bounds = font
+                    .glyph_metrics(Size::unscaled(), LocationRef::default())
+                    .bounds(glyph)?;
                 bounds.y_max + f32::from(font.vmtx().ok()?.side_bearing(glyph)?)
             }
         };
@@ -404,7 +500,9 @@ impl Face {
             cap_height: m.cap_height.unwrap_or(m.ascent * 0.7),
             x_height: m.x_height.unwrap_or(m.ascent * 0.5),
             underline_pos: m.underline.map_or(px * 0.1, |u| -u.offset),
-            underline_thickness: m.underline.map_or(px * 0.06, |u| u.thickness.max(px * 0.03)),
+            underline_thickness: m
+                .underline
+                .map_or(px * 0.06, |u| u.thickness.max(px * 0.03)),
         }
     }
     #[cfg(test)]
@@ -413,8 +511,12 @@ impl Face {
         use skrifa::raw::TableProvider;
         let Some(f) = self.font() else { return false };
         let Ok(gsub) = f.gsub() else { return false };
-        let Ok(list) = gsub.feature_list() else { return false };
-        list.feature_records().iter().any(|r| r.feature_tag().to_be_bytes() == *tag)
+        let Ok(list) = gsub.feature_list() else {
+            return false;
+        };
+        list.feature_records()
+            .iter()
+            .any(|r| r.feature_tag().to_be_bytes() == *tag)
     }
 }
 
@@ -426,8 +528,19 @@ struct Db {
 fn db() -> &'static RwLock<Db> {
     static DB: OnceLock<RwLock<Db>> = OnceLock::new();
     DB.get_or_init(|| {
-        let mut db = Db { faces: Vec::new(), scanned: false };
-        for b in [INTER_REGULAR, INTER_MEDIUM, INTER_SEMIBOLD, INTER_BOLD, INTER_ITALIC, JETBRAINS_MONO_REGULAR, NOTO_SERIF_REGULAR] {
+        let mut db = Db {
+            faces: Vec::new(),
+            scanned: false,
+        };
+        for b in [
+            INTER_REGULAR,
+            INTER_MEDIUM,
+            INTER_SEMIBOLD,
+            INTER_BOLD,
+            INTER_ITALIC,
+            JETBRAINS_MONO_REGULAR,
+            NOTO_SERIF_REGULAR,
+        ] {
             for n in read_faces_bytes(b) {
                 push(&mut db, info_from(n, FaceData::Static(b), "bundled"));
             }
@@ -436,7 +549,10 @@ fn db() -> &'static RwLock<Db> {
         // family + style is then skipped as a duplicate)
         for f in CRAFT_FONTS {
             for n in read_faces_bytes(f.bytes) {
-                push(&mut db, info_from(n, FaceData::Static(f.bytes), CRAFT_ORIGIN));
+                push(
+                    &mut db,
+                    info_from(n, FaceData::Static(f.bytes), CRAFT_ORIGIN),
+                );
             }
         }
         RwLock::new(db)
@@ -445,7 +561,13 @@ fn db() -> &'static RwLock<Db> {
 
 fn push(db: &mut Db, info: FaceInfo) -> FaceId {
     let id = db.faces.len();
-    db.faces.push(Arc::new(Face { id, info, bytes: OnceLock::new(), shaper: OnceLock::new(), charset: OnceLock::new() }));
+    db.faces.push(Arc::new(Face {
+        id,
+        info,
+        bytes: OnceLock::new(),
+        shaper: OnceLock::new(),
+        charset: OnceLock::new(),
+    }));
     id
 }
 
@@ -456,7 +578,10 @@ pub fn add_source(src: &dyn FontSource) -> usize {
     let mut d = db().write().unwrap_or_else(|e| e.into_inner());
     let mut n = 0;
     for f in faces {
-        let dup = d.faces.iter().any(|g| g.info.family.eq_ignore_ascii_case(&f.family) && g.info.style.eq_ignore_ascii_case(&f.style));
+        let dup = d.faces.iter().any(|g| {
+            g.info.family.eq_ignore_ascii_case(&f.family)
+                && g.info.style.eq_ignore_ascii_case(&f.style)
+        });
         if !dup {
             push(&mut d, f);
             n += 1;
@@ -475,7 +600,11 @@ pub fn scan_system() -> usize {
     if system_scanned() {
         return 0;
     }
-    let n = if cfg!(target_arch = "wasm32") { 0 } else { add_source(&DirectorySource::system()) };
+    let n = if cfg!(target_arch = "wasm32") {
+        0
+    } else {
+        add_source(&DirectorySource::system())
+    };
     db().write().unwrap_or_else(|e| e.into_inner()).scanned = true;
     n
 }
@@ -490,7 +619,11 @@ pub fn system_scanned() -> bool {
 #[allow(clippy::expect_used)]
 pub fn face(id: FaceId) -> Arc<Face> {
     let d = db().read().unwrap_or_else(|e| e.into_inner());
-    d.faces.get(id).or_else(|| d.faces.first()).cloned().expect("bundled fonts present")
+    d.faces
+        .get(id)
+        .or_else(|| d.faces.first())
+        .cloned()
+        .expect("`db` is made with the bundled faces in it, and faces are only ever added")
 }
 
 /// All faces (bundled first).
@@ -517,7 +650,12 @@ pub fn families() -> Vec<(String, Vec<String>)> {
 
 /// The faces of a family, found as [`resolve`] finds it: none when no font has that name.
 pub fn faces_of(family: &str) -> Vec<Arc<Face>> {
-    let of = || all_faces().into_iter().filter(|f| f.info.family.eq_ignore_ascii_case(family)).collect::<Vec<_>>();
+    let of = || {
+        all_faces()
+            .into_iter()
+            .filter(|f| f.info.family.eq_ignore_ascii_case(family))
+            .collect::<Vec<_>>()
+    };
     let found = of();
     if !found.is_empty() || family.is_empty() || system_scanned() {
         return found;
@@ -590,20 +728,46 @@ fn style_wants(style: &str) -> (u16, bool) {
 /// A style that asks for nothing past the face it names: the face as it comes.
 fn is_plain_style(style: &str) -> bool {
     let s = style.trim();
-    s.is_empty() || ["regular", "normal", "book", "roman", "plain", "standard"].iter().any(|p| s.eq_ignore_ascii_case(p))
+    s.is_empty()
+        || ["regular", "normal", "book", "roman", "plain", "standard"]
+            .iter()
+            .any(|p| s.eq_ignore_ascii_case(p))
 }
 
 /// Whether every word of `words` is one a style name is made of, so "NanumSquare Bold" can be read
 /// as the family NanumSquare in Bold, and "Noto Sans KR" is not.
 fn is_style_words(words: &str) -> bool {
     const WORDS: &[&str] = &[
-        "thin", "hairline", "extralight", "ultralight", "light", "regular", "normal", "book", "roman", "medium", "semibold", "demibold",
-        "demi", "bold", "extrabold", "ultrabold", "black", "heavy", "italic", "oblique", "extra", "ultra", "semi",
+        "thin",
+        "hairline",
+        "extralight",
+        "ultralight",
+        "light",
+        "regular",
+        "normal",
+        "book",
+        "roman",
+        "medium",
+        "semibold",
+        "demibold",
+        "demi",
+        "bold",
+        "extrabold",
+        "ultrabold",
+        "black",
+        "heavy",
+        "italic",
+        "oblique",
+        "extra",
+        "ultra",
+        "semi",
     ];
     !words.trim().is_empty()
         && words.split_whitespace().all(|w| {
             let w = w.to_ascii_lowercase();
-            WORDS.contains(&w.as_str()) || w.parse::<u16>().is_ok_and(|n| (100..=1000).contains(&n)) || style_weight(&w).is_some() && w.len() == 2 && w.starts_with('w')
+            WORDS.contains(&w.as_str())
+                || w.parse::<u16>().is_ok_and(|n| (100..=1000).contains(&n))
+                || style_weight(&w).is_some() && w.len() == 2 && w.starts_with('w')
         })
 }
 
@@ -616,7 +780,15 @@ pub fn resolve(family: &str, style: &str) -> Resolved {
     if let Some(r) = lookup(family, style) {
         return r;
     }
-    let mut r = find(DEFAULT_FAMILY, style).map_or(Resolved { face: 0, synth_bold: false, synth_italic: false, missing: true }, |f| f.resolved);
+    let mut r = find(DEFAULT_FAMILY, style).map_or(
+        Resolved {
+            face: 0,
+            synth_bold: false,
+            synth_italic: false,
+            missing: true,
+        },
+        |f| f.resolved,
+    );
     r.missing = !family.trim().is_empty() && !family.trim().eq_ignore_ascii_case(DEFAULT_FAMILY);
     r
 }
@@ -645,7 +817,10 @@ pub fn family_named(name: &str) -> Option<(String, Option<String>)> {
     lookup(name, "")?;
     let found = find(name.trim(), "")?;
     let f = face(found.resolved.face);
-    Some((f.info.family.clone(), found.named.then(|| f.info.style.clone())))
+    Some((
+        f.info.family.clone(),
+        found.named.then(|| f.info.style.clone()),
+    ))
 }
 
 /// What [`find`] found.
@@ -670,43 +845,93 @@ fn find(family: &str, style: &str) -> Option<Found> {
     let words: Vec<&str> = family.split_whitespace().collect();
     for k in (1..words.len()).rev() {
         let (fam, tail) = (words[..k].join(" "), words[k..].join(" "));
-        let has_style = faces.iter().any(|f| f.info.family.eq_ignore_ascii_case(&fam) && f.info.style.eq_ignore_ascii_case(&tail));
+        let has_style = faces.iter().any(|f| {
+            f.info.family.eq_ignore_ascii_case(&fam) && f.info.style.eq_ignore_ascii_case(&tail)
+        });
         if !has_style && !is_style_words(&tail) {
             continue;
         }
-        let combined = if is_plain_style(style) { tail } else { format!("{tail} {style}") };
-        if let Some(found) = in_family(&faces, &fam, &combined).or_else(|| by_face_name(&faces, &fam, &combined)) {
-            return Some(Found { named: true, ..found });
+        let combined = if is_plain_style(style) {
+            tail
+        } else {
+            format!("{tail} {style}")
+        };
+        if let Some(found) =
+            in_family(&faces, &fam, &combined).or_else(|| by_face_name(&faces, &fam, &combined))
+        {
+            return Some(Found {
+                named: true,
+                ..found
+            });
         }
     }
     None
 }
 
 fn in_family(faces: &[Arc<Face>], family: &str, style: &str) -> Option<Found> {
-    let fam: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.family.eq_ignore_ascii_case(family)).collect();
-    pick(&fam, style).map(|(resolved, exact)| Found { resolved, exact, named: false })
+    let fam: Vec<&Arc<Face>> = faces
+        .iter()
+        .filter(|f| f.info.family.eq_ignore_ascii_case(family))
+        .collect();
+    pick(&fam, style).map(|(resolved, exact)| Found {
+        resolved,
+        exact,
+        named: false,
+    })
 }
 
 /// A face whose own name is `name`, with `style` asked of it: as it comes for a plain style, else
 /// the face of its family at the weight `style` names (or its own) and italic if either is.
 fn by_face_name(faces: &[Arc<Face>], name: &str, style: &str) -> Option<Found> {
-    let named = faces.iter().find(|f| f.info.names.iter().any(|n| n.eq_ignore_ascii_case(name)))?;
+    let named = faces
+        .iter()
+        .find(|f| f.info.names.iter().any(|n| n.eq_ignore_ascii_case(name)))?;
     if is_plain_style(style) {
-        let resolved = Resolved { face: named.id, synth_bold: false, synth_italic: false, missing: false };
-        return Some(Found { resolved, exact: true, named: true });
+        let resolved = Resolved {
+            face: named.id,
+            synth_bold: false,
+            synth_italic: false,
+            missing: false,
+        };
+        return Some(Found {
+            resolved,
+            exact: true,
+            named: true,
+        });
     }
     let weight = style_weight(style).unwrap_or(named.info.weight);
     let italic = style_italic(style) || named.info.italic;
-    let fam: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.family == named.info.family).collect();
-    let (resolved, exact) = pick(&fam, &format!("{weight}{}", if italic { " Italic" } else { "" }))?;
-    Some(Found { resolved, exact, named: true })
+    let fam: Vec<&Arc<Face>> = faces
+        .iter()
+        .filter(|f| f.info.family == named.info.family)
+        .collect();
+    let (resolved, exact) = pick(
+        &fam,
+        &format!("{weight}{}", if italic { " Italic" } else { "" }),
+    )?;
+    Some(Found {
+        resolved,
+        exact,
+        named: true,
+    })
 }
 
 /// The face of `fam` for `style`: the one named so, else the nearest weight of the same slant.
 /// Whether it is exact: named so, or of the weight and slant asked for.
 fn pick(fam: &[&Arc<Face>], style: &str) -> Option<(Resolved, bool)> {
-    if let Some(f) = fam.iter().find(|f| f.info.style.eq_ignore_ascii_case(style.trim())) {
-        return Some((Resolved { face: f.id, synth_bold: false, synth_italic: false, missing: false }, true));
+    if let Some(f) = fam
+        .iter()
+        .find(|f| f.info.style.eq_ignore_ascii_case(style.trim()))
+    {
+        return Some((
+            Resolved {
+                face: f.id,
+                synth_bold: false,
+                synth_italic: false,
+                missing: false,
+            },
+            true,
+        ));
     }
     let (w, it) = style_wants(style);
     let best = fam.iter().min_by_key(|f| {
@@ -717,11 +942,23 @@ fn pick(fam: &[&Arc<Face>], style: &str) -> Option<(Resolved, bool)> {
     // A variable face sets its own `wght` and `ital` axes for what it lacks (`style_axes`).
     let wants_bold = w >= 600 && best.info.weight <= 500;
     let wants_italic = it && !best.info.italic;
-    let axes = if wants_bold || wants_italic { best.axes() } else { Vec::new() };
+    let axes = if wants_bold || wants_italic {
+        best.axes()
+    } else {
+        Vec::new()
+    };
     let has = |tag: &[u8; 4]| axes.iter().any(|a| &a.tag == tag);
     let synth_bold = wants_bold && !has(b"wght");
     let synth_italic = wants_italic && !has(b"ital");
-    Some((Resolved { face: best.id, synth_bold, synth_italic, missing: false }, exact))
+    Some((
+        Resolved {
+            face: best.id,
+            synth_bold,
+            synth_italic,
+            missing: false,
+        },
+        exact,
+    ))
 }
 
 /// The axes text in `style` is shaped and drawn at in the face `r` resolved it to: `axes`, and
@@ -735,7 +972,12 @@ pub fn style_axes(r: &Resolved, style: &str, axes: &[Axis]) -> Vec<Axis> {
     }
     let f = face(r.face);
     let ranges = f.axes();
-    let range = |tag: &[u8; 4]| ranges.iter().find(|a| &a.tag == tag).filter(|_| !axes.iter().any(|(t, _)| t == tag));
+    let range = |tag: &[u8; 4]| {
+        ranges
+            .iter()
+            .find(|a| &a.tag == tag)
+            .filter(|_| !axes.iter().any(|(t, _)| t == tag))
+    };
     if let Some(w) = weight.filter(|w| *w != f.info.weight)
         && let Some(a) = range(b"wght")
     {
@@ -766,7 +1008,8 @@ pub fn fallback_for(c: char, prefer: FaceId) -> FaceId {
 /// Characters that only join or vary the cluster they are in, and that no face needs to have for
 /// the cluster to draw: joiners, variation selectors and tags.
 fn is_joiner(c: char) -> bool {
-    matches!(c as u32, 0x200C | 0x200D | 0xFE00..=0xFE0F | 0xE0020..=0xE007F | 0xE0100..=0xE01EF) || c.is_control()
+    matches!(c as u32, 0x200C | 0x200D | 0xFE00..=0xFE0F | 0xE0020..=0xE007F | 0xE0100..=0xE01EF)
+        || c.is_control()
 }
 
 /// Whether a character is drawn as an emoji by itself (Unicode's `Emoji_Presentation`, in the
@@ -833,12 +1076,26 @@ pub fn wants_emoji(cluster: &[char]) -> bool {
     if cluster.contains(&'\u{FE0E}') {
         return false;
     }
-    cluster.contains(&'\u{FE0F}') || cluster.first().is_some_and(|c| emoji_presentation(*c)) || cluster.iter().any(|c| matches!(*c as u32, 0x1F3FB..=0x1F3FF))
+    cluster.contains(&'\u{FE0F}')
+        || cluster.first().is_some_and(|c| emoji_presentation(*c))
+        || cluster
+            .iter()
+            .any(|c| matches!(*c as u32, 0x1F3FB..=0x1F3FF))
 }
 
 /// Emoji families, best first.
-const EMOJI_FAMILIES: &[&str] =
-    &["Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Twemoji Mozilla", "Twitter Color Emoji", "JoyPixels", "EmojiOne Color", "Noto Emoji", "Segoe UI Symbol", "Symbola"];
+const EMOJI_FAMILIES: &[&str] = &[
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Noto Color Emoji",
+    "Twemoji Mozilla",
+    "Twitter Color Emoji",
+    "JoyPixels",
+    "EmojiOne Color",
+    "Noto Emoji",
+    "Segoe UI Symbol",
+    "Symbola",
+];
 
 /// Installed families to draw what a sans face lacks, best first: Korean, Japanese and Chinese
 /// Gothics, then faces with many scripts and symbols.
@@ -927,7 +1184,11 @@ fn is_placeholder(family: &str) -> bool {
 /// order, then the rest, then colour faces and bitmap-looking catch-alls (Unifont).
 fn fallback_rank(family: &str, color: bool, serif: bool) -> usize {
     let listed = |list: &[&str]| list.iter().position(|f| f.eq_ignore_ascii_case(family));
-    let (first, second) = if serif { (FALLBACK_SERIF, FALLBACK_SANS) } else { (FALLBACK_SANS, FALLBACK_SERIF) };
+    let (first, second) = if serif {
+        (FALLBACK_SERIF, FALLBACK_SANS)
+    } else {
+        (FALLBACK_SANS, FALLBACK_SERIF)
+    };
     if let Some(i) = listed(first) {
         return i;
     }
@@ -957,8 +1218,15 @@ fn fallback_families(serif: bool) -> Arc<Vec<Vec<FaceId>>> {
         return order.clone();
     }
     let mut families: std::collections::BTreeMap<(usize, String), Vec<FaceId>> = Default::default();
-    for f in faces.iter().filter(|f| f.info.origin != "bundled" && f.info.origin != CRAFT_ORIGIN && !is_placeholder(&f.info.family)) {
-        let key = (fallback_rank(&f.info.family, f.info.color, serif), f.info.family.to_ascii_lowercase());
+    for f in faces.iter().filter(|f| {
+        f.info.origin != "bundled"
+            && f.info.origin != CRAFT_ORIGIN
+            && !is_placeholder(&f.info.family)
+    }) {
+        let key = (
+            fallback_rank(&f.info.family, f.info.color, serif),
+            f.info.family.to_ascii_lowercase(),
+        );
         families.entry(key).or_default().push(f.id);
     }
     let order = Arc::new(families.into_values().collect::<Vec<_>>());
@@ -968,14 +1236,26 @@ fn fallback_families(serif: bool) -> Arc<Vec<Vec<FaceId>>> {
 
 /// Colour emoji faces, best first.
 fn emoji_faces() -> Vec<FaceId> {
-    let mut faces: Vec<Arc<Face>> = all_faces().into_iter().filter(|f| f.info.color && !is_placeholder(&f.info.family)).collect();
-    faces.sort_by_key(|f| (EMOJI_FAMILIES.iter().position(|e| e.eq_ignore_ascii_case(&f.info.family)).unwrap_or(usize::MAX), f.id));
+    let mut faces: Vec<Arc<Face>> = all_faces()
+        .into_iter()
+        .filter(|f| f.info.color && !is_placeholder(&f.info.family))
+        .collect();
+    faces.sort_by_key(|f| {
+        (
+            EMOJI_FAMILIES
+                .iter()
+                .position(|e| e.eq_ignore_ascii_case(&f.info.family))
+                .unwrap_or(usize::MAX),
+            f.id,
+        )
+    });
     faces.into_iter().map(|f| f.id).collect()
 }
 
 /// Recently chosen fallbacks, by cluster and preferred face, for as long as no face is added.
 fn fallback_cache() -> &'static Mutex<(usize, HashMap<(String, FaceId, u16, bool), FaceId>)> {
-    static C: OnceLock<Mutex<(usize, HashMap<(String, FaceId, u16, bool), FaceId>)>> = OnceLock::new();
+    static C: OnceLock<Mutex<(usize, HashMap<(String, FaceId, u16, bool), FaceId>)>> =
+        OnceLock::new();
     C.get_or_init(Default::default)
 }
 
@@ -989,7 +1269,9 @@ fn fallback_cache() -> &'static Mutex<(usize, HashMap<(String, FaceId, u16, bool
 /// first that has its first character; when none has that, `prefer`.
 pub fn face_for_cluster(cluster: &[char], prefer: FaceId, want: (u16, bool)) -> FaceId {
     let need: Vec<char> = cluster.iter().copied().filter(|c| !is_joiner(*c)).collect();
-    let Some(&first) = need.first() else { return prefer };
+    let Some(&first) = need.first() else {
+        return prefer;
+    };
     let emoji = wants_emoji(cluster);
     let p = face(prefer);
     let all = |f: &Face| need.iter().all(|c| f.covers(*c));
@@ -1016,7 +1298,13 @@ pub fn face_for_cluster(cluster: &[char], prefer: FaceId, want: (u16, bool)) -> 
     found
 }
 
-fn search(need: &[char], first: char, emoji: bool, p: &Face, (weight, italic): (u16, bool)) -> FaceId {
+fn search(
+    need: &[char],
+    first: char,
+    emoji: bool,
+    p: &Face,
+    (weight, italic): (u16, bool),
+) -> FaceId {
     let mut by_first: Option<FaceId> = p.covers(first).then_some(p.id);
     let mut consider = |f: &Face| -> bool {
         if need.iter().all(|c| f.covers(*c)) {
@@ -1047,8 +1335,17 @@ fn search(need: &[char], first: char, emoji: bool, p: &Face, (weight, italic): (
         }
     }
     let serif = is_serif(&p.info.family);
-    let mut craft: Vec<&Arc<Face>> = faces.iter().filter(|f| f.info.origin == CRAFT_ORIGIN).collect();
-    craft.sort_by_key(|f| (is_serif(&f.info.family) != serif, f.info.italic != italic, f.info.weight.abs_diff(weight)));
+    let mut craft: Vec<&Arc<Face>> = faces
+        .iter()
+        .filter(|f| f.info.origin == CRAFT_ORIGIN)
+        .collect();
+    craft.sort_by_key(|f| {
+        (
+            is_serif(&f.info.family) != serif,
+            f.info.italic != italic,
+            f.info.weight.abs_diff(weight),
+        )
+    });
     for f in craft {
         if consider(f) {
             return f.id;
@@ -1059,7 +1356,13 @@ fn search(need: &[char], first: char, emoji: bool, p: &Face, (weight, italic): (
     }
     for family in fallback_families(serif).iter() {
         let mut members: Vec<Arc<Face>> = family.iter().map(|id| face(*id)).collect();
-        members.sort_by_key(|f| (f.info.italic != italic, f.info.weight.abs_diff(weight), f.id));
+        members.sort_by_key(|f| {
+            (
+                f.info.italic != italic,
+                f.info.weight.abs_diff(weight),
+                f.id,
+            )
+        });
         for f in &members {
             if consider(f) {
                 return f.id;

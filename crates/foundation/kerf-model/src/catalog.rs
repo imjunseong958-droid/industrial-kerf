@@ -457,7 +457,9 @@ impl FxDef {
 
     pub fn new(id: &str, kind: FxKind, domain: Domain, doc: &str) -> Self {
         Self {
-            id: Id::new(id).expect("catalog ids are valid"),
+            id: Id::new(id).expect(
+                "definitions are made from the bundled tables and from looks, whose ids are valid",
+            ),
             kind,
             domain,
             category: String::new(),
@@ -535,17 +537,16 @@ impl Catalog {
         if self.fx.contains_key(&def.id) {
             return Err(format!("`{}` is already defined", def.id));
         }
-        if def.kind == FxKind::Generator {
-            if let Some(clash) = def
+        if def.kind == FxKind::Generator
+            && let Some(clash) = def
                 .params
                 .iter()
                 .find(|param| self.prop(def.domain, &param.name).is_some())
-            {
-                return Err(format!(
-                    "generator `{}` parameter `{}` clashes with a clip property",
-                    def.id, clash.name
-                ));
-            }
+        {
+            return Err(format!(
+                "generator `{}` parameter `{}` clashes with a clip property",
+                def.id, clash.name
+            ));
         }
         self.fx.insert(def.id.clone(), def);
         Ok(())
@@ -1404,7 +1405,7 @@ fn builtin_catalog() -> Catalog {
     {
         catalog
             .define(definition)
-            .expect("built-in definitions are consistent");
+            .expect("compiled-in definitions: a clash fails any test that builds this catalog");
     }
     for (name, text) in BUNDLED_LOOKS {
         let look = crate::look::read(text, name).unwrap_or_else(|error| panic!("{error}"));
@@ -1533,9 +1534,13 @@ fn table_definitions(text: &str, engine: Engine) -> Vec<FxDef> {
                 // A version that replaced another definition under the id, or
                 // that draws the same parameters differently and still reads
                 // the documents of the older ones.
-                let version = version.parse().expect("versions are whole numbers");
+                let version = version
+                    .parse()
+                    .expect("the bundled tables write versions as whole numbers");
                 let oldest = fields.get(6).map_or(version, |oldest| {
-                    oldest.parse().expect("versions are whole numbers")
+                    oldest
+                        .parse()
+                        .expect("the bundled tables write versions as whole numbers")
                 });
                 def = def.version(version, oldest);
             }
@@ -1568,7 +1573,7 @@ fn table_definitions(text: &str, engine: Engine) -> Vec<FxDef> {
             }
             "color" => ParamDef::color(
                 name,
-                Rgba::parse(default).expect("raster colors are #rrggbb[aa]"),
+                Rgba::parse(default).expect("the bundled tables write colors as #rrggbb[aa]"),
             ),
             "enum" => {
                 let options: Vec<&str> = constraint.split('|').collect();
@@ -1585,7 +1590,7 @@ fn table_definitions(text: &str, engine: Engine) -> Vec<FxDef> {
         };
         definitions
             .last_mut()
-            .expect("parameters follow their effect")
+            .expect("in the bundled tables, a parameter line follows its effect's")
             .params
             .push(param.doc(label));
     }

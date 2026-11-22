@@ -6,25 +6,36 @@
 use kerf_collab::git;
 use kerf_collab::scaffold::{self, NewProject, Template};
 use kerf_runtime::RuntimeClient;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Once;
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn hermetic() {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
+/// What the tests give git, here and in the daemons: the person's global git
+/// configuration kept out, and an author.
+fn hermetic_env() -> &'static [(&'static str, OsString)] {
+    static ENV: OnceLock<Vec<(&'static str, OsString)>> = OnceLock::new();
+    ENV.get_or_init(|| {
         let empty = std::env::temp_dir().join("kerf-runtime-empty-gitconfig");
         fs::write(&empty, "").unwrap();
-        std::env::set_var("GIT_CONFIG_GLOBAL", &empty);
-        std::env::set_var("GIT_CONFIG_NOSYSTEM", "1");
-        std::env::set_var("GIT_AUTHOR_NAME", "Test");
-        std::env::set_var("GIT_AUTHOR_EMAIL", "test@example.com");
-        std::env::set_var("GIT_COMMITTER_NAME", "Test");
-        std::env::set_var("GIT_COMMITTER_EMAIL", "test@example.com");
-        std::env::set_var("KERF_MERGE_DRIVER", env!("CARGO_BIN_EXE_kerfd"));
-    });
+        vec![
+            ("GIT_CONFIG_GLOBAL", empty.into_os_string()),
+            ("GIT_CONFIG_NOSYSTEM", "1".into()),
+            ("GIT_AUTHOR_NAME", "Test".into()),
+            ("GIT_AUTHOR_EMAIL", "test@example.com".into()),
+            ("GIT_COMMITTER_NAME", "Test".into()),
+            ("GIT_COMMITTER_EMAIL", "test@example.com".into()),
+        ]
+    })
+}
+
+/// Give the git these tests run [`hermetic_env`].
+fn hermetic() {
+    for (name, value) in hermetic_env() {
+        git::set_env(*name, value);
+    }
 }
 
 fn root(label: &str) -> PathBuf {
@@ -40,6 +51,7 @@ fn root(label: &str) -> PathBuf {
 
 fn sh(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
+        .envs(hermetic_env().iter().cloned())
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -93,9 +105,13 @@ fn team(label: &str) -> Team {
     }
 }
 
+/// The project's kerfd, started with what the tests give git, and with itself
+/// as the merge driver.
 fn daemon(directory: &Path) -> RuntimeClient {
     RuntimeClient::connect_or_spawn(directory, Some(Path::new(env!("CARGO_BIN_EXE_kerfd"))))
         .expect("spawn kerfd")
+        .with_daemon_env(hermetic_env().iter().cloned())
+        .with_daemon_env([("KERF_MERGE_DRIVER", env!("CARGO_BIN_EXE_kerfd"))])
 }
 
 fn edit(client: &RuntimeClient, key: &str, script: &str) {
@@ -234,6 +250,7 @@ fn kerfd_merges_project_documents_as_git_asks() {
         fs::write(root.join(name), text).unwrap();
     }
     let status = Command::new(env!("CARGO_BIN_EXE_kerfd"))
+        .envs(hermetic_env().iter().cloned())
         .current_dir(&root)
         .args(["merge-driver", "base", "ours", "theirs", "project.kerf"])
         .status()
@@ -244,6 +261,7 @@ fn kerfd_merges_project_documents_as_git_asks() {
     assert!(merged.contains("marker m2 "), "{merged}");
     fs::write(root.join("broken"), "not a kerf document").unwrap();
     let status = Command::new(env!("CARGO_BIN_EXE_kerfd"))
+        .envs(hermetic_env().iter().cloned())
         .current_dir(&root)
         .args(["merge-driver", "base", "broken", "theirs"])
         .status()

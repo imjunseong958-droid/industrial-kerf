@@ -162,7 +162,10 @@ fn a_cancelled_making_lets_its_model_take_back_what_it_asked_for() {
         &serde_json::json!({"slow": {"run": ["sh", "-c", script, "slow", "{request}"]}})
             .to_string(),
     );
-    let project = shot("shots/open.mp4", "generate model=slow prompt=\"a boat leaves\"");
+    let project = shot(
+        "shots/open.mp4",
+        "generate model=slow prompt=\"a boat leaves\"",
+    );
     let planned = plan(&project, directory, "m1", &some).unwrap();
     let token = CancellationToken::new();
     let (cancel, said) = (token.clone(), std::sync::Mutex::new(Vec::new()));

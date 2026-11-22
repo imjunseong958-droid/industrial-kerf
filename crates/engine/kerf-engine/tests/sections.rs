@@ -1,10 +1,11 @@
 //! A render whose picture is encoded a stretch at a time and joined: the same frames at the same
 //! times as one encoded whole, and after an edit only the stretches it touched encoded again.
-//! The only test of this file, since it sets where stretches are kept for the whole process.
+//! The only test of this file, since renders are counted for the whole process
+//! (`section_stats`).
 
-use kerf_engine::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
-use kerf_engine::render::{render_program, RenderOptions, RenderPreset};
-use kerf_engine::sections::section_stats;
+use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
+use kerf_engine::render::sections::section_stats;
+use kerf_engine::render::{render_program, CacheFolder, RenderOptions, RenderPreset};
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project};
 use std::path::Path;
@@ -13,7 +14,9 @@ use std::process::Command;
 const SIZE: usize = 320 * 180 * 3 / 2;
 const FRAMES: usize = 384;
 
-fn render(project: &Project, out: &Path) {
+/// `project` rendered to `out`, keeping its stretches where `sections` says. Frames are not
+/// kept, so that what is not encoded again is seen not to be drawn again.
+fn render(project: &Project, out: &Path, sections: CacheFolder) {
     render_program::<fn(f64)>(
         project,
         None,
@@ -21,6 +24,8 @@ fn render(project: &Project, out: &Path) {
         &RenderOptions {
             output: out.to_string_lossy().into_owned(),
             force_software: true,
+            frame_cache: CacheFolder::Off,
+            section_cache: sections,
             ..RenderOptions::default()
         },
         None,
@@ -34,7 +39,11 @@ fn ffmpeg(args: &[&str]) -> Vec<u8> {
         .args(args)
         .output()
         .expect("ffmpeg runs");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     output.stdout
 }
 
@@ -81,14 +90,24 @@ fn apart(a: &[u8], b: &[u8]) -> f64 {
 #[test]
 fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched() {
     let dir = tempfile::tempdir().expect("a folder");
-    // Frames are not kept, so that what is not encoded again is seen not to be drawn again.
-    std::env::set_var("KERF_FRAME_CACHE", "off");
     let source = dir.path().join("source.mp4");
     let made = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args(["-f", "lavfi", "-i", "testsrc2=s=320x180:r=24:d=20"])
-        .args(["-f", "lavfi", "-i", "sine=frequency=330:sample_rate=48000:duration=20"])
-        .args(["-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast"])
+        .args([
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=330:sample_rate=48000:duration=20",
+        ])
+        .args([
+            "-pix_fmt",
+            "yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+        ])
         .args(["-g", "12", "-c:a", "aac"])
         .arg(&source)
         .status()
@@ -118,49 +137,78 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     let file = |name: &str| dir.path().join(name);
 
     // Encoded whole, as it was before stretches: what the rest is held to.
-    std::env::set_var("KERF_SECTION_CACHE", "off");
-    render(&project, &file("whole.mp4"));
+    render(&project, &file("whole.mp4"), CacheFolder::Off);
     assert_eq!(section_stats(), Default::default());
     let whole = frames(&file("whole.mp4"));
     assert_eq!(whole.len(), FRAMES);
 
     // In stretches, with none kept yet: every frame is drawn and encoded, in a few stretches.
-    std::env::set_var("KERF_SECTION_CACHE", dir.path().join("sections"));
-    render(&project, &file("first.mp4"));
+    let kept_in = CacheFolder::At(dir.path().join("sections"));
+    render(&project, &file("first.mp4"), kept_in.clone());
     let first_stats = section_stats();
     assert_eq!(
-        (first_stats.kept, first_stats.encoded_frames, first_stats.whole),
+        (
+            first_stats.kept,
+            first_stats.encoded_frames,
+            first_stats.whole
+        ),
         (0, FRAMES as u64, 0),
         "{first_stats:?}"
     );
     assert!((2..=8).contains(&first_stats.encoded), "{first_stats:?}");
-    assert_eq!((first_stats.sound_kept, first_stats.sound_mixed), (0, 1), "{first_stats:?}");
+    assert_eq!(
+        (first_stats.sound_kept, first_stats.sound_mixed),
+        (0, 1),
+        "{first_stats:?}"
+    );
     let first = frames(&file("first.mp4"));
     assert_eq!(first.len(), FRAMES);
     // Each frame is shown exactly when it should be, across every join.
     let shown = times(&file("first.mp4"));
     assert_eq!(shown.len(), FRAMES);
     for (frame, at) in shown.iter().enumerate() {
-        assert!((at - frame as f64 / 24.0).abs() < 1e-6, "frame {frame} at {at}");
+        assert!(
+            (at - frame as f64 / 24.0).abs() < 1e-6,
+            "frame {frame} at {at}"
+        );
     }
     // And is the frame the whole render has there, not its neighbour: the test picture moves.
     for frame in 0..FRAMES - 1 {
         let here = apart(&first[frame], &whole[frame]);
-        assert!(here < 2.0, "frame {frame} is {here} from the whole render's");
-        assert!(here < apart(&first[frame], &whole[frame + 1]), "frame {frame}");
+        assert!(
+            here < 2.0,
+            "frame {frame} is {here} from the whole render's"
+        );
+        assert!(
+            here < apart(&first[frame], &whole[frame + 1]),
+            "frame {frame}"
+        );
     }
     // The sound is the whole render's.
-    assert!(sound(&file("first.mp4")) == sound(&file("whole.mp4")), "the sound differs");
+    assert!(
+        sound(&file("first.mp4")) == sound(&file("whole.mp4")),
+        "the sound differs"
+    );
 
     // Again, unchanged: nothing is drawn or encoded, and the file holds the same frames.
-    render(&project, &file("second.mp4"));
+    render(&project, &file("second.mp4"), kept_in.clone());
     let second_stats = section_stats();
-    assert_eq!(second_stats.encoded, first_stats.encoded, "{second_stats:?}");
+    assert_eq!(
+        second_stats.encoded, first_stats.encoded,
+        "{second_stats:?}"
+    );
     assert_eq!(second_stats.kept, first_stats.encoded, "{second_stats:?}");
     assert_eq!(second_stats.kept_frames, FRAMES as u64, "{second_stats:?}");
-    assert_eq!((second_stats.sound_kept, second_stats.sound_mixed), (1, 1), "{second_stats:?}");
+    assert_eq!(
+        (second_stats.sound_kept, second_stats.sound_mixed),
+        (1, 1),
+        "{second_stats:?}"
+    );
     assert!(frames(&file("second.mp4")) == first, "the frames differ");
-    assert!(sound(&file("second.mp4")) == sound(&file("whole.mp4")), "the sound differs");
+    assert!(
+        sound(&file("second.mp4")) == sound(&file("whole.mp4")),
+        "the sound differs"
+    );
 
     // The last clip drawn another way: its stretches are encoded again and the rest joined.
     // Where a stretch ends changes from run to run, with the footage's file, but the first is
@@ -168,30 +216,42 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     let edited = apply_script(&project, Catalog::builtin(), "set c3 opacity=0.5")
         .expect("edits")
         .project;
-    render(&edited, &file("third.mp4"));
+    render(&edited, &file("third.mp4"), kept_in.clone());
     let third_stats = section_stats();
     let (kept, encoded) = (
         third_stats.kept_frames - second_stats.kept_frames,
         third_stats.encoded_frames - second_stats.encoded_frames,
     );
     assert_eq!(kept + encoded, FRAMES as u64, "{third_stats:?}");
-    assert!(kept >= 48 && encoded >= 96, "{kept} kept, {encoded} encoded");
+    assert!(
+        kept >= 48 && encoded >= 96,
+        "{kept} kept, {encoded} encoded"
+    );
     let third = frames(&file("third.mp4"));
     assert_eq!(third.len(), FRAMES);
     // What was joined is the very frames of the first render; the last clip is not.
-    let same = (0..FRAMES).filter(|frame| third[*frame] == first[*frame]).count();
+    let same = (0..FRAMES)
+        .filter(|frame| third[*frame] == first[*frame])
+        .count();
     assert!(same as u64 >= kept, "{same} the same, {kept} kept");
     assert!((288..FRAMES).all(|frame| apart(&third[frame], &first[frame]) > 2.0));
     assert_eq!(times(&file("third.mp4")), shown);
     // A clip drawn another way sounds as it did: the sound is not mixed again.
-    assert_eq!((third_stats.sound_kept, third_stats.sound_mixed), (2, 1), "{third_stats:?}");
-    assert!(sound(&file("third.mp4")) == sound(&file("whole.mp4")), "the sound differs");
+    assert_eq!(
+        (third_stats.sound_kept, third_stats.sound_mixed),
+        (2, 1),
+        "{third_stats:?}"
+    );
+    assert!(
+        sound(&file("third.mp4")) == sound(&file("whole.mp4")),
+        "the sound differs"
+    );
 
     // The first clip taken out: what follows closes up, and is the render of that.
     let cut = apply_script(&project, Catalog::builtin(), "ripple-delete c1")
         .expect("edits")
         .project;
-    render(&cut, &file("fourth.mp4"));
+    render(&cut, &file("fourth.mp4"), kept_in.clone());
     let fourth_stats = section_stats();
     assert_eq!(
         (fourth_stats.kept_frames - third_stats.kept_frames)
@@ -203,12 +263,19 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
     assert_eq!(fourth.len(), 240);
     for frame in 0..240 {
         let here = apart(&fourth[frame], &whole[144 + frame]);
-        assert!(here < 2.0, "frame {frame} is {here} from the whole render's");
+        assert!(
+            here < 2.0,
+            "frame {frame} is {here} from the whole render's"
+        );
     }
     assert_eq!(fourth_stats.whole, 0, "{fourth_stats:?}");
     // Its sound is another sound, mixed again: the last ten seconds of the whole render's, as
     // near as an encoder that starts six seconds later comes to it.
-    assert_eq!((fourth_stats.sound_kept, fourth_stats.sound_mixed), (2, 2), "{fourth_stats:?}");
+    assert_eq!(
+        (fourth_stats.sound_kept, fourth_stats.sound_mixed),
+        (2, 2),
+        "{fourth_stats:?}"
+    );
     let (heard, before) = (sound(&file("fourth.mp4")), sound(&file("whole.mp4")));
     // Two channels of 16 bits, 48,000 times a second.
     assert_eq!(heard.len(), 48_000 * 4 * 10);
@@ -221,7 +288,10 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         .map(|(heard, before)| i64::from((level(heard) - level(before)).abs()))
         .sum();
     let mean = off as f64 / (heard.len() / 2) as f64;
-    assert!(mean < 40.0, "the sound is {mean} of 32768 from the whole render's");
+    assert!(
+        mean < 40.0,
+        "the sound is {mean} of 32768 from the whole render's"
+    );
 
     // Every other way a render is encoded joins too: none falls back to encoding whole, and each
     // has its frames at their times.
@@ -247,7 +317,13 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         ("master.mov", master, None, 24.0, FRAMES),
         ("draft.mp4", draft, None, 15.0, 240),
         ("silent.mp4", silent, None, 24.0, FRAMES),
-        ("range.mp4", RenderOptions::default(), Some((from(5), from(12))), 24.0, 168),
+        (
+            "range.mp4",
+            RenderOptions::default(),
+            Some((from(5), from(12))),
+            24.0,
+            168,
+        ),
     ] {
         let before = section_stats();
         render_program::<fn(f64)>(
@@ -257,6 +333,8 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
             &RenderOptions {
                 output: file(name).to_string_lossy().into_owned(),
                 force_software: true,
+                frame_cache: CacheFolder::Off,
+                section_cache: kept_in.clone(),
                 ..options
             },
             None,
@@ -265,14 +343,18 @@ fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched(
         let after = section_stats();
         assert_eq!(after.whole, before.whole, "{name}: {after:?}");
         assert_eq!(
-            (after.kept_frames - before.kept_frames) + (after.encoded_frames - before.encoded_frames),
+            (after.kept_frames - before.kept_frames)
+                + (after.encoded_frames - before.encoded_frames),
             count as u64,
             "{name}: {after:?}"
         );
         let shown = times(&file(name));
         assert_eq!(shown.len(), count, "{name}");
         for (frame, at) in shown.iter().enumerate() {
-            assert!((at - frame as f64 / rate).abs() < 1e-6, "{name}: frame {frame} at {at}");
+            assert!(
+                (at - frame as f64 / rate).abs() < 1e-6,
+                "{name}: frame {frame} at {at}"
+            );
         }
         // A picture is the same stretches with its sound or without: none is encoded again.
         if name == "silent.mp4" {

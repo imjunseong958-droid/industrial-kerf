@@ -308,8 +308,14 @@ fn a_media_whose_steps_are_in_a_recipe_file_is_made_once_they_are_carried() {
     // Carried, the steps are under the media's line and its line names no recipe.
     let (carried, said, ok) = run(&["carry", "m1", "--yes"]);
     assert!(ok, "{said}");
-    assert!(carried.contains("m1, from shots/open.kerfrecipe:"), "{carried}");
-    assert!(carried.contains("  step m1 add render s1 {out} size=160x90\n"), "{carried}");
+    assert!(
+        carried.contains("m1, from shots/open.kerfrecipe:"),
+        "{carried}"
+    );
+    assert!(
+        carried.contains("  step m1 add render s1 {out} size=160x90\n"),
+        "{carried}"
+    );
     assert!(carried.contains("carried m1 (revision 1)"), "{carried}");
     let document = runtime.get_state().unwrap().document;
     assert!(
@@ -323,6 +329,12 @@ fn a_media_whose_steps_are_in_a_recipe_file_is_made_once_they_are_carried() {
     // And the media is made from them.
     let (made, said, ok) = run(&["make", "m1", "--yes"]);
     assert!(ok, "{said}");
-    assert!(made.contains("steps   under `m1` in the document"), "{made}");
-    assert!(directory.join("shots/open.takes/001.mp4").is_file(), "{made}");
+    assert!(
+        made.contains("steps   under `m1` in the document"),
+        "{made}"
+    );
+    assert!(
+        directory.join("shots/open.takes/001.mp4").is_file(),
+        "{made}"
+    );
 }

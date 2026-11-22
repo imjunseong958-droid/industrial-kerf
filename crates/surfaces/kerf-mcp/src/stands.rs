@@ -1,13 +1,13 @@
 //! What each clip in depth stands on, as `look` with `stands` says it.
 //!
-//! [`kerf_engine::stands`] measures it; this is how it is told: an entry for each clip, or
+//! [`kerf_engine::analysis::stands`] measures it; this is how it is told: an entry for each clip, or
 //! for each run of frames a clip floats, is sunk, or is in the air on, with the line that
 //! sets it down where one does. The line is one for the whole of a clip, the keys that keep
 //! it down on every frame, so it is said once, with the first run it mends, however many
 //! runs a thing that walks has. A clip that rests on every frame read is one entry with
 //! what it is on, and the ground is named once and has none.
 
-use kerf_engine::stands::{How, Run, Standing, Stood, LEANS, TOUCH};
+use kerf_engine::analysis::stands::{How, Run, Standing, Stood, LEANS, TOUCH};
 use kerf_model::{Project, Time};
 use serde_json::{json, Value};
 
@@ -162,7 +162,7 @@ pub(crate) fn note(
     let mut frames = vec![first, (first + last) / 2, last];
     frames.dedup();
     let times: Vec<Time> = frames.iter().map(|frame| rate.time_of(*frame)).collect();
-    let standing = kerf_engine::stands::standing(project, Some(sequence), &times).ok()?;
+    let standing = kerf_engine::analysis::stands::standing(project, Some(sequence), &times).ok()?;
     let mut found = Vec::new();
     for stood in &standing.clips {
         let leaves = stood.runs.iter().any(|run| run.how == How::Air);
@@ -186,9 +186,17 @@ pub(crate) fn note(
             How::Sunk { deep, .. } => Some(*deep),
             _ => None,
         }) {
-            found.push(format!("`{}` is sunk {} in `{on}`", stood.clip, place(deep)));
+            found.push(format!(
+                "`{}` is sunk {} in `{on}`",
+                stood.clip,
+                place(deep)
+            ));
         }
-        let mut through: Vec<&str> = stood.through.iter().map(|through| through.clip.as_str()).collect();
+        let mut through: Vec<&str> = stood
+            .through
+            .iter()
+            .map(|through| through.clip.as_str())
+            .collect();
         through.dedup();
         for other in through {
             found.push(format!("`{}` goes through `{other}`", stood.clip));

@@ -40,7 +40,11 @@ pub fn folder() -> Option<PathBuf> {
     if let Some(value) = std::env::var_os("KERF_CRASH_DIR").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(value));
     }
-    let var = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    let var = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
     if cfg!(target_os = "windows") {
         var("LOCALAPPDATA").map(|folder| folder.join("Kerf").join("crashes"))
     } else if cfg!(target_os = "macos") {
@@ -165,6 +169,7 @@ fn write_report(folder: &Path, component: &str, info: &PanicHookInfo<'_>) -> std
 /// Keep the newest [`KEPT`] reports.
 fn prune(folder: &Path) {
     for old in reports(folder).iter().skip(KEPT) {
+        // One that stays is only kept until the next report tries again.
         let _ = fs::remove_file(&old.path);
     }
 }

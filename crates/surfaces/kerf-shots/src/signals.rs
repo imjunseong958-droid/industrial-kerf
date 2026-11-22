@@ -6,7 +6,7 @@
 //! An agent reads them with `look` (`signal`) and a person asks for them in
 //! the signal's card of a shot's graph, from the one reading here.
 
-use kerf_engine::derivatives::DerivativeCache;
+use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_model::{Content, Project, Rate, Time};
 use std::path::Path;
 
@@ -89,7 +89,8 @@ pub fn from_sound(
     let located = |id: &str| project.locate(id).ok_or_else(|| project.no_clip(id));
     let (of_at, clip_at) = (located(of)?, located(clip)?);
     let (sound, signal) = (project.clip_at(of_at), project.clip_at(clip_at));
-    if !matches!(&signal.content, Content::Generator { fx, .. } if fx.as_str() == kerf_model::SIGNAL) {
+    if !matches!(&signal.content, Content::Generator { fx, .. } if fx.as_str() == kerf_model::SIGNAL)
+    {
         return Err(format!(
             "`{clip}` is not a signal: a signal is a `gen={}@1` clip",
             kerf_model::SIGNAL
@@ -104,7 +105,9 @@ pub fn from_sound(
         Content::Media { media, .. } => project.media(media.as_str()),
         _ => None,
     }
-    .ok_or_else(|| format!("`{of}` plays no media: `of` is a clip of music or of footage with sound"))?;
+    .ok_or_else(|| {
+        format!("`{of}` plays no media: `of` is a clip of music or of footage with sound")
+    })?;
     let hold = hold.unwrap_or(HOLD);
     if !(1..=240).contains(&hold) {
         return Err(format!("`hold` is frames, from 1 to 240, not {hold}"));

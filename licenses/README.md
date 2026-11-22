@@ -16,12 +16,12 @@ on, and Kerf does not follow upstream.
 
 | Where | What it carries |
 |---|---|
-| `crates/effects/kerf-raster-fx` | The 22 EffectCraft effects Kerf keeps, with the tracking and plane code they run on; Add Grain's arithmetic is also in WGSL, in `crates/effects/kerf-fx/src/filmcraft/vfx/kernels.wgsl` |
+| `crates/effects/kerf-raster-fx` | The 22 EffectCraft effects Kerf keeps, with the tracking and plane code they run on; Add Grain's arithmetic is also in WGSL, in `crates/effects/kerf-fx/src/video/vfx/kernels.wgsl` |
 | `crates/render/kerf-raster` | EffectCraft's raster images, warps, and blurs, the feature tracker, and optical flow |
 | `crates/image/kerf-image/src/fill.rs` | EffectCraft's hole filling |
 | `crates/vfx/kerf-track/src/planar.rs` | EffectCraft's homography fit and RANSAC |
-| `crates/vfx/kerf-track/src/roto` | EffectCraft's graph cut, colour models, and matte propagation |
-| `crates/vfx/kerf-track/src/camera` | EffectCraft's camera tracker (`track/src/camtrack`): its linear algebra, two-view geometry, bundle adjustment, and solve, with no lens distortion, zoom, or stored tracks |
+| `crates/vfx/kerf-track/src/roto.rs` and `roto/` | EffectCraft's graph cut, colour models, and matte propagation |
+| `crates/vfx/kerf-track/src/camera.rs` and `camera/` | EffectCraft's camera tracker (`track/src/camtrack`): its linear algebra, two-view geometry, bundle adjustment, and solve, with no lens distortion, zoom, or stored tracks |
 | `crates/color/kerf-scopes` | FilmCraft's scope summaries, reduced to what an agent reads |
 | `crates/foundation/kerf-model/looks/grade-*.kerflook` | FilmCraft's Lumetri presets, as looks |
 | `crates/foundation/kerf-color` | FilmCraft's color science and EffectCraft's blend modes |
@@ -32,7 +32,7 @@ on, and Kerf does not follow upstream.
 | `crates/engine/kerf-compose/src/draw/focus.rs` | EffectCraft's circle of confusion and progressive blur for depth of field (`render/three_d/bokeh.rs`) |
 | `crates/motion/kerf-motion/src/outline.rs` | EffectCraft's path offsetting and how it uses the sweep (`crates/path`), on polygons rather than curves |
 | `crates/render/kerf-gpu/src/picture.wgsl` | FilmCraft's blend modes and dissolve pattern in WGSL |
-| `crates/effects/kerf-fx/src/filmcraft`, `crates/effects/kerf-fx/src/transitions` | FilmCraft's video effects and transitions, with its GPU effect kernels (`filmcraft/gpu.rs`, `fx.wgsl`), and its transitions' arithmetic in WGSL (`transitions/kernels.wgsl`) |
+| `crates/effects/kerf-fx/src/video.rs` and `video/`, `crates/effects/kerf-fx/src/transitions.rs` and `transitions/` | FilmCraft's video effects and transitions, with its GPU effect kernels (`video/gpu.rs`, `fx.wgsl`), and its transitions' arithmetic in WGSL (`transitions/kernels.wgsl`) |
 
 That code is MIT OR Apache-2.0, at your option: `LICENSE-MIT-ArtCraft` and
 `LICENSE-APACHE-2.0`. The ArtCraft name, wordmark, and logos are trademarks

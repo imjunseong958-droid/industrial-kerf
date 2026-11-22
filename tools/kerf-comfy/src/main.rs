@@ -159,7 +159,8 @@ fn run(args: Vec<String>) -> Result<(), String> {
         }
         println!(
             "{}",
-            serde_json::to_string(&serde_json::Value::Object(taken)).map_err(|error| error.to_string())?
+            serde_json::to_string(&serde_json::Value::Object(taken))
+                .map_err(|error| error.to_string())?
         );
         return Ok(());
     }

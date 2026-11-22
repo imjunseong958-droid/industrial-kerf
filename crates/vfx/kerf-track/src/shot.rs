@@ -83,13 +83,16 @@ pub struct Step {
     pub agreeing: f64,
 }
 
+/// A tile with detail: where its middle is, from the picture's middle, and how far it moved.
+type TileMove = ([f64; 2], [f64; 2]);
+
 /// The one move that most of how the picture moved from `from` to `to` agrees on, or none if it has too
 /// little detail to tell.
 pub fn step_between(from: &Small, to: &Small) -> Option<Step> {
     let flow = block_flow(&from.image, &to.image, TILE, SEARCH);
     let (cx, cy) = (f64::from(from.width) / 2.0, f64::from(from.height) / 2.0);
     let tile = f64::from(TILE);
-    let mut tiles: Vec<([f64; 2], [f64; 2])> = Vec::with_capacity(flow.cols * flow.rows);
+    let mut tiles: Vec<TileMove> = Vec::with_capacity(flow.cols * flow.rows);
     for row in 0..flow.rows {
         for column in 0..flow.cols {
             if from.variance_of(column, row) < FLAT {
@@ -121,7 +124,7 @@ pub fn step_between(from: &Small, to: &Small) -> Option<Step> {
     ];
     let mut agreeing = 0;
     for _ in 0..4 {
-        let kept: Vec<&([f64; 2], [f64; 2])> = tiles
+        let kept: Vec<&TileMove> = tiles
             .iter()
             .filter(|(at, moved)| {
                 let wanted = [
@@ -136,7 +139,7 @@ pub fn step_between(from: &Small, to: &Small) -> Option<Step> {
             break;
         }
         let count = kept.len() as f64;
-        let mean = |pick: &dyn Fn(&([f64; 2], [f64; 2])) -> f64| {
+        let mean = |pick: &dyn Fn(&TileMove) -> f64| {
             kept.iter().map(|tile| pick(tile)).sum::<f64>() / count
         };
         let (mx, my) = (mean(&|t| t.0[0]), mean(&|t| t.0[1]));

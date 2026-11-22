@@ -49,7 +49,8 @@ impl Store {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(CloudError::io)?;
         }
-        let text = serde_json::to_string_pretty(self).expect("store serializes");
+        let text = serde_json::to_string_pretty(self)
+            .expect("a store is two optional strings, which always make JSON");
         // Write beside, then rename, so a crash never leaves half a token.
         let temporary = path.with_extension("json.tmp");
         fs::write(&temporary, text).map_err(CloudError::io)?;
@@ -83,7 +84,13 @@ fn home(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBu
 #[cfg(unix)]
 fn restrict(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
-    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    // The session is saved all the same, readable by more than its owner.
+    if let Err(error) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+        log::warn!(
+            "{}: the session token is not kept to its owner: {error}",
+            path.display()
+        );
+    }
 }
 
 #[cfg(not(unix))]
@@ -132,9 +139,9 @@ impl Access {
     pub fn reason(self) -> Option<&'static str> {
         match self {
             Self::Ready => None,
-            Self::Unavailable => {
-                Some("Kerf's hosted model isn't available yet. Add your own API key in Settings → Chat.")
-            }
+            Self::Unavailable => Some(
+                "Kerf's hosted model isn't available yet. Add your own API key in Settings → Chat.",
+            ),
             Self::SignedOut => Some("Sign in to your Kerf account in Settings"),
             Self::Unreachable => Some("Kerf can't be reached right now"),
             Self::NotIncluded => Some("Your plan doesn't include requests to Kerf"),
@@ -164,9 +171,7 @@ impl fmt::Display for CloudError {
         match self {
             Self::Unavailable => f.write_str(Access::Unavailable.reason().unwrap_or_default()),
             Self::SignedOut => f.write_str(Access::SignedOut.reason().unwrap_or_default()),
-            Self::Unauthorized => {
-                f.write_str("Kerf did not accept this sign-in; sign in again")
-            }
+            Self::Unauthorized => f.write_str("Kerf did not accept this sign-in; sign in again"),
             Self::Service(message) => write!(f, "Kerf: {message}"),
             Self::Io(message) => write!(f, "Could not save the Kerf sign-in: {message}"),
         }
@@ -250,7 +255,10 @@ mod tests {
     fn the_session_is_kept_in_the_home_folder_on_windows_too() {
         let home_dir = || Some(OsString::from("/home/lim"));
         let profile = || Some(OsString::from(r"C:\Users\lim"));
-        assert_eq!(home(home_dir(), profile()), Some(PathBuf::from("/home/lim")));
+        assert_eq!(
+            home(home_dir(), profile()),
+            Some(PathBuf::from("/home/lim"))
+        );
         let without_home = home(None, profile());
         if cfg!(windows) {
             assert_eq!(without_home, Some(PathBuf::from(r"C:\Users\lim")));

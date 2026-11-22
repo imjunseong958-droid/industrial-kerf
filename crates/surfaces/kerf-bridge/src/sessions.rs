@@ -87,17 +87,16 @@ impl Sessions {
         }
         let mut agent = open()?;
         let opened = self.restore(conversation, &mut agent);
-        if self.open.len() >= MOST_OPEN {
-            if let Some(index) = self
+        if self.open.len() >= MOST_OPEN
+            && let Some(index) = self
                 .open
                 .iter()
                 .enumerate()
                 .min_by_key(|(_, open)| open.used)
                 .map(|(index, _)| index)
-            {
-                let closing = self.open.remove(index);
-                self.keep(&closing);
-            }
+        {
+            let closing = self.open.remove(index);
+            self.keep(&closing);
         }
         self.open.push(Open {
             conversation: conversation.to_owned(),
@@ -105,7 +104,10 @@ impl Sessions {
             agent,
             used: clock,
         });
-        let open = self.open.last_mut().expect("just pushed");
+        let open = self
+            .open
+            .last_mut()
+            .expect("an Open was pushed on the line before");
         Ok((&mut open.agent, opened))
     }
 
@@ -137,7 +139,12 @@ impl Sessions {
     pub(crate) fn forget(&mut self, conversation: &str) {
         self.open.retain(|open| open.conversation != conversation);
         if let Some(path) = self.transcript(conversation) {
-            let _ = std::fs::remove_file(path);
+            // None kept is as forgotten. One that stays is restored next time, and fails again.
+            if let Err(error) = std::fs::remove_file(&path)
+                && error.kind() != std::io::ErrorKind::NotFound
+            {
+                log::warn!("{} was not forgotten: {error}", path.display());
+            }
         }
     }
 
@@ -157,10 +164,15 @@ impl Sessions {
         self.store.load(&open.conversation)?;
         match &open.agent {
             Agent::Native(session, _) => {
-                if session.message_count() > 0 {
-                    if let Some(path) = self.transcript(&open.conversation) {
-                        let _ = session.keep(&path);
-                    }
+                if session.message_count() > 0
+                    && let Some(path) = self.transcript(&open.conversation)
+                    && let Err(error) = session.keep(&path)
+                {
+                    log::warn!(
+                        "conversation {} goes on afresh next time: its transcript was \
+                                 not kept: {error}",
+                        open.conversation
+                    );
                 }
                 None
             }
@@ -177,6 +189,7 @@ pub(crate) fn transcripts(project: &Path) -> PathBuf {
 /// Remove what was kept of `conversation`'s session, with the conversation.
 pub(crate) fn remove(project: &Path, conversation: &str) {
     if conversations::valid_id(conversation) {
+        // A conversation with Claude Code keeps no transcript, and one left over is never read.
         let _ = std::fs::remove_file(transcripts(project).join(format!("{conversation}.json")));
     }
 }

@@ -53,34 +53,48 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.5"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 
-# The crates carried from EffectCraft and FilmCraft (kerf-color, kerf-geom,
-# kerf-text, kerf-raster, kerf-raster-fx; see licenses/README.md) brought
-# these and the lints below with them.
+# Every external dependency two or more crates use, declared once: a crate
+# takes it with `x.workspace = true` and names its own features.
 [workspace.dependencies]
-serde = { version = "1", features = ["derive", "rc"] }
-rayon = "1"
-proptest = "1"
+anyhow = "1"
+async-channel = "2"
+base64 = "0.23"
+clap = "4"
+ffmpeg-next = { version = "9.0", default-features = false }
+hex = "0.4"
 kurbo = "0.13"
+libc = "0.2"
 linesweeper = "0.4"
+log = "0.4"
+naga = "30"
+proptest = "1"
+rayon = "1"
+serde = "1"
+serde_json = "1"
+sha2 = "0.10"
+signal-hook = "0.3"
+tempfile = "3"
+thiserror = "2"
+ureq = "3"
+windows-sys = "0.61"
 
-# A crate takes these with `[lints] workspace = true`. A crate with an empty
-# `[lints]` table is left out on purpose, and the empty table is how Cargo is
-# told so: kerf-engine, kerf-playback, kerf-mcp and kerf-runtime have unsafe
-# code, and so does kerf-bridge's Windows connection test (an exception
-# handler), which `forbid` allows no exception to; the others stay on
-# clippy's defaults, which the allows below would loosen.
+# Every crate takes these with `[lints] workspace = true`. Unsafe code is
+# denied, not forbidden, so the few places that need it (calls into the
+# operating system and FFmpeg, and a crash handler) allow it on just the
+# module or item that holds it, each `unsafe` block saying why it is sound
+# (`// SAFETY:`). Clippy runs on its defaults. Where code needs one loosened it
+# allows it on that code alone, with the reason: at the root of what is
+# carried from EffectCraft and FilmCraft (licenses/README.md), and on the
+# functions of Kerf's own whose many arguments stay separate.
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
-too_many_arguments = "allow"
-needless_range_loop = "allow"
-type_complexity = "allow"
 
 # Extreme runtime profile for the media engine CLI. Thin LTO is almost as
 # fast to run and much faster to link; fat LTO is reserved for maxperf.

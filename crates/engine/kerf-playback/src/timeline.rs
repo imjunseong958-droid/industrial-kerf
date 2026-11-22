@@ -5,8 +5,8 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Sequence,
-    Time, TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Sequence, Time,
+    TrackKind, Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -407,14 +407,13 @@ impl Flattener<'_> {
                 let Some((source_in, _)) = clip.source_range() else {
                     if let (TrackKind::Subtitle, Content::Caption { text }) =
                         (track.kind, &clip.content)
+                        && !text.trim().is_empty()
                     {
-                        if !text.trim().is_empty() {
-                            self.captions.push(CaptionCue {
-                                start: place(lo),
-                                end: place(hi),
-                                text: text.trim().to_owned(),
-                            });
-                        }
+                        self.captions.push(CaptionCue {
+                            start: place(lo),
+                            end: place(hi),
+                            text: text.trim().to_owned(),
+                        });
                     }
                     continue;
                 };
@@ -661,13 +660,13 @@ impl NativeCheck<'_> {
                 if track.kind == TrackKind::Video && shows.0 < shows.1 && self.has_picture(clip) {
                     self.shown.push(shows);
                 }
-                if let Content::Sequence { sequence: id, .. } = &clip.content {
-                    if let Some(nested) = self.project.sequence(id.as_str()) {
-                        self.depth += 1;
-                        let source_in = clip.source_range().map_or(Time::ZERO, |(start, _)| start);
-                        self.sequence(nested, clip.start + at - source_in, shows);
-                        self.depth -= 1;
-                    }
+                if let Content::Sequence { sequence: id, .. } = &clip.content
+                    && let Some(nested) = self.project.sequence(id.as_str())
+                {
+                    self.depth += 1;
+                    let source_in = clip.source_range().map_or(Time::ZERO, |(start, _)| start);
+                    self.sequence(nested, clip.start + at - source_in, shows);
+                    self.depth -= 1;
                 }
             }
         }

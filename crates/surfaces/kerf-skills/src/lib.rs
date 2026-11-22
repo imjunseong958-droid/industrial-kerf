@@ -33,8 +33,11 @@ pub fn bundled_skills() -> Vec<Skill> {
     .into_iter()
     .map(|content| {
         parse_skill_content(content, Path::new("<bundled>/SKILL.md"))
-            .expect("bundled skill parsing")
-            .expect("bundled skill must have valid frontmatter")
+            .expect("parsing a skill's text has no error to give: only reading its file has")
+            .expect(
+                "each bundled SKILL.md opens with frontmatter that names it, as \
+                 `every_bundled_skill_is_in_the_prompt_whole` checks",
+            )
     })
     .collect()
 }

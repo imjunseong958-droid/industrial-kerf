@@ -34,7 +34,9 @@ pub(crate) fn seek_to(input: &mut ffmpeg::format::context::Input, seconds: f64) 
         return;
     }
     let ts = (seconds * 1_000_000.0).round() as i64;
-    let _ = input.seek(ts, ..ts);
+    if let Err(error) = input.seek(ts, ..ts) {
+        log::warn!("a seek to {seconds} s failed, so reading goes on from where it was: {error}");
+    }
 }
 
 pub(crate) fn seconds(ts: i64, time_base: ffmpeg::Rational) -> f64 {

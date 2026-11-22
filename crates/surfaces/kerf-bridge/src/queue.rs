@@ -15,31 +15,36 @@
 //! not outputs and are left out. It is sent again on every change of
 //! status; progress in between comes on `export {status: running}`.
 
+use crate::event::{ErrorEvent, Event, Export, ExportStatus, QueuedRender, RenderExport};
+use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
 use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError, StartRenderOptions};
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Condvar, Mutex};
 
 /// `export {quality: preview|full|review|master, codec?: h264|hevc|
 /// prores_hq, sequence?, output?, name?}`.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-pub(crate) struct ExportRequest {
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ExportRequest {
+    /// `preview` (a draft from proxies), `full`, `review` (full-size H.264 at 12 Mb/s) or
+    /// `master` (ProRes 422 HQ in QuickTime with 24-bit PCM unless `codec` says otherwise).
     pub quality: String,
-    #[serde(default)]
+    /// `h264`, `hevc` or `prores_hq`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codec: Option<String>,
     /// The sequence to render; the first when absent.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
-    /// A folder or a file; see [`StartRenderOptions`].
-    #[serde(default)]
+    /// A folder (ending in `/`, or existing) or a file whose extension the codec takes:
+    /// `.mov` for ProRes, else `.mp4`. Relative ones are read against the project and must
+    /// stay inside it; an absolute folder must exist.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     /// The job's name in the queue, and the file's in a folder.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
@@ -161,7 +166,13 @@ impl Queue {
         self.wake.notify_all();
         if let Some(id) = running {
             // The render watches for this marker; nobody is left to see it.
-            let _ = std::fs::write(kerf_runtime::render_cancel_path(directory, &id), b"");
+            let marker = kerf_runtime::render_cancel_path(directory, &id);
+            if let Err(error) = std::fs::write(&marker, b"") {
+                log::warn!(
+                    "render {id} goes on after the bridge closed: {}: {error}",
+                    marker.display()
+                );
+            }
         }
     }
 
@@ -173,9 +184,13 @@ impl Queue {
 }
 
 /// An `error` event naming the refused command.
-pub(crate) fn refused(tx: &SyncSender<Value>, command: &str, error: &RuntimeError) -> Value {
-    let event = json!({"type": "error", "message": error.message, "code": error.code,
-        "command": command});
+pub(crate) fn refused(tx: &Outbox, command: &str, error: &RuntimeError) -> Event {
+    let event = Event::Error(ErrorEvent {
+        message: error.message.clone(),
+        code: Some(error.code.clone()),
+        command: Some(command.to_owned()),
+        ..ErrorEvent::default()
+    });
     emit(tx, event.clone());
     event
 }
@@ -201,16 +216,18 @@ pub(crate) fn job_name(job: &RenderJob) -> String {
 }
 
 /// An `export` event about `job`.
-fn export_event(job: &RenderJob, status: &str, progress: f64) -> Value {
-    let mut event = json!({
-        "type": "export", "status": status, "jobId": job.job_id, "name": job_name(job),
-        "path": job.output_path, "progress": progress,
-        "quality": job.quality, "codec": job.codec,
-    });
-    if let Some(sequence) = &job.sequence {
-        event["sequence"] = json!(sequence);
+fn export_event(job: &RenderJob, status: ExportStatus, progress: f64) -> RenderExport {
+    RenderExport {
+        status,
+        job_id: job.job_id.clone(),
+        name: job_name(job),
+        path: job.output_path.clone(),
+        progress,
+        quality: job.quality.clone(),
+        codec: job.codec.clone(),
+        sequence: job.sequence.clone(),
+        message: None,
     }
-    event
 }
 
 /// `export`: queue the render with kerfd and in the queue. A refusal
@@ -220,10 +237,17 @@ pub(crate) fn submit(
     shared: &Shared,
     renders: Arc<dyn Renders>,
     request: &ExportRequest,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let (job, document, output) = renders.start(&request.options())?;
-    emit(tx, export_event(&job, "queued", 0.0));
+    emit(
+        tx,
+        Event::Export(Export::Render(export_event(
+            &job,
+            ExportStatus::Queued,
+            0.0,
+        ))),
+    );
     {
         let mut state = shared.renders.lock();
         state.waiting.push_back(Queued {
@@ -244,7 +268,7 @@ pub(crate) fn cancel(
     shared: &Shared,
     renders: &dyn Renders,
     job_id: &str,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let job = renders.cancel(job_id)?;
     if job.status == "cancelled" {
@@ -253,7 +277,14 @@ pub(crate) fn cancel(
         let first = state.cancelled.insert(job_id.to_owned());
         drop(state);
         if first {
-            emit(tx, export_event(&job, "cancelled", job.progress));
+            emit(
+                tx,
+                Event::Export(Export::Render(export_event(
+                    &job,
+                    ExportStatus::Cancelled,
+                    job.progress,
+                ))),
+            );
         }
     }
     publish(shared, renders, tx)
@@ -263,7 +294,7 @@ pub(crate) fn cancel(
 pub(crate) fn publish(
     shared: &Shared,
     renders: &dyn Renders,
-    tx: &SyncSender<Value>,
+    tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let jobs = renders.list()?;
     emit(tx, queue_event(shared, &jobs));
@@ -273,9 +304,9 @@ pub(crate) fn publish(
 /// The `render_queue` event for kerfd's `jobs`: the viewer's previews left
 /// out (and earlier sessions' finished previews whose file is gone), the
 /// running job's progress as the bridge has it.
-pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Value {
+pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Event {
     let state = shared.renders.lock();
-    let jobs: Vec<Value> = jobs
+    let jobs = jobs
         .iter()
         .filter(|job| !state.viewer.contains(&job.job_id))
         .filter(|job| {
@@ -297,24 +328,26 @@ pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Value {
                 (None, "completed") => ("completed", 1.0),
                 (None, status) => (status, job.progress),
             };
-            let mut entry = json!({
-                "jobId": job.job_id, "name": job_name(job), "quality": job.quality,
-                "codec": job.codec, "sequence": job.sequence, "status": status,
-                "progress": progress, "outputPath": job.output_path,
-            });
-            if let Some(error) = &job.error {
-                entry["error"] = json!(error);
+            QueuedRender {
+                job_id: job.job_id.clone(),
+                name: job_name(job),
+                quality: job.quality.clone(),
+                codec: job.codec.clone(),
+                sequence: job.sequence.clone(),
+                status: status.to_owned(),
+                progress,
+                output_path: job.output_path.clone(),
+                error: job.error.clone(),
             }
-            entry
         })
         .collect();
-    json!({"type": "render_queue", "jobs": jobs})
+    Event::RenderQueue { jobs }
 }
 
 /// The render thread: take the oldest queued job, render it, report it,
 /// and wait for the next. Once the bridge closes, what still waits is
 /// cancelled with kerfd, so no job stays queued with nobody to render it.
-pub(crate) fn worker(shared: Arc<Shared>, tx: SyncSender<Value>) {
+pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
     loop {
         let next = {
             let mut state = shared.renders.lock();
@@ -329,7 +362,13 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: SyncSender<Value>) {
                 let left: Vec<Queued> = state.waiting.drain(..).collect();
                 drop(state);
                 for queued in left {
-                    let _ = queued.renders.cancel(&queued.job.job_id);
+                    if let Err(error) = queued.renders.cancel(&queued.job.job_id) {
+                        log::warn!(
+                            "render {} stays queued with kerfd, with nobody to render it: {}",
+                            queued.job.job_id,
+                            error.message
+                        );
+                    }
                 }
                 return;
             }
@@ -342,17 +381,28 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: SyncSender<Value>) {
         if let Some(queued) = next {
             render(&shared, &queued, &tx);
             shared.renders.lock().running = None;
-            let _ = publish(&shared, queued.renders.as_ref(), &tx);
+            if let Err(error) = publish(&shared, queued.renders.as_ref(), &tx) {
+                log::warn!("the render queue was not shown again: {}", error.message);
+            }
         }
     }
 }
 
 /// Render one job: `export {status: running}` with its progress, then
 /// `completed`, `failed` or `cancelled`.
-fn render(shared: &Shared, queued: &Queued, tx: &SyncSender<Value>) {
+fn render(shared: &Shared, queued: &Queued, tx: &Outbox) {
     let job = &queued.job;
-    emit(tx, export_event(job, "running", 0.0));
-    let _ = publish(shared, queued.renders.as_ref(), tx);
+    emit(
+        tx,
+        Event::Export(Export::Render(export_event(
+            job,
+            ExportStatus::Running,
+            0.0,
+        ))),
+    );
+    if let Err(error) = publish(shared, queued.renders.as_ref(), tx) {
+        log::warn!("the render queue was not shown again: {}", error.message);
+    }
     // Half-percent steps: enough for a bar, and never a flood.
     let mut step = 0_i64;
     let result = queued
@@ -366,26 +416,53 @@ fn render(shared: &Shared, queued: &Queued, tx: &SyncSender<Value>) {
             if now > step {
                 step = now;
                 // Replaceable; never stall the render behind a busy GUI.
-                let _ = tx.try_send(export_event(job, "running", progress));
+                let _ = tx.try_send(Event::Export(Export::Render(export_event(
+                    job,
+                    ExportStatus::Running,
+                    progress,
+                ))));
             }
         });
     let mut done = job.clone();
     done.output_path = Some(queued.output.to_string_lossy().into_owned());
     match result {
-        Ok(()) => emit(tx, export_event(&done, "completed", 1.0)),
+        Ok(()) => emit(
+            tx,
+            Event::Export(Export::Render(export_event(
+                &done,
+                ExportStatus::Completed,
+                1.0,
+            ))),
+        ),
         Err(error) if error.code == "CANCELLED" => {
             if shared.renders.lock().cancelled.insert(job.job_id.clone()) {
-                emit(tx, export_event(&done, "cancelled", 0.0));
+                emit(
+                    tx,
+                    Event::Export(Export::Render(export_event(
+                        &done,
+                        ExportStatus::Cancelled,
+                        0.0,
+                    ))),
+                );
             }
         }
         Err(error) => {
-            let mut event = export_event(&done, "failed", 0.0);
-            event["message"] = json!(error.message);
-            emit(tx, event);
             emit(
                 tx,
-                json!({"type": "error", "message": error.message, "code": error.code,
-                    "command": "export", "jobId": job.job_id}),
+                Event::Export(Export::Render(RenderExport {
+                    message: Some(error.message.clone()),
+                    ..export_event(&done, ExportStatus::Failed, 0.0)
+                })),
+            );
+            emit(
+                tx,
+                Event::Error(ErrorEvent {
+                    message: error.message,
+                    code: Some(error.code),
+                    command: Some("export".to_owned()),
+                    job_id: Some(job.job_id.clone()),
+                    ..ErrorEvent::default()
+                }),
             );
         }
     }
@@ -394,7 +471,8 @@ fn render(shared: &Shared, queued: &Queued, tx: &SyncSender<Value>) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use std::sync::mpsc::{self, Receiver};
+    use serde_json::{json, Value};
+    use std::sync::mpsc::{self, Receiver, SyncSender};
     use std::time::Duration;
 
     /// kerfd's render jobs in memory: renders finish when the test lets
@@ -539,7 +617,7 @@ pub(crate) mod tests {
     }
 
     fn wait_for(
-        rx: &Receiver<Value>,
+        rx: &Receiver<Event>,
         seen: &mut Vec<Value>,
         check: impl Fn(&Value) -> bool,
     ) -> Value {
@@ -550,7 +628,7 @@ pub(crate) mod tests {
             }
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             match rx.recv_timeout(left) {
-                Ok(event) => seen.push(event),
+                Ok(event) => seen.push(serde_json::to_value(event).unwrap()),
                 Err(_) => panic!("no such event in {seen:#?}"),
             }
         }
@@ -559,7 +637,7 @@ pub(crate) mod tests {
     #[test]
     fn cancelling_takes_a_queued_job_out_and_stops_the_running_one() {
         let shared = shared();
-        let (tx, rx) = mpsc::sync_channel(256);
+        let (tx, rx) = crate::wake::outbox(256);
         let (fake, open) = Fake::gated();
         let worker = {
             let (shared, tx) = (shared.clone(), tx.clone());
@@ -624,12 +702,12 @@ pub(crate) mod tests {
     #[test]
     fn refused_exports_queue_nothing() {
         let shared = shared();
-        let (tx, _rx) = mpsc::sync_channel(16);
+        let (tx, _rx) = crate::wake::outbox(16);
         let fake = Arc::new(Fake::default());
         let error = submit(&shared, fake.clone(), &request("nope", None), &tx).unwrap_err();
         assert_eq!(error.code, "INVALID_RENDER_QUALITY");
         assert_eq!(shared.renders.waiting(), 0);
-        let event = refused(&tx, "export", &error);
+        let event = serde_json::to_value(refused(&tx, "export", &error)).unwrap();
         assert_eq!(event["command"], "export");
         assert_eq!(event["code"], "INVALID_RENDER_QUALITY");
     }

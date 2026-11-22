@@ -13,17 +13,19 @@
 //! and the document diff. Renders and proposal previews hand renderers the
 //! document with media paths resolved.
 
+pub mod author;
 pub mod crash;
 mod ipc;
 mod kernel;
 #[cfg(windows)]
 mod named_pipe;
 mod render;
-pub mod author;
 mod runtime;
 mod store;
 mod timeline;
+mod view;
 
+pub use author::Author;
 pub use ipc::{
     response_value, run_ipc, run_ipc_with, run_stdio, EndpointAddress, IpcOptions, RuntimeClient,
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
@@ -33,8 +35,11 @@ pub use kernel::{
     TrimSide, RATE_NEEDS_EMPTY,
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
-pub use author::Author;
 pub use timeline::{fx_catalog_all_json, fx_catalog_json, properties_json};
+pub use view::{
+    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
+    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+};
 
 use kerf_model::Project;
 use runtime::runtime_actor;
@@ -63,10 +68,12 @@ fn default_projection_status() -> String {
 pub const MAX_PROPOSALS: usize = 8;
 
 /// What clients see of the runtime. `document` is the canonical `.kerf`
-/// text and `timeline` a JSON view of its first sequence for editors.
+/// text and `timeline` a [`TimelineView`] of it for editors.
 ///
 /// The fields after `import_warnings` are left out while empty, so the
-/// receipts older journals keep still read back byte for byte.
+/// receipts older journals keep still read back byte for byte. For the same
+/// reason `timeline` stays the JSON it was written as: a receipt's snapshot
+/// is checksummed as stored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StateSnapshot {
@@ -105,7 +112,7 @@ fn is_zero(value: &u64) -> bool {
 }
 
 /// One version of a proposal: v1, and each `revise` after it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalVersion {
     pub version: u32,
@@ -120,7 +127,7 @@ pub struct ProposalVersion {
 /// A proposal as clients list it: its lifecycle, who made it, and its
 /// versions. A settled one keeps the script and diff of the version that
 /// was accepted or rejected.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProposalEntry {
     /// The current version's id; for an accepted proposal, the version
@@ -149,6 +156,36 @@ pub struct ProposalEntry {
     pub staged: Option<String>,
 }
 
+impl ProposalEntry {
+    /// Still open: neither accepted nor rejected.
+    pub fn is_pending(&self) -> bool {
+        self.status == "pending"
+    }
+
+    /// Made on a revision the project has moved on from.
+    pub fn is_stale(&self) -> bool {
+        self.freshness == ProposalFreshness::Stale
+    }
+
+    /// The lines its document diff adds and removes, without the diff's
+    /// headers.
+    pub fn diff_counts(&self) -> (usize, usize) {
+        let mut added = 0;
+        let mut removed = 0;
+        for line in self.document_diff.lines() {
+            if line.starts_with("+++") || line.starts_with("---") {
+                continue;
+            }
+            if line.starts_with('+') {
+                added += 1;
+            } else if line.starts_with('-') {
+                removed += 1;
+            }
+        }
+        (added, removed)
+    }
+}
+
 /// Whether a pending proposal still targets the canonical project revision.
 ///
 /// Older checkpoints omit this field and therefore deserialize as `Current`.
@@ -171,7 +208,7 @@ impl ProposalFreshness {
 /// Proposal lifecycle owned by the canonical runtime.  Terminal states stay
 /// in memory so repeating an accept/reject request converges without another
 /// project mutation; only `Pending` exposes the proposed script and diff.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum PendingProposal {
     Pending {
@@ -784,13 +821,19 @@ pub fn parse_document(text: &str) -> Result<Project, RuntimeError> {
 }
 
 /// The timeline view of `document` as a proposal's `script` would leave it,
-/// in the same shape as a snapshot's `timeline`, so an editor can show a
-/// proposal in place before it is accepted.
-pub fn proposal_timeline(document: &str, script: &str) -> Result<Value, RuntimeError> {
+/// so an editor can show a proposal in place before it is accepted. It has
+/// no takes and no cast or styles shown.
+pub fn proposal_timeline_view(document: &str, script: &str) -> Result<TimelineView, RuntimeError> {
     let project = kernel::parse(document)?;
     let edited = kernel::Edit::Script {
         script: script.to_string(),
     }
     .run(&project, &kerf_lang::NoFacts)?;
-    Ok(timeline::timeline_json(&edited.project))
+    Ok(timeline::timeline_view(&edited.project))
+}
+
+/// [`proposal_timeline_view`] as JSON, in the same shape as a snapshot's
+/// `timeline`.
+pub fn proposal_timeline(document: &str, script: &str) -> Result<Value, RuntimeError> {
+    proposal_timeline_view(document, script).map(|view| timeline::to_json(&view))
 }

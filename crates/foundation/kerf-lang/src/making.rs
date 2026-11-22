@@ -140,9 +140,7 @@ pub(crate) fn with_names(
     let mut words = step.words();
     // The words that are named: all after `generate`, and after what a `render` draws
     // and a `join` joins, which are words alone.
-    let named = |word: &str| {
-        kerf_model::making::whole(word).is_none() && word.contains('=')
-    };
+    let named = |word: &str| kerf_model::making::whole(word).is_none() && word.contains('=');
     let first = match step {
         Step::Render { .. } => 3,
         Step::Generate(_) => 1,

@@ -1,11 +1,11 @@
 //! Where the eye is either side of each cut of a sequence's picture, as `look` with `eye`
 //! says it.
 //!
-//! [`kerf_engine::eye`] measures it; this is how it is told: counts of every cut, and each
+//! [`kerf_engine::analysis::eye`] measures it; this is how it is told: counts of every cut, and each
 //! cut with what its two guides say and, where the shots are made, what their takes do, or
 //! with why it was not read. Nothing is called wrong: a hard cut jumps on purpose.
 
-use kerf_engine::eye::{Cut, Eye, Seen};
+use kerf_engine::analysis::eye::{Cut, Eye, Seen};
 use kerf_lang::Clock;
 use serde_json::{json, Value};
 

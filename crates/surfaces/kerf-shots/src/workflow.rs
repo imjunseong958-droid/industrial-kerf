@@ -231,7 +231,13 @@ pub fn shown(id: &str, line: usize, read: &Read) -> Result<Value, String> {
 fn copy_name(folder: &Path, shot: &str, model: &str, taken: &[PathBuf]) -> String {
     let clean: String = model
         .chars()
-        .map(|character| if character.is_ascii_alphanumeric() || "-_".contains(character) { character } else { '-' })
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || "-_".contains(character) {
+                character
+            } else {
+                '-'
+            }
+        })
         .collect();
     (1..)
         .map(|number| match number {
@@ -242,7 +248,7 @@ fn copy_name(folder: &Path, shot: &str, model: &str, taken: &[PathBuf]) -> Strin
             let file = folder.join(name);
             !file.exists() && !taken.contains(&file)
         })
-        .expect("a number no file has")
+        .expect("a folder holds finitely many files, so a number past them all is free")
 }
 
 /// Write `text` to `file` whole: beside it first, then moved into place.
@@ -265,14 +271,20 @@ pub fn write(file: &Path, text: &str) -> Result<(), String> {
 ///
 /// Kerf asks no server itself: this runs the model's own program, as a making does.
 pub fn taken(models: &Models, read: &Read) -> Result<Value, String> {
-    let command = models.command(&read.ask.model).map_err(|error| error.to_string())?;
+    let command = models
+        .command(&read.ask.model)
+        .map_err(|error| error.to_string())?;
     let program = command.first().ok_or("the model's entry runs no program")?;
     let named = match &read.origin {
         Origin::Own(_, file) => file.to_string_lossy().into_owned(),
         Origin::Bundled | Origin::File => read.name.clone(),
     };
     let key = taken_key(program, read);
-    if let Some(kept) = taken_kept().lock().ok().and_then(|kept| kept.get(&key).cloned()) {
+    if let Some(kept) = taken_kept()
+        .lock()
+        .ok()
+        .and_then(|kept| kept.get(&key).cloned())
+    {
         return Ok(kept);
     }
     // What could not be asked is asked again the next time: a server may be back by then.
@@ -286,7 +298,11 @@ pub fn taken(models: &Models, read: &Read) -> Result<Value, String> {
 /// What [`taken`] has learned of this workflow already, without asking.
 pub fn taken_before(models: &Models, read: &Read) -> Option<Value> {
     let command = models.command(&read.ask.model).ok()?;
-    taken_kept().lock().ok()?.get(&taken_key(command.first()?, read)).cloned()
+    taken_kept()
+        .lock()
+        .ok()?
+        .get(&taken_key(command.first()?, read))
+        .cloned()
 }
 
 /// What a workflow's answer is kept under: the program asked and the kinds of node it
@@ -310,8 +326,8 @@ const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Run `program --workflow <named> --inputs` and read what it prints.
 fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(program)
+    use std::process::Stdio;
+    let mut child = kerf_engine::recipe::model::program(program)
         .args([FLAG, named, "--inputs"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -322,20 +338,29 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < ASKING => std::thread::sleep(std::time::Duration::from_millis(50)),
+            Ok(None) if started.elapsed() < ASKING => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{PROGRAM} did not say what the server takes within {} s", ASKING.as_secs()));
+                return Err(format!(
+                    "{PROGRAM} did not say what the server takes within {} s",
+                    ASKING.as_secs()
+                ));
             }
         }
     }
-    let said = child.wait_with_output().map_err(|error| error.to_string())?;
+    let said = child
+        .wait_with_output()
+        .map_err(|error| error.to_string())?;
     if !said.status.success() {
         let why = String::from_utf8_lossy(&said.stderr);
         return Err(why.trim().trim_start_matches("kerf-comfy: ").to_owned());
     }
-    serde_json::from_slice(&said.stdout).map_err(|error| format!("{PROGRAM} said something that is not what its inputs take: {error}"))
+    serde_json::from_slice(&said.stdout).map_err(|error| {
+        format!("{PROGRAM} said something that is not what its inputs take: {error}")
+    })
 }
 
 /// `shown`, a workflow as [`shown`] says it, with what each of its inputs takes beside
@@ -405,32 +430,36 @@ fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
             }
             continue;
         }
-        if let Some(choices) = takes["choices"].as_array() {
-            if !choices.contains(set.value) {
-                let listed: Vec<String> = choices.iter().take(12).map(|choice| match choice {
+        if let Some(choices) = takes["choices"].as_array()
+            && !choices.contains(set.value)
+        {
+            let listed: Vec<String> = choices
+                .iter()
+                .take(12)
+                .map(|choice| match choice {
                     Value::String(text) => text.clone(),
                     other => other.to_string(),
-                }).collect();
-                return Err(format!(
-                    "`{}` of node {} takes one of {}{}, not {}",
-                    set.input,
-                    set.node,
-                    listed.join(", "),
-                    if choices.len() > listed.len() { format!(", and {} more", choices.len() - listed.len()) } else { String::new() },
-                    set.value
-                ));
-            }
+                })
+                .collect();
+            return Err(format!(
+                "`{}` of node {} takes one of {}{}, not {}",
+                set.input,
+                set.node,
+                listed.join(", "),
+                if choices.len() > listed.len() {
+                    format!(", and {} more", choices.len() - listed.len())
+                } else {
+                    String::new()
+                },
+                set.value
+            ));
         }
         if let Some(value) = set.value.as_f64() {
             let (least, most) = (takes["min"].as_f64(), takes["max"].as_f64());
             if least.is_some_and(|least| value < least) || most.is_some_and(|most| value > most) {
                 return Err(format!(
                     "`{}` of node {} takes a number from {} to {}, not {}",
-                    set.input,
-                    set.node,
-                    takes["min"],
-                    takes["max"],
-                    set.value
+                    set.input, set.node, takes["min"], takes["max"], set.value
                 ));
             }
         }
@@ -451,12 +480,22 @@ pub struct Set<'a> {
 impl<'a> Set<'a> {
     /// Input `input` of node `node` set to `value`.
     pub fn value(node: &'a str, input: &'a str, value: &'a Value) -> Self {
-        Self { node, input, value, link: None }
+        Self {
+            node,
+            input,
+            value,
+            link: None,
+        }
     }
 
     /// Input `input` of node `node` linked to output `output` of node `from`.
     pub fn link(node: &'a str, input: &'a str, from: &'a str, output: u64) -> Self {
-        Self { node, input, value: &Value::Null, link: Some((from, output)) }
+        Self {
+            node,
+            input,
+            value: &Value::Null,
+            link: Some((from, output)),
+        }
     }
 }
 
@@ -484,10 +523,14 @@ pub struct Copy {
 /// where each is set. The server's list is no answer there: it sends whoever set the
 /// value to one that is on the list, which is refused all the same.
 pub fn with(read: &Read, sets: &[Set], taken: Option<&Value>) -> Result<String, String> {
-    let now = sets.iter().try_fold(read.text.clone(), |text, set| match set.link {
-        Some((from, output)) => kerf_workflow::detail::set_link(&text, set.node, set.input, from, output),
-        None => kerf_workflow::detail::set_input(&text, set.node, set.input, set.value),
-    })?;
+    let now = sets
+        .iter()
+        .try_fold(read.text.clone(), |text, set| match set.link {
+            Some((from, output)) => {
+                kerf_workflow::detail::set_link(&text, set.node, set.input, from, output)
+            }
+            None => kerf_workflow::detail::set_input(&text, set.node, set.input, set.value),
+        })?;
     if let Some(taken) = taken {
         check(read, sets, taken)?;
     }

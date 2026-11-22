@@ -7,7 +7,7 @@ struct Options {
 }
 
 fn main() {
-    kerf_engine::sidecar::forward_termination_signals();
+    kerf_engine::process::sidecar::forward_termination_signals();
     if let Err(error) = run() {
         eprintln!("kerf-mcp: {error}");
         std::process::exit(1);
@@ -78,12 +78,12 @@ fn discover_kerfd() -> Option<PathBuf> {
     if let Some(path) = env::var_os("KERFD_BIN").or_else(|| env::var_os("KERF_RUNTIME_BIN")) {
         return Some(path.into());
     }
-    if let Ok(executable) = env::current_exe() {
-        if let Some(parent) = executable.parent() {
-            let candidate = parent.join(binary_name("kerfd"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
+    if let Ok(executable) = env::current_exe()
+        && let Some(parent) = executable.parent()
+    {
+        let candidate = parent.join(binary_name("kerfd"));
+        if candidate.is_file() {
+            return Some(candidate);
         }
     }
     Some(PathBuf::from(binary_name("kerfd")))

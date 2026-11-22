@@ -71,7 +71,7 @@ fn next_output_number() -> u32 {
 }
 
 macro_rules! stats {
-    ($number:expr, $($line:tt)*) => {
+    ($number:expr_2021, $($line:tt)*) => {
         if stats_on() {
             eprintln!(
                 "playback audio[{}] +{:.3}s: {}",
@@ -193,6 +193,8 @@ impl AudioRuntime {
     }
 
     fn send(&self, command: AudioCommand) {
+        // The worker is gone only once shut down, or panicked, which the panic says:
+        // there is nothing left to act on the command.
         let _ = self.commands.send(command);
     }
 }
@@ -525,10 +527,10 @@ impl LevelTap {
 
     fn push(&self, levels: Levels) {
         let mut state = self.lock();
-        if state.blocks.len() >= LEVEL_QUEUE_CAPACITY {
-            if let Some(evicted) = state.blocks.pop_front() {
-                fold(&mut state.unread, evicted);
-            }
+        if state.blocks.len() >= LEVEL_QUEUE_CAPACITY
+            && let Some(evicted) = state.blocks.pop_front()
+        {
+            fold(&mut state.unread, evicted);
         }
         state.blocks.push_back(levels);
     }
@@ -1264,6 +1266,7 @@ impl CpalAudioOutput {
 /// multithreaded apartment open keeps COM, and those DLLs, loaded for the
 /// life of the process.
 #[cfg(all(windows, feature = "native-audio"))]
+#[allow(unsafe_code)]
 fn keep_com_loaded() {
     static KEPT: std::sync::Once = std::sync::Once::new();
     KEPT.call_once(|| {

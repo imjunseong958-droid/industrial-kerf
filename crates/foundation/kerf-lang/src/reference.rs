@@ -127,11 +127,13 @@ refused, naming it.
 pub fn reference(catalog: &Catalog) -> String {
     let mut out = String::from(GRAMMAR);
     let colors: Vec<&str> = MarkerColor::ALL.iter().map(|c| c.name()).collect();
-    writeln!(out, "\nMarker colors: {}.", colors.join(", ")).unwrap();
+    writeln!(out, "\nMarker colors: {}.", colors.join(", "))
+        .expect("writing to a String cannot fail");
     for domain in [Domain::Video, Domain::Audio] {
-        writeln!(out, "\n## {} clip properties", capitalized(domain.name())).unwrap();
+        writeln!(out, "\n## {} clip properties", capitalized(domain.name()))
+            .expect("writing to a String cannot fail");
         for param in catalog.props(domain) {
-            writeln!(out, "- {}", describe(param)).unwrap();
+            writeln!(out, "- {}", describe(param)).expect("writing to a String cannot fail");
         }
     }
     for (kind, title) in [
@@ -139,7 +141,7 @@ pub fn reference(catalog: &Catalog) -> String {
         (FxKind::Transition, "Transitions"),
         (FxKind::Generator, "Generators"),
     ] {
-        writeln!(out, "\n## {title}").unwrap();
+        writeln!(out, "\n## {title}").expect("writing to a String cannot fail");
         for fx in catalog.all().filter(|fx| {
             fx.kind == kind && fx.engine == Engine::Graph && fx.id != kerf_model::SHAPE_OUTLINE
         }) {
@@ -150,7 +152,7 @@ pub fn reference(catalog: &Catalog) -> String {
         (FxKind::Transition, KERF_TRANSITIONS),
         (FxKind::Effect, KERF_EFFECTS),
     ] {
-        writeln!(out, "\n{text}").unwrap();
+        writeln!(out, "\n{text}").expect("writing to a String cannot fail");
         let mut categories: BTreeMap<&str, Vec<String>> = BTreeMap::new();
         for fx in catalog
             .all()
@@ -162,10 +164,11 @@ pub fn reference(catalog: &Catalog) -> String {
                 .push(format!("`{}@{}`", fx.id, fx.version));
         }
         for (category, ids) in categories {
-            writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+            writeln!(out, "- {category}: {}", ids.join(", "))
+                .expect("writing to a String cannot fail");
         }
     }
-    writeln!(out, "\n{LOOKS}").unwrap();
+    writeln!(out, "\n{LOOKS}").expect("writing to a String cannot fail");
     let mut categories: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for fx in catalog.all().filter(|fx| fx.engine == Engine::Look) {
         categories
@@ -174,9 +177,9 @@ pub fn reference(catalog: &Catalog) -> String {
             .push(format!("`{}@{}`", fx.id, fx.version));
     }
     for (category, ids) in categories {
-        writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+        writeln!(out, "- {category}: {}", ids.join(", ")).expect("writing to a String cannot fail");
     }
-    writeln!(out, "\n{RASTER}").unwrap();
+    writeln!(out, "\n{RASTER}").expect("writing to a String cannot fail");
     let mut categories: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for fx in catalog.all().filter(|fx| fx.engine == Engine::Raster) {
         categories
@@ -186,7 +189,7 @@ pub fn reference(catalog: &Catalog) -> String {
     }
     for (category, ids) in categories {
         let ids: Vec<String> = ids.iter().map(|id| format!("`{id}`")).collect();
-        writeln!(out, "- {category}: {}", ids.join(", ")).unwrap();
+        writeln!(out, "- {category}: {}", ids.join(", ")).expect("writing to a String cannot fail");
     }
     out
 }
@@ -288,12 +291,13 @@ fn fx_listed(fx: &FxDef) -> String {
     let mut left = 0;
     for param in &fx.params {
         if kept.contains(&param.name.as_str()) {
-            writeln!(out, "  - {}", describe(param)).unwrap();
+            writeln!(out, "  - {}", describe(param)).expect("writing to a String cannot fail");
         } else {
             left += 1;
         }
     }
-    writeln!(out, "  - {left} more: `look` with `effect: \"{}\"`", fx.id).unwrap();
+    writeln!(out, "  - {left} more: `look` with `effect: \"{}\"`", fx.id)
+        .expect("writing to a String cannot fail");
     out
 }
 
@@ -318,7 +322,7 @@ fn fx_heading(fx: &FxDef) -> String {
 pub fn fx_reference(fx: &FxDef) -> String {
     let mut out = fx_heading(fx);
     for param in &fx.params {
-        writeln!(out, "  - {}", describe(param)).unwrap();
+        writeln!(out, "  - {}", describe(param)).expect("writing to a String cannot fail");
     }
     out
 }
@@ -358,9 +362,9 @@ fn describe(param: &ParamDef) -> String {
     if param.animatable {
         facts.push("animatable".into());
     }
-    write!(text, " ({})", facts.join(", ")).unwrap();
+    write!(text, " ({})", facts.join(", ")).expect("writing to a String cannot fail");
     if !param.doc.is_empty() {
-        write!(text, " {}", param.doc).unwrap();
+        write!(text, " {}", param.doc).expect("writing to a String cannot fail");
     }
     text
 }

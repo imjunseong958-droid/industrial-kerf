@@ -82,15 +82,19 @@ pub fn changed(text: &str, number: usize, change: Change) -> Result<String> {
     let (key, nth) = match change {
         Change::Set { key, nth, .. } | Change::Remove { key, nth } => (key, nth),
     };
-    if key.is_empty() || key.contains(|character: char| character.is_whitespace() || character == '=') {
-        return Err(wrong(format!("`{key}` is not a name a step gives a value by")));
+    if key.is_empty()
+        || key.contains(|character: char| character.is_whitespace() || character == '=')
+    {
+        return Err(wrong(format!(
+            "`{key}` is not a name a step gives a value by"
+        )));
     }
-    if let Change::Set { value, .. } = change {
-        if value.contains(['\n', '\r']) {
-            return Err(wrong(format!(
-                "`{key}=` takes one line, and what it is given holds a line break"
-            )));
-        }
+    if let Change::Set { value, .. } = change
+        && value.contains(['\n', '\r'])
+    {
+        return Err(wrong(format!(
+            "`{key}=` takes one line, and what it is given holds a line break"
+        )));
     }
     let mut words = steps[index].words();
     // The words that are `name=value`: all after `generate`, and after the sequence and
@@ -144,7 +148,9 @@ pub fn added(text: &str, after: usize, line: &str) -> Result<String> {
     let mut steps = super::document_steps(text)?;
     let lines = step_lines(text);
     if after > lines.last().copied().unwrap_or(1).max(1) {
-        return Err(EngineError::msg(format!("there is no line {after} to add a step after")));
+        return Err(EngineError::msg(format!(
+            "there is no line {after} to add a step after"
+        )));
     }
     let index = lines.iter().filter(|line| **line <= after).count();
     let words = super::words(line).map_err(EngineError::msg)?;

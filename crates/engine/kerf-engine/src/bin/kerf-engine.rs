@@ -6,21 +6,21 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use kerf_engine::derivatives::DerivativeCache;
-use kerf_engine::encoder::{
-    encoder_args, parse_encoder_capabilities, select_video_encoder, SelectEncoderOptions,
-    VideoCodec,
-};
-use kerf_engine::ffmpeg::{resolve_ffmpeg_bin, run_allow_failure};
-use kerf_engine::probe::{
+use kerf_engine::media::derivatives::DerivativeCache;
+use kerf_engine::media::probe::{
     cached_filmstrip, cached_waveform, detect_scenes, extract_exact_frames, extract_frames, info,
     parse_scene_times, parse_silencedetect, silence_detect,
 };
-use kerf_engine::proxy::{
+use kerf_engine::media::proxy::{
     create_proxy_cache_key, proxy_ffmpeg_args, proxy_run, proxy_settings_from_value, ProxySettings,
     ProxySourceStat,
 };
-use kerf_engine::resources::budget;
+use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, run_allow_failure};
+use kerf_engine::process::resources::budget;
+use kerf_engine::render::encoder::{
+    encoder_args, parse_encoder_capabilities, select_video_encoder, SelectEncoderOptions,
+    VideoCodec,
+};
 use kerf_engine::{
     CancellationToken, TimeRange, TranscriptionBackend, TranscriptionOptions,
     TranscriptionProgress, TranscriptionStage,
@@ -255,7 +255,7 @@ enum CliCodec {
 }
 
 fn main() -> Result<()> {
-    kerf_engine::sidecar::forward_termination_signals();
+    kerf_engine::process::sidecar::forward_termination_signals();
     let cli = Cli::parse();
     match cli.command {
         Commands::Probe { action } => match action {
@@ -510,7 +510,7 @@ fn main() -> Result<()> {
         }
         Commands::Loudness { project, sequence } => {
             let document = read_project(&project)?;
-            let loudness = kerf_engine::loudness::measure_program(
+            let loudness = kerf_engine::analysis::loudness::measure_program(
                 &document,
                 sequence.as_deref(),
                 project_dir(&project),
@@ -520,7 +520,7 @@ fn main() -> Result<()> {
         }
         Commands::Qc { project, sequence } => {
             let document = read_project(&project)?;
-            let qc = kerf_engine::qc::picture_qc(
+            let qc = kerf_engine::analysis::qc::picture_qc(
                 &document,
                 sequence.as_deref(),
                 project_dir(&project),
@@ -568,10 +568,10 @@ fn run_transcription(
     if range.duration() > limit + 1e-9 {
         bail!("selected range exceeds the {limit:.0}s limit");
     }
-    if let Some(duration) = metadata.duration {
-        if !duration.is_finite() || duration <= 0.0 || range.end > duration + 1e-6 {
-            bail!("selected range must be inside source duration {duration:.3}s");
-        }
+    if let Some(duration) = metadata.duration
+        && (!duration.is_finite() || duration <= 0.0 || range.end > duration + 1e-6)
+    {
+        bail!("selected range must be inside source duration {duration:.3}s");
     }
 
     let backend = match args.backend.as_str() {
@@ -679,8 +679,8 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         frame = Some(compositor.frame(rate.time_of(index), args.scale));
         times.push(started.elapsed().as_secs_f64() * 1000.0);
     }
-    let frame = frame.expect("at least one frame is drawn");
-    kerf_engine::still::write_png(&frame, &args.out)?;
+    let frame = frame.expect("the loop draws `args.frames.max(1)` frames, so at least one");
+    kerf_engine::render::still::write_png(&frame, &args.out)?;
     let ms = |value: f64| (value * 10.0).round() / 10.0;
     // The first frame opens and seeks the media; the rest read on.
     let steady = &times[1.min(times.len() - 1)..];

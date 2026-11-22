@@ -148,6 +148,8 @@ fn stopped_within(stop: &AtomicBool, pause: Duration) -> bool {
 /// sent is kept. Each thing worth telling goes to `say` as a line. `stop`
 /// is set when this program is asked to end: a job queued by then is taken
 /// back from the server, and nothing is queued after.
+// Each argument is a distinct thing one run needs, and none of them belong together.
+#[allow(clippy::too_many_arguments)]
 pub fn make(
     request: &Request,
     work: &Path,
@@ -213,13 +215,13 @@ pub fn make(
             read.frames
         ));
     }
-    if let Some(seconds) = request.seconds.filter(|_| read.is_none()) {
-        if (seconds * fps).round() > f64::from(frames) {
-            say(&format!(
+    if let Some(seconds) = request.seconds.filter(|_| read.is_none())
+        && (seconds * fps).round() > f64::from(frames)
+    {
+        say(&format!(
                 "{seconds} s was asked; this model makes at most {frames} frames at {fps} a second, {:.2} s",
                 f64::from(frames) / fps
             ));
-        }
     }
     // A file of a guide has the guide's frames and no more.
     let hold = if read.is_some() {
@@ -242,7 +244,9 @@ pub fn make(
         // Points are the line's own to give, where the workflow has a blank for them.
         let points = request::names_points(name) && blanks.contains(name);
         if !points
-            && (ASKED.contains(&name.as_str()) || names_what_is_handed(name) || !blanks.contains(name))
+            && (ASKED.contains(&name.as_str())
+                || names_what_is_handed(name)
+                || !blanks.contains(name))
         {
             unread.push(format!("`{name}`"));
         } else {
@@ -256,7 +260,10 @@ pub fn make(
             Some(serde_json::Value::String(given)) if !given.trim().is_empty() => given,
             _ => continue,
         };
-        values.insert(name.to_owned(), json!(request::points(name, &given, (width, height))?));
+        values.insert(
+            name.to_owned(),
+            json!(request::points(name, &given, (width, height))?),
+        );
     }
     let seed = request.seed.unwrap_or_else(any_seed);
     values.extend([
@@ -283,7 +290,14 @@ pub fn make(
             unread.push(format!("`{name}`"));
             continue;
         }
-        let given = request.file(&name).expect("the request names it");
+        // `files` names each of the request's `guides` as `guide_` and its key, and a key
+        // `guide_named` does not read back (a capital, a `_`) gives no file under that name.
+        let Some(given) = request.file(&name) else {
+            return Err(format!(
+                "the request hands a guide as `{name}`, and a guide's name after `guide_` is \
+                 lowercase letters and digits"
+            ));
+        };
         // Every guide is brought to the size, rate, and frames asked for, each to a file
         // of its own.
         let fitted = match request::guide_named(&name) {
@@ -367,7 +381,12 @@ pub fn make(
     } else if !request.moves.is_empty() && blanks.contains(request::MOVES_BOX) {
         values.insert(
             request::MOVES_BOX.to_owned(),
-            json!(request::tracks_of_boxes(&request.moves, frames, fps, (width, height))),
+            json!(request::tracks_of_boxes(
+                &request.moves,
+                frames,
+                fps,
+                (width, height)
+            )),
         );
         say(&format!(
             "handed where {} goes as five tracks of {frames} points each",
@@ -382,7 +401,12 @@ pub fn make(
         if blanks.contains(request::MOVES) {
             values.insert(
                 request::MOVES.to_owned(),
-                json!(request::tracks(&request.moves, frames, fps, (width, height))),
+                json!(request::tracks(
+                    &request.moves,
+                    frames,
+                    fps,
+                    (width, height)
+                )),
             );
             say(&format!(
                 "handed where {} goes as {frames} points each",
@@ -435,9 +459,13 @@ pub fn make(
     // Not where the server is: what is said here reaches whoever asked for the making, an agent
     // among them, and the server is the person's to name.
     if workflow.of_file() {
-        say(&format!("asked the server for a file of the file: job {id}"));
+        say(&format!(
+            "asked the server for a file of the file: job {id}"
+        ));
     } else if frames == 1 && workflow.frames.most == 1 {
-        say(&format!("asked the server for a still of {width}x{height}, seed {seed}: job {id}"));
+        say(&format!(
+            "asked the server for a still of {width}x{height}, seed {seed}: job {id}"
+        ));
     } else {
         say(&format!(
             "asked the server for {frames} frames of {width}x{height} at {fps} a second, seed {seed}: job {id}"

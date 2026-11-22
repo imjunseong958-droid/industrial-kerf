@@ -5,7 +5,17 @@
 //! The compositor works in **linear-light, premultiplied RGBA f32** in the sequence working space
 //! (Rec.709 primaries by default). Decoded frames carry [`ColorInfo`] so conversions are explicit.
 
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable))]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unimplemented,
+        clippy::todo,
+        clippy::unreachable
+    )
+)]
 
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
@@ -17,11 +27,13 @@ pub mod lut;
 pub mod spaces;
 pub mod transform;
 
-pub use blend::{BlendMode, blend_pixel};
+pub use blend::{blend_pixel, BlendMode};
 pub use grade::GradeSpace;
 pub use lut::{Lut, Lut1d, Lut3d, LutFormat};
 pub use spaces::{ColorPipeline, ColorSpace, Curve, Gamut, WorkingSpace};
-pub use transform::{DecodeTable, HdrOutput, InputStages, InputTransform, REFERENCE_WHITE_NITS, ToneMap};
+pub use transform::{
+    DecodeTable, HdrOutput, InputStages, InputTransform, ToneMap, REFERENCE_WHITE_NITS,
+};
 
 /// YUV ↔ RGB matrix coefficients.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -57,17 +69,29 @@ pub fn rgb_to_ycbcr(r: f32, g: f32, b: f32, m: Matrix) -> [f32; 3] {
     let (kr, kb) = m.kr_kb();
     let kg = 1.0 - kr - kb;
     let y = kr * r + kg * g + kb * b;
-    [y, (b - y) / (2.0 * (1.0 - kb)), (r - y) / (2.0 * (1.0 - kr))]
+    [
+        y,
+        (b - y) / (2.0 * (1.0 - kb)),
+        (r - y) / (2.0 * (1.0 - kr)),
+    ]
 }
 
 /// sRGB electro-optical transfer (encoded → linear).
 #[inline]
 pub fn srgb_to_linear(v: f32) -> f32 {
-    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    if v <= 0.04045 {
+        v / 12.92
+    } else {
+        ((v + 0.055) / 1.055).powf(2.4)
+    }
 }
 #[inline]
 pub fn linear_to_srgb(v: f32) -> f32 {
-    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
 }
 
 /// SMPTE ST 2084 EOTF, output normalised to 10 000 nits = 1.0.
@@ -85,11 +109,19 @@ pub fn pq_inverse_eotf(y: f32) -> f32 {
 }
 pub fn hlg_oetf(l: f32) -> f32 {
     let (a, b, c) = (0.178_832_77_f32, 0.284_668_92_f32, 0.559_910_7_f32);
-    if l <= 1.0 / 12.0 { (3.0 * l.max(0.0)).sqrt() } else { a * (12.0 * l - b).ln() + c }
+    if l <= 1.0 / 12.0 {
+        (3.0 * l.max(0.0)).sqrt()
+    } else {
+        a * (12.0 * l - b).ln() + c
+    }
 }
 pub fn hlg_inverse_oetf(e: f32) -> f32 {
     let (a, b, c) = (0.178_832_77_f32, 0.284_668_92_f32, 0.559_910_7_f32);
-    if e <= 0.5 { e * e / 3.0 } else { (((e - c) / a).exp() + b) / 12.0 }
+    if e <= 0.5 {
+        e * e / 3.0
+    } else {
+        (((e - c) / a).exp() + b) / 12.0
+    }
 }
 
 /// 256-entry table: sRGB-encoded u8 → linear f32.
@@ -113,7 +145,11 @@ pub fn rgb_to_hsl(r: f32, g: f32, b: f32) -> [f32; 3] {
         return [0.0, 0.0, l];
     }
     let d = max - min;
-    let s = if l > 0.5 { d / (2.0 - max - min) } else { d / (max + min) };
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
     let h = if max == r {
         (g - b) / d + if g < b { 6.0 } else { 0.0 }
     } else if max == g {
@@ -128,7 +164,11 @@ pub fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 3] {
     if s <= 0.0 {
         return [l, l, l];
     }
-    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let q = if l < 0.5 {
+        l * (1.0 + s)
+    } else {
+        l + s - l * s
+    };
     let p = 2.0 * l - q;
     let f = |mut t: f32| {
         t = t.rem_euclid(1.0);

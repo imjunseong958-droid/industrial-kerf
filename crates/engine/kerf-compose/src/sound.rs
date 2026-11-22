@@ -199,7 +199,10 @@ fn decode(path: &str) -> Result<Vec<f32>, String> {
             feed(&mut decoder, &mut graph, &mut samples)?;
         }
     }
-    let _ = decoder.send_eof();
+    // Untold, a decoder keeps the samples it holds, and the sound ends early.
+    if let Err(error) = decoder.send_eof() {
+        log::warn!("{path}: the decoder was not told the end: {error}");
+    }
     feed(&mut decoder, &mut graph, &mut samples)?;
     graph
         .get("in")
@@ -221,7 +224,9 @@ fn drain(graph: &mut filter::Graph, samples: &mut Vec<f32>) -> Result<(), String
         let bytes = &out.data(0)[..out.samples() * 2 * 4];
         samples.extend(
             bytes
-                .as_chunks::<4>().0.iter()
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])),
         );
     }

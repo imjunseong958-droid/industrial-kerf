@@ -26,8 +26,8 @@
 use super::*;
 
 mod gltf;
-mod texture;
 pub(super) mod mesh;
+mod texture;
 pub(super) mod world;
 
 /// The field of view at which a clip at z = 0 is its 2D self, in degrees.
@@ -156,9 +156,10 @@ impl Rigged {
     /// Where a point of the world is, its parents having moved it.
     fn point(&self, [x, y, z]: Vector) -> Vector {
         let middle = (self.canvas.0 / 2.0, self.canvas.1 / 2.0);
-        let on = self
-            .moved
-            .apply(Vec2::new(middle.0 + x / self.per.0, middle.1 + y / self.per.1));
+        let on = self.moved.apply(Vec2::new(
+            middle.0 + x / self.per.0,
+            middle.1 + y / self.per.1,
+        ));
         self.carried.point([
             (on.x - middle.0) * self.per.0,
             (on.y - middle.1) * self.per.1,
@@ -372,7 +373,8 @@ impl Scene {
         let carried_by = |clip: &Clip| {
             let mut carried = None;
             for rig in sequence.parents_of(clip).filter(|rig| rig.in_depth) {
-                let own = |name: &str| number(&param(&rig.clip, name).value_at(at - rig.clip.start));
+                let own =
+                    |name: &str| number(&param(&rig.clip, name).value_at(at - rig.clip.start));
                 let (back, pitch, yaw) = (own("z") * height, own("rotate_x"), own("rotate_y"));
                 if back == 0.0 && pitch == 0.0 && yaw == 0.0 {
                     continue;
@@ -612,11 +614,12 @@ impl Scene {
         let light = Irradiance::of(picture);
         let mut light = Some(light);
         for each in &mut self.lights {
-            if let Light::Environment(_, wanted, table) = each {
-                if wanted == track && table.is_none() {
-                    *table = light.take();
-                    break;
-                }
+            if let Light::Environment(_, wanted, table) = each
+                && wanted == track
+                && table.is_none()
+            {
+                *table = light.take();
+                break;
             }
         }
     }
@@ -1709,10 +1712,22 @@ pub(super) fn seen_of(
     let focal = scene.focal;
     // Each as the way that goes in from it, and how far in a point must at least be.
     let sides = [
-        (minus(times(scene.right, focal), times(scene.forward, left - cx)), 0.0),
-        (minus(times(scene.forward, right - cx), times(scene.right, focal)), 0.0),
-        (minus(times(scene.down, focal), times(scene.forward, top - cy)), 0.0),
-        (minus(times(scene.forward, bottom - cy), times(scene.down, focal)), 0.0),
+        (
+            minus(times(scene.right, focal), times(scene.forward, left - cx)),
+            0.0,
+        ),
+        (
+            minus(times(scene.forward, right - cx), times(scene.right, focal)),
+            0.0,
+        ),
+        (
+            minus(times(scene.down, focal), times(scene.forward, top - cy)),
+            0.0,
+        ),
+        (
+            minus(times(scene.forward, bottom - cy), times(scene.down, focal)),
+            0.0,
+        ),
         (scene.forward, NEAR * scene.height),
     ];
     let from_eye = minus(plane.origin, scene.eye);
@@ -1736,7 +1751,10 @@ pub(super) fn seen_of(
             }
             if (a >= 0.0) != (b >= 0.0) {
                 let along = a / (a - b);
-                kept.push((from.0 + (to.0 - from.0) * along, from.1 + (to.1 - from.1) * along));
+                kept.push((
+                    from.0 + (to.0 - from.0) * along,
+                    from.1 + (to.1 - from.1) * along,
+                ));
             }
         }
         corners = kept;
@@ -1749,7 +1767,12 @@ pub(super) fn seen_of(
         least = [least[0].min(u), least[1].min(v)];
         most = [most[0].max(u), most[1].max(v)];
     }
-    Some(Rect::new(least[0], least[1], most[0] - least[0], most[1] - least[1]))
+    Some(Rect::new(
+        least[0],
+        least[1],
+        most[0] - least[0],
+        most[1] - least[1],
+    ))
 }
 
 /// How much of its size to read a picture at when it lands far smaller than it was drawn, or it would
@@ -2136,7 +2159,9 @@ mod tests {
         opaque.px.iter_mut().for_each(|channel| *channel = 1.0);
         let mut half = opaque.clone();
         half.px
-            .as_chunks_mut::<4>().0.iter_mut()
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
             .enumerate()
             .filter(|(at, _)| at % 100 >= 50)
             .for_each(|(_, pixel)| pixel.fill(0.0));

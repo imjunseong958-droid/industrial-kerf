@@ -7,6 +7,5 @@ description = "Safe yt-dlp adapter for the native Kerf workflow"
 
 [dependencies]
 
-# Empty on purpose: this crate does not take the workspace's lints. The root
-# Cargo.toml says why.
 [lints]
+workspace = true

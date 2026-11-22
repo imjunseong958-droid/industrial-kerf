@@ -3,11 +3,12 @@
 //! here without kerfd, and the program is saved into the library.
 
 use crate::collab::git_text;
+use crate::event::{Event, LookEntry, PresetEntry, PresetLibrary, PresetMade, PresetSlot};
 use kerf_collab::scaffold::PRESETS_DIR;
 use kerf_lang::preset::{self, Preset};
 use kerf_mcp::PRESET_FOLDERS;
 use kerf_model::{Catalog, Content, Id, Project};
-use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
@@ -41,20 +42,22 @@ pub(crate) fn library_files(directory: &Path) -> Vec<PathBuf> {
 
 /// The `preset_library` event for the project in `directory`: the
 /// presets, and the effects presets saved in `presets/looks/`.
-pub(crate) fn library(directory: &Path) -> Value {
-    let presets: Vec<Value> = library_files(directory)
+pub(crate) fn library(directory: &Path) -> Event {
+    let presets = library_files(directory)
         .iter()
         .map(|relative| entry(directory, relative))
         .collect();
-    json!({"type": "preset_library",
-        "directory": directory.join(PRESETS_DIR).to_string_lossy(),
-        "presets": presets, "looks": looks(directory)})
+    Event::PresetLibrary(PresetLibrary {
+        directory: directory.join(PRESETS_DIR).to_string_lossy().into_owned(),
+        presets,
+        looks: looks(directory),
+    })
 }
 
 /// The effects presets in `presets/looks/`, in name order: `{path, name,
 /// id, version, effects, author?, updated?}`, or `{path, name, error}` for
 /// one that does not read.
-fn looks(directory: &Path) -> Vec<Value> {
+fn looks(directory: &Path) -> Vec<LookEntry> {
     let folder = directory.join(crate::looks::LOOKS_DIR);
     let Ok(entries) = fs::read_dir(&folder) else {
         return Vec::new();
@@ -89,19 +92,29 @@ fn looks(directory: &Path) -> Vec<Value> {
                         .iter()
                         .filter(|line| matches!(line, kerf_model::look::Line::Fx { .. }))
                         .count();
-                    json!({"path": path, "name": look.name, "id": look.id.as_str(),
-                        "version": look.version, "effects": effects})
+                    LookEntry {
+                        path: path.clone(),
+                        name: look.name,
+                        id: Some(look.id.as_str().to_owned()),
+                        version: Some(look.version),
+                        effects: Some(effects),
+                        ..LookEntry::default()
+                    }
                 }
-                Err(message) => json!({"path": path, "name": name, "error": message}),
+                Err(message) => LookEntry {
+                    path: path.clone(),
+                    name,
+                    error: Some(message),
+                    ..LookEntry::default()
+                },
             };
             if let Some(line) = git_text(
                 directory,
                 &["log", "-1", "--format=%an%x1f%cI", "--", &path],
-            ) {
-                if let Some((author, updated)) = line.split_once('\u{1f}') {
-                    entry["author"] = json!(author);
-                    entry["updated"] = json!(updated);
-                }
+            ) && let Some((author, updated)) = line.split_once('\u{1f}')
+            {
+                entry.author = Some(author.to_owned());
+                entry.updated = Some(updated.to_owned());
             }
             entry
         })
@@ -110,30 +123,40 @@ fn looks(directory: &Path) -> Vec<Value> {
 
 /// One library entry: what the preset needs, and who last changed it when
 /// the project is in a repository.
-fn entry(directory: &Path, relative: &Path) -> Value {
+fn entry(directory: &Path, relative: &Path) -> PresetEntry {
     let path = relative.to_string_lossy().replace('\\', "/");
     let mut entry = match read(&directory.join(relative)) {
         Ok((_, preset)) => {
             let (slots, texts) = summary(&preset);
-            json!({"path": path, "name": preset.pattern.name, "slots": slots, "texts": texts,
-                "made": made(&preset)})
+            PresetEntry {
+                path: path.clone(),
+                name: preset.pattern.name.clone(),
+                slots,
+                texts,
+                made: Some(made(&preset)),
+                ..PresetEntry::default()
+            }
         }
         Err(message) => {
             let name = relative
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            json!({"path": path, "name": name, "slots": [], "texts": {}, "error": message})
+            PresetEntry {
+                path: path.clone(),
+                name,
+                error: Some(message),
+                ..PresetEntry::default()
+            }
         }
     };
     if let Some(line) = git_text(
         directory,
         &["log", "-1", "--format=%an%x1f%cI", "--", &path],
-    ) {
-        if let Some((author, updated)) = line.split_once('\u{1f}') {
-            entry["author"] = json!(author);
-            entry["updated"] = json!(updated);
-        }
+    ) && let Some((author, updated)) = line.split_once('\u{1f}')
+    {
+        entry.author = Some(author.to_owned());
+        entry.updated = Some(updated.to_owned());
     }
     entry
 }
@@ -160,33 +183,34 @@ pub(crate) fn read(path: &Path) -> Result<(String, Preset), String> {
 /// A preset's media slots (`{id, seconds, video, audio, clips}`, where
 /// `clips` counts the pattern's clips that use it) and its text slots. The
 /// media it makes from steps are not slots: nothing binds them.
-pub(crate) fn summary(preset: &Preset) -> (Value, Value) {
+pub(crate) fn summary(preset: &Preset) -> (Vec<PresetSlot>, BTreeMap<String, String>) {
     let pattern = &preset.pattern;
-    let slots: Vec<Value> = preset::slots(pattern)
-        .map(|slot| {
-            json!({"id": slot.id.as_str(), "seconds": slot.duration.seconds(),
-                "video": slot.video.is_some(), "audio": slot.audio.is_some(),
-                "clips": clips_using(pattern, &slot.id)})
+    let slots = preset::slots(pattern)
+        .map(|slot| PresetSlot {
+            id: slot.id.as_str().to_owned(),
+            seconds: slot.duration.seconds(),
+            video: slot.video.is_some(),
+            audio: slot.audio.is_some(),
+            clips: clips_using(pattern, &slot.id),
         })
         .collect();
-    let texts: Map<String, Value> = preset::text_slots(pattern)
-        .into_iter()
-        .map(|(clip, text)| (clip, Value::String(text)))
-        .collect();
-    (Value::Array(slots), Value::Object(texts))
+    (slots, preset::text_slots(pattern))
 }
 
 /// The media a preset makes from the steps under their lines, which applying
 /// it adds to the project: `{id, of, steps, clips}`, `of` the slot it is of
 /// frame for frame where it is one's, and `steps` as the document writes them.
-pub(crate) fn made(preset: &Preset) -> Value {
+pub(crate) fn made(preset: &Preset) -> Vec<PresetMade> {
     let pattern = &preset.pattern;
     preset::made(pattern)
         .map(|media| {
             let steps: Vec<String> = media.steps.iter().map(kerf_lang::print_step).collect();
-            json!({"id": media.id.as_str(),
-                "of": preset::footage_of(media).map(|slot| slot.to_string()),
-                "steps": steps, "clips": clips_using(pattern, &media.id)})
+            PresetMade {
+                id: media.id.as_str().to_owned(),
+                of: preset::footage_of(media).map(|slot| slot.to_string()),
+                steps,
+                clips: clips_using(pattern, &media.id),
+            }
         })
         .collect()
 }
@@ -246,6 +270,7 @@ pub(crate) fn save(
             kerf_collab::media::incoming_path(directory, ".kerfpreset").map_err(failed)?;
         let written = fs::write(&temporary, document).and_then(|_| fs::rename(&temporary, &path));
         if let Err(error) = written {
+            // The write's error is the one to report; this only tidies the temporary file.
             let _ = fs::remove_file(&temporary);
             return Err(failed(error));
         }
@@ -264,6 +289,7 @@ pub(crate) fn save(
         .write_all(document.as_bytes())
         .and_then(|_| output.sync_all())
     {
+        // The write's error is the one to report; this only tidies the half-written file.
         let _ = fs::remove_file(&path);
         return Err(failed(error));
     }

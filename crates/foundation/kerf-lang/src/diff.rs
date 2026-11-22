@@ -67,7 +67,7 @@ pub fn diff_text(before: &str, after: &str) -> String {
             range(old_start, old_end - old_start),
             range(new_start, new_end - new_start)
         )
-        .unwrap();
+        .expect("writing to a String cannot fail");
         for (k, edit) in edits.iter().enumerate().take(to).skip(from) {
             let (i, j) = positions[k];
             match edit {
@@ -75,7 +75,7 @@ pub fn diff_text(before: &str, after: &str) -> String {
                 Edit::Remove => writeln!(out, "-{}", old[i]),
                 Edit::Add => writeln!(out, "+{}", new[j]),
             }
-            .unwrap();
+            .expect("writing to a String cannot fail");
         }
         start = to;
     }

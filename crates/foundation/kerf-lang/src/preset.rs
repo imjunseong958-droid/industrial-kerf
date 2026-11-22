@@ -198,7 +198,9 @@ fn travelling(project: &Project, root: &Id) -> Result<Travelling, String> {
                 match &clip.content {
                     Content::Sequence { sequence, .. } => sequences.push(sequence.clone()),
                     Content::Media { media, .. } => {
-                        let source = project.media(media.as_str()).expect("validated media");
+                        let source = project
+                            .media(media.as_str())
+                            .expect("export's valid() checked every media clip's media");
                         if let Some(recipe) = &source.recipe {
                             return Err(format!(
                                 "the steps of media `{media}` are in the recipe file `{recipe}`, which a preset does not carry: carry them into the document first (`kerf carry {media}`, or an agent's `edit` with `carry`)"
@@ -219,7 +221,9 @@ fn travelling(project: &Project, root: &Id) -> Result<Travelling, String> {
         if travel.made.contains(&id) {
             continue;
         }
-        let media = project.media(id.as_str()).expect("validated media");
+        let media = project
+            .media(id.as_str())
+            .expect("travelling puts in `made` only media it found in the project");
         travel.made.push(id.clone());
         for step in &media.steps {
             for (named, name) in step.names() {
@@ -273,7 +277,7 @@ pub fn export(
         pattern.sequences.push(
             project
                 .sequence(id.as_str())
-                .expect("visited sequence")
+                .expect("travelling keeps only sequences it found in the project")
                 .clone(),
         );
     }
@@ -299,7 +303,9 @@ pub fn export(
     // Footage a making reads is one slot: the making is of that one file.
     let mut footage_slots = BTreeMap::<Id, Id>::new();
     for footage in travel.footage.values() {
-        let source = project.media(footage.as_str()).expect("validated media");
+        let source = project
+            .media(footage.as_str())
+            .expect("travelling keeps as footage only media it found in the project");
         let mut slot = new_slot(source, slot_ids.next("slot"));
         // A model reads its picture.
         slot.video = source.video;
@@ -311,7 +317,9 @@ pub fn export(
         .made
         .iter()
         .map(|id| {
-            let media = project.media(id.as_str()).expect("validated media");
+            let media = project
+                .media(id.as_str())
+                .expect("travelling puts in `made` only media it found in the project");
             (
                 media.path.clone(),
                 format!("{MADE}{id}{}", extension(&media.path)),
@@ -322,7 +330,10 @@ pub fn export(
         .made
         .iter()
         .map(|id| {
-            let mut media = project.media(id.as_str()).expect("validated media").clone();
+            let mut media = project
+                .media(id.as_str())
+                .expect("travelling puts in `made` only media it found in the project")
+                .clone();
             media.path.clone_from(&made_paths[&media.path]);
             media.start = Time::ZERO;
             media.reel = None;
@@ -367,7 +378,9 @@ pub fn export(
                         None => continue,
                     }
                 } else {
-                    let source = project.media(media.as_str()).expect("validated media");
+                    let source = project
+                        .media(media.as_str())
+                        .expect("export's valid() checked every media clip's media");
                     let key = match footage_slots.contains_key(media) {
                         true => (media.clone(), media.clone()),
                         false => (
@@ -421,10 +434,9 @@ pub fn export(
             if let Content::Media {
                 media, source_in, ..
             } = &mut clip.content
+                && let Some(offset) = offsets.get(media)
             {
-                if let Some(offset) = offsets.get(media) {
-                    *source_in -= *offset;
-                }
+                *source_in -= *offset;
             }
         }
     }
@@ -652,7 +664,10 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Preset, String> {
             .any(|c| matches!(&c.content, Content::Media { media: id, .. } if *id == media.id));
         if !played && !read.contains(media.path.as_str()) {
             return Err(match is_made(media) {
-                true => format!("unused made media `{}`: no clip plays it and no step reads it", media.id),
+                true => format!(
+                    "unused made media `{}`: no clip plays it and no step reads it",
+                    media.id
+                ),
                 false => format!("unused slot `{}`", media.id),
             });
         }
@@ -670,7 +685,12 @@ pub fn parse(document: &str, catalog: &Catalog) -> Result<Preset, String> {
 /// Where a pattern's sequences are reached from: its first, and each a step
 /// of a media it makes draws or holds a clip a step names.
 fn roots(pattern: &Project) -> Vec<Id> {
-    let mut roots: Vec<Id> = pattern.sequences.first().map(|s| s.id.clone()).into_iter().collect();
+    let mut roots: Vec<Id> = pattern
+        .sequences
+        .first()
+        .map(|s| s.id.clone())
+        .into_iter()
+        .collect();
     for (named, name) in made(pattern).flat_map(|m| &m.steps).flat_map(Step::names) {
         let found = match named {
             Named::Sequence => pattern.sequence(name).map(|s| s.id.clone()),
@@ -724,10 +744,7 @@ fn made_media(pattern: &Project, media: &Media) -> Result<(), String> {
             Named::Sequence => pattern.sequence(name).is_none().then_some("sequence"),
             Named::Clip => (!has_clip(name)).then_some("clip"),
             Named::File => match (name.strip_prefix(SLOT), name.strip_prefix(MADE)) {
-                (Some(slot), _) => pattern
-                    .media(slot)
-                    .is_none_or(is_made)
-                    .then_some("slot"),
+                (Some(slot), _) => pattern.media(slot).is_none_or(is_made).then_some("slot"),
                 (_, Some(_)) => (!made(pattern).any(|m| m.path == name)).then_some("made media"),
                 // A file of the project it is applied to, which its making reads there.
                 _ => None,
@@ -911,7 +928,9 @@ pub fn instantiate_with_ids(
         placed.path.clone_from(&made_paths[&media.path]);
         if let Some(slot) = footage_of(media) {
             let binding = &bindings[slot.as_str()];
-            let bound = project.media(binding.media.as_str()).expect("checked binding");
+            let bound = project
+                .media(binding.media.as_str())
+                .expect("parse checked the step names a slot, and the slots loop its binding");
             placed.rate = bound.rate;
             placed.drop_frame = bound.drop_frame;
             placed.duration = bound.duration;
@@ -920,9 +939,10 @@ pub fn instantiate_with_ids(
         }
         for step in &mut placed.steps {
             step.rename(|named, name| match named {
-                Named::Sequence | Named::Clip => {
-                    Id::new(name).ok().and_then(|id| ids.get(&id)).map(Id::to_string)
-                }
+                Named::Sequence | Named::Clip => Id::new(name)
+                    .ok()
+                    .and_then(|id| ids.get(&id))
+                    .map(Id::to_string),
                 Named::File => match name.strip_prefix(SLOT) {
                     Some(slot) => bindings
                         .get(slot)
@@ -964,12 +984,11 @@ pub fn instantiate_with_ids(
                     };
                     for (name, param) in &mut effect.params {
                         let time = def.find(name).is_some_and(|d| d.ty == ParamType::Time);
-                        if let (true, Param::Static(Value::Text(marker))) = (time, param) {
-                            if let Some(id) =
+                        if let (true, Param::Static(Value::Text(marker))) = (time, param)
+                            && let Some(id) =
                                 Id::new(marker.as_str()).ok().and_then(|id| ids.get(&id))
-                            {
-                                *marker = id.to_string();
-                            }
+                        {
+                            *marker = id.to_string();
                         }
                     }
                 }
@@ -1037,7 +1056,7 @@ pub fn instantiate_with_ids(
     for original in sequence_order {
         let sequence = pattern
             .sequence(ids[&original].as_str())
-            .expect("remapped sequence");
+            .expect("each sequence of the pattern was given its new id above");
         if original == root {
             ops.push(Op::SetSequence {
                 sequence: target.clone(),

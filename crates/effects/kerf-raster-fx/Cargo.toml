@@ -2,7 +2,7 @@
 name = "kerf-raster-fx"
 description = "The EffectCraft effects Kerf keeps: their specs, parameters, and CPU implementations on kerf-raster images"
 version.workspace = true
-edition = "2024"
+edition.workspace = true
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
 
@@ -12,5 +12,5 @@ workspace = true
 [dependencies]
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-raster = { path = "../../render/kerf-raster" }
-rayon = { workspace = true }
+rayon.workspace = true
 

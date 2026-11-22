@@ -224,10 +224,8 @@ fn trimmed(
     (start, end, offset): (f32, f32, f32),
 ) -> Vec<Vec<[f32; 2]>> {
     let mut path: Vec<[f32; 2]> = points.to_vec();
-    if closed {
-        if let Some(first) = points.first() {
-            path.push(*first);
-        }
+    if closed && let Some(first) = points.first() {
+        path.push(*first);
     }
     let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
     if path.len() < 2 || end <= start {
@@ -586,7 +584,13 @@ mod tests {
     }
 
     fn area(image: &Image) -> f32 {
-        image.px.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).sum()
+        image
+            .px
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| pixel[3])
+            .sum()
     }
 
     #[test]

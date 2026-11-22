@@ -2,12 +2,13 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, Author, EditOp, RenderJob,
-    RenderRange, RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest,
-    RuntimeResponse, StartRenderOptions, StateSnapshot,
+    io_error, kernel, unique_id, Author, EditOp, RenderJob, RenderRange, RequestEnvelope,
+    RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse, StartRenderOptions,
+    StateSnapshot,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{BufRead, Read, Write};
 use std::path::{Path, PathBuf};
@@ -194,18 +195,22 @@ fn user_runtime_directory() -> PathBuf {
             .map(|current| current.join(&directory))
             .unwrap_or(directory)
     };
+    // Binding the socket makes the folder again, and says why it cannot.
     let _ = fs::create_dir_all(&directory);
     #[cfg(unix)]
     {
+        // Private where it can be; where not, the socket's own mode and the
+        // peer check still keep other users out.
         let _ = fs::set_permissions(&directory, fs::Permissions::from_mode(0o700));
     }
     directory
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
+#[allow(unsafe_code)]
 fn current_user_id() -> Option<u32> {
-    // `geteuid` has no Rust wrapper on the supported Unix targets and does not
-    // dereference pointers or depend on process-owned state.
+    // SAFETY: `geteuid` has no Rust wrapper on the supported Unix targets and
+    // does not dereference pointers or depend on process-owned state.
     Some(unsafe { libc::geteuid() })
 }
 
@@ -226,6 +231,9 @@ struct RuntimeClientInner {
     directory: PathBuf,
     endpoint: EndpointAddress,
     binary: Option<PathBuf>,
+    /// Variables a daemon this client starts is given over this process's
+    /// environment.
+    daemon_env: Vec<(OsString, OsString)>,
     request_timeout: Duration,
     startup_timeout: Duration,
 }
@@ -270,6 +278,7 @@ impl RuntimeClient {
                 directory,
                 endpoint,
                 binary: binary.map(Path::to_path_buf),
+                daemon_env: Vec::new(),
                 request_timeout: CLIENT_REQUEST_TIMEOUT,
                 startup_timeout: CLIENT_STARTUP_TIMEOUT,
             }),
@@ -282,6 +291,25 @@ impl RuntimeClient {
     pub fn with_request_timeout(self, timeout: Duration) -> Self {
         let mut inner = Arc::unwrap_or_clone(self.inner);
         inner.request_timeout = timeout;
+        Self {
+            inner: Arc::new(inner),
+        }
+    }
+
+    /// This client, starting a daemon with `vars` set in its environment over
+    /// this process's: what a host hands kerfd, and the git it runs, without
+    /// changing its own environment. A daemon already listening keeps the
+    /// environment it was started with.
+    pub fn with_daemon_env<K, V>(self, vars: impl IntoIterator<Item = (K, V)>) -> Self
+    where
+        K: Into<OsString>,
+        V: Into<OsString>,
+    {
+        let mut inner = Arc::unwrap_or_clone(self.inner);
+        inner.daemon_env.extend(
+            vars.into_iter()
+                .map(|(name, value)| (name.into(), value.into())),
+        );
         Self {
             inner: Arc::new(inner),
         }
@@ -839,6 +867,8 @@ impl RuntimeClient {
                         // than the child waits for it; start one more once.
                         if !respawned {
                             respawned = true;
+                            // The last start's stderr; one left in the temp
+                            // folder harms nothing.
                             let _ = fs::remove_file(&said);
                             (child, said) = match self.spawn_daemon(binary) {
                                 Ok(next) => next,
@@ -864,7 +894,8 @@ impl RuntimeClient {
         // Gone from the folder while kerfd may still hold it open, which is fine.
         let _ = fs::remove_file(&said);
         // kerfd exits once it is idle, while this process may live on; reap
-        // it then so it does not linger as a zombie.
+        // it then so it does not linger as a zombie. With no thread to wait
+        // for it, it is reaped when this process ends.
         let _ = thread::Builder::new()
             .name("kerfd-reaper".into())
             .spawn(move || child.wait());
@@ -888,6 +919,12 @@ impl RuntimeClient {
         command
             .arg("--dir")
             .arg(&self.inner.directory)
+            .envs(
+                self.inner
+                    .daemon_env
+                    .iter()
+                    .map(|(name, value)| (name, value)),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr);
@@ -911,6 +948,7 @@ impl RuntimeClient {
                 }
                 result => {
                     let child = result.map_err(|error| {
+                        // Empty, as nothing started to write to it.
                         let _ = fs::remove_file(&said);
                         RuntimeError::new(
                             "RUNTIME_UNAVAILABLE",
@@ -1071,6 +1109,7 @@ impl Drop for RuntimeLease {
     fn drop(&mut self) {
         self.state.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
+            // One that panicked has stopped holding the lease all the same.
             let _ = thread.join();
         }
     }
@@ -1545,6 +1584,8 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
         let activity = Arc::new(Activity::new());
         loop {
             if !directory.is_dir() || !owns_socket() {
+                // A socket left behind refuses connections, and the next
+                // kerfd binds over it.
                 if owns_socket() {
                     let _ = fs::remove_file(path);
                 }
@@ -1554,6 +1595,7 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
                 Some(wait) => wait,
                 // Idle long enough, unless a client is already waiting.
                 None if !wait_for_connection(&listener, Duration::ZERO)? => {
+                    // As above: a socket left behind is bound over.
                     if owns_socket() {
                         let _ = fs::remove_file(path);
                     }
@@ -1818,8 +1860,9 @@ fn wait_for_connection(listener: &UnixListener, timeout: Duration) -> Result<boo
         revents: 0,
     };
     let timeout = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
-    // The single `pollfd` is valid for this synchronous call, and the socket
-    // descriptor is borrowed from `listener`.
+    #[allow(unsafe_code)]
+    // SAFETY: the single `pollfd` is valid for this synchronous call, and the
+    // socket descriptor is borrowed from `listener`.
     let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
     if ready < 0 {
         let error = std::io::Error::last_os_error();
@@ -1910,6 +1953,7 @@ fn serve_pending(listener: &UnixListener, handle: &RuntimeHandle, activity: &Arc
         }
     }
     for worker in workers {
+        // One that panicked has ended, which is all this waits for.
         let _ = worker.join();
     }
 }
@@ -1922,6 +1966,7 @@ fn serve_unix_connection(
     closing: bool,
 ) {
     if let Err(error) = verify_unix_peer(&stream) {
+        // Told why, if it still listens; it is not served either way.
         let _ = write_ipc_response(&mut stream, "", Err(error));
         return;
     }
@@ -1932,12 +1977,18 @@ fn serve_unix_connection(
     } else {
         SERVER_REQUEST_TIMEOUT
     };
-    let _ = stream.set_read_timeout(Some(read_timeout));
-    let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
+    if let Err(error) = stream.set_read_timeout(Some(read_timeout)) {
+        log::warn!("a client's request is read with no time limit: {error}");
+    }
+    if let Err(error) = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT)) {
+        log::warn!("a client's answer is written with no time limit: {error}");
+    }
     if serve_request(&mut stream, &handle, closing) {
         connection.hold();
         // A lease has no deadline: it ends when its client goes.
-        let _ = stream.set_read_timeout(None);
+        if let Err(error) = stream.set_read_timeout(None) {
+            log::warn!("a lease may end before its client goes: {error}");
+        }
         read_until_closed(&mut stream);
     }
 }
@@ -1963,6 +2014,8 @@ fn serve_pipe_connection(
     handle: RuntimeHandle,
     mut connection: Connection,
 ) {
+    // A pipe stream only keeps its time limits, so setting them here and
+    // below cannot fail.
     let _ = stream.set_read_timeout(Some(SERVER_REQUEST_TIMEOUT));
     let _ = stream.set_write_timeout(Some(SERVER_REQUEST_TIMEOUT));
     if serve_request(&mut stream, &handle, false) {
@@ -1984,6 +2037,7 @@ fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle, closin
     let line = match read_bounded_line(stream) {
         Ok(line) => line,
         Err(error) => {
+            // Told why, if it still listens.
             let _ = write_ipc_response(stream, "", Err(error));
             return false;
         }
@@ -1995,6 +2049,8 @@ fn serve_request<S: Read + Write>(stream: &mut S, handle: &RuntimeHandle, closin
     if should_drop_test_response(&line) {
         return false;
     }
+    // A client that stopped waiting gets no answer; what it asked for is
+    // done all the same.
     let _ = write_ipc_response(stream, &id, result);
     false
 }
@@ -2057,6 +2113,7 @@ fn write_ipc_response<W: Write>(
 }
 
 #[cfg(unix)]
+#[allow(unsafe_code)]
 fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
     #[cfg(target_os = "linux")]
     {
@@ -2066,8 +2123,8 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
             gid: 0,
         };
         let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        // The buffer and length are valid for this synchronous libc call, and
-        // the socket descriptor is borrowed from `stream`.
+        // SAFETY: the buffer and length are valid for this synchronous libc
+        // call, and the socket descriptor is borrowed from `stream`.
         let result = unsafe {
             libc::getsockopt(
                 stream.as_raw_fd(),
@@ -2080,7 +2137,7 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
         if result != 0 {
             return Err(ipc_error(std::io::Error::last_os_error()));
         }
-        // `geteuid` is a side-effect-free libc query with no pointer argument.
+        // SAFETY: `geteuid` is a side-effect-free libc query with no pointer argument.
         if credentials.uid != unsafe { libc::geteuid() } {
             return Err(RuntimeError::new(
                 "IPC_UNAUTHORIZED_PEER",
@@ -2093,14 +2150,14 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
     {
         let mut effective_uid = 0;
         let mut effective_gid = 0;
-        // `getpeereid` writes only to the two local uid/gid values and uses the
-        // borrowed socket descriptor for the duration of this call.
+        // SAFETY: `getpeereid` writes only to the two local uid/gid values and
+        // uses the borrowed socket descriptor for the duration of this call.
         let result =
             unsafe { libc::getpeereid(stream.as_raw_fd(), &mut effective_uid, &mut effective_gid) };
         if result != 0 {
             return Err(ipc_error(std::io::Error::last_os_error()));
         }
-        // `geteuid` is a side-effect-free libc query with no pointer argument.
+        // SAFETY: `geteuid` is a side-effect-free libc query with no pointer argument.
         if effective_uid != unsafe { libc::geteuid() } {
             return Err(RuntimeError::new(
                 "IPC_UNAUTHORIZED_PEER",

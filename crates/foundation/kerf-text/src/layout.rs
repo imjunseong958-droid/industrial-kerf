@@ -116,7 +116,15 @@ impl Hash for TextStyle {
         hf(h, self.size);
         hf(h, self.tracking);
         hf(h, self.baseline_shift);
-        (self.kerning, self.ligatures, self.faux_bold, self.faux_italic, self.caps, self.underline).hash(h);
+        (
+            self.kerning,
+            self.ligatures,
+            self.faux_bold,
+            self.faux_italic,
+            self.caps,
+            self.underline,
+        )
+            .hash(h);
         for (tag, value) in &self.axes {
             tag.hash(h);
             hf(h, *value);
@@ -185,16 +193,30 @@ impl<'a> Styles<'a> {
     fn new(text: &str, base: &'a TextStyle, runs: &'a [StyleRun]) -> Self {
         let mut list = vec![base];
         list.extend(runs.iter().map(|r| &r.style));
-        let prim: Vec<Resolved> = list.iter().map(|s| fonts::resolve(&s.family, &s.style)).collect();
-        let axes = list.iter().zip(&prim).map(|(s, r)| fonts::style_axes(r, &s.style, &s.axes)).collect();
+        let prim: Vec<Resolved> = list
+            .iter()
+            .map(|s| fonts::resolve(&s.family, &s.style))
+            .collect();
+        let axes = list
+            .iter()
+            .zip(&prim)
+            .map(|(s, r)| fonts::style_axes(r, &s.style, &s.axes))
+            .collect();
         let want = list
             .iter()
             .zip(&prim)
             .map(|(s, r)| {
                 let f = fonts::face(r.face);
                 let weight = fonts::style_weight(&s.style).unwrap_or(f.info.weight);
-                let weight = if s.faux_bold || r.synth_bold { weight.max(700) } else { weight };
-                (weight, fonts::style_italic(&s.style) || f.info.italic || s.faux_italic)
+                let weight = if s.faux_bold || r.synth_bold {
+                    weight.max(700)
+                } else {
+                    weight
+                };
+                (
+                    weight,
+                    fonts::style_italic(&s.style) || f.info.italic || s.faux_italic,
+                )
             })
             .collect();
         let per_byte = (!runs.is_empty()).then(|| {
@@ -207,10 +229,19 @@ impl<'a> Styles<'a> {
             }
             v
         });
-        Styles { list, prim, axes, want, per_byte }
+        Styles {
+            list,
+            prim,
+            axes,
+            want,
+            per_byte,
+        }
     }
     fn at(&self, byte: usize) -> usize {
-        self.per_byte.as_ref().and_then(|v| v.get(byte)).map_or(0, |&i| i as usize)
+        self.per_byte
+            .as_ref()
+            .and_then(|v| v.get(byte))
+            .map_or(0, |&i| i as usize)
     }
     fn rich(&self) -> bool {
         self.per_byte.is_some()
@@ -268,8 +299,14 @@ impl Layout {
     /// Caret position `(x, baseline, line)` for byte offset `pos`.
     pub fn caret(&self, pos: usize) -> (f32, f32, usize) {
         let li = self.line_of(pos);
-        let Some(l) = self.lines.get(li) else { return (0.0, 0.0, 0) };
-        let x = l.carets.iter().min_by_key(|(b, _)| b.abs_diff(pos)).map_or(l.x, |c| c.1);
+        let Some(l) = self.lines.get(li) else {
+            return (0.0, 0.0, 0);
+        };
+        let x = l
+            .carets
+            .iter()
+            .min_by_key(|(b, _)| b.abs_diff(pos))
+            .map_or(l.x, |c| c.1);
         (x, l.baseline, li)
     }
     #[cfg(test)]
@@ -277,7 +314,11 @@ impl Layout {
     pub fn hit(&self, x: f32, y: f32) -> usize {
         let d = |l: &Line| {
             if self.vertical {
-                let dx = if x < l.x - l.ascent * 0.5 { l.x - l.ascent * 0.5 - x } else { (x - l.x - l.width - l.ascent * 0.5).max(0.0) };
+                let dx = if x < l.x - l.ascent * 0.5 {
+                    l.x - l.ascent * 0.5 - x
+                } else {
+                    (x - l.x - l.width - l.ascent * 0.5).max(0.0)
+                };
                 line_dist(l, y) + dx
             } else {
                 line_dist(l, y)
@@ -286,7 +327,10 @@ impl Layout {
         let Some(l) = self.lines.iter().min_by(|a, b| d(a).total_cmp(&d(b))) else {
             return 0;
         };
-        l.carets.iter().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map_or(l.range.start, |c| c.0)
+        l.carets
+            .iter()
+            .min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs()))
+            .map_or(l.range.start, |c| c.0)
     }
     #[cfg(test)]
     /// Selection highlight rectangles `[x0, y0, x1, y1]` for the byte range `a..b`.
@@ -299,7 +343,12 @@ impl Layout {
             if s > e || (s == e && !(a < l.range.start && b > l.range.end)) {
                 continue;
             }
-            let xs: Vec<f32> = l.carets.iter().filter(|(p, _)| *p >= s && *p <= e).map(|c| c.1).collect();
+            let xs: Vec<f32> = l
+                .carets
+                .iter()
+                .filter(|(p, _)| *p >= s && *p <= e)
+                .map(|c| c.1)
+                .collect();
             if xs.len() < 2 && b <= l.range.end {
                 continue;
             }
@@ -308,7 +357,12 @@ impl Layout {
             if b > l.range.end {
                 x1 += l.ascent * 0.25; // selected newline
             }
-            out.push([x0.min(x1), l.baseline - l.ascent, x1, l.baseline + l.descent]);
+            out.push([
+                x0.min(x1),
+                l.baseline - l.ascent,
+                x1,
+                l.baseline + l.descent,
+            ]);
         }
         out
     }
@@ -359,18 +413,40 @@ fn uses_vertical_form(c: char) -> bool {
     matches!(c as u32, 0x2E80..=0x9FFF | 0xF900..=0xFAFF | 0xFE10..=0xFE1F | 0xFE30..=0xFE4F | 0xFF00..=0xFFEF | 0x20000..=0x3FFFF)
 }
 
-fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId, size: f32, style: &TextStyle, axes: &[fonts::Axis], vertical: bool) -> Vec<ShapedGlyph> {
+fn shape_item(
+    text: &str,
+    chars: &[(usize, char, char)],
+    rtl: bool,
+    face: FaceId,
+    size: f32,
+    style: &TextStyle,
+    axes: &[fonts::Axis],
+    vertical: bool,
+) -> Vec<ShapedGlyph> {
     let f = fonts::face(face);
-    let (Some(font), Some(data)) = (f.font(), f.shaper_data()) else { return Vec::new() };
-    let variations = (!axes.is_empty())
-        .then(|| harfrust::ShaperInstance::from_variations(&font, fonts::settled(axes).map(|(tag, value)| harfrust::Variation { tag: Tag::new(&tag), value })));
+    let (Some(font), Some(data)) = (f.font(), f.shaper_data()) else {
+        return Vec::new();
+    };
+    let variations = (!axes.is_empty()).then(|| {
+        harfrust::ShaperInstance::from_variations(
+            &font,
+            fonts::settled(axes).map(|(tag, value)| harfrust::Variation {
+                tag: Tag::new(&tag),
+                value,
+            }),
+        )
+    });
     let instance = fonts::instance(face, axes);
     let shaper = data.shaper(&font).instance(variations.as_ref()).build();
     let mut buf = UnicodeBuffer::new();
     for &(b, _, sc) in chars {
         buf.add(if sc == '\t' { ' ' } else { sc }, b as u32);
     }
-    buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
+    buf.set_direction(if rtl {
+        Direction::RightToLeft
+    } else {
+        Direction::LeftToRight
+    });
     buf.guess_segment_properties();
     let mut feats = Vec::new();
     if vertical && chars.first().is_some_and(|c| uses_vertical_form(c.1)) {
@@ -385,9 +461,15 @@ fn shape_item(text: &str, chars: &[(usize, char, char)], rtl: bool, face: FaceId
         feats.push(Feature::new(Tag::new(b"clig"), 0, ..));
     }
     // Last, so that what the style asks for by name holds over the switches above.
-    feats.extend(style.features.iter().map(|(tag, value)| Feature::new(Tag::new(tag), *value, ..)));
+    feats.extend(
+        style
+            .features
+            .iter()
+            .map(|(tag, value)| Feature::new(Tag::new(tag), *value, ..)),
+    );
     let out = shaper.shape(buf, harfrust::ShapeOptions::new().features(&feats));
     let k = size / f.units_per_em();
+    // What is shaped comes from `chars`, which hold their offsets into `text`.
     let _ = text;
     out.glyph_infos()
         .iter()
@@ -422,13 +504,17 @@ struct ParaLine {
 /// upright one slanted where the text is italic, unless it draws in colour or sets its own axes.
 fn synthesised(sty: &Styles, si: usize, face: FaceId) -> (bool, bool) {
     let (st, pr) = (sty.list[si], sty.prim[si]);
-    let (mut bold, mut italic) = (pr.synth_bold || st.faux_bold, pr.synth_italic || st.faux_italic);
+    let (mut bold, mut italic) = (
+        pr.synth_bold || st.faux_bold,
+        pr.synth_italic || st.faux_italic,
+    );
     if face != pr.face {
         let f = fonts::face(face);
         let (weight, slant) = sty.want[si];
         if !f.info.color {
             let axes = f.axes();
-            bold |= weight >= 600 && f.info.weight <= 500 && !axes.iter().any(|a| &a.tag == b"wght");
+            bold |=
+                weight >= 600 && f.info.weight <= 500 && !axes.iter().any(|a| &a.tag == b"wght");
             italic |= slant && !f.info.italic && !axes.iter().any(|a| &a.tag == b"ital");
         }
         bold &= !f.info.color;
@@ -454,7 +540,9 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
             underlines: Vec::new(),
         }];
     }
-    let default_level = para.rtl.map(|r| if r { Level::rtl() } else { Level::ltr() });
+    let default_level = para
+        .rtl
+        .map(|r| if r { Level::rtl() } else { Level::ltr() });
     let bidi = BidiInfo::new(text, default_level);
     let pinfo = &bidi.paragraphs[0];
     let base_rtl = pinfo.level.is_rtl();
@@ -469,7 +557,15 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                 Caps::Small if c.is_lowercase() => (upper_single(c), true),
                 Caps::Small => (c, false),
             };
-            (b, c, sc, sty.prim[si].face, bidi.levels[b].is_rtl(), small, si)
+            (
+                b,
+                c,
+                sc,
+                sty.prim[si].face,
+                bidi.levels[b].is_rtl(),
+                small,
+                si,
+            )
         })
         .collect();
     // A face per grapheme cluster, so that an emoji sequence, a base and its marks, or a character
@@ -482,7 +578,9 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
             k += 1;
         }
         let members = &chars[start..k];
-        let Some(&(_, _, sc, pf, _, _, si)) = members.first() else { continue };
+        let Some(&(_, _, sc, pf, _, _, si)) = members.first() else {
+            continue;
+        };
         if sc.is_whitespace() {
             continue;
         }
@@ -498,13 +596,31 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
     while i < chars.len() {
         let (face, rtl, small, si) = (chars[i].3, chars[i].4, chars[i].5, chars[i].6);
         let mut j = i + 1;
-        while j < chars.len() && chars[j].3 == face && chars[j].4 == rtl && chars[j].5 == small && chars[j].6 == si {
+        while j < chars.len()
+            && chars[j].3 == face
+            && chars[j].4 == rtl
+            && chars[j].5 == small
+            && chars[j].6 == si
+        {
             j += 1;
         }
         let st = sty.list[si];
         let sub: Vec<(usize, char, char)> = chars[i..j].iter().map(|c| (c.0, c.1, c.2)).collect();
-        let size = if small { st.size * SMALL_CAPS_SCALE } else { st.size };
-        let mut glyphs = shape_item(text, &sub, rtl, face, size, st, &sty.axes[si], para.vertical);
+        let size = if small {
+            st.size * SMALL_CAPS_SCALE
+        } else {
+            st.size
+        };
+        let mut glyphs = shape_item(
+            text,
+            &sub,
+            rtl,
+            face,
+            size,
+            st,
+            &sty.axes[si],
+            para.vertical,
+        );
         // tracking after each cluster
         if st.tracking != 0.0 {
             let t = st.tracking * st.size / 1000.0;
@@ -514,8 +630,17 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                 }
             }
         }
-        let end = if j < chars.len() { chars[j].0 } else { text.len() };
-        items.push(Item { range: chars[i].0..end, rtl, glyphs, style: si });
+        let end = if j < chars.len() {
+            chars[j].0
+        } else {
+            text.len()
+        };
+        items.push(Item {
+            range: chars[i].0..end,
+            rtl,
+            glyphs,
+            style: si,
+        });
         i = j;
     }
     // advance per char byte (cluster start)
@@ -588,14 +713,17 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
         let mut extents: HashMap<usize, (f32, f32, bool)> = HashMap::new();
         for run in runs {
             let rtl = levels[run.start].is_rtl();
-            let mut idx: Vec<usize> = (0..items.len()).filter(|&k| items[k].range.start < run.end && items[k].range.end > run.start).collect();
+            let mut idx: Vec<usize> = (0..items.len())
+                .filter(|&k| items[k].range.start < run.end && items[k].range.end > run.start)
+                .collect();
             if rtl {
                 idx.reverse();
             }
             for k in idx {
                 let si = items[k].style;
                 let (st, pr) = (sty.list[si], sty.prim[si]);
-                let (synth_bold, synth_italic) = synthesised(sty, si, items[k].glyphs.first().map_or(pr.face, |g| g.face));
+                let (synth_bold, synth_italic) =
+                    synthesised(sty, si, items[k].glyphs.first().map_or(pr.face, |g| g.face));
                 for g in items[k].glyphs.iter().filter(|g| run.contains(&g.cluster)) {
                     let x0 = pen;
                     glyphs.push(Glyph {
@@ -624,7 +752,10 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
         let mut carets = Vec::new();
         let mut cluster_starts: Vec<usize> = extents.keys().copied().collect();
         cluster_starts.sort_unstable();
-        let char_bytes: Vec<usize> = text[r.clone()].char_indices().map(|(b, _)| r.start + b).collect();
+        let char_bytes: Vec<usize> = text[r.clone()]
+            .char_indices()
+            .map(|(b, _)| r.start + b)
+            .collect();
         let mut first_member = 0usize;
         for (ci, &cs) in cluster_starts.iter().enumerate() {
             let (x0, x1, rtl) = extents[&cs];
@@ -640,7 +771,11 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
             let n = members.len().max(1) as f32;
             for (mi, b) in members.iter().enumerate() {
                 let f = mi as f32 / n;
-                let x = if rtl { x1 - (x1 - x0) * f } else { x0 + (x1 - x0) * f };
+                let x = if rtl {
+                    x1 - (x1 - x0) * f
+                } else {
+                    x0 + (x1 - x0) * f
+                };
                 carets.push((base + b, x));
             }
         }
@@ -652,7 +787,9 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                 .filter(|&&cs| cs < ce)
                 .filter_map(|&cs| {
                     let si = sty.at(base + cs);
-                    sty.list[si].underline.then(|| (extents[&cs].0, extents[&cs].1, si as u16))
+                    sty.list[si]
+                        .underline
+                        .then(|| (extents[&cs].0, extents[&cs].1, si as u16))
                 })
                 .collect();
             segs.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -692,7 +829,11 @@ fn paragraph(text: &str, base: usize, sty: &Styles, para: &ParagraphStyle) -> Ve
                 desc = desc.max(m.descent);
             }
         }
-        let content_w = if space_extra > 0.0 { para.width.unwrap_or(content) } else { content };
+        let content_w = if space_extra > 0.0 {
+            para.width.unwrap_or(content)
+        } else {
+            content
+        };
         out.push(ParaLine {
             range: base + r.start..base + r.end,
             glyphs,
@@ -713,11 +854,20 @@ pub fn layout_uncached(text: &str, style: &TextStyle, para: &ParagraphStyle) -> 
 }
 
 /// Lay out `text` with per-character style runs (see [`StyleRun`]); `style` is the base style.
-pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], para: &ParagraphStyle) -> Layout {
+pub fn layout_rich_uncached(
+    text: &str,
+    style: &TextStyle,
+    runs: &[StyleRun],
+    para: &ParagraphStyle,
+) -> Layout {
     let sty = Styles::new(text, style, runs);
     let pm = fonts::face(sty.prim[0].face).metrics(style.size);
     let line_h = (pm.ascent + pm.descent + pm.line_gap).max(style.size * 0.5) + para.leading;
-    let mut lay = Layout { missing_font: sty.prim.iter().any(|p| p.missing), text_len: text.len(), ..Default::default() };
+    let mut lay = Layout {
+        missing_font: sty.prim.iter().any(|p| p.missing),
+        text_len: text.len(),
+        ..Default::default()
+    };
     if para.vertical {
         return layout_vertical(text, &sty, para, line_h, lay);
     }
@@ -740,7 +890,11 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
     for (i, pl) in plines.into_iter().enumerate() {
         if i > 0 {
             // rich text: a line holding a larger run pushes its baseline down
-            baseline += if rich { line_h.max(prev_desc + pl.ascent + para.leading) } else { line_h };
+            baseline += if rich {
+                line_h.max(prev_desc + pl.ascent + para.leading)
+            } else {
+                line_h
+            };
             if box_h.is_some_and(|h| baseline + pl.descent > h + 0.01) {
                 lay.overflow = true;
                 break;
@@ -767,12 +921,14 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
                 let st = sty.list[*si as usize];
                 let um = fonts::face(sty.prim[*si as usize].face).metrics(st.size);
                 let y = baseline - st.baseline_shift + um.underline_pos;
-                lay.underlines.push([x0 + shift, y, x1 + shift, y + um.underline_thickness]);
+                lay.underlines
+                    .push([x0 + shift, y, x1 + shift, y + um.underline_thickness]);
                 lay.underline_runs.push(*si);
             }
         } else if style.underline && pl.content > 0.0 {
             let y = baseline - style.baseline_shift + pm.underline_pos;
-            lay.underlines.push([x, y, x + pl.content, y + pm.underline_thickness]);
+            lay.underlines
+                .push([x, y, x + pl.content, y + pm.underline_thickness]);
             lay.underline_runs.push(0);
         }
         lay.lines.push(Line {
@@ -783,7 +939,11 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
             ascent: pl.ascent,
             descent: pl.descent,
             glyphs: g0..lay.glyphs.len(),
-            carets: pl.carets.into_iter().map(|(b, cx)| (b, cx + shift)).collect(),
+            carets: pl
+                .carets
+                .into_iter()
+                .map(|(b, cx)| (b, cx + shift))
+                .collect(),
         });
     }
     let (mut x0, mut x1) = (f32::MAX, f32::MIN);
@@ -796,7 +956,12 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
         x1 = x1.max(w);
     }
     if let (Some(first), Some(last)) = (lay.lines.first(), lay.lines.last()) {
-        lay.bounds = [x0, first.baseline - first.ascent, x1.max(x0), last.baseline + last.descent];
+        lay.bounds = [
+            x0,
+            first.baseline - first.ascent,
+            x1.max(x0),
+            last.baseline + last.descent,
+        ];
     }
     if let Some(h) = box_h {
         // a sized box is its own bounds, however much text it holds
@@ -808,11 +973,20 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
 
 /// Vertical layout: each grapheme is its own line (so carets, hit testing and selection work
 /// unchanged), stacked top to bottom and centred on its column; columns run right to left.
-fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, mut lay: Layout) -> Layout {
+fn layout_vertical(
+    text: &str,
+    sty: &Styles,
+    para: &ParagraphStyle,
+    col_w: f32,
+    mut lay: Layout,
+) -> Layout {
     let style = sty.list[0];
     let pm = fonts::face(sty.prim[0].face).metrics(style.size);
     let row = (pm.ascent + pm.descent).max(style.size * 0.5) + style.tracking * style.size / 1000.0;
-    let flat = ParagraphStyle { vertical: true, ..Default::default() };
+    let flat = ParagraphStyle {
+        vertical: true,
+        ..Default::default()
+    };
     lay.vertical = true;
     let rich = sty.rich();
     let mut base = 0usize;
@@ -843,7 +1017,10 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
                 // The alternate glyph hangs from its vertical origin. A horizontal ascent
                 // is not the top bearing of a vertical punctuation glyph (OpenType VORG/vmtx).
                 let font = fonts::face(g.face);
-                if text.get(g.cluster..).and_then(|s| s.chars().next()).is_some_and(uses_vertical_form)
+                if text
+                    .get(g.cluster..)
+                    .and_then(|s| s.chars().next())
+                    .is_some_and(uses_vertical_form)
                     && let Some(origin) = font.vertical_origin(g.id, g.size)
                 {
                     g.y += baseline - pl.ascent + origin;
@@ -859,12 +1036,14 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
                     let st = sty.list[*si as usize];
                     let um = fonts::face(sty.prim[*si as usize].face).metrics(st.size);
                     let x = *x1 + shift - st.baseline_shift + um.underline_pos;
-                    lay.underlines.push([x, y_top, x + um.underline_thickness, y_top + row]);
+                    lay.underlines
+                        .push([x, y_top, x + um.underline_thickness, y_top + row]);
                     lay.underline_runs.push(*si);
                 }
             } else if style.underline && pl.content > 0.0 {
                 let x = shift + pl.left_trim + pl.content + pm.underline_pos;
-                lay.underlines.push([x, y_top, x + pm.underline_thickness, y_top + row]);
+                lay.underlines
+                    .push([x, y_top, x + pm.underline_thickness, y_top + row]);
                 lay.underline_runs.push(0);
             }
             lay.lines.push(Line {
@@ -885,7 +1064,12 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
         y0 = y0.min(l.baseline - l.ascent);
         y1 = y1.max(l.baseline + l.descent);
     }
-    lay.bounds = [-(ncols.max(1) as f32 - 0.5) * col_w, y0, col_w / 2.0, y1.max(y0)];
+    lay.bounds = [
+        -(ncols.max(1) as f32 - 0.5) * col_w,
+        y0,
+        col_w / 2.0,
+        y1.max(y0),
+    ];
     lay
 }
 
@@ -900,7 +1084,12 @@ pub fn layout(text: &str, style: &TextStyle, para: &ParagraphStyle) -> Arc<Layou
 }
 
 /// Lay out `text` with per-character style runs (cached by text, styles and runs).
-pub fn layout_rich(text: &str, style: &TextStyle, runs: &[StyleRun], para: &ParagraphStyle) -> Arc<Layout> {
+pub fn layout_rich(
+    text: &str,
+    style: &TextStyle,
+    runs: &[StyleRun],
+    para: &ParagraphStyle,
+) -> Arc<Layout> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
     style.hash(&mut h);
@@ -909,7 +1098,11 @@ pub fn layout_rich(text: &str, style: &TextStyle, runs: &[StyleRun], para: &Para
     let key = h.finish();
     static CLOCK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let now = CLOCK.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    if let Some(e) = cache().lock().unwrap_or_else(|e| e.into_inner()).get_mut(&key) {
+    if let Some(e) = cache()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&key)
+    {
         e.0 = now;
         return e.1.clone();
     }
@@ -937,14 +1130,27 @@ mod tests {
     use super::*;
 
     fn st(size: f32) -> TextStyle {
-        TextStyle { size, ..Default::default() }
+        TextStyle {
+            size,
+            ..Default::default()
+        }
     }
 
     #[test]
     fn bidi_reorders_rtl_runs() {
         // Hebrew letters are laid out right-to-left: the first logical letter is rightmost.
-        let l = layout("ab \u{5d0}\u{5d1}\u{5d2} cd", &st(40.0), &ParagraphStyle::default());
-        let x_of = |byte: usize| l.glyphs.iter().find(|g| g.cluster == byte).map(|g| g.x).unwrap();
+        let l = layout(
+            "ab \u{5d0}\u{5d1}\u{5d2} cd",
+            &st(40.0),
+            &ParagraphStyle::default(),
+        );
+        let x_of = |byte: usize| {
+            l.glyphs
+                .iter()
+                .find(|g| g.cluster == byte)
+                .map(|g| g.x)
+                .unwrap()
+        };
         let alef = "ab ".len();
         let gimel = alef + 4;
         assert!(x_of(alef) > x_of(gimel), "alef right of gimel");

@@ -1,9 +1,9 @@
 //! The full QC check: everything [`check`] finds, and what needs the
 //! program measured. The sound is mixed and measured to EBU R128
 //! (integrated loudness, true peak, loudness range) by
-//! `kerf_engine::loudness`, and every frame is drawn and measured for
+//! `kerf_engine::analysis::loudness`, and every frame is drawn and measured for
 //! Rec.709 gamut, luma levels, photosensitive flashing, and black by
-//! `kerf_engine::qc`, and titles and captions are read against what is
+//! `kerf_engine::analysis::qc`, and titles and captions are read against what is
 //! behind them from frames drawn for it. That takes about as long as a draft
 //! render, so MCP tools keep using the fast [`check`] and the editor's QC
 //! runs this one. What it measures of the sound and of each frame is kept
@@ -21,9 +21,9 @@ use crate::qc::{
     check, CheckReport, Finding, RowDef, Severity, CAPTION_DURATION, CAPTION_GAPS, CAPTION_OVERLAP,
     CUTS_IN_WORDS, DOCUMENT, FRAME_EDGES, IN_STEP, MEDIA, READING_SPEED_ROW, RENDER, TITLE_SAFE,
 };
-use kerf_engine::loudness::{self, Loudness};
+use kerf_engine::analysis::loudness::{self, Loudness};
+use kerf_engine::analysis::qc::{self as picture, PictureCheck, PictureQc, QcRange};
 use kerf_engine::program::{compile_program, ProgramOptions};
-use kerf_engine::qc::{self as picture, PictureCheck, PictureQc, QcRange};
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_lang::Clock;
 use kerf_model::{Catalog, Project, Sequence, Time};
@@ -652,7 +652,7 @@ fn locate_peak(
     limit: f64,
     cancel: &CancellationToken,
 ) -> Result<Option<PeakStretch>, EngineError> {
-    let heard = kerf_engine::ramps::with_sound(project);
+    let heard = kerf_engine::render::ramps::with_sound(project);
     let compiled = compile_program(
         &heard,
         Catalog::builtin(),
@@ -756,7 +756,7 @@ fn run_ffmpeg_lines<T>(
     cancel: &CancellationToken,
     parse: impl FnOnce(&[String]) -> T,
 ) -> Result<T, EngineError> {
-    let mut command = Command::new(kerf_engine::ffmpeg::resolve_ffmpeg_bin());
+    let mut command = Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin());
     if dir.is_dir() {
         command.current_dir(dir);
     }
@@ -767,7 +767,10 @@ fn run_ffmpeg_lines<T>(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
-    let stderr = child.stderr.take().expect("stderr is piped");
+    let stderr = child
+        .stderr
+        .take()
+        .expect("the command was spawned with stderr piped, and nothing took it since");
     let reader = thread::spawn(move || {
         BufReader::new(stderr)
             .lines()
@@ -776,6 +779,8 @@ fn run_ffmpeg_lines<T>(
     });
     let status = loop {
         if cancel.is_cancelled() {
+            // Cancelled: FFmpeg may have ended by itself already, and what it wrote is not
+            // wanted, so none of these can fail in a way that matters.
             let _ = child.kill();
             let _ = child.wait();
             let _ = reader.join();

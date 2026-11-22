@@ -25,7 +25,9 @@
 //! Nothing here asks a server. ComfyUI is another program, asked over HTTP
 //! by kerf-comfy when a shot is made; this reads a file.
 
-use crate::names::{guide_named, names_a_file, names_a_signal, names_points, MOVES, MOVES_BOX, MOVES_VIDEO};
+use crate::names::{
+    guide_named, names_a_file, names_a_signal, names_points, MOVES, MOVES_BOX, MOVES_VIDEO,
+};
 use crate::workflow::Workflow;
 use serde_json::{json, Map, Value};
 use std::ops::Range;
@@ -98,7 +100,11 @@ impl<'a> Scan<'a> {
                                 self.at += 1;
                                 break;
                             }
-                            _ => return Err("the workflow is not JSON: a list is not closed".to_owned()),
+                            _ => {
+                                return Err(
+                                    "the workflow is not JSON: a list is not closed".to_owned()
+                                )
+                            }
                         }
                     }
                 }
@@ -108,17 +114,22 @@ impl<'a> Scan<'a> {
             }
             Some(_) => {
                 // A number, true, false, or null: up to what ends it.
-                while self
-                    .next()
-                    .is_some_and(|byte| !matches!(byte, b',' | b'}' | b']') && !byte.is_ascii_whitespace())
-                {
+                while self.next().is_some_and(|byte| {
+                    !matches!(byte, b',' | b'}' | b']') && !byte.is_ascii_whitespace()
+                }) {
                     self.at += 1;
                 }
                 if self.at == start {
-                    return Err(format!("the workflow is not JSON: a value was expected at byte {start}"));
+                    return Err(format!(
+                        "the workflow is not JSON: a value was expected at byte {start}"
+                    ));
                 }
             }
-            None => return Err("the workflow is not JSON: it ends where a value was expected".to_owned()),
+            None => {
+                return Err(
+                    "the workflow is not JSON: it ends where a value was expected".to_owned(),
+                )
+            }
         }
         Ok(start..self.at)
     }
@@ -172,7 +183,8 @@ struct Node {
 /// The nodes of the workflow `text` holds, and their inputs, in the file's order.
 fn nodes(text: &str) -> Result<Vec<Node>, String> {
     let parse = |at: &Range<usize>| -> Result<Value, String> {
-        serde_json::from_str(&text[at.clone()]).map_err(|error| format!("the workflow is not JSON: {error}"))
+        serde_json::from_str(&text[at.clone()])
+            .map_err(|error| format!("the workflow is not JSON: {error}"))
     };
     let mut found = Vec::new();
     let mut scan = Scan { text, at: 0 };
@@ -237,7 +249,9 @@ fn blanks_of(value: &Value) -> Vec<String> {
                     let name = &after[..close];
                     let named = name.starts_with(|first: char| first.is_ascii_lowercase())
                         && name.chars().all(|character| {
-                            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+                            character.is_ascii_lowercase()
+                                || character.is_ascii_digit()
+                                || character == '_'
                         });
                     if named && !found.iter().any(|have| have == name) {
                         found.push(name.to_owned());
@@ -259,13 +273,35 @@ fn blanks_of(value: &Value) -> Vec<String> {
 /// workflow sets for it, where it is one a line can replace.
 fn filled(name: &str, workflow: &Workflow) -> (&'static str, String, Option<Value>) {
     let (by, says) = match name {
-        "prompt" => ("line", "the line's prompt, with the cast and styles it names".to_owned()),
-        "seed" => ("line", "the line's seed, or one picked where it gives none".to_owned()),
-        "width" | "height" => ("line", "the line's size, brought to what the model takes".to_owned()),
-        "frames" => ("line", "the line's seconds, as frames of the model's".to_owned()),
-        "fps" => ("kerf", "the rate the model makes frames at, or its guide's for one made of its guide".to_owned()),
-        "no_picture" => ("kerf", "a small black picture, for a node that will not run without one".to_owned()),
-        MOVES | MOVES_VIDEO | MOVES_BOX => ("moves", "where the clips the line names with moves= go".to_owned()),
+        "prompt" => (
+            "line",
+            "the line's prompt, with the cast and styles it names".to_owned(),
+        ),
+        "seed" => (
+            "line",
+            "the line's seed, or one picked where it gives none".to_owned(),
+        ),
+        "width" | "height" => (
+            "line",
+            "the line's size, brought to what the model takes".to_owned(),
+        ),
+        "frames" => (
+            "line",
+            "the line's seconds, as frames of the model's".to_owned(),
+        ),
+        "fps" => (
+            "kerf",
+            "the rate the model makes frames at, or its guide's for one made of its guide"
+                .to_owned(),
+        ),
+        "no_picture" => (
+            "kerf",
+            "a small black picture, for a node that will not run without one".to_owned(),
+        ),
+        MOVES | MOVES_VIDEO | MOVES_BOX => (
+            "moves",
+            "where the clips the line names with moves= go".to_owned(),
+        ),
         name if names_points(name) => {
             // A line's to give as any value it sets, and none until it does.
             return (
@@ -276,8 +312,12 @@ fn filled(name: &str, workflow: &Workflow) -> (&'static str, String, Option<Valu
                 workflow.set.get(name).cloned(),
             );
         }
-        name if names_a_signal(name) => ("signal", "a signal the line names with signal=".to_owned()),
-        name if guide_named(name).is_some() => ("file", format!("the guide the line gives as {name}=")),
+        name if names_a_signal(name) => {
+            ("signal", "a signal the line names with signal=".to_owned())
+        }
+        name if guide_named(name).is_some() => {
+            ("file", format!("the guide the line gives as {name}="))
+        }
         name if names_a_file(name) => (
             "file",
             format!(
@@ -292,7 +332,11 @@ fn filled(name: &str, workflow: &Workflow) -> (&'static str, String, Option<Valu
                     format!("{} unless the line says {name}=", shown(value)),
                     Some(value.clone()),
                 ),
-                None => ("line", format!("what the line says as {name}=, which it has to"), None),
+                None => (
+                    "line",
+                    format!("what the line says as {name}=, which it has to"),
+                    None,
+                ),
             }
         }
     };
@@ -383,7 +427,12 @@ pub fn set_input(text: &str, node: &str, input: &str, value: &Value) -> Result<S
             format!(
                 "node {node}, a {}, has no input `{input}`; it has {}",
                 found.class,
-                found.inputs.iter().map(|input| input.name.as_str()).collect::<Vec<_>>().join(", ")
+                found
+                    .inputs
+                    .iter()
+                    .map(|input| input.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         })?;
     if link(&named.value).is_some() {
@@ -403,7 +452,9 @@ pub fn set_input(text: &str, node: &str, input: &str, value: &Value) -> Result<S
             match now.as_f64() {
                 // A whole number stays one: a node that counts steps takes no half.
                 Some(number) if whole && number.fract() != 0.0 => {
-                    return Err(format!("`{input}` of node {node} is a whole number, and {number} is not"))
+                    return Err(format!(
+                        "`{input}` of node {node} is a whole number, and {number} is not"
+                    ))
                 }
                 Some(number) if whole => json!(number as i64),
                 _ => value.clone(),
@@ -439,17 +490,32 @@ pub fn set_input(text: &str, node: &str, input: &str, value: &Value) -> Result<S
 /// to itself or to one that reads it, however far on, since a graph that goes round has no
 /// order to run in. What kind of thing an output gives is the server's to say, and is held
 /// by whoever asks it; here the graph only has to stay a graph.
-pub fn set_link(text: &str, node: &str, input: &str, from: &str, output: u64) -> Result<String, String> {
+pub fn set_link(
+    text: &str,
+    node: &str,
+    input: &str,
+    from: &str,
+    output: u64,
+) -> Result<String, String> {
     let nodes = nodes(text)?;
     let find = |id: &str| nodes.iter().find(|found| found.id == id);
     let found = find(node).ok_or_else(|| format!("the workflow has no node `{node}`"))?;
-    let named = found.inputs.iter().find(|found| found.name == input).ok_or_else(|| {
-        format!(
-            "node {node}, a {}, has no input `{input}`; it has {}",
-            found.class,
-            found.inputs.iter().map(|input| input.name.as_str()).collect::<Vec<_>>().join(", ")
-        )
-    })?;
+    let named = found
+        .inputs
+        .iter()
+        .find(|found| found.name == input)
+        .ok_or_else(|| {
+            format!(
+                "node {node}, a {}, has no input `{input}`; it has {}",
+                found.class,
+                found
+                    .inputs
+                    .iter()
+                    .map(|input| input.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
     if link(&named.value).is_none() {
         return Err(format!(
             "`{input}` of node {node} is not a link to another node: a value is set, and a blank is the recipe's to fill"
@@ -511,21 +577,40 @@ mod tests {
             assert!(!said["nodes"].as_array().unwrap().is_empty(), "{name}");
             // A value of it set and set back is the text it was.
             let node = said["nodes"].as_array().unwrap().iter().find_map(|node| {
-                let input = node["inputs"].as_array()?.iter().find(|input| {
-                    input.get("blanks").is_none() && input["value"].is_string()
-                })?;
-                Some((node["id"].as_str()?.to_owned(), input["name"].as_str()?.to_owned(), input["value"].clone()))
+                let input = node["inputs"]
+                    .as_array()?
+                    .iter()
+                    .find(|input| input.get("blanks").is_none() && input["value"].is_string())?;
+                Some((
+                    node["id"].as_str()?.to_owned(),
+                    input["name"].as_str()?.to_owned(),
+                    input["value"].clone(),
+                ))
             });
             if let Some((id, input, was)) = node {
                 let changed = set_input(text, &id, &input, &json!("something else")).unwrap();
                 assert_ne!(changed, *text, "{name}");
-                assert_eq!(set_input(&changed, &id, &input, &was).unwrap(), *text, "{name}");
+                assert_eq!(
+                    set_input(&changed, &id, &input, &was).unwrap(),
+                    *text,
+                    "{name}"
+                );
             }
         }
         // Points are the line's to give, as a value it sets, and said as points.
-        let matte = described(BUNDLED.iter().find(|(name, _)| *name == "matte").unwrap().1).unwrap();
+        let matte =
+            described(BUNDLED.iter().find(|(name, _)| *name == "matte").unwrap().1).unwrap();
         let inside = &matte["blanks"]["inside"];
-        assert_eq!((&inside["by"], &inside["default"]), (&json!("set"), &json!("")));
-        assert!(inside["says"].as_str().unwrap().starts_with("the points the line gives as inside="), "{inside}");
+        assert_eq!(
+            (&inside["by"], &inside["default"]),
+            (&json!("set"), &json!(""))
+        );
+        assert!(
+            inside["says"]
+                .as_str()
+                .unwrap()
+                .starts_with("the points the line gives as inside="),
+            "{inside}"
+        );
     }
 }

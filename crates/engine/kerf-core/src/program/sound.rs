@@ -129,13 +129,15 @@ impl ProgramSound {
                 }
             }
             window = Graph::source_window(&layer.clip, portion.decode, portion.hi)
-                .expect("sound clips have a source");
+                .expect("a sound's layers are its media clip and the sequence clips holding it");
             steps.push((filters, portion.lo, window));
         }
         // Inside out: each holder reads its sequence's mix of the window it
         // decodes, where `mix` places the clip inside.
         let mut steps = steps.into_iter().rev();
-        let (mut filters, mut start, source) = steps.next().expect("a sound has its media clip");
+        let (mut filters, mut start, source) = steps
+            .next()
+            .expect("a sound's first layer is its media clip, and each layer made a step");
         for (outer, lo, (decoded, end)) in steps {
             let placed = place(samples(start - decoded), end - decoded);
             filters = format!("{filters},{placed},{outer}");
@@ -280,7 +282,7 @@ impl<'a> Graph<'a> {
                     } if clip.speed().is_one() => {
                         let nested = self.nested(clip, nested)?;
                         let (start, end) = Self::source_window(clip, portion.decode, portion.hi)
-                            .expect("nested clips have a source");
+                            .expect("sequence clips have a source window");
                         // The window's start is where the clip decodes from.
                         let inner = offset + portion.decode - start;
                         self.nesting.push(nested.id.clone());

@@ -48,7 +48,9 @@ fn field_key(picture: &Image, crop: Rect, width: f64, stretch: f64) -> String {
         .px
         .par_chunks(picture.w.max(1) * 4)
         .map(|row| {
-            row.as_chunks::<4>().0.iter()
+            row.as_chunks::<4>()
+                .0
+                .iter()
                 .fold(0xcbf2_9ce4_8422_2325u64, |hash, pixel| {
                     (hash ^ u64::from(pixel[3].to_bits())).wrapping_mul(0x0000_0100_0000_01b3)
                 })

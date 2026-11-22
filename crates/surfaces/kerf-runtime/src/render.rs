@@ -280,15 +280,14 @@ pub(crate) fn render_output(
             "`{text}` is outside the project folder; choose a folder to render to"
         )));
     }
-    if let Some(part) = &inside {
-        if part
+    if let Some(part) = &inside
+        && part
             .iter()
             .any(|name| name.to_string_lossy().starts_with('.'))
-        {
-            return Err(output_error(format!(
-                "`{text}` is in a hidden folder of the project"
-            )));
-        }
+    {
+        return Err(output_error(format!(
+            "`{text}` is in a hidden folder of the project"
+        )));
     }
     let is_folder = folder_named || path.is_dir() || path.extension().is_none();
     let (folder, file) = if is_folder {
@@ -389,7 +388,13 @@ pub fn run_render_job(
     // it must not go idle while this one renders.
     let _lease = client.hold();
     let cancel_file = render_cancel_path(client.directory(), &job.job_id);
-    let _ = client.update_job(&job.job_id, "running", None, None);
+    if let Err(error) = client.update_job(&job.job_id, "running", None, None) {
+        log::warn!(
+            "render job {} is rendered without kerfd recording it as running: {}",
+            job.job_id,
+            error.message
+        );
+    }
     let result = render(
         job,
         document,
@@ -409,6 +414,7 @@ pub fn run_render_job(
         Err(error) if error.code == "CANCELLED" => Ok(()),
         Err(error) => client.update_job(&job.job_id, "failed", Some(error.message.clone()), None),
     };
+    // There is one only when the job was cancelled.
     let _ = fs::remove_file(&cancel_file);
     result.and(recorded)
 }
@@ -462,6 +468,7 @@ fn render(
         Some(&mut on_progress),
     );
     cancellation.cancel();
+    // One that panicked watches no more, which is all its end means here.
     let _ = watcher.join();
     match result {
         Ok(()) if output.is_file() => Ok(()),

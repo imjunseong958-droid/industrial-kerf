@@ -112,8 +112,12 @@ pub(in crate::draw) fn of(
     // Frame heights, where the scene is in pixels.
     let by = 1.0 / scene.height.max(1.0);
     let Some((rect, filled)) = held else {
-        let mesh::InWorld { points, triangles, closed, convex } =
-            mesh::in_the_world(scene, plan, to_output, time);
+        let mesh::InWorld {
+            points,
+            triangles,
+            closed,
+            convex,
+        } = mesh::in_the_world(scene, plan, to_output, time);
         let corners: Vec<Vector> = points.iter().map(|point| times(*point, by)).collect();
         return InDepth {
             surface: surface(&clip, &corners, &triangles),

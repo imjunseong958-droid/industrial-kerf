@@ -52,10 +52,11 @@
 
 `apps/kerf-editor` is a Cargo workspace of its own (its manifest says why), so the
 workspace-wide commands above leave it out: check, test and lint it with
-`--manifest-path apps/kerf-editor/Cargo.toml`.
+`--manifest-path apps/kerf-editor/Cargo.toml --workspace`. Its root is a package as well,
+so without `--workspace` they cover only that package, not the editor's crates.
 
 ## Motion UI
 
 Before adding or changing UI animation in `apps/kerf-editor`, read
 `apps/kerf-editor/MOTION_UI.md`. Keep its scenes table current in the same change,
-and put new durations and distances in `theme::motion` (`apps/kerf-editor/src/theme.rs`).
+and put new durations and distances in `theme::motion` (`apps/kerf-editor/crates/editor_ui/src/theme.rs`).

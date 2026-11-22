@@ -20,11 +20,15 @@ The editor is a Cargo workspace of its own, not a member of the repository's: GP
 on serde_json's `preserve_order`, and in one workspace that feature would reach every
 program built beside the editor, kerfd among them, whose journal is checksummed over JSON
 it writes again. So it is built, tested and linted with `--manifest-path apps/kerf-editor/Cargo.toml`
-(`cargo test --manifest-path apps/kerf-editor/Cargo.toml`, `cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets`), into the
+(`cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace`, `cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targets`), into the
 repository's `target` (`.cargo/config.toml`), and its version is the repository's
-(`tests/version.rs`). It links FFmpeg through the bridge, found as
-kerfd finds it (`FFMPEG_DIR`, or `pkg-config`). Build it with `--release` to judge
-playback: the live preview draws its frames in the bridge.
+(`tests/editor/version.rs`). Its parts are crates of that workspace, so that a change
+rebuilds its own crate and those above it rather than the whole editor, and the program is
+the package at its root: without `--workspace` a test or a lint covers that package alone.
+`tests/editor/layers.rs` keeps the crates, and the modules in them, to their layers. It
+links FFmpeg through the bridge, found as kerfd finds it (`FFMPEG_DIR`, or `pkg-config`).
+Build it with `--release` to judge playback: the live preview draws its frames in the
+bridge.
 
 What GPUI needs to build:
 
@@ -52,7 +56,7 @@ target/debug/kerf-editor [project-dir] [kerfd-binary]
 The project and kerfd may come from `KERF_PROJECT_DIR` and `KERFD_BIN` instead. Without
 a project the editor opens the one last worked on, or with none to go back to, its
 project launcher. A `kerf://<project>/rev<N>@HH:MM:SS:FF` link in place of the project
-opens the recent project it names at that moment (`src/links.rs`); macOS hands links to
+opens the recent project it names at that moment (`crates/editor_state/src/links.rs`); macOS hands links to
 the running editor. `kerf` opens it the same way, finding it
 beside itself, in the installed app on macOS, or in `target/debug` and `target/release`
 (`KERF_EDITOR_BIN` names another), and passes it kerfd through `KERFD_BIN`.
@@ -67,8 +71,9 @@ beside itself, in the installed app on macOS, or in `target/debug` and `target/r
   than edge to edge.
 - `--render-preview` renders the project's preview once it is open, saying nothing else
   at launch.
-- `--screenshot <file>` is accepted, as the Qt editor's was, and writes nothing: take the
-  picture from outside (below).
+- `--screenshot <file>` writes a PNG of the first window as the run quits (after
+  `--quit-after-ms`, else half a second) on X11 and macOS; on Wayland and Windows it says
+  it cannot, and the picture is taken from outside (below).
 - `--graph <media>` opens that shot's graph once the project has it, with
   `--graph-node <id>` chosen in it.
 - `--serve-mcp --dir <project>` opens no window: it serves Kerf's tools over MCP on stdin
@@ -77,11 +82,12 @@ beside itself, in the installed app on macOS, or in `target/debug` and `target/r
 
 Off macOS, an editor started for `kerf://` links alone hands them to the editor already
 open, through a link inbox (a socket in the runtime folder, else a port named in the
-settings folder), and ends. The first time it runs, the editor takes up the Qt editor's
-settings (its provider, models, faces, keymap, recent projects and each project's master
-output), once.
+settings folder), and ends. The first time it runs, the editor takes up the settings the
+editor before 0.1.5 (Qt) kept (its provider, models, faces, keymap, recent projects and
+each project's master output), once, so an update loses none of them.
 
-The editor cannot read back its own window, so a picture of it is taken from outside.
+Where `--screenshot` cannot (Wayland, Windows), or to catch the window mid-run, a picture
+of it is taken from outside.
 On Linux with no display, on a virtual X server, which needs the Composite extension or
 the Vulkan frames come out black, with ImageMagick's `import` and `xdotool`:
 
@@ -97,8 +103,8 @@ With no window manager, GPUI draws its first frame on the first input event, so 
 pointer is moved over the window before the picture is taken.
 
 `KERF_REDUCE_MOTION=1` turns motion off, as Settings ▸ Appearance does
-([MOTION_UI.md](MOTION_UI.md)), and `RUST_LOG=kerf_editor=debug` logs every event the
-bridge sends.
+([MOTION_UI.md](MOTION_UI.md)), and `RUST_LOG=editor_session::session=debug` logs every event
+the bridge sends.
 
 If Vulkan finds no driver there, point it at lavapipe:
 `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. On macOS, `screencapture -l`

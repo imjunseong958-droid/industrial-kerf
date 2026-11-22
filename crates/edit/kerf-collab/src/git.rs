@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{PoisonError, RwLock};
 
 /// The project document, the one file the structural merge driver owns.
 pub const PROJECT_FILE: &str = "project.kerf";
@@ -56,8 +57,8 @@ pub struct Tools {
 }
 
 /// Where a project stands against its repository.
-#[derive(Debug, Clone, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Status {
     pub repository: bool,
     pub branch: Option<String>,
@@ -90,8 +91,8 @@ pub struct User {
 /// on when Git has none.
 pub fn user(dir: &Path) -> Option<User> {
     let from_env = |key: &str| {
-        std::env::var(key)
-            .ok()
+        var(key)
+            .and_then(|value| value.into_string().ok())
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty())
     };
@@ -205,10 +206,59 @@ pub struct PullRequest {
     pub created: bool,
 }
 
+/// What this process gives every git and gh it runs over its own environment:
+/// variables set (`Some`) or taken away (`None`), by [`set_env`] and
+/// [`remove_env`].
+static GIVEN: RwLock<Vec<(OsString, Option<OsString>)>> = RwLock::new(Vec::new());
+
+/// Run every git and gh from here on with `name` set to `value`, and read it
+/// so where this crate reads git's environment itself, leaving this process's
+/// own environment as it is: a front end in a terminal gives git
+/// [`INTERACTIVE_ENV`] so, and a test the variables that keep a person's own
+/// configuration out.
+pub fn set_env(name: impl Into<OsString>, value: impl Into<OsString>) {
+    give(name.into(), Some(value.into()));
+}
+
+/// Run every git and gh from here on without `name`, whatever this process's
+/// environment has, and read it so ([`set_env`]).
+pub fn remove_env(name: impl Into<OsString>) {
+    give(name.into(), None);
+}
+
+fn give(name: OsString, value: Option<OsString>) {
+    let mut given = GIVEN.write().unwrap_or_else(PoisonError::into_inner);
+    given.retain(|(known, _)| *known != name);
+    given.push((name, value));
+}
+
+/// `name` as git and gh are given it: what [`set_env`] or [`remove_env`] made
+/// it, else this process's.
+fn var(name: &str) -> Option<OsString> {
+    let given = GIVEN.read().unwrap_or_else(PoisonError::into_inner);
+    match given.iter().find(|(known, _)| known == name) {
+        Some((_, value)) => value.clone(),
+        None => std::env::var_os(name),
+    }
+}
+
+/// A command for `program`, git or gh, with what [`set_env`] and
+/// [`remove_env`] give them.
+pub(crate) fn program(program: &str) -> Command {
+    let mut command = Command::new(program);
+    for (name, value) in GIVEN.read().unwrap_or_else(PoisonError::into_inner).iter() {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+    command
+}
+
 /// A `git` command for `dir`, with prompts off and messages in English so
 /// they can be read.
 fn git(dir: &Path) -> Command {
-    let mut command = Command::new("git");
+    let mut command = program("git");
     command
         .arg("-C")
         .arg(dir)
@@ -227,8 +277,9 @@ pub fn network(dir: &Path) -> Command {
     command
 }
 
-/// Set to `1` by a front end that runs in a terminal (the `kerf` CLI) so
-/// network git may prompt there, for an SSH passphrase or host key.
+/// `1` lets network git prompt, for an SSH passphrase or host key: a front
+/// end that runs in a terminal (the `kerf` CLI) gives git it with
+/// [`set_env`], and a person may set it in the environment.
 pub const INTERACTIVE_ENV: &str = "KERF_GIT_INTERACTIVE";
 
 /// ssh that fails rather than prompting, and gives up on a host that does
@@ -247,13 +298,13 @@ const NETWORK_CONFIG: &str = r"^(core\.sshcommand|http\..*lowspeed(limit|time))$
 fn non_interactive(command: &mut Command, dir: &Path) {
     let configured =
         || git_text(dir, &["config", "--get-regexp", NETWORK_CONFIG]).unwrap_or_default();
-    for (key, value) in non_interactive_env(|name| std::env::var_os(name), configured) {
+    for (key, value) in non_interactive_env(var, configured) {
         command.env(key, value);
     }
 }
 
-/// The environment [`non_interactive`] adds, given the process environment
-/// `env` and the matching configuration as `git config --get-regexp`
+/// The environment [`non_interactive`] adds, given the environment git is
+/// given (`env`) and the matching configuration as `git config --get-regexp`
 /// prints it.
 fn non_interactive_env(
     env: impl Fn(&str) -> Option<OsString>,
@@ -346,7 +397,7 @@ fn git_run(dir: &Path, args: &[&str], code: &'static str) -> Result<String> {
 /// Which tools are installed, without asking GitHub anything.
 pub fn local_tools() -> Tools {
     let version = |program: &str, args: &[&str]| {
-        let mut command = Command::new(program);
+        let mut command = self::program(program);
         command.args(args);
         succeeds(command)
     };
@@ -362,7 +413,7 @@ pub fn local_tools() -> Tools {
 
 /// Whether `gh` holds a token, without printing it or asking GitHub.
 fn gh_signed_in() -> bool {
-    let mut command = Command::new("gh");
+    let mut command = program("gh");
     command
         .args(["auth", "token"])
         .env("GH_PROMPT_DISABLED", "1")
@@ -375,7 +426,7 @@ fn gh_signed_in() -> bool {
 pub fn tools() -> Tools {
     let mut tools = local_tools();
     if tools.gh {
-        let mut command = Command::new("gh");
+        let mut command = program("gh");
         command
             .args(["api", "user", "--jq", ".login"])
             .env("GH_PROMPT_DISABLED", "1");
@@ -435,10 +486,10 @@ pub fn upstream(dir: &Path) -> Option<String> {
 /// The remote to fetch from and publish to: the upstream's, else `origin`,
 /// else the only one.
 pub fn remote_name(dir: &Path) -> Option<String> {
-    if let Some(branch) = branch(dir) {
-        if let Some(remote) = git_text(dir, &["config", &format!("branch.{branch}.remote")]) {
-            return Some(remote);
-        }
+    if let Some(branch) = branch(dir)
+        && let Some(remote) = git_text(dir, &["config", &format!("branch.{branch}.remote")])
+    {
+        return Some(remote);
     }
     let remotes = git_text(dir, &["remote"]).unwrap_or_default();
     let remotes: Vec<&str> = remotes.lines().collect();
@@ -475,15 +526,16 @@ pub fn status(dir: &Path) -> Result<Status> {
     let remote = remote_name(dir).and_then(|name| git_text(dir, &["remote", "get-url", &name]));
     let head = head(dir);
     let (mut ahead, mut behind) = (0, 0);
-    if upstream.is_some() && head.is_some() {
-        if let Some(counts) = git_text(
+    if upstream.is_some()
+        && head.is_some()
+        && let Some(counts) = git_text(
             dir,
             &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
-        ) {
-            let mut parts = counts.split_whitespace().map(str::parse::<u32>);
-            ahead = parts.next().and_then(|n| n.ok()).unwrap_or(0);
-            behind = parts.next().and_then(|n| n.ok()).unwrap_or(0);
-        }
+        )
+    {
+        let mut parts = counts.split_whitespace().map(str::parse::<u32>);
+        ahead = parts.next().and_then(|n| n.ok()).unwrap_or(0);
+        behind = parts.next().and_then(|n| n.ok()).unwrap_or(0);
     }
     let paths = project_paths();
     let mut args = vec!["status", "--porcelain", "--"];
@@ -654,7 +706,9 @@ pub fn stage(dir: &Path) -> Result<bool> {
     exclude_runtime_files(dir)?;
     git_run(dir, &["add", "-A", "--", "."], "GIT_ADD_FAILED")?;
     if let Err(error) = unstage_local_settings(dir).and_then(|()| refuse_large_files(dir)) {
-        let _ = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED");
+        if let Err(reset) = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED") {
+            log::warn!("{}: what was staged stays staged: {reset}", dir.display());
+        }
         return Err(error);
     }
     Ok(!git_ok(dir, &["diff", "--cached", "--quiet"]))
@@ -928,6 +982,8 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
     }
     let out = output(command, "git merge")?;
     let reports = read_reports(&report);
+    // There is none when the driver did not run; one that stays is in the
+    // temp folder, under a name no later merge takes.
     let _ = fs::remove_file(&report);
     if !out.status.success() {
         let unresolved = git_text(dir, &["diff", "--name-only", "--diff-filter=U"])
@@ -935,7 +991,12 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
             .lines()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        let _ = git_run(dir, &["merge", "--abort"], "GIT_FAILED");
+        if let Err(error) = git_run(dir, &["merge", "--abort"], "GIT_FAILED") {
+            log::warn!(
+                "{}: the failed merge was not aborted: {error}",
+                dir.display()
+            );
+        }
         // The driver says why it could not merge project.kerf; keep that.
         let detail = if unresolved.is_empty() {
             failure(&out)
@@ -1158,7 +1219,7 @@ pub fn pull_request(dir: &Path, title: &str, body: &str) -> Result<PullRequest> 
     }
     let mut gh_failure = None;
     if local_tools().gh_signed_in {
-        let mut command = Command::new("gh");
+        let mut command = program("gh");
         command
             .current_dir(dir)
             .env("GH_PROMPT_DISABLED", "1")
@@ -1286,7 +1347,7 @@ pub fn set_remote(dir: &Path, url: &str) -> Result<()> {
 /// Create the GitHub repository `name` with `gh` from this project and push
 /// it. Returns the repository's URL.
 pub fn create_github_repository(dir: &Path, name: &str, private: bool) -> Result<String> {
-    let mut command = Command::new("gh");
+    let mut command = program("gh");
     command
         .current_dir(dir)
         .env("GH_PROMPT_DISABLED", "1")
@@ -1327,19 +1388,32 @@ pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
     let mut command = network(location);
     command.args(["clone", "--quiet", url]).arg(&target);
     run(command, "GIT_CLONE_FAILED")?;
-    if has_head(&target) {
-        if let Err(error) = refuse_local_settings(&target, "HEAD", url) {
-            // The folder was empty or absent before the clone.
-            let _ = fs::remove_dir_all(&target);
-            if existed {
-                let _ = fs::create_dir(&target);
-            }
-            return Err(error);
+    if has_head(&target)
+        && let Err(error) = refuse_local_settings(&target, "HEAD", url)
+    {
+        // The folder was empty or absent before the clone.
+        if let Err(removed) = fs::remove_dir_all(&target) {
+            log::warn!("{}: the refused clone stays: {removed}", target.display());
         }
+        if existed {
+            // Put back as it was; failing that, it is gone, and it was
+            // empty.
+            let _ = fs::create_dir(&target);
+        }
+        return Err(error);
     }
     if git_ok(&target, &["lfs", "version"]) {
-        let _ = git_run(&target, &["lfs", "install", "--local"], "GIT_LFS_FAILED");
-        let _ = network_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED");
+        // The project opens without its media too; what it lacks shows as
+        // Git LFS pointers.
+        if let Err(error) = git_run(&target, &["lfs", "install", "--local"], "GIT_LFS_FAILED") {
+            log::warn!("{}: Git LFS was not set up: {error}", target.display());
+        }
+        if let Err(error) = network_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED") {
+            log::warn!(
+                "{}: its media was not downloaded: {error}",
+                target.display()
+            );
+        }
     }
     Ok(target)
 }

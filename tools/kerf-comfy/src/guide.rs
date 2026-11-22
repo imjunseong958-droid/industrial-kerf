@@ -21,7 +21,7 @@ fn runs(program: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-/// FFmpeg and ffprobe, as Kerf finds them (`kerf-engine/src/ffmpeg.rs`).
+/// FFmpeg and ffprobe, as Kerf finds them (`kerf-engine/src/process/ffmpeg.rs`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tools {
     ffmpeg: String,
@@ -231,7 +231,14 @@ impl Tools {
         let mut child = Command::new(&self.ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .args(["-f", "rawvideo", "-pix_fmt", "gray", "-color_range", "pc"])
-            .args(["-s", &format!("{width}x{height}"), "-r", &fps.to_string(), "-i", "-"])
+            .args([
+                "-s",
+                &format!("{width}x{height}"),
+                "-r",
+                &fps.to_string(),
+                "-i",
+                "-",
+            ])
             .args(["-c:v", "libx264", "-crf", "10", "-pix_fmt", "yuv420p"])
             .arg(to)
             .stdin(std::process::Stdio::piped())
@@ -243,7 +250,10 @@ impl Tools {
                     self.ffmpeg
                 )
             })?;
-        let mut stdin = child.stdin.take().expect("stdin is piped");
+        let mut stdin = child
+            .stdin
+            .take()
+            .expect("the command above pipes stdin, and nothing took the pipe before this");
         for frame in frames {
             // FFmpeg ending early is said by its status, below.
             if stdin.write_all(frame).is_err() {

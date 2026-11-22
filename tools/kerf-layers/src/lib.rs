@@ -98,5 +98,4 @@ mod tests {
         let found = violations(&crates);
         assert!(found.is_empty(), "{}", found.join("\n"));
     }
-
 }

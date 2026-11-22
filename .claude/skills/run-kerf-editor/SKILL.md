@@ -7,8 +7,9 @@ description: Launch and drive the real Kerf editor (apps/kerf-editor, the Rust a
 
 Tests check state, not what a window looks like at its real size, so use this when the question
 is what a person sees. The editor is one Rust binary, `kerf-editor`, drawn with GPUI: Metal on
-macOS, Vulkan on Linux. It cannot read back its own window, so a picture of it is always taken
-from outside (there is no `--screenshot`).
+macOS, Vulkan on Linux. `--screenshot <file>` writes a PNG of its first window as the run quits
+(after `--quit-after-ms`): read back from the X server on X11, by `screencapture` on macOS. On
+Wayland and Windows it says on stderr that it cannot, so take the picture from outside there.
 
 ## Build
 
@@ -83,28 +84,42 @@ says which GPU adapter it took).
 ## Linux, with no display
 
 Run it on a virtual X server. Xvfb needs the Composite extension, or the editor's Vulkan frames
-come out black. Take the picture of its window with ImageMagick's `import`, found by `xdotool`:
+come out black. `--screenshot` takes the picture as the run quits; give the picture time to
+settle (a 3D scene drawn on the CPU took over 9 seconds here) and the same `--window-size` each
+time:
 
 ```bash
-xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" sh -c '
-    KERF_EDITOR_PREFS=${TMPDIR:-/tmp}/kerf-run/editor.json KERFD_BIN=$PWD/target/debug/kerfd \
-        target/debug/kerf-editor "'"$P"'" & E=$!
-    sleep 3; xdotool mousemove 800 500; sleep 6
-    xdotool mousemove_relative 1 0; sleep 0.5
-    import -window "$(xdotool search --pid $E | tail -1)" /tmp/kerf.png
-    kill $E'
+xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
+    env KERF_EDITOR_PREFS=${TMPDIR:-/tmp}/kerf-run/editor.json KERFD_BIN=$PWD/target/debug/kerfd \
+    target/debug/kerf-editor "$P" --window-size 1600x1000 --quit-after-ms 20000 \
+    --screenshot /tmp/kerf.png
 ```
-
-With no window manager GPUI draws a frame only after an input event, so move the pointer
-before each picture (as above): without it the first picture is black, and a later one shows
-the window as it was at the last event.
 
 Then look at `/tmp/kerf.png` with the Read tool. If Vulkan finds no driver, or takes one that
 draws nothing, point it at lavapipe:
 `VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json`. The run needs `xvfb`, `imagemagick`,
-`xdotool` and `mesa-vulkan-drivers`. `xdotool` can also click and type into the window
-(`xdotool mousemove --window <id> X Y click 1`, `xdotool type`), so a state that needs a click can
-be reached; take a new picture after each.
+`xdotool` and `mesa-vulkan-drivers`.
+
+To reach a state that needs a click, start it in the background and click with `xdotool` before
+it quits; the picture then shows the state after the click. With no window manager a quick
+`click` only moves the hover, so press and release apart:
+
+```bash
+xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" sh -c '
+    KERF_EDITOR_PREFS=${TMPDIR:-/tmp}/kerf-run/editor.json KERFD_BIN=$PWD/target/debug/kerfd \
+        target/debug/kerf-editor "'"$P"'" --window-size 1600x1000 --quit-after-ms 20000 \
+        --screenshot /tmp/kerf.png & E=$!
+    sleep 8; W=$(xdotool search --pid $E | tail -1)
+    xdotool mousemove --window "$W" 1310 20; sleep 1
+    xdotool mousedown 1; sleep 0.2; xdotool mouseup 1
+    wait $E'
+```
+
+`xdotool type` types into the window the same way. Settings and the Finish tray open inside the
+window, so the picture has them; a second window (another project's) is not in it: take it with ImageMagick's
+`import -window <id>`, the id from `xdotool search --pid`. GPUI draws a frame only after an
+input event when there is no window manager, so move the pointer before an `import`, or its
+picture is black or stale.
 
 ## Drive it on a desktop
 

@@ -7,10 +7,25 @@
 #![cfg(unix)]
 
 use kerf_bridge::Bridge;
+use kerf_engine::recipe::model::Models;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// Send `command` as the editor writes it, in JSON. One that does not read as a command is
+/// refused, as one the bridge cannot take is.
+fn send(bridge: &mut Bridge, command: &Value) -> bool {
+    serde_json::from_value::<kerf_bridge::Command>(command.clone())
+        .is_ok_and(|command| bridge.send(command))
+}
+
+/// The next event, in JSON, as the editor reads it.
+fn poll(bridge: &mut Bridge) -> Option<Value> {
+    bridge
+        .poll()
+        .map(|event| serde_json::to_value(event).expect("an event writes as JSON"))
+}
 
 fn kerfd() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -55,7 +70,7 @@ struct Project(PathBuf);
 impl Project {
     fn new(tag: &str, steps: &[&str]) -> Self {
         // No models a person has set up are read: only these tests' own.
-        std::env::set_var("KERF_MODELS", models());
+        Models::use_file(models());
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -103,11 +118,11 @@ impl Editor {
     }
 
     fn send(&mut self, command: Value) {
-        assert!(self.bridge.send(&command), "{command}");
+        assert!(send(&mut self.bridge, &command), "{command}");
     }
 
     fn poll(&mut self) -> Option<Value> {
-        self.bridge.poll()
+        poll(&mut self.bridge)
     }
 
     /// The next event that `matches`, among those not yet taken.

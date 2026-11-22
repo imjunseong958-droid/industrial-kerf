@@ -122,7 +122,8 @@ fn main() {
                 // A deep frame as bytes alone: what takes it into light is the same however it came.
                 let (out_w, out_h) = (rgba.width(), rgba.height());
                 let width = if deep { out_w * 2 } else { out_w };
-                let picture = on_gpu.rgba8(rgba.data(0), width, out_h, rgba.stride(0) as u32, false);
+                let picture =
+                    on_gpu.rgba8(rgba.data(0), width, out_h, rgba.stride(0) as u32, false);
                 uploads.push(at.elapsed().as_secs_f64() * 1000.0);
                 let at = Instant::now();
                 std::hint::black_box(on_gpu.finish(&picture));

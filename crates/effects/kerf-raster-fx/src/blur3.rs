@@ -14,15 +14,34 @@ use crate::ParamUi;
 use crate::Value;
 use rayon::prelude::*;
 
-use crate::{Buf, EffectCtx, EffectSpec, num, p, popup, slider};
+use crate::{num, p, popup, slider, Buf, EffectCtx, EffectSpec};
 
-fn spec(id: &'static str, name: &'static str, params: Vec<crate::ParamSpec>, render: crate::RenderFn) -> EffectSpec {
-    EffectSpec { id, name, category: "Blur & Sharpen", params, render, gpu: false, float: true }
+fn spec(
+    id: &'static str,
+    name: &'static str,
+    params: Vec<crate::ParamSpec>,
+    render: crate::RenderFn,
+) -> EffectSpec {
+    EffectSpec {
+        id,
+        name,
+        category: "Blur & Sharpen",
+        params,
+        render,
+        gpu: false,
+        float: true,
+    }
 }
 
 // ---------------------------------------------------------------- CC Radial Blur
 
-pub const RADIAL_TYPES: [&str; 5] = ["Straight Zoom", "Fading Zoom", "Centered", "Rotate", "Rotate Fading"];
+pub const RADIAL_TYPES: [&str; 5] = [
+    "Straight Zoom",
+    "Fading Zoom",
+    "Centered",
+    "Rotate",
+    "Rotate Fading",
+];
 
 fn cc_radial_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
     let amount = ctx.params.f("amount");
@@ -40,7 +59,11 @@ fn cc_radial_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
         for (x, o) in row.iter_mut().enumerate() {
             let (dx, dy) = (x as f64 + 0.5 - c.0, y as f64 + 0.5 - c.1);
             let r = (dx * dx + dy * dy).sqrt();
-            let span = if kind >= 3 { r * arc.abs() } else { r * zoom.abs() };
+            let span = if kind >= 3 {
+                r * arc.abs()
+            } else {
+                r * zoom.abs()
+            };
             let n = ((span * quality / 50.0).ceil() as usize).clamp(1, 256);
             if n <= 1 {
                 *o = src.get(x as i64, y as i64);
@@ -69,7 +92,11 @@ fn cc_radial_blur(ctx: &EffectCtx, mut b: Buf) -> Buf {
                     _ => {
                         let a = arc * (t - 0.5);
                         let (s, co) = a.sin_cos();
-                        let w = if kind == 4 { (1.0 - (2.0 * t - 1.0).abs()) as f32 + 0.05 } else { 1.0 };
+                        let w = if kind == 4 {
+                            (1.0 - (2.0 * t - 1.0).abs()) as f32 + 0.05
+                        } else {
+                            1.0
+                        };
                         (c.0 + dx * co - dy * s, c.1 + dx * s + dy * co, w)
                     }
                 };
@@ -93,8 +120,18 @@ pub fn specs() -> Vec<EffectSpec> {
         "CC Radial Blur",
         vec![
             p("type", "Type", Value::Enum(1), popup(&RADIAL_TYPES)),
-            p("amount", "Amount", num(10.0), slider(-100.0, 100.0, -100.0, 100.0, 1)),
-            p("quality", "Quality", num(50.0), slider(1.0, 100.0, 1.0, 100.0, 1)),
+            p(
+                "amount",
+                "Amount",
+                num(10.0),
+                slider(-100.0, 100.0, -100.0, 100.0, 1),
+            ),
+            p(
+                "quality",
+                "Quality",
+                num(50.0),
+                slider(1.0, 100.0, 1.0, 100.0, 1),
+            ),
             p("center", "Center", Value::Vec2([0.5, 0.5]), ParamUi::Point),
         ],
         cc_radial_blur,

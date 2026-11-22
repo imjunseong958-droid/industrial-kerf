@@ -71,7 +71,9 @@ fn raster(picture: &Picture) -> kerf_raster::Image {
         height: picture.h as u32,
         data: picture
             .px
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
             .collect(),
     }
@@ -362,10 +364,10 @@ impl Pictures {
     pub fn picture(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Arc<Picture>> {
         let clip = self.clips.get(index)?;
         let size = (size.0.max(1), size.1.max(1));
-        if clip.retime != Retime::Frames {
-            if let Some((first, between)) = clip.between_at(at) {
-                return self.between(clip, first, between, size);
-            }
+        if clip.retime != Retime::Frames
+            && let Some((first, between)) = clip.between_at(at)
+        {
+            return self.between(clip, first, between, size);
         }
         self.whole(clip, clip.frame_at_time(at), size)
     }
@@ -842,7 +844,10 @@ impl Decoder {
                 Some(_) => {}
                 None => {
                     self.eof = true;
-                    let _ = self.decoder.send_eof();
+                    // Untold, a decoder keeps the frames it holds, and the footage ends early.
+                    if let Err(error) = self.decoder.send_eof() {
+                        log::warn!("{}: the decoder was not told the end: {error}", self.path);
+                    }
                 }
             }
         }

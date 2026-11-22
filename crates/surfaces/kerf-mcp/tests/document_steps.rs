@@ -7,11 +7,13 @@
 //! one model's matte is read by the next, and a shot from a guide, which Kerf
 //! draws from a sequence and hands to a model.
 //!
-//! In a file of its own: it names a models file of its own in `KERF_MODELS`,
-//! and no ComfyUI server in `KERF_COMFY`, which the other tests' process must
-//! not see.
+//! In a file of its own: it reads a models file of its own for the whole
+//! process ([`Models::use_file`]), and gives the programs they run no ComfyUI
+//! server in `KERF_COMFY` ([`model::set_program_env`]), which the other tests'
+//! process must not see.
 #![cfg(unix)]
 
+use kerf_engine::recipe::model::{self, Models};
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -43,7 +45,10 @@ fn ok(router: &KerfMcpRouter, name: &str, arguments: Value) -> Value {
 fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
     let response = router.call(name, arguments);
     assert_eq!(response["ok"], false, "{name}: {response}");
-    response["error"]["message"].as_str().unwrap_or_default().to_owned()
+    response["error"]["message"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned()
 }
 
 /// The entry of `toMake` for media `id`, in what `look` or an edit answered.
@@ -100,7 +105,14 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     let made = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
         .args(["-i", "testsrc=size=160x90:rate=16:duration=1"])
-        .args(["-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
         .arg(dir.join("footage/walk.mp4"))
         .status()
         .expect("ffmpeg");
@@ -119,12 +131,12 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         ),
     )
     .unwrap();
-    std::env::set_var("KERF_MODELS", &models);
+    Models::use_file(&models);
     // No server a person has named is asked what the workflow's nodes take: the file named
     // here is not there, and nothing else names one.
-    std::env::set_var("KERF_COMFY", dir.join("no-such-comfy.json"));
+    model::set_program_env("KERF_COMFY", dir.join("no-such-comfy.json"));
     for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
-        std::env::remove_var(names_one);
+        model::remove_program_env(names_one);
     }
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
@@ -143,7 +155,10 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     let looked = ok(&router, "look", json!({}));
     let listed = looked["models"].as_array().unwrap();
     let shot = listed.iter().find(|model| model["name"] == "shot").unwrap();
-    assert_eq!(shot["guide"], "render <sequence> {guide.mp4} size=160x90 rate=12");
+    assert_eq!(
+        shot["guide"],
+        "render <sequence> {guide.mp4} size=160x90 rate=12"
+    );
 
     // ---- A part of footage: the matte of a thing, and the plate a second model makes
     // with it. One edit writes the media and its steps; nothing else is written.
@@ -158,8 +173,17 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     assert!(edited.get("recipes").is_none(), "{edited}");
     let wants = to_make(&edited, "gone").unwrap_or_else(|| panic!("{edited}"));
     assert_eq!(wants["why"], "its file is not there yet");
-    assert!(wants.get("cannot").is_none() && wants.get("recipe").is_none(), "{wants}");
-    assert!(wants["make"].as_str().unwrap().starts_with("make it with `make`"), "{wants}");
+    assert!(
+        wants.get("cannot").is_none() && wants.get("recipe").is_none(),
+        "{wants}"
+    );
+    assert!(
+        wants["make"]
+            .as_str()
+            .unwrap()
+            .starts_with("make it with `make`"),
+        "{wants}"
+    );
     assert_eq!(
         steps(&router, "gone"),
         [
@@ -170,29 +194,50 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
 
     // Made right after the edit that wrote them: the take is the plate, whose model was
     // handed the footage and the matte the step before it made.
-    let take = ok(&router, "make", json!({"media": "gone", "wait": true, "why": "the plate behind him"}));
-    assert_eq!((take["status"].as_str(), take["take"].as_u64()), (Some("made"), Some(1)), "{take}");
+    let take = ok(
+        &router,
+        "make",
+        json!({"media": "gone", "wait": true, "why": "the plate behind him"}),
+    );
+    assert_eq!(
+        (take["status"].as_str(), take["take"].as_u64()),
+        (Some("made"), Some(1)),
+        "{take}"
+    );
     assert_eq!(take["path"], "shots/gone.takes/001.mp4");
     assert!(dir.join("shots/gone.takes/001.work/man.mp4").is_file());
     // Two models made it, and what each was asked is kept, by its step's number: the
     // plate's request did not replace the matte's.
     let asked = |step: u32| -> Value {
         let file = dir.join(format!("shots/gone.takes/001.work/step{step}/request.json"));
-        serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|error| panic!("{}: {error}", file.display())))
-            .unwrap()
+        serde_json::from_slice(
+            &std::fs::read(&file).unwrap_or_else(|error| panic!("{}: {error}", file.display())),
+        )
+        .unwrap()
     };
-    assert_eq!((&asked(1)["model"], &asked(1)["prompt"]), (&json!("matte"), &json!("man")));
+    assert_eq!(
+        (&asked(1)["model"], &asked(1)["prompt"]),
+        (&json!("matte"), &json!("man"))
+    );
     assert!(!dir.join("shots/gone.takes/001.work/request.json").exists());
     let request = asked(2);
     assert_eq!(request["model"], "plate");
     let handed = |name: &Value| name.as_str().unwrap_or_default().to_owned();
-    assert!(handed(&request["guide"]).ends_with("/footage/walk.mp4"), "{request}");
-    assert!(handed(&request["guides"]["mask"]).ends_with("/shots/gone.takes/001.work/man.mp4"), "{request}");
+    assert!(
+        handed(&request["guide"]).ends_with("/footage/walk.mp4"),
+        "{request}"
+    );
+    assert!(
+        handed(&request["guides"]["mask"]).ends_with("/shots/gone.takes/001.work/man.mp4"),
+        "{request}"
+    );
     // The media is the take now, and how it is made is still under it.
     assert!(media_line(&router, "gone").contains("path=\"shots/gone.takes/001.mp4\""));
     assert_eq!(steps(&router, "gone").len(), 2);
     assert!(to_make(&ok(&router, "look", json!({})), "gone").is_none());
-    assert!(files_ending(dir, ".kerfrecipe").iter().all(|file| file.ends_with("made-from.kerfrecipe")));
+    assert!(files_ending(dir, ".kerfrecipe")
+        .iter()
+        .all(|file| file.ends_with("made-from.kerfrecipe")));
 
     // One name changed for the next take: the edit says the media wants making, and why.
     let seeded = ok(&router, "edit", json!({"script": "step gone set 2 seed=8"}));
@@ -202,7 +247,11 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         "its steps changed after its file was made"
     );
     let second = ok(&router, "make", json!({"media": "gone", "wait": true}));
-    assert_eq!((second["status"].as_str(), second["take"].as_u64()), (Some("made"), Some(2)), "{second}");
+    assert_eq!(
+        (second["status"].as_str(), second["take"].as_u64()),
+        (Some("made"), Some(2)),
+        "{second}"
+    );
     // A making never writes over the one before: both takes are there, and the first is
     // chosen again by a line that leaves the steps alone.
     let listed = ok(&router, "look", json!({"media": "gone"}));
@@ -210,13 +259,25 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     assert_eq!(takes.len(), 2, "{listed}");
     assert!(listed.get("recipe").is_none(), "{listed}");
     let first = &takes[0];
-    assert_eq!((first["chosen"].as_bool(), takes[1]["chosen"].as_bool()), (Some(false), Some(true)));
+    assert_eq!(
+        (first["chosen"].as_bool(), takes[1]["chosen"].as_bool()),
+        (Some(false), Some(true))
+    );
     let chooses = first["use"].as_str().unwrap();
-    assert!(chooses.starts_with("media replace gone path=\"shots/gone.takes/001.mp4\""), "{chooses}");
+    assert!(
+        chooses.starts_with("media replace gone path=\"shots/gone.takes/001.mp4\""),
+        "{chooses}"
+    );
     assert!(!chooses.contains("recipe="), "{chooses}");
     // What the first take was made from is kept with it, seed and all.
     assert_eq!(first["changedSince"], json!(["its steps"]));
-    assert!(first["steps"][1].as_str().unwrap().ends_with("seed=7 reach=72"), "{first}");
+    assert!(
+        first["steps"][1]
+            .as_str()
+            .unwrap()
+            .ends_with("seed=7 reach=72"),
+        "{first}"
+    );
     assert!(takes[1].get("steps").is_none(), "{listed}");
     let chosen = ok(&router, "edit", json!({"script": chooses}));
     assert!(media_line(&router, "gone").contains("path=\"shots/gone.takes/001.mp4\""));
@@ -227,10 +288,17 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         "its steps changed after its file was made"
     );
     // Going back to the take's own steps is an edit that sets them, which undo takes back.
-    let back = ok(&router, "edit", json!({"restoreTake": {"media": "gone", "take": 1}}));
+    let back = ok(
+        &router,
+        "edit",
+        json!({"restoreTake": {"media": "gone", "take": 1}}),
+    );
     assert_eq!(back["status"], "accepted", "{back}");
     assert!(
-        back["script"].as_str().unwrap().contains("step gone set 2 generate model=plate"),
+        back["script"]
+            .as_str()
+            .unwrap()
+            .contains("step gone set 2 generate model=plate"),
         "{back}"
     );
     assert!(steps(&router, "gone")[1].ends_with("seed=7 reach=72"));
@@ -247,26 +315,33 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     );
     assert_eq!(edited["status"], "accepted", "{edited}");
     let wants = to_make(&edited, "depth").unwrap();
-    assert!(wants.get("cannot").is_none() && wants.get("notes").is_none(), "{wants}");
+    assert!(
+        wants.get("cannot").is_none() && wants.get("notes").is_none(),
+        "{wants}"
+    );
     let take = ok(&router, "make", json!({"media": "depth", "wait": true}));
     assert_eq!(take["status"], "made", "{take}");
-    assert!(take["steps"][0]
-        .as_str()
-        .is_some_and(|step| step.starts_with("Kerf renders the depth of sequence s2 at 160x90, 12 frames a second")));
+    assert!(take["steps"][0].as_str().is_some_and(|step| step
+        .starts_with("Kerf renders the depth of sequence s2 at 160x90, 12 frames a second")));
     assert!(dir.join("shots/depth.takes/001.work/guide.mp4").is_file());
     assert!(dir.join("shots/depth.takes/001.mp4").is_file());
 
     // Read as the graph the editor shows: the sequence into the guide into the model, each
     // step by its number, as the document has them.
     let graph = ok(&router, "look", json!({"graph": "depth"}));
-    assert!(graph.get("document").is_none() && graph.get("recipe").is_none(), "{graph}");
+    assert!(
+        graph.get("document").is_none() && graph.get("recipe").is_none(),
+        "{graph}"
+    );
     assert_eq!(
         graph["text"],
         "render s2 {guide.mp4} pass=depth size=160x90 rate=12\n\
          generate model=shot prompt=\"a red car on a wet street\" guide={guide.mp4} seed=7\n"
     );
     let nodes = graph["nodes"].as_array().unwrap();
-    let line_of = |finds: &dyn Fn(&Value) -> bool| nodes.iter().find(|node| finds(node)).unwrap()["line"].clone();
+    let line_of = |finds: &dyn Fn(&Value) -> bool| {
+        nodes.iter().find(|node| finds(node)).unwrap()["line"].clone()
+    };
     assert_eq!(line_of(&|node| node["id"] == "made:guide.mp4"), 1);
     assert_eq!(line_of(&|node| node["model"] == "shot"), 2);
     assert!(graph["edges"]
@@ -274,7 +349,13 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         .unwrap()
         .iter()
         .any(|edge| edge["from"] == "sequence:s2" && edge["to"] == "made:guide.mp4"));
-    assert!(graph["change"].as_str().unwrap().contains("step depth set <n>"), "{graph}");
+    assert!(
+        graph["change"]
+            .as_str()
+            .unwrap()
+            .contains("step depth set <n>"),
+        "{graph}"
+    );
     assert_eq!(graph["takes"]["made"].as_array().map(Vec::len), Some(1));
 
     // The scene its guide is drawn from changes: the shot wants making, and says which
@@ -286,7 +367,11 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     );
 
     // One word of a step, set by a line of the edit's script; the rest of the step stays.
-    let set = ok(&router, "edit", json!({"script": "step depth set 2 seed=9"}));
+    let set = ok(
+        &router,
+        "edit",
+        json!({"script": "step depth set 2 seed=9"}),
+    );
     assert_eq!(set["status"], "accepted", "{set}");
     assert_eq!(
         steps(&router, "depth")[1],
@@ -299,28 +384,52 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     ] {
         let response = router.call("edit", gone);
         assert_eq!(response["error"]["code"], "INVALID_ARGUMENTS", "{response}");
-        assert!(response["error"]["message"].as_str().unwrap().contains("unknown field"), "{response}");
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("unknown field"),
+            "{response}"
+        );
     }
     assert!(steps(&router, "depth")[1].ends_with("seed=9"));
 
     // A step that is no step is refused where it is written, and the document is as it was.
-    let wrong = refused(&router, "edit", json!({"script": "step depth add run vork render --out {out}"}));
+    let wrong = refused(
+        &router,
+        "edit",
+        json!({"script": "step depth add run vork render --out {out}"}),
+    );
     assert!(wrong.contains("`run` is not a step"), "{wrong}");
-    let short = refused(&router, "edit", json!({"script": "step depth add generate model=shot guide={guide.mp4}"}));
-    assert!(short.contains("writes `{out}`, the media's file, so it is the last"), "{short}");
+    let short = refused(
+        &router,
+        "edit",
+        json!({"script": "step depth add generate model=shot guide={guide.mp4}"}),
+    );
+    assert!(
+        short.contains("writes `{out}`, the media's file, so it is the last"),
+        "{short}"
+    );
     assert_eq!(steps(&router, "depth").len(), 2);
 
     // ---- What may run is the person's to bound. Asked, nothing runs: the plan comes back
     // for the agent to say, with where the steps are and how the person makes it.
     given(Mode::Ask, 0);
-    let asked = ok(&router, "make", json!({"media": "depth", "why": "another seed"}));
+    let asked = ok(
+        &router,
+        "make",
+        json!({"media": "depth", "why": "another seed"}),
+    );
     assert_eq!(asked["status"], "asked", "{asked}");
     let ask = asked["ask"].as_str().unwrap();
     assert!(
         ask.starts_with("Asks to make depth, as take 2, from the steps under its line in the document:\nanother seed\n1. Kerf renders"),
         "{ask}"
     );
-    assert!(ask.ends_with("Make it with `kerf make depth`, or Make… in the editor's bin."), "{ask}");
+    assert!(
+        ask.ends_with("Make it with `kerf make depth`, or Make… in the editor's bin."),
+        "{ask}"
+    );
     assert!(!dir.join("shots/depth.takes/002.mp4").exists());
     // And past the limit they set, it is asked for again.
     given(Mode::Auto, 0);
@@ -342,7 +451,10 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     let removed = ok(&router, "edit", json!({"script": "media remove shown"}));
     assert_eq!(removed["status"], "accepted", "{removed}");
     let document = router.runtime().get_state().unwrap().document;
-    assert!(!document.contains("media shown") && !document.contains("man, tree"), "{document}");
+    assert!(
+        !document.contains("media shown") && !document.contains("man, tree"),
+        "{document}"
+    );
     assert!(dir.join("shots/shown.takes/001.mp4").is_file());
 
     // ---- A value of the workflow a model is run with: a copy the shot keeps beside its
@@ -354,17 +466,29 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
             step bounce add render s2 {depth.mp4} pass=depth size=832x480 rate=16\n\
             step bounce add generate model=video prompt=\"a ball bounces\" guide={depth.mp4} seed=7"}),
     );
-    let workflow = ok(&router, "look", json!({"workflow": {"media": "bounce", "line": 2}}));
-    assert_eq!((workflow["name"].as_str(), workflow["origin"].as_str()), (Some("shot"), Some("bundled")));
+    let workflow = ok(
+        &router,
+        "look",
+        json!({"workflow": {"media": "bounce", "line": 2}}),
+    );
+    assert_eq!(
+        (workflow["name"].as_str(), workflow["origin"].as_str()),
+        (Some("shot"), Some("bundled"))
+    );
     // With no server named, none was asked: the workflow is read without, and says why.
-    assert!(workflow.get("taken").is_none() && workflow["takenError"].is_string(), "{workflow}");
+    assert!(
+        workflow.get("taken").is_none() && workflow["takenError"].is_string(),
+        "{workflow}"
+    );
     assert_eq!(workflow["blanks"]["seed"]["given"], "7");
     let loader = workflow["nodes"]
         .as_array()
         .unwrap()
         .iter()
         .find(|node| {
-            node["inputs"].as_array().is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))
+            node["inputs"]
+                .as_array()
+                .is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))
         })
         .unwrap()["id"]
         .as_str()
@@ -388,9 +512,18 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         "{script}"
     );
     assert!(steps(&router, "bounce")[1].ends_with("seed=7 workflow=shots/bounce.video.comfy.json"));
-    assert!(std::fs::read_to_string(dir.join("shots/bounce.video.comfy.json"))
-        .unwrap()
-        .contains("\"weight_dtype\": \"fp8_e4m3fn\""));
-    let own = ok(&router, "look", json!({"workflow": {"media": "bounce", "line": 2}}));
-    assert_eq!((own["origin"].as_str(), own["file"].as_str()), (Some("own"), Some("shots/bounce.video.comfy.json")));
+    assert!(
+        std::fs::read_to_string(dir.join("shots/bounce.video.comfy.json"))
+            .unwrap()
+            .contains("\"weight_dtype\": \"fp8_e4m3fn\"")
+    );
+    let own = ok(
+        &router,
+        "look",
+        json!({"workflow": {"media": "bounce", "line": 2}}),
+    );
+    assert_eq!(
+        (own["origin"].as_str(), own["file"].as_str()),
+        (Some("own"), Some("shots/bounce.video.comfy.json"))
+    );
 }

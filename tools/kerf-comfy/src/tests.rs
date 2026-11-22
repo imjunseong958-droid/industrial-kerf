@@ -170,7 +170,7 @@ fn patience() -> Patience {
     Patience {
         most: Duration::from_secs(30),
         pause: Duration::from_millis(5),
-            listen: false,
+        listen: false,
     }
 }
 
@@ -351,6 +351,49 @@ fn what_the_server_refuses_or_fails_is_said_and_leaves_no_file() {
     assert_eq!(asked_after, TRIES as usize + 1);
 
     assert!(!request.out.exists());
+}
+
+#[test]
+fn a_guide_handed_under_a_name_no_guide_has_is_refused_before_anything_goes_up() {
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(folder.path().join("depth.mp4"), "a guide").unwrap();
+    // A blank may have a `_` in its name, and a guide's name has none.
+    let request = Request::parse(
+        &json!({
+            "kerf-request": 1,
+            "prompt": "a boat leaves, at dawn",
+            "guides": {"a_b": folder.path().join("depth.mp4")},
+            "out": folder.path().join(".making-001.mp4"),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let workflow = Workflow::parse(
+        &json!({
+            "kerf-comfy": 1,
+            "fps": 16,
+            "frames": {"most": 81, "step": 4},
+            "size": [832, 480],
+            "multiple": 16,
+            "workflow": {"1": {"class_type": "LoadVideo", "inputs": {"file": "{guide_a_b}"}}},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (server, kept) = serve(comfy);
+    let refused = make(
+        &request,
+        folder.path(),
+        &workflow,
+        &server,
+        &Tools::find(),
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+    .unwrap_err();
+    assert!(refused.contains("`guide_a_b`"), "{refused}");
+    assert!(kept.lock().unwrap().is_empty());
 }
 
 #[test]
