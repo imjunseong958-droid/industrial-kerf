@@ -79,6 +79,8 @@ x11rb = "0.13"
 embed-resource = "3"
 
 [dev-dependencies]
+# The Inspector's tests draw it in a test window, and move focus there.
+gpui = { version = "0.2.2", features = ["test-support"] }
 proptest = "1"
 tempfile = "3"
 

@@ -1,6 +1,10 @@
 //! Media: the media bin, waveforms and pictures of media, importing, the inspector, and Finish's checks and deliveries.
 
 use crate::support::{command, snapshot_timeline};
+use gpui::{
+    div, point, px, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
+    Modifiers, ParentElement, Render, Styled, TestAppContext, VisualTestContext, Window,
+};
 use kerf_editor::artwork::{
     fill_gaps, frame_index, parse_pam_stream, pixel_format_has_alpha, strip_frame_count,
     strip_height, waveform_columns, waveform_raise, Artwork, Bucket, PeakReducer, Peaks,
@@ -16,18 +20,19 @@ use kerf_editor::finish::{
 };
 use kerf_editor::inspector::{
     choice_is_compact, choice_menu_opens_up, choice_menu_shift, choice_menu_stays, choice_rows,
-    choice_sends, format_beside, format_index, scroll_to_show,
+    choice_sends, format_beside, format_index, scroll_to_show, InspectorView,
 };
 use kerf_editor::media::{
     badge_runs, badge_text, index_rows, matches_search, program_time_of, role_change, role_choices,
     role_groups, role_name, status_text, step_choice, IndexRow,
 };
-use kerf_editor::model::{Source, Timeline, TimelineShow};
+use kerf_editor::model::{Clip, Source, Timeline, TimelineShow};
 use kerf_editor::prefs::{MasterOutput, Prefs};
+use kerf_editor::session::Session;
 use kerf_editor::store::{Badge, MediaActivity};
 use kerf_editor::theme::{layout, space};
 use kerf_editor::ui::menu_letter;
-use kerf_editor::{artwork, media};
+use kerf_editor::{artwork, input, media};
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -1002,6 +1007,152 @@ proptest! {
             prop_assert_eq!(choice_sends(option, held, keyed), !keyed && !*ticked);
         }
     }
+}
+
+// ---------------------------------------------------------------- typing in the Inspector
+
+/// kerfd as it is built beside the editor: `cargo build -p kerf-runtime --bin kerfd`.
+fn kerfd() -> PathBuf {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/debug")
+        .join(format!("kerfd{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        path.is_file(),
+        "build kerfd first: cargo build -p kerf-runtime --bin kerfd"
+    );
+    path
+}
+
+/// The Inspector in a window, beside somewhere else that takes the keys when it is pressed, as
+/// the timeline does.
+struct Beside {
+    session: Entity<Session>,
+    inspector: Entity<InspectorView>,
+    elsewhere: FocusHandle,
+}
+
+impl Render for Beside {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .child(div().w(px(320.0)).h_full().child(self.inspector.clone()))
+            .child(div().flex_1().h_full().track_focus(&self.elsewhere))
+    }
+}
+
+/// Runs the window until `done` holds of the session, as kerfd answers from its own process.
+fn run_until(
+    cx: &mut VisualTestContext,
+    session: &Entity<Session>,
+    what: &str,
+    done: impl Fn(&Session) -> bool,
+) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        cx.run_until_parked();
+        if session.read_with(cx, |session, _| done(session)) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "kerfd never showed {what}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn timeline_clip<'a>(session: &'a Session, id: &str) -> Option<&'a Clip> {
+    session
+        .timeline()
+        .tracks
+        .iter()
+        .flat_map(|track| &track.clips)
+        .find(|clip| clip.id == id)
+}
+
+fn prop_of(session: &Session, clip: &str, prop: &str) -> Option<Value> {
+    timeline_clip(session, clip).and_then(|clip| clip.props.get(prop).cloned())
+}
+
+fn choose_clip(cx: &mut VisualTestContext, session: &Entity<Session>, id: &str) {
+    session.update(cx, |session, cx| {
+        session.selection = vec![id.to_owned()];
+        cx.notify();
+    });
+    cx.run_until_parked();
+}
+
+/// Typed into a field, then typed over with `text`, as Ctrl+A then typing does.
+fn type_over(cx: &mut VisualTestContext, text: &str) {
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input(text);
+}
+
+/// What is typed in a field is sent when the field is left by Tab or by a press elsewhere, not
+/// only by Return: the window draws the Inspector again as the keys move, before it hears the
+/// field was left, and that drawing must not put back what the clip had.
+#[gpui::test]
+fn leaving_an_inspector_field_by_tab_or_a_press_elsewhere_sends_what_was_typed(
+    cx: &mut TestAppContext,
+) {
+    let project = tempfile::Builder::new()
+        .prefix("kq-inspect")
+        .tempdir()
+        .unwrap();
+    let folder = project.path().to_owned();
+    cx.update(|cx| cx.bind_keys(input::key_bindings()));
+    let (window, cx) = cx.add_window_view(|window, cx| {
+        let session = Session::open(Some(folder), Some(kerfd()), Prefs::default(), window, cx);
+        let inspector = cx.new(|cx| InspectorView::new(session.clone(), window, cx));
+        Beside {
+            session,
+            inspector,
+            elsewhere: cx.focus_handle(),
+        }
+    });
+    // A window not in front hears no field left.
+    cx.update(|window, _| window.activate_window());
+    let session = window.read_with(cx, |window, _| window.session.clone());
+    run_until(cx, &session, "it was ready", Session::connected);
+    // A title and a solid, as the Titles browser adds them.
+    let added = session.update(cx, |session, _| {
+        session.edit(vec![
+            json!({"op": "add-track", "kind": "video", "id": "V1"}),
+            json!({"op": "insert", "generator": {"fx": "title", "params": {"text": "Atlas"}},
+                   "at": 0, "frames": 50, "tracks": ["V1"], "ids": ["title"], "mode": "overwrite"}),
+            json!({"op": "insert", "generator": {"fx": "solid", "params": {"color": "#ff0000"}},
+                   "at": 50, "frames": 25, "tracks": ["V1"], "ids": ["solid"], "mode": "overwrite"}),
+        ])
+    });
+    assert!(added);
+    run_until(cx, &session, "the clips", |session| {
+        timeline_clip(session, "title").is_some() && timeline_clip(session, "solid").is_some()
+    });
+
+    // The clip's name, the Inspector's first stop, left by Tab.
+    choose_clip(cx, &session, "title");
+    cx.update(|window, _| window.focus_next());
+    type_over(cx, "Opening");
+    cx.simulate_keystrokes("tab");
+    run_until(cx, &session, "the name typed", |session| {
+        timeline_clip(session, "title").and_then(|clip| clip.name.as_deref()) == Some("Opening")
+    });
+    // Tab went on to the title's text, left by a press elsewhere.
+    type_over(cx, "Sunrise");
+    let elsewhere = cx
+        .update(|window, _| window.bounds().size)
+        .map(|side| side * 0.75);
+    cx.simulate_click(point(elsewhere.width, elsewhere.height), Modifiers::none());
+    run_until(cx, &session, "the text typed", |session| {
+        prop_of(session, "title", "text") == Some(json!("Sunrise"))
+    });
+    // A solid's colour, its one field after the name, left by Tab.
+    choose_clip(cx, &session, "solid");
+    cx.update(|window, _| window.focus_next());
+    cx.simulate_keystrokes("tab");
+    type_over(cx, "#00ff00");
+    cx.simulate_keystrokes("tab");
+    run_until(cx, &session, "the colour typed", |session| {
+        prop_of(session, "solid", "color") == Some(json!("#00ff00"))
+    });
 }
 
 // ---------------------------------------------------------------- the master output
