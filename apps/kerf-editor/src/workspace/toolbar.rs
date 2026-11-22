@@ -5,15 +5,14 @@
 //! stops ([`toolbar_stop`]) and its tips, with the keys or why not.
 
 use super::Workspace;
-use crate::commands::RunCommand;
-use crate::delivery::Quality;
-use crate::export::{ExportEvent, ExportView};
-use crate::icons::Icon;
-use crate::model::RenderJobShow;
-use crate::motion;
-use crate::sidebar;
-use crate::theme::{self, layout, motion as scene, text};
-use crate::ui::{self, icon_button};
+use editor_finish::export::{ExportEvent, ExportView};
+use editor_session::commands::RunCommand;
+use editor_state::delivery::Quality;
+use editor_state::model::RenderJobShow;
+use editor_ui::icons::Icon;
+use editor_ui::motion;
+use editor_ui::theme::{self, layout, motion as scene, text};
+use editor_ui::ui::{self, icon_button};
 use gpui::{
     div, prelude::*, px, AnimationExt, ClickEvent, Context, Div, Entity, FocusHandle,
     MouseDownEvent, Stateful, Window,
@@ -59,7 +58,8 @@ impl Workspace {
         // What can be done now, as the registry says it (none of these is
         // Ask, so the keychain is not asked).
         let states = kerf_bridge::commands_states(&session.command_context());
-        let reason = |id: &str| crate::palette::unavailable(&states, id).map(str::to_owned);
+        let reason =
+            |id: &str| editor_session::palette::unavailable(&states, id).map(str::to_owned);
         let (undo_reason, redo_reason, export_reason) = (
             reason("edit.undo"),
             reason("edit.redo"),
@@ -75,7 +75,7 @@ impl Workspace {
         let redo_tip = tip("Redo", "edit.redo", redo_reason.as_ref());
         // The master's key goes with it; a draft has none of its own.
         let export_tip = (
-            crate::export::export_tip(quality, export_reason.as_deref()),
+            editor_finish::export::export_tip(quality, export_reason.as_deref()),
             (quality == Quality::Master && export_reason.is_none())
                 .then(|| self.shown_key("export.master"))
                 .flatten(),
@@ -84,7 +84,7 @@ impl Workspace {
         let media_key = self.shown_key("window.project");
         let export_open = self.export.is_some();
         // At the window's leading edge on macOS, the window buttons' room.
-        let lead = toolbar_places(leading, crate::chrome::window_buttons_room(window)).lead;
+        let lead = toolbar_places(leading, editor_ui::chrome::window_buttons_room(window)).lead;
         div()
             .h(px(layout::TOOLBAR))
             .flex_none()
@@ -97,7 +97,9 @@ impl Workspace {
             .child(self.title_row(window, cx))
             // Its empty stretch: on macOS, where the toolbar is the title
             // bar, it moves the window and zooms it.
-            .child(crate::chrome::title_bar_stretch(div().flex_1().h_full()))
+            .child(editor_ui::chrome::title_bar_stretch(
+                div().flex_1().h_full(),
+            ))
             .child(self.formats.clone())
             .child(self.collab.clone())
             .when_some(rendering, |bar, rendering| {
@@ -133,7 +135,7 @@ impl Workspace {
                     .icon(Icon::Check)
                     .on_click(|_, window, cx| {
                         window.dispatch_action(
-                            Box::new(crate::finish::OpenFinish { run_check: false }),
+                            Box::new(editor_finish::finish::OpenFinish { run_check: false }),
                             cx,
                         )
                     }),
@@ -187,7 +189,7 @@ impl Workspace {
         )
         // With the sidebar away, its account's menu opens from here.
         .child(
-            sidebar::trigger(
+            ui::capture_trigger(
                 "toolbar-app-menu",
                 cx.listener(|this, _: &MouseDownEvent, window, cx| {
                     this.toggle_app_menu(false, false, window, cx)
@@ -247,7 +249,7 @@ impl Workspace {
             main.cursor_pointer()
                 .hover(|main| main.bg(theme::hover2()))
                 .on_click(|_, window, cx| {
-                    window.dispatch_action(Box::new(crate::export::ExportChosen), cx)
+                    window.dispatch_action(Box::new(editor_finish::export::ExportChosen), cx)
                 })
         });
         let chevron = toolbar_stop(
@@ -303,8 +305,8 @@ impl Workspace {
 /// waits, or the job's name), else the preview rendering ("Rendering preview ·
 /// 42%"). None when nothing does.
 pub fn running_words(
-    jobs: &[crate::model::RenderJob],
-    preview: &crate::store::Preview,
+    jobs: &[editor_state::model::RenderJob],
+    preview: &editor_state::store::Preview,
 ) -> Option<String> {
     let percent = |fraction: f64| (fraction.clamp(0.0, 1.0) * 100.0).floor() as i64;
     let latest = jobs
@@ -355,7 +357,7 @@ pub struct ToolbarPlaces {
 
 /// [`ToolbarPlaces`] for a toolbar at the window's leading edge or not
 /// (`leading`: the sidebar away), with `room` what macOS's window buttons
-/// need there ([`crate::chrome::window_buttons_room`]). At that edge the
+/// need there ([`editor_ui::chrome::window_buttons_room`]). At that edge the
 /// toolbar starts past the buttons, Sidebar and ⋯ first, and its popups
 /// move on with the controls that open them.
 pub fn toolbar_places(leading: bool, room: f32) -> ToolbarPlaces {
@@ -368,7 +370,7 @@ pub fn toolbar_places(leading: bool, room: f32) -> ToolbarPlaces {
             app_menu: pad + TOOLBAR_STEP,
         };
     }
-    let lead = crate::chrome::lead_past(room);
+    let lead = editor_ui::chrome::lead_past(room);
     ToolbarPlaces {
         lead,
         // Sidebar, then ⋯, then the title's row, 8 in, and 4 past it.

@@ -7,9 +7,9 @@
 //! away.
 
 use super::{Regions, Workspace};
-use crate::sidebar;
-use crate::theme::layout;
-use crate::ui;
+use editor_sidebar::sidebar;
+use editor_ui::theme::layout;
+use editor_ui::ui;
 use gpui::{
     canvas, div, prelude::*, px, App, Context, DismissEvent, DispatchPhase, Entity,
     ScrollWheelEvent, Window,
@@ -106,7 +106,7 @@ impl Workspace {
     fn app_rows(&self, cx: &App) -> Vec<sidebar::AppRow> {
         let session = self.session.read(cx);
         let keymap = session.prefs.keymap;
-        let commands = crate::commands::catalog(keymap.wire());
+        let commands = editor_session::commands::catalog(keymap.wire());
         let menus: Vec<String> = kerf_bridge::commands_catalog(keymap.wire())["menus"]
             .as_array()
             .map(|menus| {
@@ -203,7 +203,11 @@ impl Workspace {
 
     /// View ▸ Keyboard: the editor answers to `keymap`'s keys from now on,
     /// in every window (the menus and the tooltips follow).
-    pub(super) fn choose_keymap(&mut self, keymap: crate::prefs::Keymap, cx: &mut Context<Self>) {
+    pub(super) fn choose_keymap(
+        &mut self,
+        keymap: editor_state::prefs::Keymap,
+        cx: &mut Context<Self>,
+    ) {
         self.session.update(cx, |session, cx| {
             session.prefs.keymap = keymap;
             session.save_prefs();
@@ -212,7 +216,7 @@ impl Workspace {
         // Binding the keymap clears every binding; it binds the views' own again.
         crate::keymap::bind(keymap.wire(), cx);
         let project = self.session.read(cx).project.clone();
-        crate::commands::refresh_menus(project.as_deref(), cx);
+        editor_session::commands::refresh_menus(project.as_deref(), cx);
         self.refresh_keys(cx);
         cx.notify();
     }

@@ -7,15 +7,15 @@
 //! is open raises its window. What answers questions over a window
 //! (`Window::prompt`) is drawn in Kerf's own look off macOS ([`install_prompts`]).
 
-use crate::folders::same_folder;
-use crate::launcher::{LauncherEvent, LauncherView};
-use crate::motion;
-use crate::prefs::Prefs;
-use crate::session::{hear_cloud, started_kerfd, BridgeEvent, Session};
-use crate::store::Change;
-use crate::theme::{self, radius, text};
-use crate::ui;
 use crate::workspace::Workspace;
+use editor_launcher::launcher::{LauncherEvent, LauncherView};
+use editor_session::session::{hear_cloud, started_kerfd, BridgeEvent, Session};
+use editor_state::folders::same_folder;
+use editor_state::prefs::Prefs;
+use editor_state::store::Change;
+use editor_ui::motion;
+use editor_ui::theme::{self, radius, text};
+use editor_ui::ui;
 use gpui::{
     actions, div, prelude::*, px, size, AnimationExt, App, AppContext, Bounds, Context, Entity,
     EventEmitter, FocusHandle, Focusable, FontWeight, Global, KeyBinding, Pixels, PromptButton,
@@ -350,7 +350,7 @@ fn capture_target(window: gpui::AnyWindowHandle, cx: &mut App) -> Result<Capture
     {
         window
             .update(cx, |_, window, _| {
-                crate::chrome::macos::window_number(window)
+                editor_ui::chrome::macos::window_number(window)
             })
             .ok()
             .flatten()
@@ -720,7 +720,7 @@ fn find_open(project: &Path, cx: &mut App) -> Option<OpenProject> {
 }
 
 /// Brings `open`'s window to the front, following `link` there.
-fn raise(open: &OpenProject, link: Option<crate::links::Link>, cx: &mut App) {
+fn raise(open: &OpenProject, link: Option<editor_state::links::Link>, cx: &mut App) {
     let _ = open
         .window
         .update(cx, |_, window, _| window.activate_window());
@@ -736,7 +736,7 @@ fn raise(open: &OpenProject, link: Option<crate::links::Link>, cx: &mut App) {
 
 /// Opens `project` in a window, or the launcher with none. A project open
 /// already has its window raised. With no `kerfd`, the one the editor was
-/// started with ([`crate::session::set_kerfd`]) is kept.
+/// started with ([`editor_session::session::set_kerfd`]) is kept.
 pub fn open(project: Option<PathBuf>, kerfd: Option<PathBuf>, cx: &mut App) {
     open_at(project, kerfd, None, None, cx);
 }
@@ -759,9 +759,9 @@ pub fn open_in_place(
 /// its window if it is open. A link that cannot be followed is explained.
 pub fn follow(text: &str, kerfd: Option<PathBuf>, cx: &mut App) {
     let recent = Prefs::load().recent;
-    let found = crate::links::parse(text).and_then(|link| {
-        let project = crate::links::resolve(&link, &recent)?;
-        crate::links::openable(&project)?;
+    let found = editor_state::links::parse(text).and_then(|link| {
+        let project = editor_state::links::resolve(&link, &recent)?;
+        editor_state::links::openable(&project)?;
         Ok((project, link))
     });
     match found {
@@ -799,7 +799,7 @@ fn explain_link(link: &str, message: &str, cx: &mut App) {
 fn open_at(
     project: Option<PathBuf>,
     kerfd: Option<PathBuf>,
-    link: Option<crate::links::Link>,
+    link: Option<editor_state::links::Link>,
     place: Option<WindowBounds>,
     cx: &mut App,
 ) {
@@ -862,7 +862,7 @@ pub fn represented_file(project: &Path) -> PathBuf {
 /// calls it as it opens: a window keeps its project.
 pub fn represent_project(window: &Window, project: &Path) {
     #[cfg(target_os = "macos")]
-    crate::chrome::macos::represent(window, &represented_file(project));
+    editor_ui::chrome::macos::represent(window, &represented_file(project));
     #[cfg(not(target_os = "macos"))]
     let _ = (window, project);
 }
@@ -945,8 +945,8 @@ pub fn render_preview_when_up(cx: &mut App) {
 
 /// Opens the shot's graph `start` names (`--graph`, `--graph-node`) in the
 /// first project's window, once its project has said that media
-/// ([`crate::making::open_when_ready`]).
-pub fn open_graph_when_up(start: crate::making::GraphStart, cx: &mut App) {
+/// ([`editor_making::making::open_when_ready`]).
+pub fn open_graph_when_up(start: editor_making::making::GraphStart, cx: &mut App) {
     let Some(open) = cx
         .try_global::<Opened>()
         .and_then(|opened| opened.0.first())
@@ -958,7 +958,7 @@ pub fn open_graph_when_up(start: crate::making::GraphStart, cx: &mut App) {
         return;
     };
     let window = open.window;
-    crate::making::open_when_ready(
+    editor_making::making::open_when_ready(
         start,
         &session,
         move |media, cx| {
@@ -1017,7 +1017,7 @@ fn take_warnings(project: &Path, cx: &mut App) -> Vec<String> {
 
 /// Says `warnings` in `session`'s window once its project is up (its
 /// first snapshot), or kerfd could not be reached
-/// ([`EditorState::opened_or_failed`](crate::store::EditorState::opened_or_failed)):
+/// ([`EditorState::opened_or_failed`](editor_state::store::EditorState::opened_or_failed)):
 /// at once when it is already, else at the first change after which it is.
 /// Not while it only connects: a notice goes after a while, and a large
 /// project can take longer than that to open.
@@ -1058,7 +1058,7 @@ pub fn crash_notice_text(reports: &[Value]) -> String {
         return String::new();
     };
     let component =
-        crate::settings::component_name(latest["component"].as_str().unwrap_or("editor"));
+        editor_launcher::settings::component_name(latest["component"].as_str().unwrap_or("editor"));
     let mut text = if reports.len() == 1 {
         format!("Kerf stopped unexpectedly: {component} hit an error it could not recover from.")
     } else {
@@ -1248,7 +1248,7 @@ fn kerf_prompt(
     cx: &mut App,
 ) -> RenderablePromptHandle {
     // Binding a keymap clears these: bound again whenever they are missing.
-    if !crate::settings::escape_bound(cx, &PromptCancel) {
+    if !editor_launcher::settings::escape_bound(cx, &PromptCancel) {
         cx.bind_keys([
             KeyBinding::new("escape", PromptCancel, Some(PROMPT)),
             KeyBinding::new("enter", PromptDefault, Some(PROMPT)),

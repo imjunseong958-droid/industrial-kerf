@@ -6,8 +6,8 @@
 
 use super::flights::PaneGoes;
 use super::{Regions, Workspace};
-use crate::motion::Tween;
-use crate::theme::{self, layout, motion as scene};
+use editor_ui::motion::Tween;
+use editor_ui::theme::{self, layout, motion as scene};
 use gpui::{canvas, div, point, prelude::*, px, size, AnyElement, Bounds, Context, Pixels, Window};
 use std::time::Duration;
 
@@ -137,7 +137,7 @@ impl Workspace {
     /// picture comes in for it. Not while something is open over the window.
     pub(super) fn toggle_mask_tool(
         &mut self,
-        tool: crate::stage::MaskTool,
+        tool: editor_stage::stage::MaskTool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

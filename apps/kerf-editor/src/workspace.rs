@@ -58,22 +58,22 @@ pub use toolbar::{running_words, toolbar_places, ToolbarPlaces};
 /// How long before the picture has grown the timeline starts to come in,
 /// and how long its stand-in takes to fade (kept here for the tests and
 /// views that name them so).
-pub use crate::stage::{render_card_shows, render_stop_holds, RenderCard};
-pub use crate::theme::motion::{STAND_IN_MOST, STAND_IN_RELEASE, TIMELINE_LEAD};
+pub use editor_stage::stage::{render_card_shows, render_stop_holds, RenderCard};
+pub use editor_ui::theme::motion::{STAND_IN_MOST, STAND_IN_RELEASE, TIMELINE_LEAD};
 
-use crate::chat::ChatView;
-use crate::commands::WORKSPACE;
-use crate::export::ExportView;
-use crate::input::TextInput;
-use crate::media::MediaBand;
-use crate::motion::Tween;
-use crate::session::Session;
-use crate::sidebar::SidebarView;
-use crate::stage::StageView;
-use crate::theme::{self, layout, motion as scene, text};
-use crate::timeline::TimelineView;
-use crate::ui;
 use bars::{ErrorBar, BAR};
+use editor_chat::chat::ChatView;
+use editor_finish::export::ExportView;
+use editor_making::media::MediaBand;
+use editor_session::commands::WORKSPACE;
+use editor_session::session::Session;
+use editor_sidebar::sidebar::SidebarView;
+use editor_stage::stage::StageView;
+use editor_timeline::timeline::TimelineView;
+use editor_ui::input::TextInput;
+use editor_ui::motion::Tween;
+use editor_ui::theme::{self, layout, motion as scene, text};
+use editor_ui::ui;
 use flights::{flown, Flight, PendingClip};
 use gpui::{
     div, prelude::*, px, AnyElement, AnyView, App, Context, Entity, FocusHandle, Focusable, Pixels,
@@ -95,9 +95,9 @@ pub struct Workspace {
     stage: Entity<StageView>,
     timeline: Entity<TimelineView>,
     media: Entity<MediaBand>,
-    inspector: Entity<crate::inspector::InspectorView>,
-    formats: Entity<crate::inspector::FormatBank>,
-    collab: Entity<crate::finish::Collab>,
+    inspector: Entity<editor_inspector::inspector::InspectorView>,
+    formats: Entity<editor_inspector::inspector::FormatBank>,
+    collab: Entity<editor_finish::finish::Collab>,
     /// Settings while open, and how many times it has been opened.
     /// What one has gone into (Settings, a shot's graph, Finish), over the
     /// window, and how many times one has been opened.
@@ -192,9 +192,9 @@ pub struct Workspace {
     /// the conversation, which falls back (`ChatView` dims itself).
     reel_reach: Tween,
     /// The picture's mask tool out when last seen, for the menu bar's tick.
-    mask_tool_seen: Option<crate::stage::MaskTool>,
+    mask_tool_seen: Option<editor_stage::stage::MaskTool>,
     /// Drawn again as the title tip's "Edited 2 min ago" turns over.
-    ages: crate::motion::Redraw,
+    ages: editor_ui::motion::Redraw,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -245,10 +245,11 @@ impl Workspace {
             timeline.update(cx, |timeline, cx| timeline.set_track_heights(heights, cx));
         }
         let media = cx.new(|cx| MediaBand::new(session.clone(), window, cx));
-        let inspector =
-            cx.new(|cx| crate::inspector::InspectorView::new(session.clone(), window, cx));
-        let formats = cx.new(|cx| crate::inspector::FormatBank::new(session.clone(), window, cx));
-        let collab = cx.new(|cx| crate::finish::Collab::new(session.clone(), window, cx));
+        let inspector = cx
+            .new(|cx| editor_inspector::inspector::InspectorView::new(session.clone(), window, cx));
+        let formats =
+            cx.new(|cx| editor_inspector::inspector::FormatBank::new(session.clone(), window, cx));
+        let collab = cx.new(|cx| editor_finish::finish::Collab::new(session.clone(), window, cx));
         let sidebar_open = session.read(cx).prefs.sidebar_open;
         sidebar.update(cx, |sidebar, cx| sidebar.set_shown(sidebar_open, cx));
         let title_field =
@@ -327,7 +328,7 @@ impl Workspace {
             turn_rendered: false,
             reel_reach: Tween::at(0.0),
             mask_tool_seen: None,
-            ages: crate::motion::Redraw::default(),
+            ages: editor_ui::motion::Redraw::default(),
             _subscriptions: subscriptions,
         };
         // What the window's first frame would otherwise have had to set: the
@@ -424,9 +425,9 @@ impl Workspace {
         // The chosen clip's inspector stands beside the picture when there is room.
         let inspecting = !session.selection.is_empty() && panel_width > layout::INSPECTOR * 2.2;
         // The picture's shape, which splits the panel.
-        let aspect = crate::stage::shown_aspect(session);
+        let aspect = editor_stage::stage::shown_aspect(session);
         // Where the title and ⋯ are, for their menus to open under them.
-        let places = toolbar_places(leading, crate::chrome::window_buttons_room(window));
+        let places = toolbar_places(leading, editor_ui::chrome::window_buttons_room(window));
         Regions {
             window_height,
             sidebar_width,
@@ -543,7 +544,7 @@ impl Render for Workspace {
         if cfg!(target_os = "macos") && window.is_window_active() {
             let states = self.menu_states(cx);
             let project = self.session.read(cx).project.clone();
-            crate::commands::set_menu_states(states, project.as_deref(), cx);
+            editor_session::commands::set_menu_states(states, project.as_deref(), cx);
         }
         let bars = self.bars(cx);
         let regions = self.regions(bars.len(), window, cx);
@@ -609,4 +610,4 @@ pub fn points(value: Pixels) -> f32 {
 
 /// How far the stage grows over the conversation while changes are
 /// watched.
-use crate::theme::motion::REEL_REACH;
+use editor_ui::theme::motion::REEL_REACH;

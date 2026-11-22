@@ -8,10 +8,10 @@
 
 use super::panel::{picture_in, picture_within, StageSlot};
 use super::{Regions, Workspace};
-use crate::motion;
-use crate::theme::motion::{STAND_IN_MOST, STAND_IN_RELEASE, TIMELINE_LEAD};
-use crate::theme::{self, layout, motion as scene, text};
-use crate::ui;
+use editor_ui::motion;
+use editor_ui::theme::motion::{STAND_IN_MOST, STAND_IN_RELEASE, TIMELINE_LEAD};
+use editor_ui::theme::{self, layout, motion as scene, text};
+use editor_ui::ui;
 use gpui::{
     div, img, point, prelude::*, px, size, AnyElement, App, Bounds, Context, ObjectFit, Pixels,
     RenderImage, SharedString, Window,
@@ -347,7 +347,7 @@ impl Workspace {
             ),
             None => picture_in(
                 self.picture_slot(regions),
-                crate::stage::shown_aspect(session),
+                editor_stage::stage::shown_aspect(session),
             ),
         }
     }
@@ -881,20 +881,21 @@ pub struct PlacedClip {
 /// taken out and none on a sound track (its sound comes with it), in the
 /// order they play; and what is seen now.
 pub fn placed_since(
-    program: &crate::model::Timeline,
-    cut: &crate::model::Timeline,
+    program: &editor_state::model::Timeline,
+    cut: &editor_state::model::Timeline,
     seen: &HashSet<String>,
 ) -> (Vec<PlacedClip>, HashSet<String>) {
-    let changes = crate::changes::clip_changes(program, cut);
-    let key =
-        |change: &crate::changes::ClipChange| format!("{}@{:.4}", change.clip, change.new_end);
+    let changes = editor_state::changes::clip_changes(program, cut);
+    let key = |change: &editor_state::changes::ClipChange| {
+        format!("{}@{:.4}", change.clip, change.new_end)
+    };
     let now: HashSet<String> = changes.iter().map(key).collect();
     let mut placed: Vec<PlacedClip> = changes
         .iter()
         .filter(|change| !change.removed && !change.transition && !seen.contains(&key(change)))
         .filter_map(|change| {
             let (track, clip) = cut.clip(&change.clip)?;
-            (track.kind == crate::model::TrackKind::Video).then(|| PlacedClip {
+            (track.kind == editor_state::model::TrackKind::Video).then(|| PlacedClip {
                 clip: change.clip.clone(),
                 source: clip.source_id.clone(),
                 name: change.name.clone(),
@@ -908,11 +909,11 @@ pub fn placed_since(
 
 /// The first clip of `timeline`'s first picture track that has one, and
 /// the footage it plays: what the picture grows out of.
-fn first_picture_clip(timeline: &crate::model::Timeline) -> Option<(String, String)> {
+fn first_picture_clip(timeline: &editor_state::model::Timeline) -> Option<(String, String)> {
     timeline
         .tracks
         .iter()
-        .filter(|track| track.kind == crate::model::TrackKind::Video)
+        .filter(|track| track.kind == editor_state::model::TrackKind::Video)
         .find_map(|track| {
             let clip = track
                 .clips

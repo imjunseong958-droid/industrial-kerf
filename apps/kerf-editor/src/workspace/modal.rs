@@ -6,11 +6,11 @@
 
 use super::asked::{sync_params, sync_question, AskWords, Confirm};
 use super::Workspace;
-use crate::model::SummaryShow;
-use crate::motion;
-use crate::settings::{Page, SettingsEvent, SettingsView};
-use crate::theme::{self, layout, motion as scene};
-use crate::ui;
+use editor_launcher::settings::{Page, SettingsEvent, SettingsView};
+use editor_state::model::SummaryShow;
+use editor_ui::motion;
+use editor_ui::theme::{self, layout, motion as scene};
+use editor_ui::ui;
 use gpui::{
     div, prelude::*, px, size, AnimationExt, AnyElement, AnyView, App, Context, DismissEvent,
     Entity, EventEmitter, Focusable, MouseButton, Pixels, SharedString, Window,
@@ -106,7 +106,7 @@ impl Workspace {
     pub(super) fn modal_gives_way(&self) -> bool {
         self.modal.as_ref().is_none_or(|(view, _)| {
             view.clone()
-                .downcast::<crate::palette::CommandPalette>()
+                .downcast::<editor_session::palette::CommandPalette>()
                 .is_ok()
         })
     }
@@ -212,8 +212,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let graph =
-            cx.new(|cx| crate::making::ShotGraph::new(self.session.clone(), media, window, cx));
+        let graph = cx.new(|cx| {
+            editor_making::making::ShotGraph::new(self.session.clone(), media, window, cx)
+        });
         self.open_modal(graph, window, cx);
     }
 
@@ -294,9 +295,9 @@ impl Workspace {
 fn modal_most(view: &AnyView, _cx: &App) -> Option<gpui::Size<Pixels>> {
     let view = view.clone();
     let most = if view.clone().downcast::<SettingsView>().is_ok() {
-        crate::settings::MOST
-    } else if view.downcast::<crate::finish::FinishView>().is_ok() {
-        crate::finish::MOST
+        editor_launcher::settings::MOST
+    } else if view.downcast::<editor_finish::finish::FinishView>().is_ok() {
+        editor_finish::finish::MOST
     } else {
         return None;
     };

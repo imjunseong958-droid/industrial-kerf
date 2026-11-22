@@ -1,41 +1,80 @@
-//! The rule that keeps the editor's modules apart, read from their source: a module of `src/`,
-//! with the submodules in the folder of its name, may use modules of its own layer and the ones
-//! below it, never one above. The kit beneath the views stays generic (the app's own contexts
-//! and actions come to it as parameters), the data beneath the kit names no gpui, and only the
-//! assembly at the top sees every view. Every path counts, tests' included.
+//! The rule that keeps the editor's parts apart, read from their manifests and their source.
+//! The editor is crates in layers: a crate may depend on crates of its own layer and the ones
+//! below it, by any kind of dependency, never on one above. Inside them, modules are in layers
+//! too: a module, with the submodules in the folder of its name, may use modules of its own
+//! layer and the ones below it, in its own crate or another, never one above. The data at the
+//! bottom names no gpui; the kit above it stays generic (the app's own contexts and actions come
+//! to it as parameters); only the assembly at the top sees every view. Every path counts, tests'
+//! included, and a module of another crate is named by that crate's name, not through the
+//! assembly's re-exports. A crate whose manifest builds no test binary for it (`test = false`)
+//! has no unit tests to lose that way.
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use toml::{Table, Value};
 
-/// The layer of each module of `src/`, or `None` for one this table does not know yet. lib.rs
-/// only declares the modules and is not read; main.rs names the library `kerf_editor::`, which is
-/// read as `crate::`.
-fn layer(module: &str) -> Option<u8> {
-    Some(match module {
-        // Design tokens, icons, the motion clock.
-        "theme" | "icons" | "motion" => 0,
-        // Pure data: none of these names gpui.
-        "model" | "names" | "links" | "store" | "prefs" | "chip" | "changes" | "delivery"
-        | "folders" | "preset_file" | "shortcuts" => 1,
-        // The window's session, and the media pictures it keeps (`session.artwork`).
-        "session" | "artwork" => 2,
-        // The kit: generic; app-specific contexts, actions and lookups come in as parameters.
-        "ui" | "input" | "selectable" | "chrome" => 3,
-        // Feature views, and the command vocabulary they share.
-        "ask" | "cast" | "chat" | "commands" | "export" | "finish" | "focus" | "inspector"
-        | "launcher" | "making" | "media" | "palette" | "presets" | "settings" | "sidebar"
-        | "stage" | "timeline" => 4,
+/// The layer of each of the editor's crates, or `None` for one this table does not know yet.
+/// Each is a folder of `crates/`; the assembly (`kerf_editor`) is the editor's own root.
+fn crate_layer(name: &str) -> Option<u8> {
+    Some(match name {
+        // Pure data: names no gpui, and has none to name.
+        "editor_state" => 0,
+        // Design tokens and the kit.
+        "editor_ui" => 1,
+        // The window's session, and the command vocabulary every view runs.
+        "editor_session" => 2,
+        // Feature views.
+        "editor_launcher" | "editor_finish" | "editor_inspector" | "editor_stage"
+        | "editor_making" | "editor_sidebar" | "editor_chat" | "editor_timeline" => 3,
         // Assembly: key bindings and menus, the window, the application.
-        "keymap" | "workspace" | "app" | "main" => 5,
+        "kerf_editor" => 4,
         _ => return None,
     })
 }
 
-/// The layer whose modules are pure data, and so name no gpui.
-const PURE: u8 = 1;
+/// The crate whose modules are pure data, and so names no gpui.
+const PURE: &str = "editor_state";
 
-/// One file of a module of `src/`: where it is under `src/`, its source, and how many modules
+/// The layer of each module, or `None` for one this table does not know yet. A crate's root
+/// file (`src/<crate>.rs`) only declares its modules (and the assembly's gives the others' out
+/// again) and is not read; main.rs names the library `kerf_editor::`, which gives out every
+/// module.
+fn layer(module: &str) -> Option<u8> {
+    Some(match module {
+        // The tokens the data takes its defaults from (the theme gives them out).
+        "tokens" => 0,
+        // Design tokens, icons, the motion clock.
+        "theme" | "icons" | "motion" => 1,
+        // Pure data: none of these names gpui.
+        "model" | "names" | "links" | "store" | "prefs" | "chip" | "changes" | "delivery"
+        | "folders" | "preset_file" | "shortcuts" | "book" | "track_heights" => 2,
+        // The window's session, and the media pictures it keeps (`session.artwork`).
+        "session" | "artwork" => 3,
+        // The kit: generic; app-specific contexts, actions and lookups come in as parameters.
+        "ui" | "input" | "selectable" | "chrome" => 4,
+        // Feature views, and the command vocabulary they share.
+        "ask" | "cast" | "chat" | "commands" | "export" | "finish" | "focus" | "inspector"
+        | "launcher" | "making" | "media" | "palette" | "presets" | "settings" | "sidebar"
+        | "stage" | "timeline" => 5,
+        // Assembly: key bindings and menus, the window, the application.
+        "keymap" | "workspace" | "app" | "main" => 6,
+        _ => return None,
+    })
+}
+
+/// One of the editor's crates: where it is under the editor's root, its manifest, its package's
+/// name (what a manifest that depends on it names), and its modules.
+struct Crate {
+    at: String,
+    manifest: Table,
+    package: String,
+    /// Its root file (`src/<crate>.rs`).
+    root: File,
+    modules: BTreeMap<String, Vec<File>>,
+}
+
+/// One file of a module: where it is under the editor's root, its source, and how many modules
 /// below the module's own it is (0 for `x.rs`, 1 for `x/y.rs`, 2 for `x/y/z.rs`).
 struct File {
     path: String,
@@ -43,21 +82,66 @@ struct File {
     depth: usize,
 }
 
-/// Every module of `src/` but lib.rs, by name, with its files: its own, and those of the
-/// submodules in the folder of its name (`x/y.rs`, `x/y/z.rs`), which are of its layer.
-fn modules(src: &Path) -> std::io::Result<BTreeMap<String, Vec<File>>> {
-    let mut found: BTreeMap<String, Vec<File>> = BTreeMap::new();
-    for entry in fs::read_dir(src)? {
+/// Every crate of the editor, by name: each folder of `crates/`, and the assembly at `root`.
+fn crates(root: &Path) -> std::io::Result<BTreeMap<String, Crate>> {
+    let mut found = BTreeMap::new();
+    found.insert(
+        "kerf_editor".to_owned(),
+        read_crate(root, "", "kerf_editor")?,
+    );
+    for entry in fs::read_dir(root.join("crates"))? {
         let path = entry?.path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
+        if path.join("Cargo.toml").is_file() {
+            let at = format!("crates/{name}/");
+            found.insert(name.to_owned(), read_crate(&path, &at, name)?);
+        }
+    }
+    Ok(found)
+}
+
+/// The crate `name` in `folder` (`at` under the editor's root).
+fn read_crate(folder: &Path, at: &str, name: &str) -> std::io::Result<Crate> {
+    let manifest: Table = fs::read_to_string(folder.join("Cargo.toml"))?
+        .parse()
+        .map_err(std::io::Error::other)?;
+    let package = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| std::io::Error::other(format!("{at}Cargo.toml names no package")))?
+        .to_owned();
+    Ok(Crate {
+        at: at.to_owned(),
+        manifest,
+        package,
+        root: File {
+            path: format!("{at}src/{name}.rs"),
+            source: fs::read_to_string(folder.join("src").join(format!("{name}.rs")))?,
+            depth: 0,
+        },
+        modules: modules(&folder.join("src"), &format!("{at}src"), name)?,
+    })
+}
+
+/// Every module of `src` (`at` under the editor's root) but the root file of crate `name`, by
+/// name, with its files: its own, and those of the submodules in the folder of its name
+/// (`x/y.rs`, `x/y/z.rs`), which are of its layer.
+fn modules(src: &Path, at: &str, name: &str) -> std::io::Result<BTreeMap<String, Vec<File>>> {
+    let mut found: BTreeMap<String, Vec<File>> = BTreeMap::new();
+    for entry in fs::read_dir(src)? {
+        let path = entry?.path();
+        let Some(file) = path.file_name().and_then(|file| file.to_str()) else {
+            continue;
+        };
         if path.is_dir() {
-            let files = found.entry(name.to_owned()).or_default();
-            submodules(&path, name, 1, files)?;
-        } else if let Some(module) = name.strip_suffix(".rs").filter(|module| *module != "lib") {
+            let files = found.entry(file.to_owned()).or_default();
+            submodules(&path, &format!("{at}/{file}"), 1, files)?;
+        } else if let Some(module) = file.strip_suffix(".rs").filter(|module| *module != name) {
             found.entry(module.to_owned()).or_default().push(File {
-                path: name.to_owned(),
+                path: format!("{at}/{file}"),
                 source: fs::read_to_string(&path)?,
                 depth: 0,
             });
@@ -66,8 +150,8 @@ fn modules(src: &Path) -> std::io::Result<BTreeMap<String, Vec<File>>> {
     Ok(found)
 }
 
-/// The files in `folder` (`at` under `src/`), `depth` modules below its module's own, and in
-/// the folders under it.
+/// The files in `folder` (`at` under the editor's root), `depth` modules below its module's own,
+/// and in the folders under it.
 fn submodules(folder: &Path, at: &str, depth: usize, files: &mut Vec<File>) -> std::io::Result<()> {
     for entry in fs::read_dir(folder)? {
         let path = entry?.path();
@@ -87,6 +171,48 @@ fn submodules(folder: &Path, at: &str, depth: usize, files: &mut Vec<File>) -> s
         }
     }
     Ok(())
+}
+
+/// The packages `manifest` depends on, by any kind of dependency, each by its package's name:
+/// what its `[dependencies]`, `[dev-dependencies]` and `[build-dependencies]` tables name, and
+/// theirs under `[target.…]` (not `[workspace.dependencies]`, which only declares what the
+/// crates take). A key renamed with `package = ".."`, in the manifest or in the `workspace`
+/// dependency it takes, is that package.
+fn dependencies(manifest: &Table, workspace: &Table) -> Vec<String> {
+    const KINDS: [&str; 5] = [
+        "dependencies",
+        "dev-dependencies",
+        "build-dependencies",
+        // The spellings Cargo still reads.
+        "dev_dependencies",
+        "build_dependencies",
+    ];
+    let targets = manifest
+        .get("target")
+        .and_then(Value::as_table)
+        .into_iter()
+        .flat_map(Table::values)
+        .filter_map(Value::as_table);
+    let tables = std::iter::once(manifest)
+        .chain(targets)
+        .flat_map(|table| KINDS.iter().filter_map(|kind| table.get(*kind)?.as_table()));
+    let mut found = Vec::new();
+    for table in tables {
+        for (key, given) in table {
+            let inherited = given.get("workspace").and_then(Value::as_bool) == Some(true);
+            let declared = if inherited {
+                workspace.get(key)
+            } else {
+                Some(given)
+            };
+            let package = declared
+                .and_then(|declared| declared.get("package"))
+                .and_then(Value::as_str)
+                .unwrap_or(key);
+            found.push(package.to_owned());
+        }
+    }
+    found
 }
 
 /// `source` with its comments and its string and character literals blanked, its newlines kept
@@ -193,11 +319,12 @@ fn is_word(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
 
-/// The modules `code` names by path, each with the line it names it on: `crate::x`, `x` once for
-/// each name of `use crate::{x, ..}`, and what a `super::` that climbs out of the module (`depth`
-/// modules below it in its folder, 0 in its own file) names. `root` is the library's name in
-/// this file (`crate`, or `kerf_editor` in main.rs).
-fn uses(code: &str, root: &str, depth: usize) -> Vec<(String, usize)> {
+/// The modules `code` names by path, each with the crate it names it in (`crate`, or a crate's
+/// name) and the line it names it on: `crate::x` and `editor_ui::x`, `x` once for each name of
+/// `use crate::{x, ..}`, and what a `super::` that climbs out of the module (`depth` modules
+/// below it in its folder, 0 in its own file) names, in `crate`. `roots` are the names a path
+/// may start from in this file: `crate` and the editor's crates.
+fn uses(code: &str, roots: &[&str], depth: usize) -> Vec<(String, String, usize)> {
     let text = code.as_bytes();
     let lines: Vec<usize> = code.match_indices('\n').map(|(at, _)| at).collect();
     let line = |at: usize| lines.partition_point(|&end| end < at) + 1;
@@ -217,14 +344,16 @@ fn uses(code: &str, root: &str, depth: usize) -> Vec<(String, usize)> {
     }
 
     let mut found = Vec::new();
-    let prefix = format!("{root}::");
-    for (at, _) in code.match_indices(&prefix) {
-        if alone(text, at, root.len()) {
-            found.extend(
-                named(text, at + prefix.len())
-                    .into_iter()
-                    .map(|m| (m, line(at))),
-            );
+    for root in roots {
+        let prefix = format!("{root}::");
+        for (at, _) in code.match_indices(&prefix) {
+            if alone(text, at, root.len()) {
+                found.extend(
+                    named(text, at + prefix.len())
+                        .into_iter()
+                        .map(|m| (root.to_string(), m, line(at))),
+                );
+            }
         }
     }
     for (at, _) in code.match_indices("super::") {
@@ -242,7 +371,11 @@ fn uses(code: &str, root: &str, depth: usize) -> Vec<(String, usize)> {
             .filter(|&&(open, close)| open < at && at < close)
             .count();
         if climbs > inside + depth {
-            found.extend(named(text, end).into_iter().map(|m| (m, line(at))));
+            found.extend(
+                named(text, end)
+                    .into_iter()
+                    .map(|m| ("crate".to_owned(), m, line(at))),
+            );
         }
     }
     found
@@ -319,44 +452,174 @@ fn close_of(text: &[u8], open: usize) -> usize {
     text.len()
 }
 
+/// Where `code` (comments and literals blanked) first marks a unit test: an attribute that names
+/// `test` (`#[test]`, `#[gpui::test]`, `#[cfg(test)]`, `#[cfg(all(test, unix))]`, `#![cfg(test)]`)
+/// or a `proptest!` block.
+fn first_test_mark(code: &str) -> Option<usize> {
+    let names_test = |attribute: &str| {
+        attribute.match_indices("test").any(|(at, _)| {
+            !attribute[..at].chars().next_back().is_some_and(is_word)
+                && !attribute[at + 4..].chars().next().is_some_and(is_word)
+        })
+    };
+    let mut from = 0;
+    let attribute = loop {
+        let Some(hash) = code[from..].find('#').map(|at| from + at) else {
+            break None;
+        };
+        let rest = &code[hash + 1..];
+        let open = if rest.starts_with('[') {
+            hash + 1
+        } else if rest.starts_with("![") {
+            hash + 2
+        } else {
+            from = hash + 1;
+            continue;
+        };
+        let mut depth = 0;
+        let close = code[open..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '[' => depth += 1,
+                    ']' => depth -= 1,
+                    _ => return None,
+                }
+                (depth == 0).then_some(open + i)
+            })
+            .unwrap_or(code.len());
+        if names_test(&code[open..close]) {
+            break Some(hash);
+        }
+        from = close;
+    };
+    [attribute, code.find("proptest!")]
+        .into_iter()
+        .flatten()
+        .min()
+}
+
+/// Whether `manifest` builds no test binary for its library (`test = false` in `[lib]`).
+fn tests_off(manifest: &Table) -> bool {
+    manifest
+        .get("lib")
+        .and_then(|lib| lib.get("test"))
+        .and_then(Value::as_bool)
+        == Some(false)
+}
+
 /// Every break of the rule, in words.
-fn violations(modules: &BTreeMap<String, Vec<File>>) -> Vec<String> {
+fn violations(crates: &BTreeMap<String, Crate>) -> Vec<String> {
     let mut found = Vec::new();
-    for (module, files) in modules {
-        let Some(from) = layer(module) else {
+    // Each module's crate, to find what a path names; main.rs names them all from the library.
+    let mut home: BTreeMap<&str, &str> = BTreeMap::new();
+    for (name, krate) in crates {
+        for module in krate.modules.keys() {
+            home.insert(module, name);
+        }
+    }
+    let names: Vec<&str> = crates.keys().map(String::as_str).collect();
+    // Each crate by its package's name, which is what a manifest names.
+    let packages: BTreeMap<&str, &str> = crates
+        .iter()
+        .map(|(name, krate)| (krate.package.as_str(), name.as_str()))
+        .collect();
+    // What the crates take from the workspace (`x.workspace = true`), declared at the root.
+    let workspace = crates
+        .get("kerf_editor")
+        .and_then(|root| root.manifest.get("workspace"))
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(Value::as_table)
+        .cloned()
+        .unwrap_or_default();
+    for (name, krate) in crates {
+        let manifest = format!("{}Cargo.toml", krate.at);
+        let Some(level) = crate_layer(name) else {
             found.push(format!(
-                "src/{module}.rs: `{module}` has no layer; give it one in tests/editor/layers.rs"
+                "{manifest}: `{name}` has no layer; give it one in tests/editor/layers.rs"
             ));
             continue;
         };
-        let root = if module == "main" {
-            "kerf_editor"
-        } else {
-            "crate"
-        };
-        for file in files {
-            let (path, code) = (&file.path, code(&file.source));
-            for (to, line) in uses(&code, root, file.depth) {
-                match layer(&to) {
-                    Some(up) if up > from => found.push(format!(
-                        "src/{path}:{line}: {module} ({from}) may not use {to} ({up})"
-                    )),
-                    Some(_) => {}
-                    // A module without a layer: its own line says so.
-                    None if modules.contains_key(&to) => {}
-                    None => found.push(format!(
-                        "src/{path}:{line}: {module} names {root}::{to}, which is not a module"
-                    )),
+        for dependency in dependencies(&krate.manifest, &workspace) {
+            let named = packages.get(dependency.as_str()).copied();
+            match named.and_then(crate_layer) {
+                Some(up) if up > level => found.push(format!(
+                    "{manifest}: {name} ({level}) may not depend on {dependency} ({up})"
+                )),
+                _ if name == PURE && dependency == "gpui" => found.push(format!(
+                    "{manifest}: {name} depends on gpui; it is pure data"
+                )),
+                _ => {}
+            }
+        }
+        if tests_off(&krate.manifest) {
+            let files = krate.modules.values().flatten();
+            for file in std::iter::once(&krate.root).chain(files) {
+                let code = code(&file.source);
+                if let Some(at) = first_test_mark(&code) {
+                    let line = code[..at].matches('\n').count() + 1;
+                    found.push(format!(
+                        "{}:{line}: {name} has unit tests, but `test = false` in {manifest} \
+                         keeps cargo test from running them",
+                        file.path
+                    ));
                 }
             }
-            let gpui = code
-                .match_indices("gpui")
-                .find(|&(at, _)| alone(code.as_bytes(), at, 4));
-            if let (PURE, Some((at, _))) = (from, gpui) {
-                let line = code[..at].matches('\n').count() + 1;
+        }
+        for (module, files) in &krate.modules {
+            let Some(from) = layer(module) else {
                 found.push(format!(
-                    "src/{path}:{line}: {module} ({from}) names gpui; layer {PURE} is pure data"
+                    "{}src/{module}.rs: `{module}` has no layer; give it one in tests/editor/layers.rs",
+                    krate.at
                 ));
+                continue;
+            };
+            // main.rs names the library by its name; its `crate` is itself.
+            let mut roots = if module == "main" {
+                vec![]
+            } else {
+                vec!["crate"]
+            };
+            roots.extend(
+                names
+                    .iter()
+                    .filter(|&&other| other != name || module == "main"),
+            );
+            for file in files {
+                let (path, code) = (&file.path, code(&file.source));
+                for (root, to, line) in uses(&code, &roots, file.depth) {
+                    // The crate `root` names: this one (`crate`), or another by its name.
+                    let named = if root == "crate" {
+                        name.as_str()
+                    } else {
+                        root.as_str()
+                    };
+                    let library = module == "main" && named == "kerf_editor";
+                    match home.get(to.as_str()) {
+                        Some(&owner) if owner != named && !library => found.push(format!(
+                            "{path}:{line}: {module} names {root}::{to}, which is {owner}'s: \
+                             name it {owner}::{to}"
+                        )),
+                        Some(_) => match layer(&to) {
+                            Some(up) if up > from => found.push(format!(
+                                "{path}:{line}: {module} ({from}) may not use {to} ({up})"
+                            )),
+                            _ => {}
+                        },
+                        None => found.push(format!(
+                            "{path}:{line}: {module} names {root}::{to}, which is not a module"
+                        )),
+                    }
+                }
+                let gpui = code
+                    .match_indices("gpui")
+                    .find(|&(at, _)| alone(code.as_bytes(), at, 4));
+                if let (true, Some((at, _))) = (name == PURE, gpui) {
+                    let line = code[..at].matches('\n').count() + 1;
+                    found.push(format!(
+                        "{path}:{line}: {module} names gpui; {PURE} is pure data"
+                    ));
+                }
             }
         }
     }
@@ -365,9 +628,11 @@ fn violations(modules: &BTreeMap<String, Vec<File>>) -> Vec<String> {
 
 #[test]
 fn the_editor_keeps_its_layers() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let modules = modules(&src).expect("the editor's src folder reads");
-    assert!(modules.len() > 30, "found {} modules", modules.len());
-    let found = violations(&modules);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let crates = crates(root).expect("the editor's crates read");
+    assert!(crates.len() > 5, "found {} crates", crates.len());
+    let modules: usize = crates.values().map(|krate| krate.modules.len()).sum();
+    assert!(modules > 30, "found {modules} modules");
+    let found = violations(&crates);
     assert!(found.is_empty(), "{}", found.join("\n"));
 }

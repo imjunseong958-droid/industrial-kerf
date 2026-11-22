@@ -169,9 +169,9 @@ jobs:
       - name: Build the editor and the daemon
         run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
       - name: Lint the editor
-        run: cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --all-targets -- -D warnings
+        run: cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targets -- -D warnings
       - name: Test the editor
-        run: cargo test --manifest-path apps/kerf-editor/Cargo.toml
+        run: cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
       # It has to open its window and quit on its own when asked to. Xvfb
       # needs the Composite extension, or the editor's Vulkan frames come
       # out black.

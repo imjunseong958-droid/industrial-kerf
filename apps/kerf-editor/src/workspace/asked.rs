@@ -3,9 +3,9 @@
 //! [`AskWords`], for the line of words a sync command needs
 //! ([`sync_question`]). Esc and Enter answer them before the window's own keys.
 
-use crate::input::{InputEvent, TextInput};
-use crate::theme::{self, text};
-use crate::ui;
+use editor_ui::input::{InputEvent, TextInput};
+use editor_ui::theme::{self, text};
+use editor_ui::ui;
 use gpui::{
     div, prelude::*, px, App, ClickEvent, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
     Focusable, KeyBinding, SharedString, Subscription, Window,
@@ -20,7 +20,7 @@ pub(super) const CONFIRM: &str = "Confirm";
 /// them. Binding a keymap clears these, so they are bound again whenever a
 /// question opens and finds them missing.
 fn bind_confirm(cx: &mut App) {
-    if !crate::settings::escape_bound(cx, &CloseConfirm) {
+    if !editor_launcher::settings::escape_bound(cx, &CloseConfirm) {
         cx.bind_keys([
             KeyBinding::new("escape", CloseConfirm, Some(CONFIRM)),
             KeyBinding::new("enter", ConfirmDefault, Some(CONFIRM)),
