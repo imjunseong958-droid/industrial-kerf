@@ -132,53 +132,6 @@ pub(super) fn panic_reported() {
     LAST_PANIC_MS.store(now_ms(), Ordering::SeqCst);
 }
 
-/// Report `message` now, as a fatal error the process is about to die of, just before its
-/// abort; the crash that follows writes no second report. Not from a signal handler:
-/// this one may allocate. Nothing is written when no handler was installed.
-pub(super) fn fatal(message: &str) -> Option<std::path::PathBuf> {
-    let setup = SETUP.get()?;
-    if REPORTED.swap(true, Ordering::SeqCst) {
-        return None;
-    }
-    let at_ms = now_ms();
-    let thread = std::thread::current();
-    let thread = thread
-        .name()
-        .map_or_else(|| format!("{}", current_thread()), str::to_owned);
-    let backtrace = std::backtrace::Backtrace::force_capture().to_string();
-    let text = format!(
-        "{}at_ms: {at_ms}\nthread: {thread}\nlocation: unknown\nmessage: {}\n\n{message}\n\nbacktrace:\n{backtrace}\n",
-        setup.header,
-        message.lines().next().unwrap_or(""),
-    );
-    let folder = folder_path(setup);
-    std::fs::create_dir_all(&folder).ok()?;
-    let path = folder.join(format!(
-        "{}-{at_ms}-{}.txt",
-        setup.component,
-        std::process::id()
-    ));
-    std::fs::write(&path, text).ok()?;
-    Some(path)
-}
-
-#[cfg(unix)]
-fn folder_path(setup: &Setup) -> std::path::PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    std::path::PathBuf::from(std::ffi::OsStr::from_bytes(setup.folder.as_bytes()))
-}
-
-#[cfg(windows)]
-fn folder_path(setup: &Setup) -> std::path::PathBuf {
-    use std::os::windows::ffi::OsStringExt;
-    std::path::PathBuf::from(std::ffi::OsString::from_wide(&setup.folder))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn folder_path(_: &Setup) -> std::path::PathBuf {
-    std::path::PathBuf::new()
-}
-
 fn current_thread() -> u64 {
     #[cfg(unix)]
     return unix::thread_id();

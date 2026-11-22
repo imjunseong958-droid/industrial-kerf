@@ -102,12 +102,12 @@ impl Affine {
 /// what is nearer than this along its way, or behind it, is out of sight.
 pub const NEAREST: f64 = 0.001;
 
-/// What `w` is held to at least as a point is mapped, as QTransform's
-/// near clip has it: a point on or behind the camera still maps somewhere.
+/// What `w` is held to at least as a point is mapped: a point on or behind
+/// the camera still maps somewhere.
 const NEAR_CLIP: f64 = 1e-6;
 
-/// A map of the plane as a camera may see it, in perspective, in
-/// QTransform's order: `(x, y)` goes to `(m11 x + m21 y + m31,
+/// A map of the plane as a camera may see it, in perspective, a row vector
+/// times the matrix: `(x, y)` goes to `(m11 x + m21 y + m31,
 /// m12 x + m22 y + m32)` over `w = m13 x + m23 y + m33`, `m[r][c]` being
 /// `m(r+1)(c+1)`. For a placement in depth `w` is how far along the
 /// camera's way the point is, in frame heights; for a flat one it is 1.

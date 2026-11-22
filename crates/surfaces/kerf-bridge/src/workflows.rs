@@ -5,7 +5,7 @@
 //! Setting one changes nothing on a ComfyUI server and nothing of
 //! `kerf-comfy`. The workflow as it comes is copied into the project, beside
 //! the shot, with that value changed and the rest as it was written
-//! ([`kerf_workflow::detail`]), and the step is given `workflow=<file>`, by an
+//! (`kerf_workflow::detail`), and the step is given `workflow=<file>`, by an
 //! edit where the document holds it and in its recipe's text where a file does,
 //! which has the model's program run the copy for this shot
 //! The copy is a file of the project: it travels with it,

@@ -40,7 +40,7 @@
 //! never on opening or drawing a project.
 //!
 //! Each making is a take, kept beside the ones before it; the document says
-//! which one the media is ([`takes`]).
+//! which one the media is ([`mod@takes`]).
 //!
 //! Before the document held them, steps were written in a recipe, a text
 //! file the media's line named (`recipe="shots/open.kerfrecipe"`). Nothing
@@ -1005,7 +1005,7 @@ pub struct Made {
 /// something: a failed run leaves no take, and the media as it was.
 ///
 /// While it runs it says what it is doing where another program can see
-/// it ([`told`]), and stops when one asks it to ([`ask_to_stop`]).
+/// it ([`mod@told`]), and stops when one asks it to ([`ask_to_stop`]).
 pub fn make(
     project: &kerf_model::Project,
     directory: &Path,

@@ -1926,10 +1926,10 @@ version = "0.1.5"
 dependencies = [
  "idna",
  "kerf-bridge",
+ "kerf-paths",
  "log",
  "serde",
  "serde_json",
- "sha1_smol",
  "unicode-normalization",
 ]
 
@@ -3659,10 +3659,10 @@ dependencies = [
  "kerf-compose",
  "kerf-core",
  "kerf-engine",
- "kerf-fx",
  "kerf-lang",
  "kerf-mcp",
  "kerf-model",
+ "kerf-paths",
  "kerf-playback",
  "kerf-runtime",
  "kerf-shots",
@@ -3677,6 +3677,7 @@ dependencies = [
 name = "kerf-cloud"
 version = "0.1.5"
 dependencies = [
+ "kerf-paths",
  "log",
  "serde",
  "serde_json",
@@ -3793,9 +3794,9 @@ dependencies = [
  "kerf-color",
  "kerf-compose",
  "kerf-core",
- "kerf-fx",
  "kerf-lang",
  "kerf-model",
+ "kerf-paths",
  "kerf-track",
  "libc",
  "log",
@@ -3885,6 +3886,7 @@ dependencies = [
  "kerf-interchange",
  "kerf-lang",
  "kerf-model",
+ "kerf-paths",
  "kerf-runtime",
  "kerf-scopes",
  "kerf-shots",
@@ -3916,6 +3918,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerf-paths"
+version = "0.1.5"
+
+[[package]]
 name = "kerf-playback"
 version = "0.1.5"
 dependencies = [
@@ -3926,7 +3932,6 @@ dependencies = [
  "kerf-fx",
  "kerf-model",
  "log",
- "serde_json",
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
 ]

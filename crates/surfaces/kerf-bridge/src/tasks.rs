@@ -537,7 +537,6 @@ fn start_from_preset(
         progress("Committing…");
         git::stage(directory).map_err(|error| error.message)?;
         client
-            .clone()
             .with_request_timeout(COMMIT_TIMEOUT)
             .collab_integrate(
                 "system",

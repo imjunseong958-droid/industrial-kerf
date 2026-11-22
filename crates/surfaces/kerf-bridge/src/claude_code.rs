@@ -477,7 +477,7 @@ fn find_claude() -> Option<PathBuf> {
                 .collect()
         })
         .unwrap_or_default();
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+    if let Some(home) = kerf_paths::home() {
         candidates.push(home.join(".local/bin").join(name));
         candidates.push(home.join(".claude/local").join(name));
     }

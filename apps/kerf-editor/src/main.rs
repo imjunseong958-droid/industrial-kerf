@@ -181,8 +181,6 @@ fn main() {
             eprintln!("kerf-editor: cannot start again with the tool folders on PATH: {error}");
         }
     }
-    // Settings someone else put in place (a test's) are theirs alone.
-    let settings_given = std::env::var_os("KERF_EDITOR_PREFS").is_some_and(|path| !path.is_empty());
     let arguments = match arguments(&raw) {
         Ok(arguments) => arguments,
         Err(message) => {
@@ -197,14 +195,6 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     kerf_bridge::crash_install();
     motion::init_from_env();
-    // Before anything reads them, the first time: the settings the editor
-    // before 0.1.5 (Qt) kept, so an update loses none of them.
-    if !settings_given || arguments.settings_dir.is_some() {
-        let taken = prefs::import_qt_once(arguments.settings_dir.as_deref());
-        if !taken.is_empty() {
-            log::info!("took up the Qt editor's settings: {}", taken.join(", "));
-        }
-    }
     let mut prefs = Prefs::load();
     if prefs.reduce_motion {
         motion::set_reduced(true);

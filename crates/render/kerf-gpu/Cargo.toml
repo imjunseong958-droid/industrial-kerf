@@ -3,6 +3,7 @@ name = "kerf-gpu"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Kerf's drawing on the GPU: pictures in textures, and the kernels that composite them"
 
 # The kernels are carried from FilmCraft's GPU compositor (see licenses/README.md).

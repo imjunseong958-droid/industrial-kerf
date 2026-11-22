@@ -749,7 +749,7 @@ fn step() -> impl Strategy<Value = Step> {
 
 proptest! {
     #[test]
-    fn a_sync_failure_follows_qts_rules(steps in proptest::collection::vec(step(), 0..40)) {
+    fn a_sync_failure_follows_its_rules(steps in proptest::collection::vec(step(), 0..40)) {
         let mut sync = SyncFailure::default();
         // The model: why the last failed (until done), whether it stands.
         let mut last: Option<String> = None;

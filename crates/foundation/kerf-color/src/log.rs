@@ -8,8 +8,8 @@
 //! * [`Domain::Ire`]: the specification is written in "IRE" (video-range normalised: 0 = code 64,
 //!   1 = code 940). Canon publishes Canon Log 2/3 this way; Apple Log is treated the same.
 //!
-//! [`signal_from_normalized`] / [`normalized_from_signal`] convert between the decoder's
-//! normalised value (which already accounts for the file's range flag) and the curve domain.
+//! [`signal_from_normalized`] converts the decoder's normalised value (which already
+//! accounts for the file's range flag) to the curve domain.
 //! Formulas and sources are listed in the crate README (§ Camera log curves).
 
 use crate::Range;

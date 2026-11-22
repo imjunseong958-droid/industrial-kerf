@@ -3,6 +3,7 @@ name = "kerf-compose"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Kerf's compositor: a sequence drawn frame by frame in linear light, with footage decoded by libav"
 
 [dependencies]

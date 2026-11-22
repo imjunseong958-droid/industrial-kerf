@@ -3,6 +3,7 @@ name = "kerf-interchange"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Project interchange for Kerf: OpenTimelineIO, Final Cut Pro XML, and CMX3600 EDL"
 
 [dependencies]

@@ -470,11 +470,6 @@ fn can_play(context: &Context) -> Result<(), &'static str> {
     }
 }
 
-/// Why a command the editor lists has no handler yet: its region lands
-/// later in this release, and the command reads as unavailable until then.
-/// Every command has its handler now; a new one without one says this.
-pub const COMING: &str = "Coming in this release";
-
 const NOT_SHARED: &str = "Share the project with Git first (Collaborate → Publish to GitHub…)";
 const SYNCING: &str = "A sync is running";
 const DIVERGED: &str = "project.kerf changed on disk: load it or keep the editor's version first";

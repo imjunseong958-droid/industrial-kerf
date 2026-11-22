@@ -1,5 +1,5 @@
-//! A crash that is not a panic, a bad memory access or an abort in native code such as the
-//! editor's C++, leaves a report as a panic does, which `crash::reports` lists for the editor's
+//! A crash that is not a panic, a bad memory access or an abort in native code such as
+//! FFmpeg's, leaves a report as a panic does, which `crash::reports` lists for the editor's
 //! next start to tell of. Each test crashes a child process on purpose: this test binary, run
 //! again for `crash_on_purpose` alone.
 
@@ -24,11 +24,6 @@ fn crash_on_purpose() {
         },
         // SAFETY: abort takes nothing; it is what C++'s std::terminate ends a process with.
         "abort" => unsafe { libc::abort() },
-        "fatal" => {
-            crash::fatal("QWidget: Must construct a QApplication before a QWidget");
-            // SAFETY: as above.
-            unsafe { libc::abort() }
-        }
         "panic, then abort" => {
             let _ = std::panic::catch_unwind(|| panic!("a panic that cannot unwind"));
             // SAFETY: as above.
@@ -172,22 +167,6 @@ fn an_abort_leaves_a_report_with_a_backtrace() {
     assert_eq!(report.component, "editor");
     assert_eq!(report.message, "Aborted (SIGABRT)", "{text}");
     assert!(names_this_binary(backtrace(&text)), "{text}");
-}
-
-// A fatal error reported before an abort: its message is the report, and the abort adds nothing.
-#[test]
-fn a_fatal_error_is_reported_once_with_its_message() {
-    let crashed = crash("fatal");
-    assert!(!crashed.status.success());
-    let (report, text) = only_report(&crashed);
-    assert_eq!(
-        report.message,
-        "QWidget: Must construct a QApplication before a QWidget"
-    );
-    assert!(
-        text.contains("crash_on_purpose"),
-        "the backtrace names the function: {text}"
-    );
 }
 
 // A panic that cannot unwind out of an extern "C" function aborts: its report is the one.

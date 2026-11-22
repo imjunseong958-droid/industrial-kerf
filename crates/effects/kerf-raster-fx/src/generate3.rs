@@ -247,7 +247,7 @@ fn audio_window(ctx: &EffectCtx, dur_ms: f64, offset_ms: f64, channel: u32) -> O
 }
 
 /// The drawing baseline: a polyline in buffer px (mask path or start→end line), sampled at
-/// parameter u∈[0,1] → (point, unit normal).
+/// parameter u∈\[0,1\] → (point, unit normal).
 struct Baseline {
     pts: Vec<[f64; 2]>,
     closed: bool,

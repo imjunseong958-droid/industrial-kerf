@@ -3,12 +3,8 @@ name = "kerf-kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "One source for a kernel: runs on the CPU and writes itself out as WGSL"
-
-[dependencies]
-
-[dev-dependencies]
-naga = { workspace = true, features = ["wgsl-in"] }
 
 [lints]
 workspace = true

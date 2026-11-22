@@ -951,7 +951,7 @@ impl Frame<'_> {
         let depths_view = depths.create_view(&Default::default());
         Layers {
             pictures: self.take(w, h * count),
-            depths: depths.clone(),
+            depths,
             depths_view,
             h,
             laid: Vec::new(),

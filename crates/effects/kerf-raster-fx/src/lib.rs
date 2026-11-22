@@ -2,9 +2,8 @@
 //!
 //! Every effect is an [`EffectSpec`]: a stable id (`ec.blur.gaussian`), its display name and
 //! category (the Effects & Presets tree), typed parameters with defaults and UI hints, and a CPU
-//! render function. Effect instances on layers are ordinary property groups (see
-//! [`instantiate`]), so parameters animate, take expressions and are addressable like any other
-//! property.
+//! render function. Effect instances on layers are ordinary property groups, so parameters
+//! animate, take expressions and are addressable like any other property.
 
 #![deny(
     clippy::unwrap_used,
@@ -110,7 +109,7 @@ impl Params {
 }
 
 /// A layer image in flight: point `p` sits at pixel `p * scale + offset`. Points are in layer
-/// space, or in effect space while the layer's effects run (see [`Buf::rebase`]).
+/// space, or in effect space while the layer's effects run.
 #[derive(Clone, Debug, Default)]
 pub struct Buf {
     pub img: Image,

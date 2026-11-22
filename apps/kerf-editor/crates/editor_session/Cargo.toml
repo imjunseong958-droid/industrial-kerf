@@ -3,6 +3,7 @@ name = "editor_session"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "The editor window's session with kerfd, the media pictures it keeps, and the commands every view runs"
 
 [lib]

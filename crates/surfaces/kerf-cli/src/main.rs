@@ -1571,10 +1571,10 @@ fn resolve_llm(args: &Args) -> Result<LlmConfig> {
 }
 
 fn read_user_config() -> Value {
-    let Some(home) = env::var_os("HOME") else {
+    let Some(folder) = kerf_paths::user_dir() else {
         return json!({});
     };
-    fs::read_to_string(PathBuf::from(home).join(".kerf/config.json"))
+    fs::read_to_string(folder.join("config.json"))
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
         .unwrap_or_else(|| json!({}))
@@ -1595,12 +1595,19 @@ fn open_router(directory: &Path, kerfd: Option<&Path>) -> Result<KerfMcpRouter> 
     KerfMcpRouter::new(directory, kerfd.as_deref()).map_err(|error| anyhow!(error))
 }
 
+/// The checkout this `kerf` was built in, whose `target` holds the kerfd and the editor
+/// built with it: the folder that holds the workspace, three above this crate
+/// (`crates/surfaces/kerf-cli`).
+fn checkout() -> Option<&'static Path> {
+    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(3)
+}
+
 fn discover_kerfd() -> Option<PathBuf> {
     if let Some(path) = env::var_os("KERFD_BIN") {
         return Some(path.into());
     }
     let current = env::current_exe().ok();
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2)?;
+    let root = checkout()?;
     let mut candidates = Vec::new();
     if let Some(parent) = current.as_deref().and_then(Path::parent) {
         candidates.push(parent.join(binary_name("kerfd")));
@@ -1617,12 +1624,9 @@ fn discover_editor() -> Result<PathBuf> {
         }
         bail!("configured editor does not exist: {}", path.display());
     }
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .context("could not resolve repository root")?;
+    let root = checkout().context("could not resolve repository root")?;
     let current = env::current_exe().ok();
-    let home = env::var_os("HOME").map(PathBuf::from);
+    let home = kerf_paths::home();
     editor_candidates(current.as_deref(), root, home.as_deref())
         .into_iter()
         .find(|path| path.is_file())
@@ -1802,7 +1806,7 @@ fn run_repl(session: &mut AgentSession, directory: &Path) -> Result<()> {
             }
             prompt => {
                 // Its answer was printed as it streamed in.
-                let _ = run_prompt(session, prompt)?;
+                run_prompt(session, prompt)?;
                 println!();
             }
         }
@@ -1840,7 +1844,7 @@ fn operation_key(kind: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{create_project, git, in_step, run_sync, Args, Command};
+    use super::{checkout, create_project, git, in_step, run_sync, Args, Command};
     use clap::Parser;
 
     use serde_json::json;
@@ -1848,6 +1852,22 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::sync::Once;
+
+    /// `kerf` looks in the checkout it was built in for the kerfd and the editor built
+    /// with it (`target/debug`, `target/release`): that is the folder that holds the
+    /// workspace, not one of the folders the crates are sorted into.
+    #[test]
+    fn the_checkout_is_the_folder_that_holds_the_workspace() {
+        let checkout = checkout().expect("this crate is three folders into its checkout");
+        assert!(
+            checkout.join("rust-toolchain.toml").is_file(),
+            "{}",
+            checkout.display()
+        );
+        assert!(checkout
+            .join("crates/surfaces/kerf-cli/Cargo.toml")
+            .is_file());
+    }
 
     /// A snapshot at `revision` whose proposals are `proposals`, newest first as kerfd lists
     /// them: each an id, its status, and the revision it was made for.

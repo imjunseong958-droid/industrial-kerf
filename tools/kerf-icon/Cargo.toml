@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Renders Kerf's icon from its SVG to the PNG, .ico and .icns files the editor and its packages carry"
-publish = false
+publish.workspace = true
 
 [[bin]]
 name = "kerf-icon"

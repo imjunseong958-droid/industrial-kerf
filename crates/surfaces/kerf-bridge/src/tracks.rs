@@ -140,7 +140,7 @@ pub(crate) fn follow(
             Ok(read) => crate::emit(
                 &tx,
                 Event::ShotFollowed {
-                    clip: clip.clone(),
+                    clip,
                     of,
                     frames: read.frames,
                     keyframes: read.keyframes,

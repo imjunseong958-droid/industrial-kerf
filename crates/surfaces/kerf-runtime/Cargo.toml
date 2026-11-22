@@ -3,6 +3,7 @@ name = "kerf-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Single-owner durable runtime and command mailbox for Kerf"
 
 [lib]

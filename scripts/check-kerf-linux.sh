@@ -122,7 +122,7 @@ grep -q '/libvulkan\.so\.1$' <<< "$loaded" || {
 outside="$(grep -vF "$package/" <<< "$loaded" | while IFS= read -r library; do
     name="$(basename "$library")"
     if grep -qxF "$name" <<< "$carried"; then echo "$library"; continue; fi
-    case "$name" in libav*|libsw*|libpostproc*|libkerf*) echo "$library" ;; esac
+    case "$name" in libav*|libsw*|libpostproc*) echo "$library" ;; esac
 done)"
 if [ -n "$outside" ]; then
     printf 'The package loaded from outside it what it carries or should:\n%s\n' "$outside" >&2

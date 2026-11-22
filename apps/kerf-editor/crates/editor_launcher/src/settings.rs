@@ -2228,7 +2228,7 @@ pub fn models_file() -> PathBuf {
     std::env::var_os("KERF_MODELS")
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
-        .or_else(|| editor_state::prefs::home().map(|home| home.join(".kerf").join("models.json")))
+        .or_else(|| editor_state::prefs::user_dir().map(|folder| folder.join("models.json")))
         .unwrap_or_else(|| PathBuf::from("models.json"))
 }
 

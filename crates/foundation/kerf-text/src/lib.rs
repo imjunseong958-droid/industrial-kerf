@@ -6,7 +6,7 @@
 //!   web unless the host registers font data), family/style resolution (by family, face name or
 //!   weight) with synthetic bold/italic, and per-cluster fallback to bundled, craft-fonts and
 //!   installed faces, colour emoji faces first for emoji.
-//! - [`layout`]: shaping (harfrust: kerning, ligatures, complex scripts), bidi, line breaking,
+//! - [`mod@layout`]: shaping (harfrust: kerning, ligatures, complex scripts), bidi, line breaking,
 //!   paragraph layout, per-character style runs, carets and hit testing; cached.
 //! - [`raster`]: our own anti-aliased path rasteriser (linear coverage, so compositing in linear
 //!   light is correct) and vector shapes.

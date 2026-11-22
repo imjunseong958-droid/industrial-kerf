@@ -61,7 +61,7 @@ fn half(src: &Image) -> Image {
 ///
 /// Affine transforms with non-stencil modes take a fast path (per-row span clipping, interior
 /// bilinear without bounds checks, integer-translation copies, inlined Normal blending); it
-/// matches [`composite_warp_reference`] to float rounding.
+/// matches `composite_warp_reference` (the tests' per-pixel reference) to float rounding.
 pub fn composite_warp(dst: &mut Image, src: &Image, m: &Mat3, opts: &WarpOpts) {
     composite_warp_impl(dst, src, m, opts, true, None);
 }

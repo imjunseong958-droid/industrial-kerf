@@ -95,9 +95,8 @@ impl Quality {
     }
 }
 
-/// The export command that renders the project's master, named and placed
-/// as the editor before 0.1.5 (Qt) placed it, so a master lands where the
-/// earlier ones are: `{type: export, quality: master}`, to
+/// The export command that renders the project's master:
+/// `{type: export, quality: master}`, to
 /// deliveries/ as `<project>_master` unless `kept` (the project's
 /// [`MasterOutput`]) names another folder (empty: where kerfd puts it) or
 /// file name; its codec when it is not ProRes 422 HQ, a master's own.

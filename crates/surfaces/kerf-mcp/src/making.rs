@@ -467,7 +467,7 @@ impl KerfMcpRouter {
                         Ok(revision) => Status::Made {
                             revision,
                             path: made.stored,
-                            takes: takes.clone(),
+                            takes,
                         },
                         Err(error) => Status::Failed(format!(
                             "take {} was made, and the document could not take it: {}; its `use` \

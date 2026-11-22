@@ -314,11 +314,6 @@ impl TimelineView {
         self.targets.as_deref()
     }
 
-    /// The sound tracks soloed for monitoring.
-    pub fn solo_tracks(&self) -> &[String] {
-        &self.solo
-    }
-
     /// Clip `id`'s box in the window as the lanes last drew it, cut to the
     /// lanes; None while it is scrolled out of view or the lanes are not
     /// laid out. The window stands the Ask popover over it (`ai.ask`).

@@ -424,13 +424,7 @@ impl Models {
         std::env::var_os("KERF_MODELS")
             .filter(|path| !path.is_empty())
             .map(PathBuf::from)
-            .or_else(|| {
-                // Windows sets no HOME.
-                std::env::var_os("HOME")
-                    .or_else(|| std::env::var_os("USERPROFILE"))
-                    .filter(|home| !home.is_empty())
-                    .map(|home| PathBuf::from(home).join(".kerf").join("models.json"))
-            })
+            .or_else(|| kerf_paths::user_dir().map(|folder| folder.join("models.json")))
             .unwrap_or_else(|| PathBuf::from("models.json"))
     }
 

@@ -13,7 +13,7 @@ fn dir(e: &Fx) -> u32 {
     e.choice("direction").unwrap_or(3)
 }
 
-/// Mask-based mix: out = A·(1-m) + B·m with m = f(x, y) ∈ [0,1].
+/// Mask-based mix: out = A·(1-m) + B·m with m = f(x, y) ∈ \[0,1\].
 fn masked(a: &Image, b: &Image, m: impl Fn(f32, f32) -> f32 + Sync) -> Image {
     let (w, h) = (a.w, a.h);
     let mut out = Image::new(w, h);

@@ -989,7 +989,7 @@ impl AudioBuffer {
         queue.extend(samples.iter().copied());
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn pop(&self) -> Option<f32> {
         self.samples
             .lock()

@@ -173,7 +173,7 @@ impl Stage {
                 ramp: kernel("ramp"),
                 gradient: kernel("gradient"),
                 checkerboard: kernel("checkerboard"),
-                layout: layout.clone(),
+                layout,
             }
         });
         built

@@ -3,8 +3,8 @@ name = "kerf-playback"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Native Kerf playback controller, timeline mapper, and in-process libav decoder"
-rust-version = "1.95"
 
 [lib]
 name = "kerf_playback"
@@ -28,7 +28,6 @@ ffmpeg-next = { workspace = true, features = [
     "software-scaling",
 ] }
 log.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]

@@ -8,7 +8,7 @@ use std::path::Path;
 
 /// The recipe of media `id` as a graph: its nodes and edges, its text, what
 /// would refuse its making (`cannot`) and what is worth knowing first
-/// (`notes`), as [`kerf_engine::recipe::graph`] lays it out. A model its
+/// (`notes`), as [`kerf_engine::recipe::graph()`] lays it out. A model its
 /// entry runs with a program whose workflow can be opened says so under
 /// `runner`: which program, and which workflow.
 pub fn shown(

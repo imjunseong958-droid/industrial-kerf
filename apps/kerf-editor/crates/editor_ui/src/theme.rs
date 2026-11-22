@@ -426,7 +426,6 @@ pub use editor_state::tokens::{
 
 pub mod radius {
     pub const SMALL: f32 = 4.0;
-    pub const MARKER: f32 = 5.0;
     pub const CONTROL: f32 = 6.0;
     pub const CARD: f32 = 8.0;
     pub const PANEL: f32 = 12.0;
@@ -439,7 +438,6 @@ pub mod space {
     pub const S8: f32 = 8.0;
     pub const S12: f32 = 12.0;
     pub const S16: f32 = 16.0;
-    pub const PANEL_LEFT: f32 = 16.0;
 }
 
 pub mod height {
@@ -699,8 +697,6 @@ pub mod layout {
     pub const PREVIEW_REASON_MOST: f32 = 320.0;
     /// The chosen clip's inspector, beside the picture.
     pub const INSPECTOR: f32 = 300.0;
-    /// The tallest the composer grows with its lines before it scrolls.
-    pub const COMPOSER: f32 = 110.0;
     /// A bar under the toolbar (kerfd gone, the file changed, an error).
     pub const BAR: f32 = 40.0;
     /// Points a press on an edge or a handle moves before it is a drag.

@@ -4,7 +4,7 @@ description = "Kerf's 2D geometry: vectors, rectangles, affine transforms, and p
 version.workspace = true
 edition.workspace = true
 license = "MIT OR Apache-2.0"
-rust-version = "1.95"
+publish.workspace = true
 
 [lints]
 workspace = true

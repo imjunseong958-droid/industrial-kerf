@@ -40,12 +40,9 @@ impl Address {
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         };
-        let file = variable("KERF_COMFY").map(PathBuf::from).or_else(|| {
-            // Windows sets no HOME.
-            variable("HOME")
-                .or_else(|| variable("USERPROFILE"))
-                .map(|home| PathBuf::from(home).join(".kerf").join("comfy.json"))
-        });
+        let file = variable("KERF_COMFY")
+            .map(PathBuf::from)
+            .or_else(|| kerf_paths::user_dir().map(|folder| folder.join("comfy.json")));
         let kept = match &file {
             Some(file) => match std::fs::read_to_string(file) {
                 Ok(text) => Some((file.clone(), text)),

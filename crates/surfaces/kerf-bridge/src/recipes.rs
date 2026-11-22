@@ -1,5 +1,5 @@
 //! How a shot is made, for the editor's graph: a media's steps laid out with
-//! what they read ([`kerf_engine::recipe::graph`]), and a person's change to
+//! what they read ([`kerf_engine::recipe::graph()`]), and a person's change to
 //! them.
 //!
 //! The steps are the document's own, under the media, and are changed by an

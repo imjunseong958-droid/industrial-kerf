@@ -84,14 +84,6 @@ pub fn install_in(component: &'static str, folder: PathBuf) {
     });
 }
 
-/// Report `message` now as what ends the process, just before it aborts; the crash that follows
-/// writes no second report. On Windows an abort can be a fail-fast that no handler in the process
-/// sees (`std::process::abort` is one), so this is then its only report. Returns where it went; nothing is
-/// written before [`install`], or after another report of a native crash.
-pub fn fatal(message: &str) -> Option<PathBuf> {
-    native::fatal(message)
-}
-
 /// The reports in `folder`, newest first.
 pub fn reports(folder: &Path) -> Vec<Report> {
     let Ok(entries) = fs::read_dir(folder) else {

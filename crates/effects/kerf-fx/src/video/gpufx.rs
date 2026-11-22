@@ -5,7 +5,7 @@
 //! [`FxOp::apply`] runs the CPU reference on a working [`Image`]. `effects::apply` uses exactly
 //! these two steps, so the CPU render and the GPU plan agree on every parameter (and on how
 //! hostile values are clamped) by construction. The GPU compositor receives the evaluated
-//! [`FxOp`]s in a [`crate::plan::LayerFx`] and reproduces `apply` per pixel; the plan only hands an
+//! [`FxOp`]s and reproduces `apply` per pixel; the plan only hands an
 //! op to the GPU when [`FxOp::gpu_ok`] says the shader covers it (finite numbers, no minifying
 //! resample), otherwise the clip is rendered on the CPU as before.
 

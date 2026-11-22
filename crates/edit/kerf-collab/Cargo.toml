@@ -3,6 +3,7 @@ name = "kerf-collab"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+publish.workspace = true
 description = "Git-based collaboration for Kerf projects: structural merges of project.kerf, sync, and project scaffolding"
 
 [dependencies]

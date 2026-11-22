@@ -8,14 +8,12 @@
 //! field is written with its decimal point (`0.0`), and a float that is not finite as
 //! `null`.
 //!
-//! Reading one back is lenient, as the editor read these events when they reached it as
-//! JSON: an absent field reads as its default; an event without a `type`, or of a `type`
-//! this build does not know, reads as [`Event::Unknown`], and an agent update of a `kind` it
-//! does not know as [`AgentUpdate::Other`], so a newer bridge or kerfd never breaks an older
-//! window. A snapshot's timelines that do not read are empty, and its proposals that do not
+//! Reading one back is lenient: an absent field reads as its default; an event without a
+//! `type`, or of a `type` this build does not know, reads as [`Event::Unknown`], and an
+//! agent update of a `kind` it does not know as [`AgentUpdate::Other`], so what a newer Kerf
+//! wrote still reads. A snapshot's timelines that do not read are empty, and its proposals that do not
 //! read are left out. What only a reader takes ([`AgentUpdate::Other`],
-//! [`PreviewStatus::Other`], and [`Event::Analysis`], which only the Qt editor's bridge sent)
-//! is never sent.
+//! [`PreviewStatus::Other`]) is never sent.
 
 use crate::ShotOf;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -387,16 +385,8 @@ pub enum Event {
         created: bool,
     },
 
-    /// An analysis made in the background, as the Qt editor's bridge said one: its line for
-    /// the editor's Activity. This bridge never sends one; one read from JSON is kept for
-    /// that line.
-    Analysis {
-        #[serde(default)]
-        message: String,
-    },
-
     /// An event of a type this build does not know, or without one. It is never sent;
-    /// one read from JSON is this, so a newer bridge or kerfd never breaks an older window.
+    /// one read from JSON is this, so what a newer Kerf wrote still reads.
     #[serde(other)]
     Unknown,
 }

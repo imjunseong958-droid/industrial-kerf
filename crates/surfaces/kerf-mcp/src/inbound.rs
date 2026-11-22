@@ -752,10 +752,9 @@ fn load_configs(
     directory: &Path,
     log: &mut impl FnMut(String),
 ) -> Result<BTreeMap<String, McpServerConfig>, String> {
-    let home = env::var_os("HOME").map(PathBuf::from);
     let mut merged = BTreeMap::new();
     let mut paths = Vec::new();
-    if let Some(home) = home {
+    if let Some(home) = kerf_paths::home() {
         paths.push(home.join(CONFIG_FILE));
     }
     paths.extend(project_config(directory, log));
