@@ -261,7 +261,7 @@ impl Render for CommandPalette {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .px(px(14.0))
                     .h(px(46.0))
                     .border_b_1()
@@ -276,7 +276,7 @@ impl Render for CommandPalette {
                     .min_h_0()
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll)
-                    .p(px(6.0))
+                    .p(px(theme::space::S6))
                     .when(found.is_empty(), |list| {
                         list.child(div().p(px(10.0)).child(ui::label(
                             "No command says that.",

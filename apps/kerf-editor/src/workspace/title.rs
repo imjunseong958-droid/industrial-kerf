@@ -76,7 +76,7 @@ impl Workspace {
             .flex()
             .items_center()
             .gap(px(10.0))
-            .pl(px(8.0))
+            .pl(px(theme::space::S8))
             .min_w_0()
             .child(if renaming {
                 // Renamed where it is named: the field takes the title's place.
@@ -86,7 +86,7 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .ml(px(-5.0))
-                    .px(px(4.0))
+                    .px(px(theme::space::S4))
                     .rounded(px(theme::radius::SMALL))
                     .bg(theme::card())
                     .border_1()
@@ -146,11 +146,11 @@ impl Workspace {
         }))
         .flex()
         .items_center()
-        .gap(px(4.0))
+        .gap(px(theme::space::S4))
         .min_w_0()
         .h(px(theme::height::H28))
-        .pl(px(4.0))
-        .pr(px(2.0))
+        .pl(px(theme::space::S4))
+        .pr(px(theme::space::S2))
         .ml(px(-4.0))
         .rounded(px(theme::radius::CONTROL))
         .cursor_pointer()
@@ -413,11 +413,11 @@ impl Workspace {
             .collect();
         sidebar::menu_panel()
             .w(px(ACTIVITY_WIDTH))
-            .px(px(12.0))
+            .px(px(theme::space::S12))
             .py(px(10.0))
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.activity_open = false;
                 cx.notify();
@@ -433,7 +433,7 @@ impl Workspace {
             .children(lines.into_iter().map(|(kind, words)| {
                 div()
                     .flex()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(
                         ui::line(kind, text::MONO_SMALL, theme::ink3())
                             .w(px(ACTIVITY_KIND))

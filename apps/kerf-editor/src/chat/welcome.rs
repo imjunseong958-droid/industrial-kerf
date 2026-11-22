@@ -106,7 +106,7 @@ impl ChatView {
             if entry.separated && !folder_rows.is_empty() {
                 folder_rows.push(
                     div()
-                        .my(px(4.0))
+                        .my(px(theme::space::S4))
                         .child(ui::hairline(true))
                         .into_any_element(),
                 );
@@ -230,7 +230,7 @@ fn welcome_row(
         .id(id)
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(theme::space::S8))
         .h(px(32.0))
         .px(px(10.0))
         .rounded(px(theme::radius::CONTROL))

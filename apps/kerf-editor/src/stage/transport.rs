@@ -124,8 +124,8 @@ impl StageView {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(4.0))
-            .px(px(12.0))
+            .gap(px(theme::space::S4))
+            .px(px(theme::space::S12))
             // Go to start, Previous frame, Play, Next frame, Go to end: each
             // its command, its key in its tip, greyed with why while it
             // cannot run.
@@ -134,19 +134,19 @@ impl StageView {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .pl(px(8.0))
+                    .gap(px(theme::space::S6))
+                    .pl(px(theme::space::S8))
                     .child(ui::label(position, text::TIMECODE_STRONG, theme::ink()))
                     .child(ui::label("/", text::TIMECODE, theme::ink3()))
                     .child(ui::label(length, text::TIMECODE, theme::ink3())),
             )
             .child(loop_button(looping, marked, &keys, cx))
             .child(self.zoom_button(&keys, cx))
-            .child(ui::hairline(false).h(px(16.0)).mx(px(6.0)))
+            .child(ui::hairline(false).h(px(16.0)).mx(px(theme::space::S6)))
             .children(self.tool_buttons(drawable, cx))
             .children(self.tool.map(|tool| {
                 ui::line(tool.hint(), text::CONTROL, theme::ink3())
-                    .pl(px(6.0))
+                    .pl(px(theme::space::S6))
                     .min_w_0()
                     .flex_shrink()
             }))
@@ -158,7 +158,7 @@ impl StageView {
     fn zoom_button(&self, keys: &HashMap<String, String>, cx: &Context<Self>) -> Div {
         div()
             .relative()
-            .pl(px(4.0))
+            .pl(px(theme::space::S4))
             .child(ui::tip_on(
                 theme::type_style(
                     crate::sidebar::trigger("viewer-zoom", {
@@ -313,7 +313,7 @@ fn loop_button(
     keys: &HashMap<String, String>,
     cx: &Context<StageView>,
 ) -> Div {
-    div().pl(px(8.0)).child(
+    div().pl(px(theme::space::S8)).child(
         icon_button("loop-playback", Icon::Loop)
             .on(looping)
             .tooltip(if looping && marked {

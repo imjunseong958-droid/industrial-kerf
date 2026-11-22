@@ -1375,7 +1375,7 @@ impl Render for KerfPrompt {
             .justify_center()
             .font(theme::ui_font(FontWeight::NORMAL))
             // The window dims at once, and nothing under the dim answers.
-            .bg(theme::with_alpha(gpui::rgb(0x000000), theme::motion::SCRIM))
+            .bg(theme::with_alpha(theme::scrim(), theme::motion::SCRIM))
             .occlude()
             .child(body)
     }

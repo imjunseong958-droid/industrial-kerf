@@ -145,7 +145,7 @@ impl StageView {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(px(theme::space::S8))
                         .min_w_0()
                         .flex_shrink()
                         .child(ui::tip_on(
@@ -175,7 +175,7 @@ impl StageView {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(px(theme::space::S6))
                     .child(ui::chip(previewing.unwrap_or_default(), theme::pos()))
                     .child(
                         ui::button("exit-preview", "Exit preview")
@@ -229,8 +229,8 @@ impl RenderOnce for PreviewCard {
             .flex()
             .flex_col()
             .justify_between()
-            .px(px(12.0))
-            .py(px(8.0))
+            .px(px(theme::space::S12))
+            .py(px(theme::space::S8))
             .rounded(px(theme::radius::CARD))
             .bg(theme::with_alpha(theme::card(), 0.94))
             .border_1()
@@ -242,7 +242,7 @@ impl RenderOnce for PreviewCard {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(
                         div()
                             .flex()
@@ -265,7 +265,7 @@ impl RenderOnce for PreviewCard {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .pl(px(24.0))
                     .child(
                         div()

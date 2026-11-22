@@ -363,11 +363,13 @@ impl Menu {
                 panel = panel.child(head(window, cx));
                 kinds.push(None);
             } else if let Some(header) = self.header.clone() {
-                panel = panel.child(div().px(px(10.0)).pt(px(4.0)).pb(px(6.0)).child(line(
-                    header,
-                    text::META,
-                    theme::ink3(),
-                )));
+                panel = panel.child(
+                    div()
+                        .px(px(10.0))
+                        .pt(px(theme::space::S4))
+                        .pb(px(theme::space::S6))
+                        .child(line(header, text::META, theme::ink3())),
+                );
                 kinds.push(None);
             }
         }
@@ -637,7 +639,7 @@ pub fn menu_item(
         .id(id)
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(theme::space::S8))
         .h(px(layout::MENU_ROW))
         .px(px(10.0))
         .rounded(px(radius::CONTROL))
@@ -655,7 +657,11 @@ pub fn menu_item(
 
 /// A line between a menu's groups.
 pub fn menu_separator() -> Div {
-    div().my(px(4.0)).mx(px(6.0)).h(px(1.0)).bg(theme::line())
+    div()
+        .my(px(theme::space::S4))
+        .mx(px(theme::space::S6))
+        .h(px(1.0))
+        .bg(theme::line())
 }
 
 /// A press that toggles what it opens (a menu), taken as the button goes

@@ -1022,7 +1022,7 @@ impl FocusRegion {
             .h(px(theme::height::H28))
             .flex()
             .items_center()
-            .px(px(8.0))
+            .px(px(theme::space::S8))
             .rounded(px(theme::radius::CONTROL))
             .bg(theme::card())
             .border_1()
@@ -1036,7 +1036,7 @@ impl FocusRegion {
         div()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .child(
                 ui::line(words, text::CONTROL, theme::ink2())
                     .w(px(40.0))
@@ -1076,7 +1076,7 @@ impl Render for FocusRegion {
                 div()
                     .flex()
                     .items_baseline()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(ui::label("Focus region", text::TITLE, theme::ink()))
                     .child(ui::line(clip, text::CONTROL, theme::ink3()).min_w_0()),
             )
@@ -1102,7 +1102,7 @@ impl Render for FocusRegion {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(ui::switch("focus-follow", follow, {
                         let this = cx.entity().downgrade();
                         move |on, window, cx| {

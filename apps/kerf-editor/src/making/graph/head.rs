@@ -87,9 +87,9 @@ impl ShotGraph {
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .pl(px(if self.workflow.is_some() { 10.0 } else { 16.0 }))
-            .pr(px(12.0))
+            .pr(px(theme::space::S12))
             .border_b_1()
             .border_color(theme::line());
         if self.workflow.is_some() {

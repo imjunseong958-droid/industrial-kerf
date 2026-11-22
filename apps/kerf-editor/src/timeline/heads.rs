@@ -62,7 +62,7 @@ impl TimelineView {
                     .h(px(layout::RULER))
                     .flex()
                     .items_center()
-                    .px(px(12.0))
+                    .px(px(theme::space::S12))
                     .border_b_1()
                     .border_color(theme::line())
                     .child(ui::label(rate, text::META, theme::ink3())),
@@ -94,7 +94,7 @@ impl TimelineView {
             .h(px(ADD_ROW))
             .flex()
             .items_center()
-            .pl(px(6.0))
+            .pl(px(theme::space::S6))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
                 this.add_hover = *hovered;
                 cx.notify();
@@ -169,9 +169,9 @@ impl TimelineView {
             .h(px(row.height))
             .flex()
             .items_center()
-            .gap(px(2.0))
-            .pl(px(6.0))
-            .pr(px(4.0))
+            .gap(px(theme::space::S2))
+            .pl(px(theme::space::S6))
+            .pr(px(theme::space::S4))
             .border_b_1()
             .border_color(theme::line())
             .on_mouse_down(

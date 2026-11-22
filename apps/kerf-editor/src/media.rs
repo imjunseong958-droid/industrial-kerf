@@ -1320,7 +1320,7 @@ impl MediaBand {
                 .border_1()
                 .border_dashed()
                 .border_color(theme::lineh())
-                .child(ui::label("Not made", text::META, theme::ink2()).mb(px(12.0)));
+                .child(ui::label("Not made", text::META, theme::ink2()).mb(px(theme::space::S12)));
         } else if sound && !offline {
             thumb = thumb.bg(theme::raised());
             match session.artwork.peaks(&source.id) {
@@ -1361,7 +1361,9 @@ impl MediaBand {
                 );
             }
             if offline {
-                thumb = thumb.child(ui::label("Offline", text::META, theme::neg()).mb(px(12.0)));
+                thumb = thumb.child(
+                    ui::label("Offline", text::META, theme::neg()).mb(px(theme::space::S12)),
+                );
             } else {
                 match session.artwork.poster(&source.id) {
                     Some(poster) => {
@@ -1403,7 +1405,7 @@ impl MediaBand {
                     .absolute()
                     .right(px(4.0))
                     .bottom(px(4.0))
-                    .px(px(4.0))
+                    .px(px(theme::space::S4))
                     .py(px(1.0))
                     .rounded(px(theme::radius::SMALL))
                     .bg(theme::activity::chip())
@@ -1625,15 +1627,15 @@ impl MediaBand {
             .id(ElementId::Name(format!("media-row-{}", source.id).into()))
             .h(px(LIST_ROW))
             .flex_none()
-            .px(px(8.0))
-            .py(px(2.0))
+            .px(px(theme::space::S8))
+            .py(px(theme::space::S2))
             .child(
                 div()
                     .size_full()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .px(px(8.0))
+                    .gap(px(theme::space::S8))
+                    .px(px(theme::space::S8))
                     .rounded(px(theme::radius::CONTROL))
                     .when(chosen, |row| row.bg(theme::on()))
                     .when(!chosen, |row| row.hover(|row| row.bg(theme::raised())))
@@ -1706,7 +1708,7 @@ impl MediaBand {
             .relative()
             .flex()
             .flex_none()
-            .p(px(2.0))
+            .p(px(theme::space::S2))
             .h(px(24.0))
             .rounded(px(theme::radius::CONTROL))
             .bg(theme::raised())
@@ -1961,7 +1963,7 @@ impl MediaBand {
                             .flex_none()
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
+                            .gap(px(theme::space::S8))
                             .px(px(SIDE_PADDING))
                             .cursor_pointer()
                             .hover(|row| row.bg(theme::raised()))
@@ -2118,7 +2120,7 @@ impl MediaBand {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(theme::with_alpha(gpui::rgb(0x000000), scene::SCRIM))
+                        .bg(theme::with_alpha(theme::scrim(), scene::SCRIM))
                         .occlude()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(

@@ -381,7 +381,7 @@ impl FinishView {
                                 line.child(
                                     ui::label(timecode, text::TIMECODE, theme::accent_ink())
                                         .flex_none()
-                                        .pt(px(2.0)),
+                                        .pt(px(theme::space::S2)),
                                 )
                             },
                         )

@@ -3,7 +3,7 @@
 //! stands on (`theme::lane`), and the shade under a waveform's name.
 
 use crate::theme::{lane, waveform};
-use gpui::{rgba, Rgba};
+use gpui::Rgba;
 
 pub fn peak(room: bool) -> Rgba {
     if room {
@@ -21,9 +21,4 @@ pub fn rms(room: bool) -> Rgba {
     }
 }
 
-pub use lane::{keyframe as key, name_bar, rubber_band};
-
-/// What shades a waveform's name, so it reads over the wave.
-pub fn shadow() -> Rgba {
-    rgba(0x000000b3)
-}
+pub use lane::{keyframe as key, name_bar, name_shadow as shadow, rubber_band};

@@ -596,7 +596,7 @@ impl Render for CastView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(2.0))
+                    .gap(px(theme::space::S2))
                     .child(
                         div()
                             .flex()
@@ -614,7 +614,7 @@ impl Render for CastView {
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
-                            .gap(px(2.0))
+                            .gap(px(theme::space::S2))
                             .children(rows)
                             .when(editing && self.rows.is_empty(), |list| {
                                 list.child(

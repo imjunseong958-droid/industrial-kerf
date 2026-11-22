@@ -112,7 +112,7 @@ impl Render for Confirm {
             .p(px(20.0))
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .bg(theme::popup())
             .child(ui::label(self.title.clone(), text::TITLE, theme::ink()))
             .when_some(self.detail.clone(), |body, detail| {
@@ -123,7 +123,7 @@ impl Render for Confirm {
                     .mt(px(14.0))
                     .flex()
                     .justify_end()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(
                         ui::button("confirm-cancel", "Cancel")
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.cancel(cx))),
@@ -325,7 +325,7 @@ impl Render for AskWords {
             .p(px(20.0))
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .bg(theme::popup())
             .child(ui::label(
                 self.asked.title.clone(),
@@ -339,11 +339,11 @@ impl Render for AskWords {
             ))
             .child(
                 div()
-                    .mt(px(8.0))
+                    .mt(px(theme::space::S8))
                     .h(px(theme::height::H28))
                     .flex()
                     .items_center()
-                    .px(px(8.0))
+                    .px(px(theme::space::S8))
                     .rounded(px(theme::radius::CONTROL))
                     .bg(theme::card())
                     .border_1()
@@ -355,7 +355,7 @@ impl Render for AskWords {
                     .mt(px(14.0))
                     .flex()
                     .justify_end()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .child(
                         ui::button("words-cancel", "Cancel").on_click(
                             cx.listener(|_, _: &ClickEvent, _, cx| cx.emit(DismissEvent)),

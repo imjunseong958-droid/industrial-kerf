@@ -476,11 +476,11 @@ fn poster_layers(
         (None, _) => vec![div()
             .absolute()
             .inset_0()
-            .bg(gpui::rgb(0x141720))
+            .bg(theme::cut::ground())
             .child(div().absolute().inset_0().bg(linear_gradient(
                 135.0,
-                linear_color_stop(gpui::rgba(0x8fb0ff46), 0.0),
-                linear_color_stop(gpui::rgba(0xb4aaff00), 1.0),
+                linear_color_stop(theme::cut::glow_from(), 0.0),
+                linear_color_stop(theme::cut::glow_to(), 1.0),
             )))
             .into_any_element()],
     }
@@ -495,7 +495,7 @@ fn scrub_line(scrub: f32) -> gpui::Div {
         .bottom_0()
         .h(px(2.0))
         .w(gpui::relative(scrub))
-        .bg(gpui::rgba(0xffffffe6))
+        .bg(theme::cut::scrub())
 }
 
 /// At work the picture sits a little back, by `work`.
@@ -518,7 +518,7 @@ fn stage_or_marks(on_stage: bool, marks: f32, duration: f64) -> Vec<AnyElement> 
             .flex()
             .items_center()
             .justify_center()
-            .bg(gpui::rgba(0x121212c7))
+            .bg(theme::cut::on_stage())
             .child(ui::label("On the stage", text::CONTROL, theme::ink2()))
             .into_any_element()]
     } else if marks > 0.0 {
@@ -533,7 +533,7 @@ fn stage_or_marks(on_stage: bool, marks: f32, duration: f64) -> Vec<AnyElement> 
                 .flex()
                 .items_center()
                 .rounded(px(theme::radius::SMALL))
-                .bg(gpui::rgba(0x000000a8))
+                .bg(theme::cut::length_plate())
                 .opacity(marks)
                 .child(ui::label(
                     length_badge(duration),
@@ -555,7 +555,7 @@ fn stage_or_marks(on_stage: bool, marks: f32, duration: f64) -> Vec<AnyElement> 
                         .items_center()
                         .justify_center()
                         .rounded_full()
-                        .bg(gpui::rgba(0x00000080))
+                        .bg(theme::cut::play_mark())
                         .child(Icon::Play.view(16.0, gpui::white().into())),
                 )
                 .into_any_element(),
@@ -595,19 +595,19 @@ fn work_chip(working: bool, chip: f32, reduced: bool, since: Duration) -> gpui::
         .left(px(8.0))
         .top(px(8.0))
         .h(px(22.0))
-        .pl(px(8.0))
+        .pl(px(theme::space::S8))
         .pr(px(9.0))
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(px(theme::space::S6))
         .rounded_full()
-        .bg(gpui::rgba(0x0a0c129e))
+        .bg(theme::cut::work_chip())
         .opacity(chip)
         .child(if working {
             div()
                 .flex()
                 .items_center()
-                .gap(px(2.0))
+                .gap(px(theme::space::S2))
                 .children(dots)
                 .into_any_element()
         } else {
@@ -715,8 +715,8 @@ fn foot_line(work: f32, at: f32) -> gpui::Div {
                 .w(gpui::relative(0.4))
                 .bg(linear_gradient(
                     90.0,
-                    linear_color_stop(gpui::rgba(0x8fb0ff00), 0.0),
-                    linear_color_stop(gpui::rgba(0x8fb0ffcc), 1.0),
+                    linear_color_stop(theme::cut::foot_line_from(), 0.0),
+                    linear_color_stop(theme::cut::foot_line_to(), 1.0),
                 )),
         )
 }

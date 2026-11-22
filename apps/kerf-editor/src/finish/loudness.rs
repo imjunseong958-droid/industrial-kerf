@@ -450,7 +450,7 @@ fn swatch(color: Rgba, weight: f32, dashed: bool) -> impl IntoElement {
     if dashed {
         div()
             .flex()
-            .gap(px(2.0))
+            .gap(px(theme::space::S2))
             .child(piece(5.0))
             .child(piece(5.0))
             .child(piece(4.0))
@@ -539,7 +539,7 @@ pub(super) fn meter_glyph(color: Rgba) -> impl IntoElement {
         .flex()
         .items_end()
         .justify_center()
-        .gap(px(2.0))
+        .gap(px(theme::space::S2))
         .pb(px(2.5))
         .child(bar(6.0))
         .child(bar(11.0))

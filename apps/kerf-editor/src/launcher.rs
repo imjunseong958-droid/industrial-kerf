@@ -405,7 +405,7 @@ impl LauncherView {
                 .id("launcher-scrim")
                 .absolute()
                 .inset_0()
-                .bg(theme::with_alpha(gpui::rgb(0x000000), theme::motion::SCRIM))
+                .bg(theme::with_alpha(theme::scrim(), theme::motion::SCRIM))
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(

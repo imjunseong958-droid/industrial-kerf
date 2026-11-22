@@ -200,7 +200,7 @@ impl ShotGraph {
         let mut column = div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .child(section("From footage"));
         if mine && !self.pointing.says.is_empty() {
             column = column.child(note(
@@ -355,7 +355,7 @@ impl ShotGraph {
                             log::warn!("the frame to point on did not draw: {error}");
                         }
                         if following {
-                            window.paint_quad(fill(placed, gpui::rgba(0x00000060)));
+                            window.paint_quad(fill(placed, theme::pointing::following_dim()));
                         }
                         let place = |(x, y): (f64, f64)| {
                             point(px(left + x as f32 * w), px(top + y as f32 * h))
@@ -364,12 +364,12 @@ impl ShotGraph {
                         // told by shape as well as by hue.
                         for at in &on {
                             let at = place(*at);
-                            paint_ring_line(window, at, 5.0, gpui::rgba(0x000000a0), 4.0);
+                            paint_ring_line(window, at, 5.0, theme::pointing::mark_shadow(), 4.0);
                             paint_ring_line(window, at, 5.0, path_ink, 2.0);
                         }
                         for at in &off {
                             let at = place(*at);
-                            paint_cross(window, at, gpui::rgba(0x000000a0), 4.0);
+                            paint_cross(window, at, theme::pointing::mark_shadow(), 4.0);
                             paint_cross(window, at, off_ink, 2.0);
                         }
                     },

@@ -274,6 +274,78 @@ pub mod lane {
     pub fn watch_dim() -> Rgba {
         rgba(0x0c0c0caa)
     }
+    /// What shades a waveform's name, so it reads over the wave.
+    pub fn name_shadow() -> Rgba {
+        rgba(0x000000b3)
+    }
+}
+
+/// The black a scrim dims the window with under a dialog or a sheet; the
+/// scene's `SCRIM` is how much.
+pub fn scrim() -> Rgba {
+    rgb(0x000000)
+}
+
+/// The dark plate under a picture's name while it flies over the window.
+pub fn flight_name_plate() -> Rgba {
+    rgba(0x00000099)
+}
+
+/// A cut's picture in the conversation, and what is drawn over it.
+pub mod cut {
+    use gpui::{rgb, rgba, Rgba};
+    /// A cut with no poster yet: its ground, and the accent's glow across
+    /// it from the top left (`glow_from`) to nothing (`glow_to`).
+    pub fn ground() -> Rgba {
+        rgb(0x141720)
+    }
+    pub fn glow_from() -> Rgba {
+        rgba(0x8fb0ff46)
+    }
+    pub fn glow_to() -> Rgba {
+        rgba(0xb4aaff00)
+    }
+    /// The pointer's place, a line at the picture's foot.
+    pub fn scrub() -> Rgba {
+        rgba(0xffffffe6)
+    }
+    /// Over a cut that is on the stage now.
+    pub fn on_stage() -> Rgba {
+        rgba(0x121212c7)
+    }
+    /// Under the cut's length, at its foot.
+    pub fn length_plate() -> Rgba {
+        rgba(0x000000a8)
+    }
+    /// Under the play mark.
+    pub fn play_mark() -> Rgba {
+        rgba(0x00000080)
+    }
+    /// Under what Kerf is doing, at the top left.
+    pub fn work_chip() -> Rgba {
+        rgba(0x0a0c129e)
+    }
+    /// The line of light running along the foot while Kerf works, from its
+    /// tail (`foot_line_from`) to its head (`foot_line_to`).
+    pub fn foot_line_from() -> Rgba {
+        rgba(0x8fb0ff00)
+    }
+    pub fn foot_line_to() -> Rgba {
+        rgba(0x8fb0ffcc)
+    }
+}
+
+/// The shot graph's first frame of a clip, to point on.
+pub mod pointing {
+    use gpui::{rgba, Rgba};
+    /// Over the frame while what it follows is shown on it.
+    pub fn following_dim() -> Rgba {
+        rgba(0x00000060)
+    }
+    /// Under a ring or a cross, so it reads on any picture.
+    pub fn mark_shadow() -> Rgba {
+        rgba(0x000000a0)
+    }
 }
 
 /// A colour with its alpha replaced by `alpha` (0..1).

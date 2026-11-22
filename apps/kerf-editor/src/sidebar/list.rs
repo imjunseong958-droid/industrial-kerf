@@ -130,10 +130,11 @@ pub(super) fn more_words(more: More) -> String {
 
 /// A line in the list that says how it stands ("No conversations match").
 fn list_note(words: &'static str) -> Div {
-    div()
-        .px(px(18.0))
-        .py(px(6.0))
-        .child(ui::label(words, text::SIDE_NOTE, theme::ink3()))
+    div().px(px(18.0)).py(px(theme::space::S6)).child(ui::label(
+        words,
+        text::SIDE_NOTE,
+        theme::ink3(),
+    ))
 }
 
 impl SidebarView {
@@ -182,16 +183,16 @@ impl SidebarView {
     /// New conversation, and Search under it.
     pub(super) fn top_rows(&self, new_chosen: bool, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .px(px(8.0))
-            .pb(px(8.0))
+            .px(px(theme::space::S8))
+            .pb(px(theme::space::S8))
             .flex()
             .flex_col()
-            .gap(px(2.0))
+            .gap(px(theme::space::S2))
             .child(
                 Self::keyed(div().id("new-conversation"), ITEM)
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(theme::space::S8))
                     .h(px(theme::height::H32))
                     .px(px(10.0))
                     .rounded(px(theme::radius::CONTROL))
@@ -215,7 +216,7 @@ impl SidebarView {
         let shell = div()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(px(theme::space::S8))
             .h(px(theme::height::H32))
             .px(px(10.0))
             .rounded(px(theme::radius::CONTROL));
@@ -308,11 +309,11 @@ impl SidebarView {
             .track_scroll(&self.list_scroll)
             .flex_1()
             .min_h_0()
-            .pt(px(4.0))
+            .pt(px(theme::space::S4))
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(2.0))
+            .gap(px(theme::space::S2))
             .children(rows)
             .when_some(more, |list, more| list.child(Self::show_more(more, cx)))
             .when(open.is_empty() && query.is_empty(), |list| {
@@ -322,11 +323,13 @@ impl SidebarView {
                 list.child(list_note("No conversations match"))
             })
             .when(!other_rows.is_empty(), |list| {
-                list.child(div().px(px(18.0)).pt(px(18.0)).pb(px(4.0)).child(ui::label(
-                    "Other folders",
-                    text::META,
-                    theme::ink3(),
-                )))
+                list.child(
+                    div()
+                        .px(px(18.0))
+                        .pt(px(18.0))
+                        .pb(px(theme::space::S4))
+                        .child(ui::label("Other folders", text::META, theme::ink3())),
+                )
                 .children(other_rows)
             })
             .when(archived_count > 0, |list| {
@@ -343,7 +346,7 @@ impl SidebarView {
             .items_center()
             .h(px(theme::height::H28))
             .px(px(10.0))
-            .mx(px(8.0))
+            .mx(px(theme::space::S8))
             .rounded(px(theme::radius::CONTROL))
             .cursor_pointer()
             .hover(|row| row.bg(theme::raised()))
@@ -359,12 +362,12 @@ impl SidebarView {
     fn archived_toggle(&self, count: usize, cx: &Context<Self>) -> impl IntoElement {
         Self::keyed(div().id("archived"), ITEM)
             .mt(px(10.0))
-            .mx(px(8.0))
+            .mx(px(theme::space::S8))
             .px(px(10.0))
             .h(px(28.0))
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(theme::space::S6))
             .rounded(px(theme::radius::CONTROL))
             .cursor_pointer()
             .hover(|row| row.bg(theme::raised()))

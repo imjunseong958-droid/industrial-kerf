@@ -134,7 +134,7 @@ impl ShotGraph {
 
     /// No node of a workflow chosen: the workflow itself, and what fills its blanks.
     pub(super) fn workflow_column(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let mut column = div().flex().flex_col().gap(px(8.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S8));
         let Some(workflow) = &self.workflow else {
             return column;
         };
@@ -213,7 +213,7 @@ impl ShotGraph {
         node: &GraphNode,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let mut column = div().flex().flex_col().gap(px(8.0));
+        let mut column = div().flex().flex_col().gap(px(theme::space::S8));
         if !node.detail.is_empty() {
             column = column.child(ui::label(
                 node.detail.clone(),
@@ -226,7 +226,7 @@ impl ShotGraph {
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.0))
+                .gap(px(theme::space::S8))
                 .child(
                     ui::line(name.to_owned(), text::CONTROL, theme::ink2())
                         .w(px(INPUT_LABEL))
@@ -325,8 +325,9 @@ impl ShotGraph {
                     if let Some(field) = self.field(&name) {
                         let mut control = field_box(field);
                         if let Some(tip) = field.tip.clone() {
-                            control = control
-                                .child(ui::label(tip, text::META, theme::ink3()).pt(px(2.0)));
+                            control = control.child(
+                                ui::label(tip, text::META, theme::ink3()).pt(px(theme::space::S2)),
+                            );
                         }
                         column = column.child(row(&name, control.into_any_element()));
                     }

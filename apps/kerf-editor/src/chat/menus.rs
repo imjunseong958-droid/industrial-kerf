@@ -399,7 +399,7 @@ pub(super) fn escape_keys(window: &Window, cx: &mut Context<ChatView>) -> Subscr
 pub(super) fn menu_frame(width: gpui::Pixels, cx: &Context<ChatView>) -> gpui::Div {
     div()
         .w(width)
-        .p(px(4.0))
+        .p(px(theme::space::S4))
         .flex()
         .flex_col()
         .rounded(px(theme::radius::CARD))

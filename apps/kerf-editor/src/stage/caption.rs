@@ -254,7 +254,7 @@ impl StageView {
                         .child(
                             theme::type_style(div(), text::MONO_SMALL)
                                 .h(px(16.0))
-                                .px(px(4.0))
+                                .px(px(theme::space::S4))
                                 .flex()
                                 .items_center()
                                 .rounded(px(theme::radius::SMALL))

@@ -365,8 +365,8 @@ impl SidebarView {
             // past them, and the row's empty stretch moves and
             // zooms the window.
             .pl(px(crate::chrome::title_bar_lead(window)))
-            .pr(px(8.0))
-            .gap(px(4.0))
+            .pr(px(theme::space::S8))
+            .gap(px(theme::space::S4))
             .child(
                 icon_button("hide-sidebar", Icon::Sidebar)
                     .tooltip("Hide sidebar")

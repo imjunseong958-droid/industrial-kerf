@@ -269,7 +269,7 @@ impl Workspace {
                 .absolute()
                 .inset_0()
                 // The window dims at once.
-                .bg(theme::with_alpha(gpui::rgb(0x000000), scene::SCRIM))
+                .bg(theme::with_alpha(theme::scrim(), scene::SCRIM))
                 // Nothing under the dim answers the pointer, not even its hover.
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

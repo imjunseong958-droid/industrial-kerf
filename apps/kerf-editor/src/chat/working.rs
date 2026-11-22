@@ -126,7 +126,11 @@ impl ChatView {
             .cloned()
             .collect::<Vec<_>>();
         let answer = work.answer.clone();
-        let mut column = div().flex().flex_col().gap(px(8.0)).child(head);
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(theme::space::S8))
+            .child(head);
         if !steps.is_empty() {
             column = column.child(recent_steps(steps));
         }
@@ -285,18 +289,18 @@ impl ChatView {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(8.0))
+                .gap(px(theme::space::S8))
                 .p(px(10.0))
                 .rounded(px(theme::radius::CARD))
                 .bg(theme::raised())
                 .border_1()
                 .border_color(theme::line())
                 .child(picture)
-                .child(
-                    div()
-                        .px(px(4.0))
-                        .child(ui::line(title, text::BODY_NAME, theme::ink())),
-                )
+                .child(div().px(px(theme::space::S4)).child(ui::line(
+                    title,
+                    text::BODY_NAME,
+                    theme::ink(),
+                )))
                 .with_animation(
                     "building-card",
                     motion::animation(scene::APPEAR),
@@ -343,7 +347,7 @@ impl ChatView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(px(theme::space::S4))
                     .w(px(FOOTAGE_TILE.0))
                     .when(taken, |tile| tile.invisible())
                     .child(
@@ -464,7 +468,7 @@ fn recent_steps(steps: Vec<Step>) -> gpui::Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(4.0))
+        .gap(px(theme::space::S4))
         .pl(px(10.0))
         .border_l_1()
         .border_color(theme::line2())
@@ -482,7 +486,7 @@ fn recent_steps(steps: Vec<Step>) -> gpui::Div {
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(theme::space::S6))
                 .child(icon.view(12.0, color))
                 .child(ui::line(step.text, text::CONTROL, ink))
         }))
@@ -496,7 +500,7 @@ fn drafting_dots(lit: Option<usize>) -> gpui::Div {
         .items_center()
         .gap(px(3.0))
         .h(px(16.0))
-        .pl(px(2.0))
+        .pl(px(theme::space::S2))
         .children((0..3).map(|dot| {
             let full = lit.is_none_or(|lit| lit == dot);
             div()
