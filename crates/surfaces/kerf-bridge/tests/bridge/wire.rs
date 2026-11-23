@@ -5,7 +5,7 @@
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, CollabSync, ConnectionStatus,
     ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, LoudnessEvent, MeterReading,
-    Preview, PreviewStatus, QueuedRender, RenderExport, ToolState,
+    Preview, PreviewStatus, QueuedRender, RenderExport, RenderStatus, ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::vec;
@@ -350,6 +350,21 @@ fn loudness() -> impl Strategy<Value = Event> {
     .prop_map(Event::Loudness)
 }
 
+/// Where a render job stands: as kerfd names it, or any other name (a newer kerfd's).
+fn render_status() -> impl Strategy<Value = RenderStatus> {
+    prop_oneof![
+        select(vec![
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+        ])
+        .prop_map(RenderStatus::from_name),
+        text().prop_map(|name| RenderStatus::from_name(&name)),
+    ]
+}
+
 fn queued_render() -> impl Strategy<Value = QueuedRender> {
     (
         text(),
@@ -357,7 +372,7 @@ fn queued_render() -> impl Strategy<Value = QueuedRender> {
         some_text(),
         some_text(),
         some_text(),
-        text(),
+        render_status(),
         number(),
         some_text(),
         some_text(),

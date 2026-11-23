@@ -264,7 +264,10 @@ fn the_render_queue_keeps_the_newest_finished_jobs_for_every_client() {
     };
     for number in 0..52 {
         let job = start(number);
-        assert_eq!(editor.cancel_render(&job).unwrap().status, "cancelled");
+        assert_eq!(
+            editor.cancel_render(&job).unwrap().status.as_str(),
+            "cancelled"
+        );
     }
     // kerfd trims the finished jobs as it queues one: the newest 50 stay,
     // oldest first, then the queued one, for any client that asks.
@@ -272,7 +275,7 @@ fn the_render_queue_keeps_the_newest_finished_jobs_for_every_client() {
     let jobs = other.list_renders().unwrap();
     let finished: Vec<&str> = jobs
         .iter()
-        .filter(|job| job.status != "queued" && job.status != "running")
+        .filter(|job| job.status.as_str() != "queued" && job.status.as_str() != "running")
         .map(|job| job.name.as_deref().unwrap_or(""))
         .collect();
     let expected: Vec<String> = (2..52).map(|number| format!("History {number}")).collect();

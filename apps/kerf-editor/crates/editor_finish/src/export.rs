@@ -21,7 +21,7 @@ use editor_session::session::{BridgeEvent, Session};
 use editor_state::delivery::{
     export_of, export_request, master_makes, master_request, request, shown_folder, Quality,
 };
-use editor_state::model::{RenderJob, RenderJobShow};
+use editor_state::model::{RenderJob, RenderJobShow, RenderStatus};
 use editor_state::prefs::MasterOutput;
 use editor_state::store::Change;
 use editor_ui::icons::Icon;
@@ -463,7 +463,7 @@ impl ExportView {
 
     fn job(&self, index: usize, job: &RenderJob, cx: &Context<Self>) -> impl IntoElement + use<> {
         let (said, color) = job_status(job);
-        let running = job.status == "running";
+        let running = job.status == RenderStatus::Running;
         let file = Path::new(job.output_path.as_deref().unwrap_or_default())
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -480,7 +480,7 @@ impl ExportView {
                     }))
                     .into_any_element(),
             )
-        } else if job.status == "completed"
+        } else if job.status == RenderStatus::Completed
             && job
                 .output_path
                 .as_deref()
@@ -525,7 +525,9 @@ impl ExportView {
                 row.child(ui::progress(job.progress, theme::activity::gpu()))
             })
             .when_some(
-                job.error.clone().filter(|_| job.status == "failed"),
+                job.error
+                    .clone()
+                    .filter(|_| job.status == RenderStatus::Failed),
                 |row, error| row.child(ui::label(error, text::META, theme::neg())),
             )
             .when(!file.is_empty() || action.is_some(), |row| {
@@ -728,16 +730,17 @@ fn job_name(job: &RenderJob) -> SharedString {
 
 /// What a job's status says, and in what colour: amber while it renders.
 fn job_status(job: &RenderJob) -> (SharedString, Rgba) {
-    match job.status.as_str() {
-        "queued" => ("Waiting".into(), theme::ink2()),
-        "running" => (
+    match &job.status {
+        RenderStatus::Queued => ("Waiting".into(), theme::ink2()),
+        RenderStatus::Running => (
             format!("Rendering {:.0}%", job.progress.clamp(0.0, 1.0) * 100.0).into(),
             theme::activity::gpu(),
         ),
-        "completed" => ("Done".into(), theme::pos()),
-        "failed" => ("Failed".into(), theme::neg()),
-        "cancelled" => ("Cancelled".into(), theme::ink3()),
-        other => (other.to_owned().into(), theme::ink3()),
+        RenderStatus::Completed => ("Done".into(), theme::pos()),
+        RenderStatus::Failed => ("Failed".into(), theme::neg()),
+        RenderStatus::Cancelled => ("Cancelled".into(), theme::ink3()),
+        // A status a newer kerfd has: shown by its name.
+        other @ RenderStatus::Other(_) => (other.as_str().to_owned().into(), theme::ink3()),
     }
 }
 

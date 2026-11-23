@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, HashMap};
 pub use kerf_bridge::event::{
     Author, Conversation, ConversationAsk as Ask, ConversationItem as Turn, ConversationSummary,
     ProjectionStatus, ProposalEntry as Proposal, ProposalFreshness, ProposalStatus,
-    ProposalVersion, QueuedRender as RenderJob, Snapshot, TimelineView as Timeline,
+    ProposalVersion, QueuedRender as RenderJob, RenderStatus, Snapshot, TimelineView as Timeline,
     ViewClip as Clip, ViewEffect, ViewMarker as Marker, ViewSequence as SequenceInfo,
     ViewSource as Source, ViewTake as Take, ViewTrack as Track, ViewTrackKind as TrackKind,
     ViewTransition as Transition,
@@ -510,7 +510,7 @@ pub trait RenderJobShow {
 
 impl RenderJobShow for RenderJob {
     fn is_active(&self) -> bool {
-        matches!(self.status.as_str(), "queued" | "running")
+        self.status.is_under_way()
     }
 }
 

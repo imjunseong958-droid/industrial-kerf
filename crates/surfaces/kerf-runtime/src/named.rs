@@ -12,6 +12,7 @@
 pub struct Unnamed(String);
 
 impl Unnamed {
+    /// For [`named!`]'s `from_name` alone, which has looked for the name among its own first.
     pub(crate) fn new(name: &str) -> Self {
         Self(name.to_owned())
     }
@@ -69,7 +70,10 @@ macro_rules! named {
         }
 
         impl ::serde::Serialize for $Value {
-            fn serialize<S: ::serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            fn serialize<S: ::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> ::std::result::Result<S::Ok, S::Error> {
                 serializer.serialize_str(self.as_str())
             }
         }
@@ -77,7 +81,7 @@ macro_rules! named {
         impl<'de> ::serde::Deserialize<'de> for $Value {
             fn deserialize<D: ::serde::Deserializer<'de>>(
                 deserializer: D,
-            ) -> Result<Self, D::Error> {
+            ) -> ::std::result::Result<Self, D::Error> {
                 <String as ::serde::Deserialize>::deserialize(deserializer)
                     .map(|name| Self::from_name(&name))
             }

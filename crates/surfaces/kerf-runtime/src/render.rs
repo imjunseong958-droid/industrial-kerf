@@ -1,7 +1,7 @@
 //! Render workers. A worker renders a job's document in-process; the
 //! runtime keeps the job's durable state.
 
-use crate::{kernel, ErrorCode, RenderJob, RenderRange, RuntimeClient, RuntimeError};
+use crate::{kernel, ErrorCode, RenderJob, RenderRange, RenderStatus, RuntimeClient, RuntimeError};
 use kerf_engine::render::RenderPreset;
 use kerf_engine::VideoCodec;
 use std::fs;
@@ -388,7 +388,7 @@ pub fn run_render_job(
     // it must not go idle while this one renders.
     let _lease = client.hold();
     let cancel_file = render_cancel_path(client.directory(), &job.job_id);
-    if let Err(error) = client.update_job(&job.job_id, "running", None, None) {
+    if let Err(error) = client.update_job(&job.job_id, RenderStatus::Running, None, None) {
         log::warn!(
             "render job {} is rendered without kerfd recording it as running: {}",
             job.job_id,
@@ -407,12 +407,17 @@ pub fn run_render_job(
     let recorded = match &result {
         Ok(()) => client.update_job(
             &job.job_id,
-            "completed",
+            RenderStatus::Completed,
             None,
             Some(output.to_string_lossy().into_owned()),
         ),
         Err(error) if error.code == ErrorCode::Cancelled => Ok(()),
-        Err(error) => client.update_job(&job.job_id, "failed", Some(error.message.clone()), None),
+        Err(error) => client.update_job(
+            &job.job_id,
+            RenderStatus::Failed,
+            Some(error.message.clone()),
+            None,
+        ),
     };
     // There is one only when the job was cancelled.
     let _ = fs::remove_file(&cancel_file);

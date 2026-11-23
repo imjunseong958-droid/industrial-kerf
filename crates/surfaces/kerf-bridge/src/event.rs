@@ -27,9 +27,9 @@ pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
 pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
 pub use kerf_runtime::{
     Author, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness,
-    ProposalStatus, ProposalVersion, TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask,
-    ViewOutline, ViewOutlineKey, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
-    ViewTransition,
+    ProposalStatus, ProposalVersion, RenderStatus, TimelineView, ViewClip, ViewEffect, ViewMarker,
+    ViewMask, ViewOutline, ViewOutlineKey, ViewSequence, ViewSource, ViewTake, ViewTrack,
+    ViewTrackKind, ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -988,6 +988,19 @@ pub enum ExportStatus {
     Cancelled,
 }
 
+/// An export stands as its render job does: the two have the same names.
+impl From<ExportStatus> for RenderStatus {
+    fn from(status: ExportStatus) -> Self {
+        match status {
+            ExportStatus::Queued => Self::Queued,
+            ExportStatus::Running => Self::Running,
+            ExportStatus::Completed => Self::Completed,
+            ExportStatus::Failed => Self::Failed,
+            ExportStatus::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
 impl ExportStatus {
     /// As the wire writes it: `queued`, `running`, `completed`, `failed`, `cancelled`.
     pub fn as_str(self) -> &'static str {
@@ -1001,9 +1014,8 @@ impl ExportStatus {
     }
 }
 
-/// One job of the render queue. `status` is kerfd's (`queued`, `running`, `completed`,
-/// `failed`, `cancelled`), except that the job this bridge renders reads as `running`
-/// with its progress (0..1) as soon as it starts.
+/// One job of the render queue. `status` is kerfd's, except that the job this bridge renders
+/// reads as running with its progress (0..1) as soon as it starts.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct QueuedRender {
@@ -1016,7 +1028,7 @@ pub struct QueuedRender {
     #[serde(default = "absent_is_empty")]
     pub codec: Option<String>,
     pub sequence: Option<String>,
-    pub status: String,
+    pub status: RenderStatus,
     pub progress: f64,
     #[serde(default = "absent_is_empty")]
     pub output_path: Option<String>,

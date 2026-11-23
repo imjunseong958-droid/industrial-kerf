@@ -5,7 +5,7 @@ use super::*;
 use crate::ipc::expect_state;
 use crate::render::render_cancel_path;
 use crate::store::{load_journal, CHECKPOINT_TEMP_FILE, JOURNAL_FILE, PREVIOUS_STATE_PREFIX};
-use crate::{run_stdio, EditOp, RuntimeHandle};
+use crate::{run_stdio, EditOp, RenderStatus, RuntimeHandle};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -837,19 +837,25 @@ fn render_cancellation_is_job_scoped_and_survives_restart() {
         let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
         let queued_path = render_cancel_path(&directory, &queued.job_id);
         let cancelled_job = runtime.cancel_render(&cancelled.job_id).unwrap();
-        assert_eq!(cancelled_job.status, "cancelled");
+        assert_eq!(cancelled_job.status.as_str(), "cancelled");
         assert!(cancel_path.is_file());
         assert!(!queued_path.is_file());
-        assert_eq!(runtime.render_job(&queued.job_id).unwrap().status, "queued");
+        assert_eq!(
+            runtime.render_job(&queued.job_id).unwrap().status.as_str(),
+            "queued"
+        );
         (cancelled.job_id, queued.job_id)
     };
 
     let runtime = Runtime::open(&directory).unwrap();
     assert_eq!(
-        runtime.render_job(&cancelled_id).unwrap().status,
+        runtime.render_job(&cancelled_id).unwrap().status.as_str(),
         "cancelled"
     );
-    assert_eq!(runtime.render_job(&queued_id).unwrap().status, "failed");
+    assert_eq!(
+        runtime.render_job(&queued_id).unwrap().status.as_str(),
+        "failed"
+    );
     drop(runtime);
     let _ = fs::remove_dir_all(directory);
 }
@@ -1158,14 +1164,26 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
         .start_render_range("preview", None, None, None)
         .unwrap();
     runtime
-        .update_job(&running.job_id, "running", None, None, Some(0.0))
+        .update_job(
+            &running.job_id,
+            RenderStatus::Running,
+            None,
+            None,
+            Some(0.0),
+        )
         .unwrap();
     let journaled = load_journal(&journal_path, 0).unwrap().len();
     let since_checkpoint = runtime.journal_records_since_checkpoint;
     for step in 1..100 {
         let progress = f64::from(step) / 100.0;
         runtime
-            .update_job(&running.job_id, "running", None, None, Some(progress))
+            .update_job(
+                &running.job_id,
+                RenderStatus::Running,
+                None,
+                None,
+                Some(progress),
+            )
             .unwrap();
     }
     assert_eq!(load_journal(&journal_path, 0).unwrap().len(), journaled);
@@ -1178,7 +1196,7 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
             .start_render_range("preview", None, None, None)
             .unwrap();
         runtime
-            .update_job(&job.job_id, "completed", None, None, None)
+            .update_job(&job.job_id, RenderStatus::Completed, None, None, None)
             .unwrap();
         finished.push(job.job_id);
     }
@@ -1199,4 +1217,53 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
     assert!(reopened.render_job(&queued.job_id).is_ok());
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
+}
+
+/// What `update_job` refuses, each by its own code: a status kerfd has no name for, as a
+/// client of another build may send one; a progress that is no fraction; and another end
+/// for a job that has ended.
+#[test]
+fn a_job_update_kerfd_cannot_take_is_refused_by_its_own_code() {
+    let root = std::env::temp_dir().join(format!("kerf-runtime-job-update-{}", unique_id()));
+    // Off the wire the name still reads: it is refused as a status, not as a request kerfd
+    // cannot read, and before the job is looked for. In a folder of its own: the runtime
+    // that answers lets go of its folder a moment after the answer.
+    let request = json!({
+        "protocolVersion": 1, "id": "u", "operation": "update_job",
+        "jobId": "none", "status": "paused", "error": null, "outputUrl": null,
+    });
+    let mut output = Vec::new();
+    run_stdio(
+        &root.join("wire"),
+        std::io::Cursor::new(format!("{request}\n")),
+        &mut output,
+    )
+    .unwrap();
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["error"]["code"], "INVALID_RENDER_STATUS");
+
+    let mut runtime = Runtime::open(&root.join("jobs")).unwrap();
+    let (job, _, _) = runtime
+        .start_render_range("preview", None, None, None)
+        .unwrap();
+    let id = job.job_id.as_str();
+    let refused = runtime
+        .update_job(id, RenderStatus::Running, None, None, Some(2.0))
+        .unwrap_err();
+    assert_eq!(refused.code.as_str(), "INVALID_RENDER_PROGRESS");
+    runtime
+        .update_job(id, RenderStatus::Completed, None, None, None)
+        .unwrap();
+    let refused = runtime
+        .update_job(id, RenderStatus::Failed, Some("late".into()), None, None)
+        .unwrap_err();
+    assert_eq!(refused.code.as_str(), "RENDER_STATE_CONFLICT");
+    // The same end said again is no conflict, and the job keeps how it ended.
+    runtime
+        .update_job(id, RenderStatus::Completed, None, None, None)
+        .unwrap();
+    let kept = runtime.render_job(id).unwrap();
+    assert_eq!((kept.status.as_str(), kept.error), ("completed", None));
+    drop(runtime);
+    let _ = fs::remove_dir_all(root);
 }

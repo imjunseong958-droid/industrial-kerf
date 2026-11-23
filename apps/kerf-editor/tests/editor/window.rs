@@ -17,7 +17,7 @@ use kerf_editor::keymap::{
     app_menu, app_menu_bindings, branch_menu, menus_with, menus_with_branches, menus_with_states,
     recent_menu,
 };
-use kerf_editor::model::RenderJob;
+use kerf_editor::model::{RenderJob, RenderStatus};
 use kerf_editor::prefs::Prefs;
 use kerf_editor::settings::component_name;
 use kerf_editor::sidebar::{
@@ -1360,7 +1360,7 @@ fn the_toolbar_says_what_renders_queued_exports_too() {
         job_id: format!("{status}-{quality}"),
         name: name.into(),
         quality: Some(quality.into()),
-        status: status.into(),
+        status: RenderStatus::from_name(status),
         progress,
         ..RenderJob::default()
     };

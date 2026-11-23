@@ -5,7 +5,7 @@ use super::tools::{input, RenderInput};
 use super::{program, program_position};
 use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Time;
-use kerf_runtime::{ErrorCode, RenderJob, RenderRange};
+use kerf_runtime::{ErrorCode, RenderJob, RenderRange, RenderStatus};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -49,7 +49,7 @@ impl KerfMcpRouter {
                     // the job ended is recorded by run_render_job.
                     let _ = runtime.update_job_with_progress(
                         &worker_job.job_id,
-                        "running",
+                        RenderStatus::Running,
                         None,
                         None,
                         Some(progress),

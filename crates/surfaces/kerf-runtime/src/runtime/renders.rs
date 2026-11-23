@@ -5,7 +5,8 @@ use super::{JournalEvent, Runtime, MAX_FINISHED_JOBS};
 use crate::kernel;
 use crate::render::{render_cancel_path, render_name, render_output, Encoding};
 use crate::{
-    io_error, unique_id, ErrorCode, RenderJob, RenderRange, RuntimeError, StartRenderOptions,
+    io_error, unique_id, ErrorCode, RenderJob, RenderRange, RenderStatus, RuntimeError,
+    StartRenderOptions,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -77,12 +78,12 @@ impl Runtime {
             name.as_deref().unwrap_or(&id),
             encoding.extension(),
         )?;
-        let writes = |file: &Path, status: fn(&str) -> bool| {
+        let writes = |file: &Path, status: fn(&RenderStatus) -> bool| {
             self.state.jobs.values().any(|job| {
                 status(&job.status) && job.output_path.as_deref().map(Path::new) == Some(file)
             })
         };
-        if writes(&target.file, |status| !job_finished(status)) {
+        if writes(&target.file, |status| !status.is_finished()) {
             return Err(RuntimeError::new(
                 ErrorCode::RenderOutputBusy,
                 format!("another render is writing {}", target.file.display()),
@@ -93,7 +94,7 @@ impl Runtime {
         let target = target.free(|file| {
             file.symlink_metadata().is_ok()
                 || writes(file, |status| {
-                    status == "completed" || !job_finished(status)
+                    *status == RenderStatus::Completed || !status.is_finished()
                 })
         })?;
         target.make(self.directory())?;
@@ -107,7 +108,7 @@ impl Runtime {
         }
         let job = RenderJob {
             job_id: id.clone(),
-            status: "queued".into(),
+            status: RenderStatus::Queued,
             output_url: None,
             output_path: Some(output.to_string_lossy().into_owned()),
             error: None,
@@ -128,15 +129,12 @@ impl Runtime {
     pub fn update_job(
         &mut self,
         id: &str,
-        status: &str,
+        status: RenderStatus,
         error: Option<String>,
         output_url: Option<String>,
         progress: Option<f64>,
     ) -> Result<(), RuntimeError> {
-        if !matches!(
-            status,
-            "queued" | "running" | "completed" | "failed" | "cancelled"
-        ) {
+        if let RenderStatus::Other(_) = status {
             return Err(RuntimeError::new(
                 ErrorCode::InvalidRenderStatus,
                 format!("unsupported render status: {status}"),
@@ -148,18 +146,14 @@ impl Runtime {
                 format!("render job not found: {id}"),
             )
         })?;
-        if matches!(
-            current.status.as_str(),
-            "completed" | "failed" | "cancelled"
-        ) && current.status != status
-        {
+        if current.status.is_finished() && current.status != status {
             return Err(RuntimeError::new(
                 ErrorCode::RenderStateConflict,
                 format!("render job {id} is already {}", current.status),
             ));
         }
         let mut job = current.clone();
-        job.status = status.into();
+        job.status = status;
         job.error = error;
         job.output_url = output_url;
         if let Some(progress) = progress {
@@ -171,7 +165,7 @@ impl Runtime {
             }
             job.progress = progress;
         }
-        if status == "completed" {
+        if job.status == RenderStatus::Completed {
             job.progress = 1.0;
         }
         if job.status == current.status
@@ -188,7 +182,7 @@ impl Runtime {
         candidate.jobs.insert(id.to_owned(), job.clone());
         // A job that finishes may take the finished history past its bound,
         // as journal replay of this record would.
-        if job_finished(&job.status) {
+        if job.status.is_finished() {
             bound_jobs(&mut candidate.jobs);
         }
         self.commit_candidate(candidate, JournalEvent::Job { job })?;
@@ -214,13 +208,13 @@ impl Runtime {
 
     pub fn cancel_render(&mut self, id: &str) -> Result<RenderJob, RuntimeError> {
         let current = self.render_job(id)?;
-        if matches!(current.status.as_str(), "queued" | "running") {
+        if current.status.is_under_way() {
             let cancel_path =
                 render_cancel_path(self.project_path.parent().unwrap_or(Path::new(".")), id);
             fs::write(&cancel_path, b"cancelled\n").map_err(io_error)?;
             self.update_job(
                 id,
-                "cancelled",
+                RenderStatus::Cancelled,
                 Some("render job was cancelled".into()),
                 None,
                 None,
@@ -232,19 +226,14 @@ impl Runtime {
     pub(super) fn reconcile_abandoned_jobs(&mut self) -> bool {
         let mut changed = false;
         for job in self.state.jobs.values_mut() {
-            if matches!(job.status.as_str(), "queued" | "running") {
-                job.status = "failed".into();
+            if job.status.is_under_way() {
+                job.status = RenderStatus::Failed;
                 job.error = Some("render job was abandoned when kerfd restarted".into());
                 changed = true;
             }
         }
         changed
     }
-}
-
-/// Whether a render job with `status` has ended.
-fn job_finished(status: &str) -> bool {
-    matches!(status, "completed" | "failed" | "cancelled")
 }
 
 /// The order render jobs were made in, from their ids: `render-<nanos>-<seq>`
@@ -271,7 +260,7 @@ fn job_order(id: &str) -> (Option<(u128, u64)>, &str) {
 pub(super) fn bound_jobs(jobs: &mut HashMap<String, RenderJob>) {
     let mut finished: Vec<String> = jobs
         .iter()
-        .filter(|(_, job)| job_finished(&job.status))
+        .filter(|(_, job)| job.status.is_finished())
         .map(|(id, _)| id.clone())
         .collect();
     if finished.len() <= MAX_FINISHED_JOBS {

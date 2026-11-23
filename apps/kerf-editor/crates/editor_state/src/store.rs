@@ -4,9 +4,12 @@
 //! project, which only kerfd owns.
 
 use crate::model::{
-    Conversation, ConversationSummary, RenderJob, Snapshot, SnapshotShow, TimelineShow, TurnShow,
+    Conversation, ConversationSummary, RenderJob, RenderStatus, Snapshot, SnapshotShow,
+    TimelineShow, TurnShow,
 };
-use kerf_bridge::event::{self, AgentUpdate, ConnectionStatus, Event, Export, ToolState};
+use kerf_bridge::event::{
+    self, AgentUpdate, ConnectionStatus, Event, Export, ExportStatus, ToolState,
+};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -929,7 +932,6 @@ impl EditorState {
                         captions.message.as_deref(),
                     ),
                 };
-                let status = status.as_str();
                 if let Export::Render(render) = export {
                     let job = &render.job_id;
                     let entry = match self.renders.iter_mut().find(|known| known.job_id == *job) {
@@ -944,7 +946,7 @@ impl EditorState {
                                 .expect("`renders` holds the job pushed just above")
                         }
                     };
-                    entry.status = status.to_owned();
+                    entry.status = render.status.into();
                     entry.progress = render.progress;
                     // A name the event does not say keeps the one known.
                     if !render.name.is_empty() {
@@ -958,12 +960,12 @@ impl EditorState {
                     }
                 }
                 match status {
-                    "completed" => {
+                    ExportStatus::Completed => {
                         let path = path.unwrap_or_default();
                         let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
                         self.notify(&format!("Exported {name}"), false);
                     }
-                    "failed" => {
+                    ExportStatus::Failed => {
                         let message = message.unwrap_or("The export failed");
                         self.notify(message, true);
                     }
@@ -1391,7 +1393,7 @@ impl EditorState {
         }
         self.renders
             .iter()
-            .find(|job| job.status == "running")
+            .find(|job| job.status == RenderStatus::Running)
             .map(|job| {
                 let name = if job.name.is_empty() {
                     "export"
