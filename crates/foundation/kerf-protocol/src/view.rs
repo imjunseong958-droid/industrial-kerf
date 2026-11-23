@@ -367,7 +367,7 @@ pub struct ViewEffect {
     /// process that made the view does not have it.
     pub doc: Option<String>,
     /// The parameters it sets, each a parameter value, as the effect catalog
-    /// ([`fx_catalog_all_json`](crate::fx_catalog_all_json)) defines them.
+    /// (`kerf_runtime::fx_catalog_all_json`) defines them.
     pub params: Map<String, Value>,
 }
 

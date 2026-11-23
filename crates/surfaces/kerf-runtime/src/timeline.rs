@@ -2,7 +2,7 @@
 //! the catalog of effects in the same terms: parameter definitions and values
 //! as JSON.
 
-use crate::view::{
+use crate::{
     TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
     ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
 };

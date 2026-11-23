@@ -15,6 +15,7 @@ kerf-collab = { path = "../../edit/kerf-collab" }
 kerf-engine = { path = "../../engine/kerf-engine" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
+kerf-protocol = { path = "../../foundation/kerf-protocol" }
 fs2 = "0.4"
 libc.workspace = true
 log.workspace = true
