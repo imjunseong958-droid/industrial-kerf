@@ -4,8 +4,9 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    response_value, EndpointAddress, ErrorCode, ProjectionStatus, RuntimeClient, RuntimeError,
-    RuntimeLease, StartRenderOptions, StateSnapshot, MAX_REQUEST_BYTES,
+    response_value, EndpointAddress, ErrorCode, ProjectionStatus, RenderCodec, RenderQuality,
+    RuntimeClient, RuntimeError, RuntimeLease, StartRenderOptions, StateSnapshot,
+    MAX_REQUEST_BYTES,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -451,10 +452,10 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
         .unwrap();
 
     let options = StartRenderOptions {
-        codec: Some("prores_hq".into()),
+        codec: Some(RenderCodec::ProresHq),
         output: Some("deliveries/v1/".into()),
         name: Some("Master".into()),
-        ..StartRenderOptions::new("master")
+        ..StartRenderOptions::new(RenderQuality::Master)
     };
     let (job, document, output) = client.start_render_with(&options).unwrap();
     assert!(
@@ -464,8 +465,8 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
     );
     assert_eq!(
         (
-            job.quality.as_deref(),
-            job.codec.as_deref(),
+            job.quality.as_ref().map(|name| name.as_str()),
+            job.codec.as_ref().map(|name| name.as_str()),
             job.name.as_deref()
         ),
         (Some("master"), Some("prores_hq"), Some("Master"))
@@ -494,7 +495,7 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
     let refused = client
         .start_render_with(&StartRenderOptions {
             output: Some("../elsewhere/".into()),
-            ..StartRenderOptions::new("master")
+            ..StartRenderOptions::new(RenderQuality::Master)
         })
         .unwrap_err();
     assert_eq!(

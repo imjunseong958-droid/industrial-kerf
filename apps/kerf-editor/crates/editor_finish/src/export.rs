@@ -21,7 +21,7 @@ use editor_session::session::{BridgeEvent, Session};
 use editor_state::delivery::{
     export_of, export_request, master_makes, master_request, request, shown_folder, Quality,
 };
-use editor_state::model::{RenderJob, RenderJobShow, RenderStatus};
+use editor_state::model::{RenderJob, RenderJobShow, RenderQuality, RenderStatus};
 use editor_state::prefs::MasterOutput;
 use editor_state::store::Change;
 use editor_ui::icons::Icon;
@@ -718,11 +718,11 @@ fn job_name(job: &RenderJob) -> SharedString {
     if !job.name.trim().is_empty() {
         return job.name.clone().into();
     }
-    match job.quality.as_deref().unwrap_or_default() {
-        "master" => "Master",
-        "review" => "Review copy",
-        "full" => "Full render",
-        "preview" => "Preview",
+    match &job.quality {
+        Some(RenderQuality::Master) => "Master",
+        Some(RenderQuality::Review) => "Review copy",
+        Some(RenderQuality::Full) => "Full render",
+        Some(RenderQuality::Preview) => "Preview",
         _ => "Render",
     }
     .into()

@@ -10,7 +10,7 @@ use kerf_model::{
     AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
     VideoInfo,
 };
-use kerf_runtime::{ErrorCode, RuntimeClient};
+use kerf_runtime::{ErrorCode, RenderQuality, RuntimeClient};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use std::thread;
 
 /// One render the runtime worker hands to an export thread.
 struct RenderRequest {
-    quality: String,
+    quality: RenderQuality,
     /// Played in place of the program once rendered.
     preview: bool,
     proposal: Option<String>,
@@ -66,7 +66,7 @@ pub(crate) fn start(
     };
     spawn_render(
         RenderRequest {
-            quality: "preview".into(),
+            quality: RenderQuality::Preview,
             preview: true,
             proposal: proposal_id,
             range,
@@ -192,7 +192,7 @@ fn export(
 ) -> Result<(String, String), kerf_runtime::RuntimeError> {
     let preview = request.preview;
     let (job, document, output) = client.start_render_range(
-        &request.quality,
+        request.quality.clone(),
         request.range.clone(),
         request.proposal.as_deref(),
         request.sequence.as_deref(),
@@ -222,7 +222,7 @@ fn export(
             &job,
             &document,
             &output,
-            request.quality == "preview",
+            request.quality == RenderQuality::Preview,
             |progress| {
                 // Progress is replaceable; never stall rendering behind a busy GUI.
                 running.progress = Some(progress);
@@ -480,6 +480,7 @@ fn rendered_preview(
 #[cfg(test)]
 mod tests {
     use super::{discard_previews, rendered_preview, MediaProject, Shared};
+    use kerf_runtime::RenderQuality;
 
     use serde_json::json;
     use std::path::Path;
@@ -530,7 +531,7 @@ mod tests {
 
     fn preview_request(proposal: &str) -> super::RenderRequest {
         super::RenderRequest {
-            quality: "preview".into(),
+            quality: RenderQuality::Preview,
             preview: true,
             proposal: Some(proposal.into()),
             range: None,

@@ -27,9 +27,9 @@ pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
 pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
 pub use kerf_runtime::{
     Author, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness,
-    ProposalStatus, ProposalVersion, RenderStatus, TimelineView, ViewClip, ViewEffect, ViewMarker,
-    ViewMask, ViewOutline, ViewOutlineKey, ViewSequence, ViewSource, ViewTake, ViewTrack,
-    ViewTrackKind, ViewTransition,
+    ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus, TimelineView,
+    ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey, ViewSequence,
+    ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -949,9 +949,9 @@ pub struct RenderExport {
     #[serde(default)]
     pub progress: f64,
     #[serde(default)]
-    pub quality: Option<String>,
+    pub quality: Option<RenderQuality>,
     #[serde(default)]
-    pub codec: Option<String>,
+    pub codec: Option<RenderCodec>,
     /// The sequence rendered; left out for the first.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
@@ -1023,10 +1023,10 @@ pub struct QueuedRender {
     pub name: String,
     /// Null for a job kerfd recorded before renders kept it; absent reads as empty.
     #[serde(default = "absent_is_empty")]
-    pub quality: Option<String>,
+    pub quality: Option<RenderQuality>,
     /// Null for a job kerfd recorded before renders kept it; absent reads as empty.
     #[serde(default = "absent_is_empty")]
-    pub codec: Option<String>,
+    pub codec: Option<RenderCodec>,
     pub sequence: Option<String>,
     pub status: RenderStatus,
     pub progress: f64,
@@ -1038,8 +1038,8 @@ pub struct QueuedRender {
 
 /// A [`QueuedRender`] field left out reads as an empty value, and only one written as null
 /// as none: the editor leaves out of its queue the jobs an older kerfd recorded without them.
-fn absent_is_empty() -> Option<String> {
-    Some(String::new())
+fn absent_is_empty<T: Default>() -> Option<T> {
+    Some(T::default())
 }
 
 /// The programme's loudness, by `status`. `revision` is the document revision measured;

@@ -20,13 +20,13 @@ impl Runtime {
     #[cfg(test)]
     pub fn start_render_range(
         &mut self,
-        quality: &str,
+        quality: crate::RenderQuality,
         range: Option<RenderRange>,
         proposal: Option<&str>,
         sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         self.start_render_with(StartRenderOptions {
-            quality: quality.to_owned(),
+            quality,
             range,
             proposal: proposal.map(str::to_owned),
             sequence: sequence.map(str::to_owned),
@@ -51,7 +51,7 @@ impl Runtime {
             name,
         } = options;
         let (proposal, sequence) = (proposal.as_deref(), sequence.as_deref());
-        let encoding = Encoding::new(&quality, codec.as_deref())?;
+        let encoding = Encoding::new(&quality, codec.as_ref())?;
         let name = render_name(name.as_deref())?;
         let proposed = proposal.map(|id| self.proposal_result(id)).transpose()?;
         let project = proposed.as_ref().unwrap_or(&self.state.project);
@@ -116,8 +116,8 @@ impl Runtime {
             sequence: sequence.map(str::to_owned),
             progress: 0.0,
             name,
-            quality: Some(encoding.quality.to_owned()),
-            codec: Some(encoding.codec.to_owned()),
+            quality: Some(encoding.quality),
+            codec: Some(encoding.codec),
         };
         let mut candidate = self.state.clone();
         candidate.jobs.insert(id, job.clone());

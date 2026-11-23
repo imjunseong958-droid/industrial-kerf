@@ -5,7 +5,7 @@ use super::tools::{input, RenderInput};
 use super::{program, program_position};
 use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Time;
-use kerf_runtime::{ErrorCode, RenderJob, RenderRange, RenderStatus};
+use kerf_runtime::{ErrorCode, RenderJob, RenderQuality, RenderRange, RenderStatus};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -23,7 +23,11 @@ impl KerfMcpRouter {
         let (job, document, output) = self
             .runtime
             .start_render_range(
-                if draft { "preview" } else { "full" },
+                if draft {
+                    RenderQuality::Preview
+                } else {
+                    RenderQuality::Full
+                },
                 range,
                 proposal,
                 sequence,

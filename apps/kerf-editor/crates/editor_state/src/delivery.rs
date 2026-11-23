@@ -3,6 +3,7 @@
 //! master is kept to go.
 
 use crate::prefs::{MasterOutput, Prefs};
+use kerf_bridge::event::{RenderCodec, RenderQuality};
 use kerf_bridge::{Command, ExportRequest};
 use std::path::Path;
 
@@ -15,21 +16,22 @@ pub const DELIVERIES: &str = "deliveries/";
 /// quality (`full`, `preview`), or a project with no folder name, goes
 /// where kerfd puts it, under its own name.
 pub fn export_request(project: Option<&Path>, quality: &str) -> Command {
+    let quality = RenderQuality::from_name(quality);
     let folder = project
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
         .filter(|name| !name.trim().is_empty());
+    let delivered = match quality {
+        RenderQuality::Master => Some("master"),
+        RenderQuality::Review => Some("draft"),
+        _ => None,
+    };
     let mut request = kerf_bridge::ExportRequest {
-        quality: quality.to_owned(),
-        codec: (quality == "review").then(|| "h264".to_owned()),
+        codec: (quality == RenderQuality::Review).then_some(RenderCodec::H264),
+        quality,
         ..kerf_bridge::ExportRequest::default()
     };
-    if let (Some(folder), true) = (folder, matches!(quality, "master" | "review")) {
-        let suffix = if quality == "master" {
-            "master"
-        } else {
-            "draft"
-        };
+    if let (Some(folder), Some(suffix)) = (folder, delivered) {
         request.output = Some(DELIVERIES.to_owned());
         request.name = Some(format!("{folder}_{suffix}"));
     }
@@ -129,10 +131,10 @@ pub fn master_request(project: Option<&Path>, kept: Option<&MasterOutput>) -> Co
     let codec = kept
         .and_then(|kept| kept.codec.as_deref())
         .map(str::trim)
-        .filter(|codec| !codec.is_empty() && *codec != MASTER_CODEC)
-        .map(str::to_owned);
+        .filter(|codec| !codec.is_empty() && *codec != MASTER_CODEC.as_str())
+        .map(RenderCodec::from_name);
     Command::Export(ExportRequest {
-        quality: "master".to_owned(),
+        quality: RenderQuality::Master,
         codec,
         sequence: None,
         output: (!folder.is_empty()).then_some(folder),
@@ -164,27 +166,27 @@ pub fn request(project: Option<&Path>, prefs: &Prefs, quality: &str) -> Command 
 }
 
 /// A master's own codec, which goes without saying.
-const MASTER_CODEC: &str = "prores_hq";
+const MASTER_CODEC: RenderCodec = RenderCodec::ProresHq;
 
 /// What a master in `codec` (as kerfd names it) is: short, as Export's
 /// menu says it; the extension kerfd gives its file; and in full, as
 /// Finish's Deliver row says it. None for a codec kerfd renders no master
 /// in.
-fn master_codec(codec: &str) -> Option<(&'static str, &'static str, &'static str)> {
+fn master_codec(codec: &RenderCodec) -> Option<(&'static str, &'static str, &'static str)> {
     match codec {
-        MASTER_CODEC => Some((
+        RenderCodec::ProresHq => Some((
             "ProRes 422 HQ",
             "mov",
             "ProRes 422 HQ in QuickTime, with 24-bit sound",
         )),
-        "h264" => Some(("H.264", "mp4", "H.264 in MP4, with its sound")),
-        "hevc" => Some(("HEVC", "mp4", "HEVC in MP4, with its sound")),
-        "hevc_hdr" => Some((
+        RenderCodec::H264 => Some(("H.264", "mp4", "H.264 in MP4, with its sound")),
+        RenderCodec::Hevc => Some(("HEVC", "mp4", "HEVC in MP4, with its sound")),
+        RenderCodec::HevcHdr => Some((
             "HEVC 10-bit HDR",
             "mp4",
             "HEVC 10-bit HDR in MP4, with its sound",
         )),
-        _ => None,
+        RenderCodec::Other(_) => None,
     }
 }
 
@@ -195,10 +197,9 @@ fn master_codec(codec: &str) -> Option<(&'static str, &'static str, &'static str
 pub fn master_makes(kept: Option<&MasterOutput>) -> String {
     let command = master_request(None, kept);
     let codec = export_of(&command)
-        .and_then(|request| request.codec.as_deref())
-        .unwrap_or(MASTER_CODEC)
-        .to_owned();
-    master_codec(&codec).map_or(codec, |(short, _, _)| short.to_owned())
+        .and_then(|request| request.codec.clone())
+        .unwrap_or(MASTER_CODEC);
+    master_codec(&codec).map_or_else(|| codec.to_string(), |(short, _, _)| short.to_owned())
 }
 
 /// Where a master `master_request` sends goes, as Finish's Deliver row says
@@ -208,12 +209,12 @@ pub fn master_goes(project: Option<&Path>, kept: Option<&MasterOutput>) -> (Stri
     let command = master_request(project, kept);
     let request = export_of(&command);
     let codec = request
-        .and_then(|request| request.codec.as_deref())
+        .and_then(|request| request.codec.clone())
         .unwrap_or(MASTER_CODEC);
     let name = request
         .and_then(|request| request.name.as_deref())
         .unwrap_or("master");
-    let (file, makes) = match master_codec(codec) {
+    let (file, makes) = match master_codec(&codec) {
         Some((_, extension, makes)) => (format!("{name}.{extension}"), makes.to_owned()),
         // kerfd turns it down, so there is no file to name.
         None => (

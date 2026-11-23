@@ -9,7 +9,7 @@
 //! carried out by the frontend; the registry still owns their metadata and
 //! enabled state.
 
-use kerf_runtime::{EditOp, ProjectionStatus, TrimSide};
+use kerf_runtime::{EditOp, ProjectionStatus, RenderQuality, TrimSide};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
@@ -165,7 +165,7 @@ pub enum Request {
         path: String,
     },
     Export {
-        quality: String,
+        quality: RenderQuality,
     },
     PresetExport {
         path: String,
@@ -1381,8 +1381,8 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         },
         "file.export" => Request::Export {
             quality: match params.string("quality").as_deref() {
-                None | Some("preview") => "preview".into(),
-                Some("full") => "full".into(),
+                None | Some("preview") => RenderQuality::Preview,
+                Some("full") => RenderQuality::Full,
                 Some(other) => return Err(format!("unknown export quality `{other}`")),
             },
         },
@@ -1478,7 +1478,7 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
             sync_locked: params.bool("syncLocked")?,
         }),
         "export.master" => Request::Export {
-            quality: "master".into(),
+            quality: RenderQuality::Master,
         },
         "qc.run" => Request::Check {
             sequence: params.trimmed("sequence"),

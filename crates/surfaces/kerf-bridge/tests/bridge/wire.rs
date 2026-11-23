@@ -5,7 +5,8 @@
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, CollabSync, ConnectionStatus,
     ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, LoudnessEvent, MeterReading,
-    Preview, PreviewStatus, QueuedRender, RenderExport, RenderStatus, ToolState,
+    Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus,
+    ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::vec;
@@ -217,6 +218,23 @@ fn export_status() -> impl Strategy<Value = ExportStatus> {
     ])
 }
 
+/// What a render is made for: as kerfd names it, or any other name (a newer kerfd's), or
+/// none.
+fn quality() -> impl Strategy<Value = Option<RenderQuality>> {
+    option::of(prop_oneof![
+        select(vec!["preview", "full", "review", "master"]).prop_map(RenderQuality::from_name),
+        text().prop_map(|name| RenderQuality::from_name(&name)),
+    ])
+}
+
+/// A render's codec: as kerfd names it, or any other name, or none.
+fn codec() -> impl Strategy<Value = Option<RenderCodec>> {
+    option::of(prop_oneof![
+        select(vec!["h264", "hevc", "hevc_hdr", "prores_hq"]).prop_map(RenderCodec::from_name),
+        text().prop_map(|name| RenderCodec::from_name(&name)),
+    ])
+}
+
 fn export() -> impl Strategy<Value = Event> {
     let render = (
         export_status(),
@@ -224,8 +242,8 @@ fn export() -> impl Strategy<Value = Event> {
         text(),
         some_text(),
         number(),
-        some_text(),
-        some_text(),
+        quality(),
+        codec(),
         some_text(),
         some_text(),
     )
@@ -369,8 +387,8 @@ fn queued_render() -> impl Strategy<Value = QueuedRender> {
     (
         text(),
         text(),
-        some_text(),
-        some_text(),
+        quality(),
+        codec(),
         some_text(),
         render_status(),
         number(),

@@ -1,7 +1,10 @@
 //! Render workers. A worker renders a job's document in-process; the
 //! runtime keeps the job's durable state.
 
-use crate::{kernel, ErrorCode, RenderJob, RenderRange, RenderStatus, RuntimeClient, RuntimeError};
+use crate::{
+    kernel, ErrorCode, RenderCodec, RenderJob, RenderQuality, RenderRange, RenderStatus,
+    RuntimeClient, RuntimeError,
+};
 use kerf_engine::render::RenderPreset;
 use kerf_engine::VideoCodec;
 use std::fs;
@@ -9,20 +12,14 @@ use std::path::{Component, Path, PathBuf};
 
 const RENDER_CANCEL_FILE_PREFIX: &str = ".kerf-render-";
 
-/// The qualities a render job takes.
-pub const RENDER_QUALITIES: [&str; 4] = ["preview", "full", "review", "master"];
-
-/// The codecs a render job takes.
-pub const RENDER_CODECS: [&str; 4] = ["h264", "hevc", "hevc_hdr", "prores_hq"];
-
 /// The longest render name, in characters.
 const MAX_RENDER_NAME: usize = 120;
 
 /// How a render job is encoded, as its quality and codec say.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Encoding {
-    pub quality: &'static str,
-    pub codec: &'static str,
+    pub quality: RenderQuality,
+    pub codec: RenderCodec,
     pub preset: RenderPreset,
     pub video: VideoCodec,
     /// A draft from proxies, at the draft size and rate.
@@ -34,66 +31,68 @@ impl Encoding {
     /// own codec: ProRes 422 HQ for a master, else H.264. A preview is a
     /// draft and a review copy is the engine's review preset, so neither
     /// takes ProRes, and a review copy is H.264 only.
-    pub fn new(quality: &str, codec: Option<&str>) -> Result<Self, RuntimeError> {
-        let quality = RENDER_QUALITIES
-            .into_iter()
-            .find(|known| *known == quality)
-            .ok_or_else(|| {
-                RuntimeError::new(
-                    ErrorCode::InvalidRenderQuality,
-                    "quality must be preview, full, review, or master",
-                )
-            })?;
-        let codec = match codec.map(str::trim) {
-            None | Some("") if quality == "master" => "prores_hq",
-            None | Some("") => "h264",
-            Some(codec) => RENDER_CODECS
-                .into_iter()
-                .find(|known| *known == codec)
-                .ok_or_else(|| {
-                    RuntimeError::new(
-                        ErrorCode::InvalidRenderCodec,
-                        "codec must be h264, hevc, hevc_hdr, or prores_hq",
-                    )
-                })?,
+    pub fn new(quality: &RenderQuality, codec: Option<&RenderCodec>) -> Result<Self, RuntimeError> {
+        if let RenderQuality::Other(_) = quality {
+            return Err(RuntimeError::new(
+                ErrorCode::InvalidRenderQuality,
+                "quality must be preview, full, review, or master",
+            ));
+        }
+        // A codec is read with the spaces around its name left off, and a blank one is none.
+        let codec = match codec.map(|codec| RenderCodec::from_name(codec.as_str().trim())) {
+            Some(codec) if !codec.as_str().is_empty() => codec,
+            _ if *quality == RenderQuality::Master => RenderCodec::ProresHq,
+            _ => RenderCodec::H264,
         };
-        let refused = match (quality, codec) {
-            ("preview", "prores_hq" | "hevc_hdr") => Some("a preview is an H.264 or HEVC draft"),
-            ("review", "hevc" | "hevc_hdr" | "prores_hq") => Some("a review copy is H.264"),
+        if let RenderCodec::Other(_) = codec {
+            return Err(RuntimeError::new(
+                ErrorCode::InvalidRenderCodec,
+                "codec must be h264, hevc, hevc_hdr, or prores_hq",
+            ));
+        }
+        let refused = match (quality, &codec) {
+            (RenderQuality::Preview, RenderCodec::ProresHq | RenderCodec::HevcHdr) => {
+                Some("a preview is an H.264 or HEVC draft")
+            }
+            (
+                RenderQuality::Review,
+                RenderCodec::Hevc | RenderCodec::HevcHdr | RenderCodec::ProresHq,
+            ) => Some("a review copy is H.264"),
             _ => None,
         };
         if let Some(reason) = refused {
             return Err(RuntimeError::new(ErrorCode::InvalidRenderCodec, reason));
         }
         Ok(Self {
-            quality,
-            codec,
-            preset: match (quality, codec) {
-                (_, "prores_hq") => RenderPreset::ProRes422Hq,
-                (_, "hevc_hdr") => RenderPreset::HevcHdr,
-                ("review", _) => RenderPreset::Review,
+            preset: match (quality, &codec) {
+                (_, RenderCodec::ProresHq) => RenderPreset::ProRes422Hq,
+                (_, RenderCodec::HevcHdr) => RenderPreset::HevcHdr,
+                (RenderQuality::Review, _) => RenderPreset::Review,
                 _ => RenderPreset::Standard,
             },
-            video: if codec == "hevc" {
+            video: if codec == RenderCodec::Hevc {
                 VideoCodec::Hevc
             } else {
                 VideoCodec::H264
             },
-            draft: quality == "preview",
+            draft: *quality == RenderQuality::Preview,
+            quality: quality.clone(),
+            codec,
         })
     }
 
     /// How `job` was asked to be encoded. Jobs recorded before renders
     /// kept their quality are standard H.264, a draft when `draft`.
     fn of(job: &RenderJob, draft: bool) -> Result<Self, RuntimeError> {
-        match job.quality.as_deref() {
-            Some(quality) => Self::new(quality, job.codec.as_deref()),
-            None => Self::new(if draft { "preview" } else { "full" }, None),
+        match &job.quality {
+            Some(quality) => Self::new(quality, job.codec.as_ref()),
+            None if draft => Self::new(&RenderQuality::Preview, None),
+            None => Self::new(&RenderQuality::Full, None),
         }
     }
 
     /// The extension of the file this encoding makes.
-    pub fn extension(self) -> &'static str {
+    pub fn extension(&self) -> &'static str {
         self.preset.extension()
     }
 }
@@ -503,7 +502,10 @@ mod tests {
         let draft = Encoding::of(&job, true).unwrap();
         assert_eq!((draft.preset, draft.draft), (RenderPreset::Standard, true));
         let full = Encoding::of(&job, false).unwrap();
-        assert_eq!((full.quality, full.codec), ("full", "h264"));
+        assert_eq!(
+            (full.quality.as_str(), full.codec.as_str()),
+            ("full", "h264")
+        );
     }
 
     #[test]

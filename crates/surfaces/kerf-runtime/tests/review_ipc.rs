@@ -6,7 +6,9 @@
 
 #![cfg(any(unix, windows))]
 
-use kerf_runtime::{Author, EditOp, RuntimeClient, StartRenderOptions, StateSnapshot};
+use kerf_runtime::{
+    Author, EditOp, RenderQuality, RuntimeClient, StartRenderOptions, StateSnapshot,
+};
 use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
@@ -258,7 +260,7 @@ fn the_render_queue_keeps_the_newest_finished_jobs_for_every_client() {
     let start = |number: usize| {
         let options = StartRenderOptions {
             name: Some(format!("History {number}")),
-            ..StartRenderOptions::new("full")
+            ..StartRenderOptions::new(RenderQuality::Full)
         };
         editor.start_render_with(&options).unwrap().0.job_id
     };
@@ -285,8 +287,11 @@ fn the_render_queue_keeps_the_newest_finished_jobs_for_every_client() {
         (last.job_id.as_str(), last.status.as_str()),
         (waiting.as_str(), "queued")
     );
-    assert_eq!(last.quality.as_deref(), Some("full"));
-    assert_eq!(last.codec.as_deref(), Some("h264"));
+    assert_eq!(
+        last.quality.as_ref().map(|name| name.as_str()),
+        Some("full")
+    );
+    assert_eq!(last.codec.as_ref().map(|name| name.as_str()), Some("h264"));
     other.cancel_render(&waiting).unwrap();
 }
 

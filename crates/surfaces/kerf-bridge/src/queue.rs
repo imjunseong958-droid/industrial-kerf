@@ -27,7 +27,8 @@ use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
 use kerf_playback::OnFrame;
 use kerf_runtime::{
-    ErrorCode, RenderJob, RenderStatus, RuntimeClient, RuntimeError, StartRenderOptions,
+    ErrorCode, RenderCodec, RenderJob, RenderQuality, RenderStatus, RuntimeClient, RuntimeError,
+    StartRenderOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -35,15 +36,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// `export {quality: preview|full|review|master, codec?: h264|hevc|
-/// prores_hq, sequence?, output?, name?}`.
+/// hevc_hdr|prores_hq, sequence?, output?, name?}`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ExportRequest {
     /// `preview` (a draft from proxies), `full`, `review` (full-size H.264 at 12 Mb/s) or
     /// `master` (ProRes 422 HQ in QuickTime with 24-bit PCM unless `codec` says otherwise).
-    pub quality: String,
-    /// `h264`, `hevc` or `prores_hq`.
+    pub quality: RenderQuality,
+    /// `h264`, `hevc`, `hevc_hdr` or `prores_hq`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codec: Option<String>,
+    pub codec: Option<RenderCodec>,
     /// The sequence to render; the first when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
@@ -67,8 +68,14 @@ impl ExportRequest {
                 .map(str::to_owned)
         };
         StartRenderOptions {
-            quality: self.quality.trim().to_owned(),
-            codec: text(&self.codec),
+            // The spaces around a name are no part of it, and a blank codec is none.
+            quality: RenderQuality::from_name(self.quality.as_str().trim()),
+            codec: self
+                .codec
+                .as_ref()
+                .map(|codec| codec.as_str().trim())
+                .filter(|codec| !codec.is_empty())
+                .map(RenderCodec::from_name),
             sequence: text(&self.sequence),
             output: text(&self.output),
             name: text(&self.name),
@@ -120,7 +127,7 @@ impl Renders for RuntimeClient {
         progress: &mut dyn FnMut(f64),
     ) -> Result<(), RuntimeError> {
         // A preview-quality export is a draft from proxies, as it always was.
-        let draft = job.quality.as_deref() == Some("preview");
+        let draft = job.quality == Some(RenderQuality::Preview);
         kerf_runtime::run_render_job(self, job, document, output, draft, progress)
     }
 }
@@ -209,14 +216,18 @@ pub(crate) fn job_name(job: &RenderJob) -> String {
     if let Some(name) = job.name.as_deref().filter(|name| !name.trim().is_empty()) {
         return name.to_owned();
     }
-    let quality = match job.quality.as_deref() {
-        Some("master") => "Master",
-        Some("review") => "Review copy",
-        Some("preview") => "Preview",
+    let quality = match &job.quality {
+        Some(RenderQuality::Master) => "Master",
+        Some(RenderQuality::Review) => "Review copy",
+        Some(RenderQuality::Preview) => "Preview",
         _ => "Full render",
     };
-    match job.codec.as_deref().and_then(RenderPreset::parse) {
-        Some(RenderPreset::ProRes422Hq) if quality != "Master" => {
+    match job
+        .codec
+        .as_ref()
+        .and_then(|codec| RenderPreset::parse(codec.as_str()))
+    {
+        Some(RenderPreset::ProRes422Hq) if job.quality != Some(RenderQuality::Master) => {
             format!("{quality} · ProRes 422 HQ")
         }
         Some(RenderPreset::HevcHdr) => format!("{quality} · HEVC 10-bit HDR"),
@@ -324,7 +335,7 @@ pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Event {
                 .output_path
                 .as_deref()
                 .is_none_or(|path| !Path::new(path).is_file());
-            !(job.quality.as_deref() == Some("preview") && finished && gone)
+            !(job.quality == Some(RenderQuality::Preview) && finished && gone)
         })
         .map(|job| {
             let rendering = state
@@ -537,7 +548,7 @@ pub(crate) mod tests {
             &self,
             options: &StartRenderOptions,
         ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
-            if options.quality == "nope" {
+            if options.quality.as_str() == "nope" {
                 return Err(RuntimeError::new(
                     ErrorCode::InvalidRenderQuality,
                     "quality must be preview, full, review, or master",
@@ -546,8 +557,8 @@ pub(crate) mod tests {
             let mut next = self.next.lock().unwrap();
             *next += 1;
             let id = format!("render-{next}");
-            let extension = if options.codec.as_deref() == Some("prores_hq")
-                || (options.quality == "master" && options.codec.is_none())
+            let extension = if options.codec == Some(RenderCodec::ProresHq)
+                || (options.quality == RenderQuality::Master && options.codec.is_none())
             {
                 "mov"
             } else {
@@ -568,14 +579,13 @@ pub(crate) mod tests {
                 progress: 0.0,
                 name: options.name.clone(),
                 quality: Some(options.quality.clone()),
-                codec: Some(options.codec.clone().unwrap_or_else(|| {
-                    if options.quality == "master" {
-                        "prores_hq"
+                codec: Some(options.codec.clone().unwrap_or(
+                    if options.quality == RenderQuality::Master {
+                        RenderCodec::ProresHq
                     } else {
-                        "h264"
-                    }
-                    .into()
-                })),
+                        RenderCodec::H264
+                    },
+                )),
             };
             self.jobs.lock().unwrap().push(job.clone());
             Ok((job, "kerf 1\n".into(), output))
@@ -631,7 +641,7 @@ pub(crate) mod tests {
 
     fn request(quality: &str, name: Option<&str>) -> ExportRequest {
         ExportRequest {
-            quality: quality.into(),
+            quality: RenderQuality::from_name(quality),
             name: name.map(str::to_owned),
             ..ExportRequest::default()
         }
