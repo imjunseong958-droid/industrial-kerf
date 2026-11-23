@@ -111,7 +111,7 @@ pub(crate) fn scope_signal(shared: Arc<Shared>, tx: Outbox, time: f64, sequence:
         }
         state.busy = true;
     }
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:scope", move || {
         let (mut time, mut sequence) = (time, sequence);
         loop {
             draw_signal(&shared, &tx, time, sequence.as_deref());
@@ -219,7 +219,7 @@ pub(crate) fn loudness(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>
         }
         state.busy = true;
     }
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:loudness", move || {
         let mut sequence = sequence;
         loop {
             let event = measure(&shared, &tx, sequence.as_deref());
@@ -340,7 +340,7 @@ fn probe(path: &str) -> Result<MediaInfo, String> {
 /// for. Files that cannot be read are named in `errors`; the one media asked
 /// for that cannot be read is an `error {command: media_info, media}`.
 pub(crate) fn media_info(shared: Arc<Shared>, tx: Outbox, media: Option<String>) {
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:info", move || {
         let refuse = |message: &str| {
             emit(
                 &tx,
@@ -413,7 +413,7 @@ pub(crate) fn media_changed(shared: &Arc<Shared>, tx: &Outbox, project: &Project
         return;
     }
     let (shared, tx) = (shared.clone(), tx.clone());
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:changed", move || {
         let mut infos = BTreeMap::new();
         for (id, path) in fresh {
             if let Ok(info) = probe(&path) {
@@ -485,7 +485,7 @@ pub(crate) fn media_index(shared: Arc<Shared>, tx: Outbox, media: String) {
         // The one running answers.
         return;
     }
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:index", move || {
         let event = index(&shared, &media).unwrap_or_else(|message| {
             Event::Error(ErrorEvent {
                 message,

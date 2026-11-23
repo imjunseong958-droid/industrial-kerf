@@ -1,5 +1,5 @@
-//! The bridge's own surface: the commands it refuses at once, the folder it names, and the
-//! editor's `--serve-mcp` argument.
+//! The bridge's own surface: the commands it refuses at once, the folder it names, the
+//! threads it started and leaves none of at work, and the editor's `--serve-mcp` argument.
 //!
 //! Needs kerfd built beside this test: `cargo build -p kerf-runtime --bin kerfd`.
 
@@ -147,4 +147,78 @@ fn what_is_answered_at_once_never_holds_the_caller_while_the_events_wait() {
         }
     }
     assert_eq!(models, 300);
+}
+
+/// Set in the process [`alone`] starts a test in.
+const ALONE: &str = "KERF_BRIDGE_API_ALONE";
+
+/// Keep the person's Kerf account and keychain out of a test that waits for every thread of
+/// a bridge, the one that asks the keychain for the account among them: a keychain that
+/// asks its person first would hold that thread for as long as they took. `test` runs again
+/// in a process of its own, this binary started for it alone, with a home of the tests' own
+/// and the keychain off. True in that process, where the test goes on; false in this one,
+/// once the test has passed there.
+fn alone(test: &str) -> bool {
+    if std::env::var_os(ALONE).is_some() {
+        return true;
+    }
+    let home = std::env::temp_dir().join("kerf-bridge-api-home");
+    fs::create_dir_all(&home).unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([test, "--exact"])
+        .env(ALONE, "1")
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("KERF_SECRETS", "off")
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success() && said.contains("test result: ok. 1 passed"),
+        "{test}, in a process of its own:\n{said}"
+    );
+    false
+}
+
+#[test]
+fn a_bridge_let_go_leaves_none_of_the_threads_it_started_at_work() {
+    if !alone("api::a_bridge_let_go_leaves_none_of_the_threads_it_started_at_work") {
+        return;
+    }
+    let project = Project::new();
+    let mut bridge = Bridge::open(&project.0, &kerfd());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !poll(&mut bridge).is_some_and(|event| event["type"] == "state") {
+        assert!(Instant::now() < deadline, "no state");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // Its workers are at work, and so are threads that answer at once: more answers than
+    // the events' queue holds, with none taken, so that some wait for room in it.
+    for _ in 0..300 {
+        assert!(send(&mut bridge, &json!({"type": "models"})));
+    }
+    for command in [
+        json!({"type": "preset_library"}),
+        json!({"type": "loudness"}),
+        json!({"type": "check"}),
+        json!({"type": "collab_status"}),
+        json!({"type": "conversations", "action": "list"}),
+    ] {
+        assert!(send(&mut bridge, &command), "{command}");
+    }
+    let workers = bridge.workers();
+    assert!(workers.running() > 0);
+
+    // Let go, each ends on its own: the workers as they see the bridge closed, the rest as
+    // they find nobody left to take what they say.
+    drop(bridge);
+    assert!(
+        workers.ended(Duration::from_secs(60)),
+        "{} of the threads the bridge started were still at work a minute after it was let go",
+        workers.running()
+    );
 }

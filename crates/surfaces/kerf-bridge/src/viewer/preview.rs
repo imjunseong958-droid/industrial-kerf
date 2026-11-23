@@ -14,7 +14,6 @@ use kerf_runtime::{ErrorCode, RenderQuality, RuntimeClient};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::thread;
 
 /// One render the runtime worker hands to an export thread.
 struct RenderRequest {
@@ -117,7 +116,7 @@ fn spawn_render(
     let client = client.clone();
     let tx = tx.clone();
     let shared = shared.clone();
-    thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:preview", move || {
         let revision = shared.revision.load(Ordering::SeqCst);
         let result = export(&client, &request, turn, &tx, &shared);
         let rendered = result.as_ref().ok().and_then(|(output, document)| {
@@ -277,7 +276,9 @@ pub(crate) fn stop_preview(shared: &Arc<Shared>, tx: &Outbox) {
     let answered = shared.preview_turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
-    thread::spawn(move || stopped_preview(&shared, answered, &tx));
+    shared.workers.clone().spawn("bridge:pv-stop", move || {
+        stopped_preview(&shared, answered, &tx)
+    });
 }
 
 /// What follows a stop: the render running is told, and a stop that no
@@ -302,7 +303,10 @@ pub(crate) fn exit_preview(shared: &Arc<Shared>, tx: &Outbox) {
     shared.preview_turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
-    thread::spawn(move || exited_preview(&shared, &tx));
+    shared
+        .workers
+        .clone()
+        .spawn("bridge:pv-exit", move || exited_preview(&shared, &tx));
 }
 
 /// What follows an exit, once its previews are asked to stop.

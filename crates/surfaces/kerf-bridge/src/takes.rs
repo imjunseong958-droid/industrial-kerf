@@ -50,7 +50,7 @@ pub(crate) fn read(
     };
     let tx = tx.clone();
     let shared = shared.clone();
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:takes", move || {
         kerf_runtime::resolve_media_paths(&mut project, &directory);
         read_each(&shared, &project, &id, &takes, &guide, revision, &tx);
     });

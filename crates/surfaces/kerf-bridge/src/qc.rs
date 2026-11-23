@@ -18,7 +18,7 @@ use std::sync::Arc;
 pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
     if shared.check_busy.swap(true, Ordering::SeqCst) {
         // Said from a thread of its own: the caller's empties the event queue.
-        std::thread::spawn(move || {
+        shared.workers.spawn("bridge:refused", move || {
             emit(
                 &tx,
                 Event::Error(ErrorEvent {
@@ -34,7 +34,7 @@ pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
     if let Ok(mut running) = shared.check_cancel.lock() {
         *running = Some(cancel.clone());
     }
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:check", move || {
         emit(&tx, running(sequence.as_deref(), 0.0));
         let event = match RuntimeClient::new(&shared.directory)
             .and_then(|client| run(&client, &shared, &tx, sequence.as_deref(), &cancel))

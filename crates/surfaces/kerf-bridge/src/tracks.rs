@@ -87,7 +87,7 @@ pub(crate) fn picture(
     tx: &Outbox,
 ) {
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:picture", move || {
         let drawn = opened(&shared, &client).and_then(|(revision, project)| {
             let frame = {
                 // The bridge was let go: nobody is left to point on a picture.
@@ -128,7 +128,7 @@ pub(crate) fn follow(
     tx: &Outbox,
 ) {
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
-    std::thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:follow", move || {
         let Follow {
             clip,
             of,
