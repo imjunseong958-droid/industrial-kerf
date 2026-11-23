@@ -156,8 +156,8 @@ jobs:
   # tests build target/debug/kerf-editor again: their gpui has `test-support`
   # (a dev-dependency's feature, which Cargo gives the whole build once
   # tests are in it), and that editor is not the one a build makes or a
-  # package carries. It does not wait for what the editor does as it quits,
-  # and says "timed out waiting on app_will_quit" each time.
+  # package carries. Its gpui never awaits what a quit handler returns, and
+  # says "timed out waiting on app_will_quit" each time the editor quits.
   linux-editor:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
