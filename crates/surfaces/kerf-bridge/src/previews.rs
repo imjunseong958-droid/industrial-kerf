@@ -222,7 +222,7 @@ fn compose(
     at: Time,
     width: u32,
 ) -> Option<(u32, u32, Vec<u8>)> {
-    // Held until the compositor is gone as well as its frame drawn.
+    // Asked first: with the drawers closed there is no frame to build a compositor for.
     let _drawing = drawers.begin()?;
     let compositor = Compositor::new(
         project,

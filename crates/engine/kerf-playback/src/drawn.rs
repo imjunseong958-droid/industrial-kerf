@@ -74,10 +74,10 @@ struct GateState {
     closed: bool,
 }
 
-/// What [`Drawers::begin`] gives: a frame being drawn, the compositor being asked about one, or
-/// a run of frames that ends soon after the drawers close (a render cancelled with them),
-/// counted until this is dropped. [`drawing_settled`] waits for it, so it is held only while
-/// the compositor is at work.
+/// What [`Drawers::begin`] gives, counted until it is dropped: a frame being drawn, the
+/// compositor being asked about one, or a whole render, which its owner cancels as it closes
+/// the drawers. [`drawing_settled`] waits for it, so whatever holds one ends soon after the
+/// drawers close.
 #[derive(Debug)]
 #[must_use = "the frame is counted as being drawn only until this is dropped"]
 pub struct OnFrame(Drawers);
@@ -89,6 +89,7 @@ static CLOSED: Mutex<Vec<Drawers>> = Mutex::new(Vec::new());
 impl Drawers {
     /// Count a frame as being drawn until what this returns is dropped. `None` once
     /// [`close`](Self::close)d: the frame is to be left undrawn, and the compositor unasked.
+    #[must_use = "the frame is counted as being drawn only while what this gives is held"]
     pub fn begin(&self) -> Option<OnFrame> {
         let mut state = self.state();
         if state.closed {

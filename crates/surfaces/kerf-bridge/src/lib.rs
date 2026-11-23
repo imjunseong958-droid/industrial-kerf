@@ -212,10 +212,11 @@ struct Shared {
     analysis: analysis::Analysis,
     /// The workflow last said of each step a graph has open.
     workflows: workflows::Said,
-    /// What lets the bridge draw a frame with the compositor in this process, whichever of
-    /// its workers draws it: its playback, an effect preview, the scope signal, a shot
-    /// picture, a render. Closed with the bridge, so that [`drawing_settled`] can wait for
-    /// the ones under way before the process exits.
+    /// What lets the bridge draw a frame with the compositor in this process, for its
+    /// playback, an effect preview, the scope signal, a shot picture or follow, and a
+    /// render. Closed with the bridge, so that [`drawing_settled`] can wait for the ones
+    /// under way before the process exits. Its QC check, its take readings, its makings
+    /// and its agent's tools draw too and do not ask it yet: nothing waits for theirs.
     drawers: kerf_playback::Drawers,
 }
 
@@ -718,8 +719,8 @@ impl Drop for Bridge {
     /// Close the bridge and signal the workers to shut down, without blocking the editor.
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
-        // None of its workers begins a frame from here on; [`drawing_settled`] waits for
-        // those that had, and for the renders cancelled below to stop.
+        // Nothing that draws through them begins a frame from here on; [`drawing_settled`]
+        // waits for those that had, and for the renders cancelled below to stop.
         self.shared.drawers.close();
         // Nobody would see a preview still rendering, or the one playing. The
         // process may exit before the media worker stops, so the files go now;

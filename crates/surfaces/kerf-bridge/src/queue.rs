@@ -10,9 +10,10 @@
 //! cancelling the running one stops its FFmpeg.
 //!
 //! A render draws its frames in this process, so it begins on the bridge's
-//! drawers (`Shared::drawers`) and holds them until it is over: closing the
-//! bridge cancels it, and whoever is about to exit waits the moment that
-//! takes rather than leave under the frames it was drawing.
+//! drawers (`Shared::drawers`) and holds them until it is over, what it tells
+//! kerfd and what FFmpeg encodes included: closing the bridge cancels it, and
+//! whoever is about to exit waits the moment that takes rather than leave
+//! under the frames it was drawing.
 //!
 //! The `render_queue` event is kerfd's list of render jobs (the queued, the
 //! running and the newest finished, oldest first) with the running job's
@@ -364,8 +365,8 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
                     .wait(state)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
-            // A bridge being let go closes its drawers before its queue, so a job taken in
-            // between is left with the ones that wait: begun, it would be one nothing stops.
+            // A bridge being let go closes its drawers before its queue. A job taken in
+            // between is left with the ones that wait: nothing would wait for its frames.
             let drawing = if state.closed {
                 None
             } else {
@@ -736,8 +737,8 @@ pub(crate) mod tests {
         shared.drawers.close();
         // What is about to exit is told a render is still drawing.
         assert!(!kerf_playback::drawing_settled(Duration::from_millis(50)));
-        // The render ends, as a cancelled one does: the wait is over, and the job that
-        // waited is cancelled with kerfd in place of rendered.
+        // Its render over, the wait is too, and the job that waited is cancelled with
+        // kerfd in place of rendered.
         open.send(()).unwrap();
         assert!(kerf_playback::drawing_settled(Duration::from_secs(30)));
         let ended = crate::tests_support::wait(Duration::from_secs(10), || {
