@@ -194,10 +194,11 @@ fn a_sync_with_nothing_new_changes_nothing() {
 fn a_sync_of_a_folder_that_is_no_repository_is_refused_by_gits_name() {
     let folder = root("norepo");
     let client = daemon(&folder);
-    let error = client.collab_integrate("ui", "norepo-1", None).unwrap_err();
-    assert_eq!(error.code.as_str(), "NOT_A_REPOSITORY", "{error:?}");
-    // Removing the folder orphans the daemon, which then exits.
+    let answered = client.collab_integrate("ui", "norepo-1", None);
+    // Before anything is asserted: removing the folder orphans the daemon, which then exits.
     let _ = fs::remove_dir_all(&folder);
+    let error = answered.unwrap_err();
+    assert_eq!(error.code.as_str(), "NOT_A_REPOSITORY", "{error:?}");
 }
 
 #[test]

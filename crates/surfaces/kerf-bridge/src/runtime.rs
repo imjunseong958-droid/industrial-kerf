@@ -601,8 +601,8 @@ impl Worker {
     }
 
     /// `signal_from_sound`: the keys of the signal clip `clip` set from the onsets of the
-    /// sound `of` plays, as one edit; `None` once a sound that does not read is said, which
-    /// kerfd is asked nothing about.
+    /// sound `of` plays, as one edit; `None` once keys that cannot be read (the clips are not
+    /// what it takes, or the sound has no onsets) are said here, with no edit asked of kerfd.
     fn signal_from_sound(
         &mut self,
         active_client: &RuntimeClient,
