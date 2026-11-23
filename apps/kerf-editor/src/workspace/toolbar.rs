@@ -8,7 +8,7 @@ use super::Workspace;
 use editor_finish::export::{ExportEvent, ExportView};
 use editor_session::commands::RunCommand;
 use editor_state::delivery::Quality;
-use editor_state::model::{RenderJobShow, RenderStatus};
+use editor_state::model::{RenderJobShow, RenderQuality, RenderStatus};
 use editor_ui::icons::Icon;
 use editor_ui::motion;
 use editor_ui::theme::{self, layout, motion as scene, text};
@@ -316,10 +316,13 @@ pub fn running_words(
         .max_by_key(|(at, job)| (job.status == RenderStatus::Running, *at))
         .map(|(_, job)| job);
     if let Some(job) = latest {
-        let quality = job.quality.as_deref().unwrap_or_default();
-        let label = if matches!(quality, "review" | "preview") {
+        let quality = job.quality.as_ref();
+        let label = if matches!(
+            quality,
+            Some(RenderQuality::Review | RenderQuality::Preview)
+        ) {
             "Draft export".to_owned()
-        } else if quality == "master" && job.name.is_empty() {
+        } else if quality == Some(&RenderQuality::Master) && job.name.is_empty() {
             "Master export".to_owned()
         } else if !job.name.is_empty() {
             job.name.clone()

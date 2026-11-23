@@ -38,8 +38,8 @@ pub use kernel::{
     resolve_media_paths, use_proxies, CachedFacts, EditOp, GeneratorSpec, MaskOutline, RateSpec,
     TrimSide, RATE_NEEDS_EMPTY,
 };
-pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
-pub use status::{ProjectionStatus, ProposalStatus, RenderStatus};
+pub use render::{render_cancel_path, run_render_job};
+pub use status::{ProjectionStatus, ProposalStatus, RenderCodec, RenderQuality, RenderStatus};
 pub use timeline::{fx_catalog_all_json, properties_json};
 pub use view::{
     TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
@@ -303,14 +303,12 @@ pub struct RenderJob {
     /// What the render was called when it was started, for a queue.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// `preview`, `full`, `review` or `master`; absent on jobs recorded
-    /// before renders kept it.
+    /// Absent on jobs recorded before renders kept it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quality: Option<String>,
-    /// `h264`, `hevc` or `prores_hq`; absent on jobs recorded before renders
-    /// kept it, which were H.264.
+    pub quality: Option<RenderQuality>,
+    /// Absent on jobs recorded before renders kept it, which were H.264.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codec: Option<String>,
+    pub codec: Option<RenderCodec>,
 }
 
 /// What [`RuntimeClient::start_render_with`] renders, how, and where.
@@ -336,7 +334,7 @@ pub struct RenderJob {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StartRenderOptions {
-    pub quality: String,
+    pub quality: RenderQuality,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<RenderRange>,
     /// Render what this pending proposal would make of the project.
@@ -346,7 +344,7 @@ pub struct StartRenderOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sequence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codec: Option<String>,
+    pub codec: Option<RenderCodec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -355,9 +353,9 @@ pub struct StartRenderOptions {
 
 impl StartRenderOptions {
     /// A render of the whole first sequence at `quality`.
-    pub fn new(quality: impl Into<String>) -> Self {
+    pub fn new(quality: RenderQuality) -> Self {
         Self {
-            quality: quality.into(),
+            quality,
             ..Self::default()
         }
     }
@@ -475,7 +473,7 @@ pub enum RuntimeRequest {
         path: String,
     },
     StartRender {
-        quality: String,
+        quality: RenderQuality,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start: Option<f64>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -490,9 +488,9 @@ pub enum RuntimeRequest {
         /// The sequence to render; the first when absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sequence: Option<String>,
-        /// `h264`, `hevc` or `prores_hq` (see [`StartRenderOptions`]).
+        /// See [`StartRenderOptions`].
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        codec: Option<String>,
+        codec: Option<RenderCodec>,
         /// The folder or file to render to (see [`StartRenderOptions`]).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,

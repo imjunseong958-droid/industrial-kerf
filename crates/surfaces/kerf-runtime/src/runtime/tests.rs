@@ -5,7 +5,7 @@ use super::*;
 use crate::ipc::expect_state;
 use crate::render::render_cancel_path;
 use crate::store::{load_journal, CHECKPOINT_TEMP_FILE, JOURNAL_FILE, PREVIOUS_STATE_PREFIX};
-use crate::{run_stdio, EditOp, RenderStatus, RuntimeHandle};
+use crate::{run_stdio, EditOp, RenderQuality, RenderStatus, RuntimeHandle};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -829,10 +829,10 @@ fn render_cancellation_is_job_scoped_and_survives_restart() {
     let (cancelled_id, queued_id) = {
         let mut runtime = Runtime::open(&directory).unwrap();
         let (cancelled, _, _) = runtime
-            .start_render_range("preview", None, None, None)
+            .start_render_range(RenderQuality::Preview, None, None, None)
             .unwrap();
         let (queued, _, _) = runtime
-            .start_render_range("preview", None, None, None)
+            .start_render_range(RenderQuality::Preview, None, None, None)
             .unwrap();
         let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
         let queued_path = render_cancel_path(&directory, &queued.job_id);
@@ -1161,7 +1161,7 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
     let journal_path = directory.join(JOURNAL_FILE);
     let mut runtime = Runtime::open(&directory).unwrap();
     let (running, _, _) = runtime
-        .start_render_range("preview", None, None, None)
+        .start_render_range(RenderQuality::Preview, None, None, None)
         .unwrap();
     runtime
         .update_job(
@@ -1193,7 +1193,7 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
     let mut finished = Vec::new();
     for _ in 0..MAX_FINISHED_JOBS + 5 {
         let (job, _, _) = runtime
-            .start_render_range("preview", None, None, None)
+            .start_render_range(RenderQuality::Preview, None, None, None)
             .unwrap();
         runtime
             .update_job(&job.job_id, RenderStatus::Completed, None, None, None)
@@ -1201,7 +1201,7 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
         finished.push(job.job_id);
     }
     let (queued, _, _) = runtime
-        .start_render_range("preview", None, None, None)
+        .start_render_range(RenderQuality::Preview, None, None, None)
         .unwrap();
     // The running and queued jobs, and the newest finished ones.
     assert_eq!(runtime.state.jobs.len(), MAX_FINISHED_JOBS + 2);

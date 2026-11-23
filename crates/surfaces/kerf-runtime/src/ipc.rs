@@ -2,8 +2,8 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, Author, EditOp, ErrorCode, RenderJob, RenderRange, RenderStatus,
-    RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse,
+    io_error, kernel, unique_id, Author, EditOp, ErrorCode, RenderJob, RenderQuality, RenderRange,
+    RenderStatus, RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse,
     StartRenderOptions, StateSnapshot,
 };
 use serde_json::{json, Value};
@@ -643,13 +643,13 @@ impl RuntimeClient {
     /// would make of it. The returned document is what to render.
     pub fn start_render_range(
         &self,
-        quality: &str,
+        quality: RenderQuality,
         range: Option<RenderRange>,
         proposal: Option<&str>,
         sequence: Option<&str>,
     ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
         self.start_render_with(&StartRenderOptions {
-            quality: quality.to_owned(),
+            quality,
             range,
             proposal: proposal.map(str::to_owned),
             sequence: sequence.map(str::to_owned),

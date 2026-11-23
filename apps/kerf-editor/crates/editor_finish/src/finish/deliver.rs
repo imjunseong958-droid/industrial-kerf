@@ -4,7 +4,7 @@
 
 use super::{percent, plural, said, FinishView, Section};
 use editor_state::delivery::DELIVERIES;
-use editor_state::model::{RenderJob, RenderJobShow, RenderStatus};
+use editor_state::model::{RenderJob, RenderJobShow, RenderQuality, RenderStatus};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, height, radius, text};
 use editor_ui::ui;
@@ -116,9 +116,9 @@ impl FinishView {
             Some(project) => format!("{DELIVERIES}{project}_{suffix}.{extension}"),
             None => format!("{suffix}.{extension}"),
         };
-        let latest = |quality: &str| {
+        let latest = |quality: RenderQuality| {
             jobs.iter()
-                .find(|job| job.quality.as_deref().unwrap_or_default() == quality)
+                .find(|job| job.quality.as_ref() == Some(&quality))
                 .cloned()
         };
         let kept = folder
@@ -156,7 +156,7 @@ impl FinishView {
                     name: "Master",
                     makes: master_makes,
                     goes: master_goes,
-                    newest: latest("master"),
+                    newest: latest(RenderQuality::Master),
                     problem: finishing.export_failed.clone(),
                 }
                 .row(master, folder.as_deref(), true),
@@ -166,7 +166,7 @@ impl FinishView {
                     name: "Review copy",
                     makes: "H.264 at 12 Mb/s, full size, to send round".into(),
                     goes: named("draft", "mp4"),
-                    newest: latest("review"),
+                    newest: latest(RenderQuality::Review),
                     problem: None,
                 }
                 .row(review, folder.as_deref(), false),
@@ -506,11 +506,11 @@ fn job_name(job: &RenderJob) -> String {
     if !job.name.trim().is_empty() {
         return job.name.clone();
     }
-    match job.quality.as_deref().unwrap_or_default() {
-        "master" => "Master",
-        "review" => "Review copy",
-        "full" => "Full render",
-        "preview" => "Preview",
+    match &job.quality {
+        Some(RenderQuality::Master) => "Master",
+        Some(RenderQuality::Review) => "Review copy",
+        Some(RenderQuality::Full) => "Full render",
+        Some(RenderQuality::Preview) => "Preview",
         _ => "Render",
     }
     .to_owned()
