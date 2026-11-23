@@ -283,6 +283,14 @@ fn main() {
             }
         })
         .detach();
+        // That window's session is let go before the quit comes, and its
+        // bridge with it, so its own wait for the picture being drawn never
+        // runs: the app waits here.
+        cx.on_app_quit(|_| {
+            session::settle_drawing();
+            async {}
+        })
+        .detach();
         // Every window opened later keeps the kerfd given here; the first
         // alone takes the size.
         session::set_kerfd(kerfd.clone(), cx);

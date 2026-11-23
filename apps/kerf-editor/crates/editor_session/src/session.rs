@@ -345,11 +345,21 @@ impl EventEmitter<Change> for Session {}
 /// The most events one drain takes, so the window keeps drawing between them.
 const DRAIN_MOST: usize = 256;
 
-/// The longest quitting waits for the picture a session is drawing, and for the GPU its first
-/// picture began to bring up. A process that exits under a thread at work in the GPU's libraries
-/// now and then dies as it ends, most of all while they load, which takes a second or two.
-/// Past this the editor quits anyway, as it always did.
+/// The longest [`settle_drawing`] waits each time it is called.
 const QUIT_WAITS: Duration = Duration::from_secs(5);
+
+/// Wait, as the app quits, for the pictures the sessions already let go were still drawing, and
+/// for the GPU one of them began to bring up. A process that exits under a thread at work in
+/// the GPU's libraries now and then dies as it ends, most of all while they load, which takes a
+/// second or two. Past [`QUIT_WAITS`] the editor quits anyway, as it always did.
+///
+/// Each session calls this when the app quits, having let its bridge go. A session whose window
+/// was the last to close is gone before then, so the app calls it too.
+pub fn settle_drawing() {
+    if !kerf_bridge::drawing_settled(QUIT_WAITS) {
+        log::warn!("quitting while a picture is drawn or the GPU brought up");
+    }
+}
 
 /// What the pump does after a drain.
 enum Pump {
@@ -434,13 +444,10 @@ impl Session {
                 // Quitting closes the bridge as closing the window does: the
                 // render running stops, the queued ones are cancelled. It
                 // waits for the picture being drawn, too, since the process
-                // exits next (see `QUIT_WAITS`).
+                // exits next.
                 _on_quit: cx.on_app_quit(|session: &mut Session, _| {
-                    if let Some(bridge) = session.bridge.take()
-                        && !bridge.close(QUIT_WAITS)
-                    {
-                        log::warn!("quitting while a picture is drawn or the GPU brought up");
-                    }
+                    session.bridge.take();
+                    settle_drawing();
                     async {}
                 }),
                 link: None,

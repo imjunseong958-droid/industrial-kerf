@@ -23,7 +23,7 @@ mod loudness;
 mod mix;
 mod timeline;
 
-pub use drawn::Drawers;
+pub use drawn::{drawing_settled, Drawers};
 pub use loudness::LEVEL_FLOOR_DB;
 
 pub use timeline::{
@@ -537,8 +537,8 @@ pub struct PlaybackConfig {
     pub audio_enabled: bool,
     /// The compositor draws the picture instead of the native decoders.
     pub composited: bool,
-    /// What lets the compositor's frames begin, for whoever opened the session to close and
-    /// wait for before the process exits. Its own unless one is given.
+    /// What lets the compositor's frames begin, for whoever opened the session to close
+    /// before the process exits. Its own unless one is given.
     pub drawers: Drawers,
 }
 
@@ -582,7 +582,7 @@ impl PlaybackConfig {
     }
 
     /// Draw the compositor's frames only while `drawers` lets them begin: one set for every
-    /// session of an owner that waits for them all.
+    /// session of an owner that closes them all at once.
     pub fn with_drawers(mut self, drawers: Drawers) -> Self {
         self.drawers = drawers;
         self

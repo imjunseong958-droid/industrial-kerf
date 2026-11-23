@@ -13,6 +13,11 @@
 //! viewer preview rendering, the QC check, the makings it started and the render queue's
 //! jobs are stopped. A making another program runs on the project goes on.
 //!
+//! One thing an editor waits for, just before its process exits, with [`drawing_settled`]:
+//! the frames a closed bridge's playback was still drawing, and the GPU a frame had begun to
+//! bring up. A process that exits under a thread at work in the GPU's libraries now and then
+//! dies as it ends.
+//!
 //! # Commands and events
 //!
 //! [`Command`] and [`Event`] are the protocol: each variant says what it asks or tells,
@@ -107,6 +112,7 @@ pub use conversations::Request as ConversationsRequest;
 pub use event::{Event, Snapshot};
 pub use kerf_agent::{Focus, FocusScope, OpenAiApiMode};
 pub use kerf_collab::scaffold::GitHubRepository;
+pub use kerf_playback::drawing_settled;
 pub use kerf_runtime::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
 pub use media::CastEntry;
 pub use paperwork::CaptionsRequest;
@@ -134,7 +140,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 use viewer::media_worker;
 use viewer::preview::{cancel_preview, discard_previews, exit_preview, stop_preview};
 use wake::Outbox;
@@ -204,8 +209,8 @@ struct Shared {
     analysis: analysis::Analysis,
     /// The workflow last said of each step a graph has open.
     workflows: workflows::Said,
-    /// What lets a frame be drawn in this process for the bridge, so that closing it can wait
-    /// for the ones under way.
+    /// What lets the bridge's playback draw a frame: closed with the bridge, so that
+    /// [`drawing_settled`] can wait for the ones under way before the process exits.
     drawers: kerf_playback::Drawers,
 }
 
@@ -460,17 +465,6 @@ impl Bridge {
         }
     }
 
-    /// Close the bridge as letting it go does, then wait, for at most `within`, for the frames
-    /// its playback was drawing and for the GPU one of them may have begun to bring up: `false`
-    /// when either is still under way. For the moment before the process exits, which now and
-    /// then dies as it ends when it exits under a thread at work in the GPU's libraries (see
-    /// [`kerf_playback::Drawers`]).
-    pub fn close(self, within: Duration) -> bool {
-        let drawers = self.shared.drawers.clone();
-        drop(self);
-        drawers.wait(within)
-    }
-
     /// Queue a command (see [`Command`] for every command). `false` means it was refused: it
     /// cannot be taken as it is, or its bounded queue is full. Show an error then; an edit is
     /// never dropped silently. Never blocks.
@@ -719,7 +713,8 @@ impl Drop for Bridge {
     /// Close the bridge and signal the workers to shut down, without blocking the editor.
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
-        // No frame begins from here on; [`Bridge::close`] waits for those that had.
+        // Its playback begins no frame from here on; [`drawing_settled`] waits for those that
+        // had.
         self.shared.drawers.close();
         // Nobody would see a preview still rendering, or the one playing. The
         // process may exit before the media worker stops, so the files go now;

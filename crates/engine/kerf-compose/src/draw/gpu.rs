@@ -58,12 +58,13 @@ impl Drop for Warming {
 /// Wait while the device and its kernels are being built, for at most `within`: `false` when
 /// they still are.
 ///
-/// A viewer's first frame large enough for the GPU starts building them, once, on a thread of
+/// The first time a viewer's compositor is asked for the GPU (to draw a frame large enough for
+/// it, or to say whether it could draw one), it starts building them, once, on a thread of
 /// their own, and that thread loads the GPU's libraries: the Vulkan loader, each driver it
 /// finds, and LLVM with Mesa's. A process that exits meanwhile runs those libraries'
 /// destructors under it, and now and then dies of it as it ends (a test binary whose tests had
-/// all passed, of SIGSEGV). So whoever is about to exit waits here, once no frame of its own
-/// can begin.
+/// all passed, of SIGSEGV). So whoever is about to exit waits here, once nothing of its own
+/// can ask any more.
 pub fn gpu_settled(within: Duration) -> bool {
     let (still, _) = WARMED
         .wait_timeout_while(warming(), within, |still| *still)
