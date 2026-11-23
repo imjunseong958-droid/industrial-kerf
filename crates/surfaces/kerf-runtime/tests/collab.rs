@@ -189,6 +189,17 @@ fn a_sync_with_nothing_new_changes_nothing() {
     assert!(replayed.is_object());
 }
 
+/// What git refuses, kerfd passes on to its client under the name kerf-collab gives it.
+#[test]
+fn a_sync_of_a_folder_that_is_no_repository_is_refused_by_gits_name() {
+    let folder = root("norepo");
+    let client = daemon(&folder);
+    let error = client.collab_integrate("ui", "norepo-1", None).unwrap_err();
+    assert_eq!(error.code.as_str(), "NOT_A_REPOSITORY", "{error:?}");
+    // Removing the folder orphans the daemon, which then exits.
+    let _ = fs::remove_dir_all(&folder);
+}
+
 #[test]
 fn a_hand_edited_project_file_is_not_synced_until_it_is_settled() {
     let team = team("hand");

@@ -256,5 +256,5 @@ pub(super) fn merge_driver() -> Result<PathBuf, RuntimeError> {
 
 /// What git or GitHub refused, under the name kerf-collab gives it.
 pub(super) fn collab_error(error: kerf_collab::git::CollabError) -> RuntimeError {
-    RuntimeError::new(error.code.as_str().into(), error.message)
+    RuntimeError::new(ErrorCode::from_name(error.code.as_str()), error.message)
 }

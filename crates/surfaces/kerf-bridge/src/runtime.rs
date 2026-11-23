@@ -10,7 +10,7 @@ use crate::{
     workflows, Command, Event, MediaProject, Shared,
 };
 use kerf_mcp::KerfMcpRouter;
-use kerf_runtime::{ErrorCode, RuntimeClient, StateSnapshot};
+use kerf_runtime::{RuntimeClient, StateSnapshot};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -425,7 +425,7 @@ impl Worker {
                 return None;
             }
             Command::SignalFromSound { clip, of } => {
-                self.signal_from_sound(active_client, operation, clip, of)
+                self.signal_from_sound(active_client, operation, clip, of)?
             }
             Command::MediaReplace { media, path } => active_client.get_state().and_then(|state| {
                 active_client.replace_media_request("ui", operation, &media, &path, state.revision)
@@ -601,28 +601,37 @@ impl Worker {
     }
 
     /// `signal_from_sound`: the keys of the signal clip `clip` set from the onsets of the
-    /// sound `of` plays, as one edit.
+    /// sound `of` plays, as one edit; `None` once a sound that does not read is said, which
+    /// kerfd is asked nothing about.
     fn signal_from_sound(
-        &self,
+        &mut self,
         active_client: &RuntimeClient,
         operation: &str,
         clip: String,
         of: String,
-    ) -> Result<StateSnapshot, kerf_runtime::RuntimeError> {
-        active_client
+    ) -> Option<Result<StateSnapshot, kerf_runtime::RuntimeError>> {
+        let opened = active_client
             .get_document(false)
             .and_then(|(revision, text)| {
-                let project = kerf_runtime::parse_document(&text)?;
-                let read = kerf_shots::signals::from_sound(
-                    &project,
-                    &self.shared.directory,
-                    &of,
-                    &clip,
-                    None,
-                )
-                .map_err(|why| kerf_runtime::RuntimeError::new(ErrorCode::SignalFailed, why))?;
-                active_client.apply_script_request("ui", operation, &read.script(&clip), revision)
-            })
+                kerf_runtime::parse_document(&text).map(|project| (revision, project))
+            });
+        let (revision, project) = match opened {
+            Ok(opened) => opened,
+            Err(error) => return Some(Err(error)),
+        };
+        match kerf_shots::signals::from_sound(&project, &self.shared.directory, &of, &clip, None) {
+            Ok(read) => Some(active_client.apply_script_request(
+                "ui",
+                operation,
+                &read.script(&clip),
+                revision,
+            )),
+            Err(why) => {
+                error(&self.tx, why);
+                self.publish_as_it_is(active_client);
+                None
+            }
+        }
     }
 
     /// `preset_save`: the program saved as the project's preset `name`.
@@ -754,12 +763,17 @@ impl Worker {
                     }
                     None => error(&self.tx, runtime_error.message),
                 }
-                if let Ok(state) = active_client.get_state() {
-                    publish_force(state, &self.shared, &self.tx, &mut self.previous);
-                } else {
-                    self.disconnect("runtime became unavailable");
-                }
+                self.publish_as_it_is(active_client);
             }
+        }
+    }
+
+    /// Publish the state as it is, after a command that left none; or say kerfd is gone.
+    fn publish_as_it_is(&mut self, active_client: &RuntimeClient) {
+        if let Ok(state) = active_client.get_state() {
+            publish_force(state, &self.shared, &self.tx, &mut self.previous);
+        } else {
+            self.disconnect("runtime became unavailable");
         }
     }
 }

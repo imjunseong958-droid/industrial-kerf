@@ -1241,7 +1241,7 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             .cloned()
             .and_then(|error| serde_json::from_value::<RuntimeError>(error).ok())
             .unwrap_or_else(|| {
-                RuntimeError::new(ErrorCode::RuntimeError, "runtime request failed")
+                RuntimeError::new(ErrorCode::Unspecified, "runtime request failed")
             }));
     }
     if let (Some(revision), Some(document)) = (

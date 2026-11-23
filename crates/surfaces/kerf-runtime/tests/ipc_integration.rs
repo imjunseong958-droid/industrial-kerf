@@ -843,7 +843,10 @@ fn a_refusal_reads_as_the_code_kerfd_wrote() {
     assert_eq!(conflict.actual_revision, Some(4));
 
     // A code a newer kerfd has and this build does not: kept by its name, and written the same.
-    let newer = read(RuntimeError::new("NOT_NAMED_YET".into(), "said"));
+    let newer = read(RuntimeError::new(
+        ErrorCode::from_name("NOT_NAMED_YET"),
+        "said",
+    ));
     assert_eq!(newer.code.as_str(), "NOT_NAMED_YET");
     assert_ne!(newer.code, ErrorCode::RevisionConflict);
     let again = response_value("2", Err(newer));

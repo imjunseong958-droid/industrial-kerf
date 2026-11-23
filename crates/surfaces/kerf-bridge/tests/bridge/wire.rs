@@ -146,8 +146,8 @@ fn code() -> impl Strategy<Value = ErrorCode> {
             "CANCELLED",
             "INVALID_RENDER_OUTPUT"
         ])
-        .prop_map(ErrorCode::from),
-        text().prop_map(ErrorCode::from),
+        .prop_map(ErrorCode::from_name),
+        text().prop_map(|name| ErrorCode::from_name(&name)),
     ]
 }
 

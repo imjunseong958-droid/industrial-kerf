@@ -60,10 +60,10 @@ macro_rules! error_codes {
             $($(#[$note])* $code,)+
             /// A code with no name here, as it came: one a kerfd of another build answered
             /// with, or one kerfd passes on as git and GitHub said it
-            /// ([`kerf_collab::git::CollabCode`]). Made by reading a name
-            /// ([`ErrorCode::from`]), never written out by hand, so that a name this build
-            /// does know is always its own code.
-            Other(String),
+            /// ([`kerf_collab::git::CollabCode`]). Only [`ErrorCode::from_name`] makes one,
+            /// so a name this build does know is always its own code, and two codes are
+            /// equal just when their names are.
+            Other(Unnamed),
         }
 
         impl ErrorCode {
@@ -71,10 +71,12 @@ macro_rules! error_codes {
             pub fn as_str(&self) -> &str {
                 match self {
                     $(Self::$code => $name,)+
-                    Self::Other(name) => name,
+                    Self::Other(Unnamed(name)) => name,
                 }
             }
 
+            // Two codes with one name would make the second arm unreachable.
+            #[deny(unreachable_patterns)]
             fn named(name: &str) -> Option<Self> {
                 match name {
                     $($name => Some(Self::$code),)+
@@ -106,8 +108,8 @@ error_codes! {
     RuntimeUnavailable = "RUNTIME_UNAVAILABLE",
     RuntimeAlreadyRunning = "RUNTIME_ALREADY_RUNNING",
     RuntimeProtocolError = "RUNTIME_PROTOCOL_ERROR",
-    /// A failure kerfd gave no code of its own.
-    RuntimeError = "RUNTIME_ERROR",
+    /// A failure kerfd gave no code a client can read.
+    Unspecified = "RUNTIME_ERROR",
 
     // An edit.
     RevisionConflict = "REVISION_CONFLICT",
@@ -168,22 +170,20 @@ error_codes! {
 
     // Sharing.
     CollabUnreadableProject = "COLLAB_UNREADABLE_PROJECT",
-
-    // The editor's bridge says this one itself, of a request it does not send on to kerfd.
-    SignalFailed = "SIGNAL_FAILED",
 }
 
-impl From<&str> for ErrorCode {
-    fn from(name: &str) -> Self {
-        Self::named(name).unwrap_or_else(|| Self::Other(name.to_owned()))
+impl ErrorCode {
+    /// The code a name stands for. For a name that comes from elsewhere (off the wire, or
+    /// from git): a code said here is written as its variant, which the compiler checks.
+    pub fn from_name(name: &str) -> Self {
+        Self::named(name).unwrap_or_else(|| Self::Other(Unnamed(name.to_owned())))
     }
 }
 
-impl From<String> for ErrorCode {
-    fn from(name: String) -> Self {
-        Self::named(&name).unwrap_or(Self::Other(name))
-    }
-}
+/// The name of a code this build has no code for ([`ErrorCode::Other`]). Nothing outside this
+/// module makes one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unnamed(String);
 
 impl fmt::Display for ErrorCode {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -199,6 +199,6 @@ impl Serialize for ErrorCode {
 
 impl<'de> Deserialize<'de> for ErrorCode {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        String::deserialize(deserializer).map(Self::from)
+        String::deserialize(deserializer).map(|name| Self::from_name(&name))
     }
 }

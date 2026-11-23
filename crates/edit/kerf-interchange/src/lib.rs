@@ -270,6 +270,8 @@ pub enum InterchangeCode {
 }
 
 impl InterchangeCode {
+    // Two codes with one name would be two arms the same.
+    #[deny(clippy::match_same_arms)]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ConfigInvalid => "INTERCHANGE_CONFIG_INVALID",
