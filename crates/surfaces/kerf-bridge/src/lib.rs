@@ -13,6 +13,11 @@
 //! viewer preview rendering, the QC check, the makings it started and the render queue's
 //! jobs are stopped. A making another program runs on the project goes on.
 //!
+//! One thing an editor waits for, just before its process exits, with [`drawing_settled`]:
+//! the frames a closed bridge's playback was still drawing, and the GPU a frame had begun to
+//! bring up. A process that exits under a thread at work in the GPU's libraries now and then
+//! dies as it ends.
+//!
 //! # Commands and events
 //!
 //! [`Command`] and [`Event`] are the protocol: each variant says what it asks or tells,
@@ -107,6 +112,7 @@ pub use conversations::Request as ConversationsRequest;
 pub use event::{Event, Snapshot};
 pub use kerf_agent::{Focus, FocusScope, OpenAiApiMode};
 pub use kerf_collab::scaffold::GitHubRepository;
+pub use kerf_playback::drawing_settled;
 pub use kerf_runtime::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
 pub use media::CastEntry;
 pub use paperwork::CaptionsRequest;
@@ -203,6 +209,9 @@ struct Shared {
     analysis: analysis::Analysis,
     /// The workflow last said of each step a graph has open.
     workflows: workflows::Said,
+    /// What lets the bridge's playback draw a frame: closed with the bridge, so that
+    /// [`drawing_settled`] can wait for the ones under way before the process exits.
+    drawers: kerf_playback::Drawers,
 }
 
 /// One project open in the editor: commands in through [`Bridge::send`], events out through
@@ -391,6 +400,7 @@ impl Bridge {
             renders: queue::Queue::default(),
             analysis: analysis::Analysis::default(),
             workflows: Default::default(),
+            drawers: Default::default(),
         });
         {
             let directory = directory.clone();
@@ -703,6 +713,9 @@ impl Drop for Bridge {
     /// Close the bridge and signal the workers to shut down, without blocking the editor.
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        // Its playback begins no frame from here on; [`drawing_settled`] waits for those that
+        // had.
+        self.shared.drawers.close();
         // Nobody would see a preview still rendering, or the one playing. The
         // process may exit before the media worker stops, so the files go now;
         // one a playback worker still holds open is left for the media worker.

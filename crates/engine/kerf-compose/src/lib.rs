@@ -86,7 +86,7 @@ pub const DRAW_STAMP: &str = env!("KERF_DRAW_STAMP");
 
 pub use alone::{draws_effect, effects_on_picture, Alone};
 pub use disk::{default_frame_folder, frame_cache_stats, FrameCacheStats};
-pub use draw::{Form, InDepth, World, ID_COLORS};
+pub use draw::{gpu_settled, Form, InDepth, World, ID_COLORS};
 
 /// One frame of straight RGBA, row by row: 8 bits a component, or 16 from
 /// [`Compositor::frame16`].

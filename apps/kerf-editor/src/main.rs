@@ -269,11 +269,26 @@ fn main() {
         }
         app::install_prompts(cx);
         keymap::bind(prefs.keymap.wire(), cx);
-        // The editor is its windows: the last one closed, it quits.
+        // The editor is its windows: the last one closed, it quits. On the
+        // next turn, not here: GPUI's X11 client holds its own state while it
+        // closes a window for the title bar's button, and a quit from inside
+        // that panicked ("RefCell already borrowed") in place of quitting.
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
-                cx.quit();
+                cx.spawn(async move |cx| {
+                    // Refused only once the editor has ended already.
+                    let _ = cx.update(|cx| cx.quit());
+                })
+                .detach();
             }
+        })
+        .detach();
+        // That window's session is let go before the quit comes, and its
+        // bridge with it, so its own wait for the picture being drawn never
+        // runs: the app waits here.
+        cx.on_app_quit(|_| {
+            session::settle_drawing();
+            async {}
         })
         .detach();
         // Every window opened later keeps the kerfd given here; the first

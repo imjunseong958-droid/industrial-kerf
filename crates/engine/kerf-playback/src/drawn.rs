@@ -15,7 +15,7 @@ use kerf_model::{Catalog, Project, Rate};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,123 @@ const HEADROOM: f64 = 0.9;
 /// and straight back drops frames each time.
 const ROOM_TO_GROW: f64 = 0.6;
 
+/// Whether one owner's frames may be drawn, and how many are being drawn now, so that the owner
+/// can keep the process from exiting under them: it [`close`](Self::close)s these when it is
+/// done, and whoever is about to exit waits with [`drawing_settled`].
+///
+/// A frame is drawn inside the GPU's libraries, and asking the compositor whether the GPU can
+/// draw one has it start bringing the device up on a thread of its own, which loads them
+/// ([`kerf_compose::gpu_settled`]). A process that exits meanwhile runs those libraries'
+/// destructors under the threads at work in them, and now and then dies of it as it ends.
+#[derive(Clone, Debug, Default)]
+pub struct Drawers(Arc<Gate>);
+
+#[derive(Debug, Default)]
+struct Gate {
+    state: Mutex<GateState>,
+    /// Rung when the last frame being drawn is done.
+    idle: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct GateState {
+    drawing: usize,
+    closed: bool,
+}
+
+/// A frame being drawn, or the compositor being asked about one, counted until this is dropped.
+struct OnFrame(Drawers);
+
+/// The drawers closed while a frame of theirs was being drawn, for [`drawing_settled`] to wait
+/// for. One whose frames are done is forgotten the next time this is looked at.
+static CLOSED: Mutex<Vec<Drawers>> = Mutex::new(Vec::new());
+
+impl Drawers {
+    /// Count a frame as being drawn until what this returns is dropped. `None` once
+    /// [`close`](Self::close)d: the frame is to be left undrawn, and the compositor unasked.
+    fn begin(&self) -> Option<OnFrame> {
+        let mut state = self.state();
+        if state.closed {
+            return None;
+        }
+        state.drawing += 1;
+        Some(OnFrame(self.clone()))
+    }
+
+    /// Let no more frames begin. Those being drawn are finished, and [`drawing_settled`] waits
+    /// for them.
+    pub fn close(&self) {
+        let drawing = {
+            let mut state = self.state();
+            state.closed = true;
+            state.drawing > 0
+        };
+        let mut closed = CLOSED.lock().unwrap_or_else(PoisonError::into_inner);
+        closed.retain(|drawers| !Arc::ptr_eq(&drawers.0, &self.0) && drawers.state().drawing > 0);
+        if drawing {
+            closed.push(self.clone());
+        }
+    }
+
+    /// Wait until no frame is being drawn, until `until` at most (for ever, with none). `false`
+    /// when one still is.
+    fn idle_by(&self, until: Option<Instant>) -> bool {
+        let mut state = self.state();
+        while state.drawing > 0 {
+            let Some(until) = until else {
+                state = self
+                    .0
+                    .idle
+                    .wait(state)
+                    .unwrap_or_else(PoisonError::into_inner);
+                continue;
+            };
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            state = self
+                .0
+                .idle
+                .wait_timeout(state, left)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+        true
+    }
+
+    fn state(&self) -> MutexGuard<'_, GateState> {
+        self.0.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Drop for OnFrame {
+    fn drop(&mut self) {
+        let mut state = self.0.state();
+        state.drawing -= 1;
+        if state.drawing == 0 {
+            self.0 .0.idle.notify_all();
+        }
+    }
+}
+
+/// Wait, for at most `within`, until no closed [`Drawers`] has a frame being drawn and the
+/// compositor is not bringing the GPU up: `false` when either is still under way. For the moment
+/// before the process exits, once whatever owned drawers has closed them.
+pub fn drawing_settled(within: Duration) -> bool {
+    // No end, for a time too long to count to.
+    let until = Instant::now().checked_add(within);
+    let closed = CLOSED
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    // After the frames, since one of them may have been the first to ask for the device.
+    closed.iter().all(|drawers| drawers.idle_by(until))
+        && kerf_compose::gpu_settled(until.map_or(within, |until| {
+            until.saturating_duration_since(Instant::now())
+        }))
+}
+
 pub(crate) struct Drawn {
     rate: Rate,
     last: i64,
@@ -65,6 +182,8 @@ pub(crate) struct Drawn {
     /// Frames asked for and not back yet, with the seek they were asked
     /// for.
     drawing: HashSet<(i64, u64)>,
+    /// What lets the drawers draw, which asking the compositor about a frame waits on too.
+    drawers: Drawers,
 }
 
 struct Job {
@@ -85,11 +204,12 @@ pub(crate) struct Drawing {
 impl Drawn {
     /// The first sequence of `project`, drawn at most `frame_size`. `epoch`
     /// is the playback's seek counter: work asked for before the latest
-    /// seek is skipped.
+    /// seek is skipped. A frame is drawn only while `drawers` lets it begin.
     pub fn open(
         project: &Project,
         frame_size: Option<(u32, u32)>,
         epoch: Arc<AtomicU64>,
+        drawers: &Drawers,
     ) -> Result<Self, PlaybackError> {
         let options = ComposeOptions {
             keep_frames: true,
@@ -112,12 +232,13 @@ impl Drawn {
         let queue = Arc::new(Mutex::new(queue));
         let closed = Arc::new(AtomicBool::new(false));
         for drawer in 0..DRAWERS {
-            let (compositor, queue, done, epoch, closed) = (
+            let (compositor, queue, done, epoch, closed, drawers) = (
                 Arc::clone(&compositor),
                 Arc::clone(&queue),
                 done.clone(),
                 Arc::clone(&epoch),
                 Arc::clone(&closed),
+                drawers.clone(),
             );
             thread::Builder::new()
                 .name(format!("kerf-draw-{drawer}"))
@@ -133,8 +254,16 @@ impl Drawn {
                         return;
                     }
                     let started = Instant::now();
-                    let frame = (job.epoch >= epoch.load(Ordering::Acquire))
-                        .then(|| compositor.frame(rate.time_of(job.index), job.scale));
+                    let frame = if job.epoch >= epoch.load(Ordering::Acquire) {
+                        // Their owner has closed them: it may be about to exit, and waits
+                        // only for the frames that had begun.
+                        let Some(_on_frame) = drawers.begin() else {
+                            return;
+                        };
+                        Some(compositor.frame(rate.time_of(job.index), job.scale))
+                    } else {
+                        None
+                    };
                     let drawing = Drawing {
                         index: job.index,
                         epoch: job.epoch,
@@ -162,6 +291,7 @@ impl Drawn {
             closed,
             results,
             drawing: HashSet::new(),
+            drawers: drawers.clone(),
         })
     }
 
@@ -227,7 +357,12 @@ impl Drawn {
             match self.results.try_recv() {
                 Ok(drawing) => {
                     self.drawing.remove(&(drawing.index, drawing.epoch));
-                    if playing && drawing.frame.is_some() {
+                    // Asking is what first brings the GPU up, which drawers that are closed
+                    // are not to start: nothing would wait for it.
+                    if playing
+                        && drawing.frame.is_some()
+                        && let Some(_asking) = self.drawers.begin()
+                    {
                         let on_gpu = self
                             .compositor
                             .draws_on_gpu(self.rate.time_of(drawing.index), drawing.scale);
@@ -298,5 +433,75 @@ mod tests {
     fn the_compositor_moves_between_threads() {
         fn shared<T: Send + Sync>() {}
         shared::<Compositor>();
+    }
+
+    #[test]
+    fn closed_drawers_leave_the_frames_asked_for_undrawn() {
+        // A solid, which needs no media to draw.
+        let project = kerf_lang::parse_document(
+            "kerf 1\nproject name=\"Drawn\"\n\
+             sequence s1 rate=10 size=64x36 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip block gen=solid@1 at=0f dur=20f\n\
+             \x20     set color=#e08030\n",
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let drawers = Drawers::default();
+        let epoch = Arc::new(AtomicU64::new(0));
+        let mut drawn = Drawn::open(&project, None, epoch, &drawers).expect("open");
+
+        // Open, they draw the frame asked for.
+        assert!(drawn.request(0, drawn.still(), 0));
+        let first = loop {
+            if let Some(drawing) = drawn.take(false).pop() {
+                break drawing;
+            }
+            thread::sleep(Duration::from_millis(1));
+        };
+        assert!(first.frame.is_some());
+
+        drawers.close();
+        // A frame for each drawer: each leaves its own undrawn and ends, so none comes back,
+        // and the last to end closes what they send their frames on.
+        for index in 1..=DRAWERS as i64 {
+            assert!(drawn.request(index, drawn.still(), 0));
+        }
+        assert!(matches!(
+            drawn.results.recv_timeout(Duration::from_secs(30)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
+
+    #[test]
+    fn drawers_closed_on_a_frame_are_waited_for_until_it_is_done() {
+        let drawers = Drawers::default();
+        let on_frame = drawers.begin().expect("open drawers let a frame begin");
+        drawers.close();
+        assert!(drawers.begin().is_none());
+        // The frame is still being drawn: what is about to exit is told so, in its time.
+        let soon = Some(Instant::now() + Duration::from_millis(20));
+        assert!(!drawers.idle_by(soon));
+        assert!(CLOSED
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|closed| Arc::ptr_eq(&closed.0, &drawers.0)));
+        // Done on another thread while this one waits, it lets the wait go.
+        let done = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            drop(on_frame);
+        });
+        assert!(drawers.idle_by(Some(Instant::now() + Duration::from_secs(30))));
+        done.join().expect("the frame's thread");
+        // Drawers closed with no frame on are not kept: there is nothing of theirs to wait for.
+        let idle = Drawers::default();
+        idle.close();
+        assert!(!CLOSED
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|closed| Arc::ptr_eq(&closed.0, &idle.0)));
     }
 }

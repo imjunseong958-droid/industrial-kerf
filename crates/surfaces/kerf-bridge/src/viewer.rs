@@ -282,20 +282,21 @@ impl Player {
                 }
             }),
         );
-        self.open(project, composited, tx);
+        self.open(project, composited, tx, shared);
         true
     }
 
     /// Open a playback session of `project` where the last one was, at its volume, with the
     /// tracks heard alone, and playing if it played.
-    fn open(&mut self, project: Project, composited: bool, tx: &Outbox) {
+    fn open(&mut self, project: Project, composited: bool, tx: &Outbox, shared: &Shared) {
         let size = preview_frame_size(&project);
         // A new worker prevents old-project frames from resurfacing after an edit.
         self.session = match PlaybackSession::open(
             project,
             PlaybackConfig::default()
                 .with_frame_size(size.0, size.1)
-                .with_composited(composited),
+                .with_composited(composited)
+                .with_drawers(shared.drawers.clone()),
         ) {
             Ok(session) => {
                 // The new session goes on as the last one was; where it cannot, it plays as it

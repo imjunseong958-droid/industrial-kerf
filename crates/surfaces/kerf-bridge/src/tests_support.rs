@@ -35,6 +35,7 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         renders: Default::default(),
         analysis: Default::default(),
         workflows: Default::default(),
+        drawers: Default::default(),
     }
 }
 

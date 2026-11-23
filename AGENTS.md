@@ -55,6 +55,13 @@ workspace-wide commands above leave it out: check, test and lint it with
 `--manifest-path apps/kerf-editor/Cargo.toml --workspace`. Its root is a package as well,
 so without `--workspace` they cover only that package, not the editor's crates.
 
+## Home folder
+
+Find a person's home folder with `kerf_paths::home()` and their `~/.kerf` with
+`kerf_paths::user_dir()`, never by reading `HOME`: Windows sets none, so code that reads it
+finds nothing there. A cache, log or font folder that each system places by its own rule
+may name `HOME` in its macOS and Linux branches.
+
 ## Motion UI
 
 Before adding or changing UI animation in `apps/kerf-editor`, read
