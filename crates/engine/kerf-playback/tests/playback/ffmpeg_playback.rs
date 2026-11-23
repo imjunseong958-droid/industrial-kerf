@@ -447,7 +447,7 @@ fn composited_programs_play_and_seek_frame_exactly() {
         kerf_playback::preview_plan(&project).mode,
         kerf_core::preview::PreviewMode::Composited
     );
-    let session = PlaybackSession::open(
+    let session = crate::Composited::open(
         project,
         PlaybackConfig::default()
             .with_audio_enabled(false)

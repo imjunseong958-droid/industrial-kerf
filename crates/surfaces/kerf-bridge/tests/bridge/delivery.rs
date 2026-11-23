@@ -52,6 +52,8 @@ impl Drop for Project {
 struct Editor {
     bridge: Bridge,
     events: Vec<Value>,
+    /// After the bridge, to be let go after it.
+    _settles: crate::Settles,
 }
 
 impl Editor {
@@ -59,6 +61,7 @@ impl Editor {
         Self {
             bridge: Bridge::open(directory, &kerfd()),
             events: Vec::new(),
+            _settles: crate::Settles,
         }
     }
 
