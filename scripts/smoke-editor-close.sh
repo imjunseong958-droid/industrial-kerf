@@ -8,24 +8,28 @@
 # The ask is the ICCCM's: a WM_PROTOCOLS client message that carries WM_DELETE_WINDOW,
 # sent to each window of the editor's that is shown and takes it, by a few lines of C
 # built here against libxcb, which GPUI's build needs already. Nothing more is installed
-# for it: Ubuntu 24.04's xdotool has no windowquit and its windowclose destroys the
-# window unasked, and wmctrl -c needs a window manager.
+# for it: the job has neither xdotool nor wmctrl, and on Ubuntu 24.04 neither would do:
+# its xdotool has no windowquit and its windowclose destroys the window unasked, and
+# wmctrl -c needs a window manager.
 #
 # The editor is asked every 0.2 s, from when its window is shown until it ends, not once:
 # an ask sent while it is starting waits for it, and by hand, with no window manager, as
-# many as 22 went by before one took. It has $limit seconds from its start to end. If it
-# has not by then, it is stopped and this fails: the close never took. It is started with
-# a --quit-after-ms well past that, so that it ends whatever becomes of this script and
+# many as 22 went by before one took. It has $limit seconds from its start to end (and
+# up to one more: the time is counted in the clock's whole seconds). If it has not by
+# then, it is stopped and this fails: the close never took. It is started with a
+# --quit-after-ms well past that, so that it ends whatever becomes of this script and
 # opens no project but the one given here; a run that lasted until then is out of time
 # long before, and fails.
 #
-# On an X server, with the editor and what it is to open:
+# On an X server, with the editor and what it is given: a project to open, and where its
+# settings are kept, or the run reads the caller's own and adds the project to their
+# recent ones (CI names the file with KERF_EDITOR_PREFS instead):
 #
 #   xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
-#       scripts/smoke-editor-close.sh target/debug/kerf-editor [project]
+#       scripts/smoke-editor-close.sh target/debug/kerf-editor [project] --settings-dir DIR
 set -euo pipefail
 
-[ $# -ge 1 ] || { echo "usage: $0 path/to/kerf-editor [project]" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: $0 path/to/kerf-editor [its arguments]" >&2; exit 2; }
 [ -n "${DISPLAY:-}" ] || { echo "No DISPLAY: run this under xvfb-run" >&2; exit 2; }
 
 limit=30
@@ -33,7 +37,8 @@ scratch="$(mktemp -d)"
 editor=""
 trap '[ -z "$editor" ] || kill "$editor" 2> /dev/null || true; rm -rf -- "$scratch"' EXIT
 
-# ask-to-close <pid>: exit 0 if a window of that process was asked, 3 if it shows none.
+# ask-to-close <pid>: exit 0 if a window of that process was asked, 3 if it shows none,
+# 1 if there is no X server to ask.
 cc -o "$scratch/ask-to-close" -x c - -lxcb << 'C'
 #include <stdint.h>
 #include <stdlib.h>
@@ -122,17 +127,26 @@ env -u WAYLAND_DISPLAY "$@" --quit-after-ms $(((limit + 90) * 1000)) > "$scratch
 editor=$!
 SECONDS=0
 asks=0
-while kill -0 "$editor" 2> /dev/null && [ "$SECONDS" -lt "$limit" ]; do
-    if "$scratch/ask-to-close" "$editor"; then asks=$((asks + 1)); fi
+unasked=""
+# More than $limit on bash's count of seconds is at least $limit s. An X server that
+# stops answering does not hold the count up: the ask has 5 s of its own.
+while kill -0 "$editor" 2> /dev/null && [ "$SECONDS" -le "$limit" ]; do
+    asked=0
+    timeout 5 "$scratch/ask-to-close" "$editor" || asked=$?
+    case "$asked" in
+        0) asks=$((asks + 1)) ;;
+        3) ;;
+        *) unasked=" (ask-to-close could not ask the X server at $DISPLAY: exit $asked)" ;;
+    esac
     sleep 0.2
 done
 # Out of time, whether it is still running or ended only now.
-if [ "$SECONDS" -ge "$limit" ]; then
+if [ "$SECONDS" -gt "$limit" ]; then
     cat "$scratch/editor.log"
     if [ "$asks" -eq 0 ]; then
-        echo "The editor showed no window to close in the $limit s after its start" >&2
+        echo "The editor showed no window to close in the $limit s after its start$unasked" >&2
     else
-        echo "The editor had not ended $limit s after its start (asks sent to its window: $asks)" >&2
+        echo "The editor had not ended $limit s after its start (asks sent to its window: $asks)$unasked" >&2
     fi
     exit 1
 fi
@@ -141,7 +155,7 @@ wait "$editor" || status=$?
 editor=""
 cat "$scratch/editor.log"
 if [ "$asks" -eq 0 ]; then
-    echo "The editor ended (exit $status) before it had a window to close" >&2
+    echo "The editor ended (exit $status) before it had a window to close$unasked" >&2
     exit 1
 fi
 if [ "$status" -ne 0 ]; then
@@ -152,4 +166,4 @@ if grep -q 'panicked at' "$scratch/editor.log"; then
     echo "The editor's window was asked to close and the editor panicked on the way to its exit 0" >&2
     exit 1
 fi
-echo "The editor quit, exit 0, $SECONDS s after its start (asks sent to its window: $asks)"
+echo "The editor quit, exit 0, within $((SECONDS + 1)) s of its start (asks sent to its window: $asks)"
