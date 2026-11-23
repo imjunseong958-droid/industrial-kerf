@@ -1,0 +1,63 @@
+name: Repair release
+
+# Run once, then removed. v0.1.5's Mac app went up as libSystem.B.dylib.zip:
+# package-kerf-macos.sh used its package-name variable again in a loop (mended in #391).
+# The zip keeps the bytes it was published with and takes the name the script meant; its
+# .sha256, which names the zip inside, is written again for that name. Each step looks at
+# what the release holds first, so a run that stopped partway can be run again.
+on:
+  push:
+    branches: [lim/gallant-ritchie-1fm102]
+    paths: [".github/workflows/repair-release.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: v0.1.5
+      OLD: libSystem.B.dylib.zip
+      NEW: Industrial-Kerf-0.1.5-macos-arm64.zip
+      # What GitHub says the published zip is; the bytes that take the new name must be these.
+      SHA256: 20695dfd2359e2b28b706e2c9ce8aa3751fe1b4ec0781bfd7845b82a50b61264
+    steps:
+      - name: Give the zip its name, and its sha256 that name
+        run: |
+          set -euo pipefail
+          assets() { gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq '.assets[] | "\(.id) \(.name)"'; }
+          id_of() { assets | awk -v name="$1" '$2 == name { print $1 }'; }
+          echo "Before:"; assets | sort -k2
+
+          old="$(id_of "$OLD")"
+          if [ -n "$old" ]; then
+            mkdir before
+            gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir before --pattern "$OLD"
+            echo "$SHA256  before/$OLD" | sha256sum -c -
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/releases/assets/$old" -f name="$NEW" --jq .name
+          fi
+          [ -n "$(id_of "$NEW")" ] || { echo "$TAG has neither $OLD nor $NEW" >&2; exit 1; }
+
+          if [ -z "$(id_of "$NEW.sha256")" ]; then
+            # As shasum writes it in package-kerf-macos.sh.
+            printf '%s  %s\n' "$SHA256" "$NEW" > "$NEW.sha256"
+            gh release upload "$TAG" "$NEW.sha256" -R "$GITHUB_REPOSITORY"
+          fi
+          if [ -n "$(id_of "$OLD.sha256")" ]; then
+            gh release delete-asset "$TAG" "$OLD.sha256" -R "$GITHUB_REPOSITORY" --yes
+          fi
+
+          echo "After:"; assets | sort -k2
+      # As verify-release.yml's macOS job fetches and checks it.
+      - name: The zip downloads by its name and matches its sha256
+        run: |
+          set -euo pipefail
+          mkdir after
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir after \
+            --pattern '*-macos-arm64.zip' --pattern '*-macos-arm64.zip.sha256'
+          ls -l after
+          (cd after && sha256sum -c ./*-macos-arm64.zip.sha256)
+          cat after/*.sha256
