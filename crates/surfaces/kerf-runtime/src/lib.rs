@@ -39,7 +39,7 @@ pub use kernel::{
     TrimSide, RATE_NEEDS_EMPTY,
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
-pub use status::{ProjectionStatus, ProposalStatus};
+pub use status::{ProjectionStatus, ProposalStatus, RenderStatus};
 pub use timeline::{fx_catalog_all_json, properties_json};
 pub use view::{
     TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
@@ -289,7 +289,7 @@ fn default_render_progress() -> f64 {
 #[serde(rename_all = "camelCase")]
 pub struct RenderJob {
     pub job_id: String,
-    pub status: String,
+    pub status: RenderStatus,
     pub output_url: Option<String>,
     pub output_path: Option<String>,
     pub error: Option<String>,
@@ -510,7 +510,7 @@ pub enum RuntimeRequest {
     UpdateJob {
         #[serde(rename = "jobId")]
         job_id: String,
-        status: String,
+        status: RenderStatus,
         error: Option<String>,
         #[serde(rename = "outputUrl")]
         output_url: Option<String>,

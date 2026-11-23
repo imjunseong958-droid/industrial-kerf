@@ -13,7 +13,7 @@ use crate::emit;
 use crate::event::{CaptionsExport, ErrorEvent, Event, Export, ExportStatus};
 use crate::wake::Outbox;
 use kerf_model::{Project, Sequence};
-use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError};
+use kerf_runtime::{RenderJob, RenderStatus, RuntimeClient, RuntimeError};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -108,7 +108,9 @@ fn file_name(base: &str, format: &str) -> String {
 pub(crate) fn latest_master(jobs: &[RenderJob]) -> Option<PathBuf> {
     jobs.iter()
         .rev()
-        .filter(|job| job.status == "completed" && job.quality.as_deref() == Some("master"))
+        .filter(|job| {
+            job.status == RenderStatus::Completed && job.quality.as_deref() == Some("master")
+        })
         .filter_map(|job| job.output_path.as_deref().map(PathBuf::from))
         .find(|path| path.is_file())
 }

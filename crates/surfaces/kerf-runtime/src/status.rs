@@ -1,4 +1,4 @@
-//! Where a proposal and the project file stand, as kerfd says them.
+//! Where a proposal, a render job and the project file stand, as kerfd says them.
 
 use crate::named::named;
 
@@ -28,5 +28,36 @@ named! {
         Missing = "missing",
         /// The file says something else: it was changed outside Kerf.
         Diverged = "diverged",
+    }
+}
+
+named! {
+    /// Where a render job stands.
+    pub enum RenderStatus {
+        /// Waiting for a worker to take it.
+        Queued = "queued",
+        Running = "running",
+        Completed = "completed",
+        Failed = "failed",
+        Cancelled = "cancelled",
+    }
+}
+
+impl Default for RenderStatus {
+    /// As a status left out reads: none of these.
+    fn default() -> Self {
+        Self::from_name("")
+    }
+}
+
+impl RenderStatus {
+    /// Whether a job that stands so has ended.
+    pub fn is_finished(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    /// Whether a job that stands so is still to end: waiting, or being rendered.
+    pub fn is_under_way(&self) -> bool {
+        matches!(self, Self::Queued | Self::Running)
     }
 }

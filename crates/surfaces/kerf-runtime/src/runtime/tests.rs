@@ -5,7 +5,7 @@ use super::*;
 use crate::ipc::expect_state;
 use crate::render::render_cancel_path;
 use crate::store::{load_journal, CHECKPOINT_TEMP_FILE, JOURNAL_FILE, PREVIOUS_STATE_PREFIX};
-use crate::{run_stdio, EditOp, RuntimeHandle};
+use crate::{run_stdio, EditOp, RenderStatus, RuntimeHandle};
 use serde_json::{json, Value};
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -837,19 +837,25 @@ fn render_cancellation_is_job_scoped_and_survives_restart() {
         let cancel_path = render_cancel_path(&directory, &cancelled.job_id);
         let queued_path = render_cancel_path(&directory, &queued.job_id);
         let cancelled_job = runtime.cancel_render(&cancelled.job_id).unwrap();
-        assert_eq!(cancelled_job.status, "cancelled");
+        assert_eq!(cancelled_job.status.as_str(), "cancelled");
         assert!(cancel_path.is_file());
         assert!(!queued_path.is_file());
-        assert_eq!(runtime.render_job(&queued.job_id).unwrap().status, "queued");
+        assert_eq!(
+            runtime.render_job(&queued.job_id).unwrap().status.as_str(),
+            "queued"
+        );
         (cancelled.job_id, queued.job_id)
     };
 
     let runtime = Runtime::open(&directory).unwrap();
     assert_eq!(
-        runtime.render_job(&cancelled_id).unwrap().status,
+        runtime.render_job(&cancelled_id).unwrap().status.as_str(),
         "cancelled"
     );
-    assert_eq!(runtime.render_job(&queued_id).unwrap().status, "failed");
+    assert_eq!(
+        runtime.render_job(&queued_id).unwrap().status.as_str(),
+        "failed"
+    );
     drop(runtime);
     let _ = fs::remove_dir_all(directory);
 }
@@ -1158,14 +1164,26 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
         .start_render_range("preview", None, None, None)
         .unwrap();
     runtime
-        .update_job(&running.job_id, "running", None, None, Some(0.0))
+        .update_job(
+            &running.job_id,
+            RenderStatus::Running,
+            None,
+            None,
+            Some(0.0),
+        )
         .unwrap();
     let journaled = load_journal(&journal_path, 0).unwrap().len();
     let since_checkpoint = runtime.journal_records_since_checkpoint;
     for step in 1..100 {
         let progress = f64::from(step) / 100.0;
         runtime
-            .update_job(&running.job_id, "running", None, None, Some(progress))
+            .update_job(
+                &running.job_id,
+                RenderStatus::Running,
+                None,
+                None,
+                Some(progress),
+            )
             .unwrap();
     }
     assert_eq!(load_journal(&journal_path, 0).unwrap().len(), journaled);
@@ -1178,7 +1196,7 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
             .start_render_range("preview", None, None, None)
             .unwrap();
         runtime
-            .update_job(&job.job_id, "completed", None, None, None)
+            .update_job(&job.job_id, RenderStatus::Completed, None, None, None)
             .unwrap();
         finished.push(job.job_id);
     }

@@ -2,6 +2,7 @@
 //! lock) and the render queue's options and listing.
 
 use super::*;
+use crate::RenderStatus;
 use serde_json::{json, Value};
 
 /// A project folder with a 24 fps sequence: V1 holds c1 (0–2 s) and c2
@@ -114,7 +115,7 @@ fn finished_renders_are_never_written_over() {
     let (first, _, output) = render(&mut runtime, options.clone()).unwrap();
     assert_eq!(output, directory.join("deliveries/Master.mov"));
     runtime
-        .update_job(&first.job_id, "completed", None, None, None)
+        .update_job(&first.job_id, RenderStatus::Completed, None, None, None)
         .unwrap();
     // Exporting `Master` again takes the next free name, so the finished
     // job still describes its file.
@@ -156,7 +157,13 @@ fn finished_renders_are_never_written_over() {
     )
     .unwrap();
     runtime
-        .update_job(&failed.job_id, "failed", Some("boom".into()), None, None)
+        .update_job(
+            &failed.job_id,
+            RenderStatus::Failed,
+            Some("boom".into()),
+            None,
+            None,
+        )
         .unwrap();
     let (_, _, output) = render(
         &mut runtime,

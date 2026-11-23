@@ -4,7 +4,7 @@
 
 use super::{percent, plural, said, FinishView, Section};
 use editor_state::delivery::DELIVERIES;
-use editor_state::model::{RenderJob, RenderJobShow};
+use editor_state::model::{RenderJob, RenderJobShow, RenderStatus};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, height, radius, text};
 use editor_ui::ui;
@@ -339,7 +339,7 @@ impl FinishView {
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let (status, color) = job_status(job);
-        let running = job.status == "running";
+        let running = job.status == RenderStatus::Running;
         let action = if job.is_active() {
             let id = job.job_id.clone();
             Some(
@@ -352,7 +352,7 @@ impl FinishView {
                     }))
                     .into_any_element(),
             )
-        } else if job.status == "completed"
+        } else if job.status == RenderStatus::Completed
             && job
                 .output_path
                 .as_deref()
@@ -403,7 +403,9 @@ impl FinishView {
                 row.child(ui::progress(job.progress, theme::activity::gpu()))
             })
             .when_some(
-                job.error.clone().filter(|_| job.status == "failed"),
+                job.error
+                    .clone()
+                    .filter(|_| job.status == RenderStatus::Failed),
                 |row, error| row.child(ui::label(error, text::META, theme::neg())),
             )
     }
@@ -431,7 +433,7 @@ impl Deliverable {
         } = self;
         let running = newest
             .as_ref()
-            .filter(|job| job.status == "running")
+            .filter(|job| job.status == RenderStatus::Running)
             .map(|job| job.progress);
         let status = newest.as_ref().map(|job| {
             let (words, color) = job_status(job);
@@ -516,16 +518,17 @@ fn job_name(job: &RenderJob) -> String {
 
 /// What a job's status says, and in what colour: amber while it renders.
 fn job_status(job: &RenderJob) -> (String, Rgba) {
-    match job.status.as_str() {
-        "queued" => ("Waiting".into(), theme::ink2()),
-        "running" => (
+    match &job.status {
+        RenderStatus::Queued => ("Waiting".into(), theme::ink2()),
+        RenderStatus::Running => (
             format!("Rendering {}", percent(job.progress)),
             theme::activity::gpu(),
         ),
-        "completed" => ("Done".into(), theme::pos()),
-        "failed" => ("Failed".into(), theme::neg()),
-        "cancelled" => ("Cancelled".into(), theme::ink3()),
-        other => (other.to_owned(), theme::ink3()),
+        RenderStatus::Completed => ("Done".into(), theme::pos()),
+        RenderStatus::Failed => ("Failed".into(), theme::neg()),
+        RenderStatus::Cancelled => ("Cancelled".into(), theme::ink3()),
+        // A status a newer kerfd has: shown by its name.
+        other @ RenderStatus::Other(_) => (other.as_str().to_owned(), theme::ink3()),
     }
 }
 

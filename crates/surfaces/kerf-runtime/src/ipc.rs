@@ -2,7 +2,7 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, Author, EditOp, ErrorCode, RenderJob, RenderRange,
+    io_error, kernel, unique_id, Author, EditOp, ErrorCode, RenderJob, RenderRange, RenderStatus,
     RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse,
     StartRenderOptions, StateSnapshot,
 };
@@ -707,7 +707,7 @@ impl RuntimeClient {
     pub fn update_job(
         &self,
         job_id: &str,
-        status: &str,
+        status: RenderStatus,
         error: Option<String>,
         output_url: Option<String>,
     ) -> Result<(), RuntimeError> {
@@ -717,14 +717,14 @@ impl RuntimeClient {
     pub fn update_job_with_progress(
         &self,
         job_id: &str,
-        status: &str,
+        status: RenderStatus,
         error: Option<String>,
         output_url: Option<String>,
         progress: Option<f64>,
     ) -> Result<(), RuntimeError> {
         match self.request(RuntimeRequest::UpdateJob {
             job_id: job_id.to_owned(),
-            status: status.to_owned(),
+            status,
             error,
             output_url,
             progress,

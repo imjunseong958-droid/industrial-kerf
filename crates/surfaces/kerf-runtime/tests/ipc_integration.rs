@@ -472,7 +472,7 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
     );
     let queued = client.list_renders().unwrap();
     assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].status, "queued");
+    assert_eq!(queued[0].status.as_str(), "queued");
 
     kerf_runtime::run_render_job(&client, &job, &document, &output, false, |_| {}).unwrap();
     let streams = streams(&output);
@@ -486,7 +486,7 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
     assert_eq!(stream("video")["profile"], "HQ");
     assert_eq!(stream("audio")["codec_name"], "pcm_s24le");
     let done = client.list_renders().unwrap();
-    assert_eq!(done[0].status, "completed");
+    assert_eq!(done[0].status.as_str(), "completed");
     assert_eq!(done[0].progress, 1.0);
 
     // An output that climbs out of the project is refused over the socket,

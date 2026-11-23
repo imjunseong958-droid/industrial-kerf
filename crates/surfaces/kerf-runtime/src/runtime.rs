@@ -611,7 +611,7 @@ impl Runtime {
                 output_url,
                 progress,
             } => {
-                self.update_job(&job_id, &status, error, output_url, progress)?;
+                self.update_job(&job_id, status, error, output_url, progress)?;
                 Ok(RuntimeResponse::Empty)
             }
             RuntimeRequest::CancelRender { job_id } => {

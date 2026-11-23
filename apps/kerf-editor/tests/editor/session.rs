@@ -1927,7 +1927,7 @@ fn a_render_job_is_followed_from_queued_to_done() {
     assert_eq!(state.rendering().as_deref(), Some("Rendering Master 50%"));
     state.apply(&event(json!({"type": "export", "status": "completed", "jobId": "j1", "path": "deliveries/Master.mov", "progress": 1.0})));
     assert_eq!(state.renders.len(), 1);
-    assert_eq!(state.renders[0].status, "completed");
+    assert_eq!(state.renders[0].status.as_str(), "completed");
     assert!(state.rendering().is_none());
     assert_eq!(
         state.notices.last().map(|notice| notice.text.as_str()),

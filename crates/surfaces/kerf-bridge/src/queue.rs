@@ -26,7 +26,9 @@ use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
 use kerf_playback::OnFrame;
-use kerf_runtime::{ErrorCode, RenderJob, RuntimeClient, RuntimeError, StartRenderOptions};
+use kerf_runtime::{
+    ErrorCode, RenderJob, RenderStatus, RuntimeClient, RuntimeError, StartRenderOptions,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -278,7 +280,7 @@ pub(crate) fn cancel(
     tx: &Outbox,
 ) -> Result<(), RuntimeError> {
     let job = renders.cancel(job_id)?;
-    if job.status == "cancelled" {
+    if job.status == RenderStatus::Cancelled {
         let mut state = shared.renders.lock();
         state.waiting.retain(|queued| queued.job.job_id != job_id);
         let first = state.cancelled.insert(job_id.to_owned());
@@ -317,7 +319,7 @@ pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Event {
         .iter()
         .filter(|job| !state.viewer.contains(&job.job_id))
         .filter(|job| {
-            let finished = matches!(job.status.as_str(), "completed" | "failed" | "cancelled");
+            let finished = job.status.is_finished();
             let gone = job
                 .output_path
                 .as_deref()
@@ -325,15 +327,16 @@ pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Event {
             !(job.quality.as_deref() == Some("preview") && finished && gone)
         })
         .map(|job| {
-            let rendering = state.running.as_ref().filter(|(id, _)| {
-                *id == job.job_id && matches!(job.status.as_str(), "queued" | "running")
-            });
+            let rendering = state
+                .running
+                .as_ref()
+                .filter(|(id, _)| *id == job.job_id && job.status.is_under_way());
             // The job this thread renders reads as running even before
             // kerfd has heard so.
-            let (status, progress) = match (rendering, job.status.as_str()) {
-                (Some((_, progress)), _) => ("running", *progress),
-                (None, "completed") => ("completed", 1.0),
-                (None, status) => (status, job.progress),
+            let (status, progress) = match (rendering, &job.status) {
+                (Some((_, progress)), _) => (RenderStatus::Running, *progress),
+                (None, RenderStatus::Completed) => (RenderStatus::Completed, 1.0),
+                (None, status) => (status.clone(), job.progress),
             };
             QueuedRender {
                 job_id: job.job_id.clone(),
@@ -341,7 +344,7 @@ pub(crate) fn queue_event(shared: &Shared, jobs: &[RenderJob]) -> Event {
                 quality: job.quality.clone(),
                 codec: job.codec.clone(),
                 sequence: job.sequence.clone(),
-                status: status.to_owned(),
+                status,
                 progress,
                 output_path: job.output_path.clone(),
                 error: job.error.clone(),
@@ -516,16 +519,14 @@ pub(crate) mod tests {
             let jobs = self.jobs.lock().unwrap();
             jobs.iter()
                 .find(|job| job.job_id == id)
-                .map(|job| job.status.clone())
+                .map(|job| job.status.to_string())
                 .unwrap_or_default()
         }
 
         fn set(&self, id: &str, status: &str) {
             for job in self.jobs.lock().unwrap().iter_mut() {
-                if job.job_id == id
-                    && !matches!(job.status.as_str(), "completed" | "failed" | "cancelled")
-                {
-                    job.status = status.into();
+                if job.job_id == id && !job.status.is_finished() {
+                    job.status = RenderStatus::from_name(status);
                 }
             }
         }
@@ -558,7 +559,7 @@ pub(crate) mod tests {
             ));
             let job = RenderJob {
                 job_id: id,
-                status: "queued".into(),
+                status: RenderStatus::Queued,
                 output_url: None,
                 output_path: Some(output.to_string_lossy().into_owned()),
                 error: None,

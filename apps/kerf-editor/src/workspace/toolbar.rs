@@ -8,7 +8,7 @@ use super::Workspace;
 use editor_finish::export::{ExportEvent, ExportView};
 use editor_session::commands::RunCommand;
 use editor_state::delivery::Quality;
-use editor_state::model::RenderJobShow;
+use editor_state::model::{RenderJobShow, RenderStatus};
 use editor_ui::icons::Icon;
 use editor_ui::motion;
 use editor_ui::theme::{self, layout, motion as scene, text};
@@ -313,7 +313,7 @@ pub fn running_words(
         .iter()
         .enumerate()
         .filter(|(_, job)| job.is_active())
-        .max_by_key(|(at, job)| (job.status == "running", *at))
+        .max_by_key(|(at, job)| (job.status == RenderStatus::Running, *at))
         .map(|(_, job)| job);
     if let Some(job) = latest {
         let quality = job.quality.as_deref().unwrap_or_default();
