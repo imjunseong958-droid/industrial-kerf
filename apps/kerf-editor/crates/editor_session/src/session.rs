@@ -351,8 +351,10 @@ const QUIT_WAITS: Duration = Duration::from_secs(5);
 /// The quit under way: when it stops waiting in [`settle_drawing`], and whether it has said that
 /// it stopped. The first call of a quit starts the time and the rest wait out what is left of
 /// it. The app keeps it, not the process: a test process quits many apps, one after another,
-/// and each has its own time. An app quits once (GPUI runs its quit hooks once), so the time is
-/// never left over from a quit before.
+/// and each has its own time. It stays with the app once the quit is over, which nothing here
+/// minds: GPUI takes a quit's hooks out as it runs them, and no app is quit a second time. A
+/// test that quit its app itself and then opened a session in it would find the time long over
+/// when the app quit again, and that session's wait would be none.
 struct QuitWait {
     until: Instant,
     said: bool,
