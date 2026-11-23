@@ -23,7 +23,7 @@ mod loudness;
 mod mix;
 mod timeline;
 
-pub use drawn::{drawing_settled, Drawers};
+pub use drawn::{drawing_settled, Drawers, OnFrame};
 pub use loudness::LEVEL_FLOOR_DB;
 
 pub use timeline::{

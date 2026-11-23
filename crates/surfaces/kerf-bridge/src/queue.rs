@@ -9,6 +9,11 @@
 //! each was queued. Cancelling a queued job takes it out of the queue;
 //! cancelling the running one stops its FFmpeg.
 //!
+//! A render draws its frames in this process, so it begins on the bridge's
+//! drawers (`Shared::drawers`) and holds them until it is over: closing the
+//! bridge cancels it, and whoever is about to exit waits the moment that
+//! takes rather than leave under the frames it was drawing.
+//!
 //! The `render_queue` event is kerfd's list of render jobs (the queued, the
 //! running and the newest finished, oldest first) with the running job's
 //! progress as this bridge sees it. The viewer's own preview renders are
@@ -19,6 +24,7 @@ use crate::event::{ErrorEvent, Event, Export, ExportStatus, QueuedRender, Render
 use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
+use kerf_playback::OnFrame;
 use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError, StartRenderOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
@@ -358,7 +364,14 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
                     .wait(state)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
-            if state.closed {
+            // A bridge being let go closes its drawers before its queue, so a job taken in
+            // between is left with the ones that wait: begun, it would be one nothing stops.
+            let drawing = if state.closed {
+                None
+            } else {
+                shared.drawers.begin()
+            };
+            let Some(drawing) = drawing else {
                 let left: Vec<Queued> = state.waiting.drain(..).collect();
                 drop(state);
                 for queued in left {
@@ -371,15 +384,15 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
                     }
                 }
                 return;
-            }
+            };
             let next = state.waiting.pop_front();
             if let Some(queued) = &next {
                 state.running = Some((queued.job.job_id.clone(), 0.0));
             }
-            next
+            next.map(|queued| (queued, drawing))
         };
-        if let Some(queued) = next {
-            render(&shared, &queued, &tx);
+        if let Some((queued, drawing)) = next {
+            render(&shared, &queued, &tx, drawing);
             shared.renders.lock().running = None;
             if let Err(error) = publish(&shared, queued.renders.as_ref(), &tx) {
                 log::warn!("the render queue was not shown again: {}", error.message);
@@ -389,8 +402,9 @@ pub(crate) fn worker(shared: Arc<Shared>, tx: Outbox) {
 }
 
 /// Render one job: `export {status: running}` with its progress, then
-/// `completed`, `failed` or `cancelled`.
-fn render(shared: &Shared, queued: &Queued, tx: &Outbox) {
+/// `completed`, `failed` or `cancelled`. `drawing` is held for as long as its
+/// frames are drawn.
+fn render(shared: &Shared, queued: &Queued, tx: &Outbox, drawing: OnFrame) {
     let job = &queued.job;
     emit(
         tx,
@@ -423,6 +437,8 @@ fn render(shared: &Shared, queued: &Queued, tx: &Outbox) {
                 ))));
             }
         });
+    // Its drawing threads have ended with it; what follows only tells of it.
+    drop(drawing);
     let mut done = job.clone();
     done.output_path = Some(queued.output.to_string_lossy().into_owned());
     match result {
@@ -697,6 +713,40 @@ pub(crate) mod tests {
         assert_eq!(fake.status("render-3"), "completed");
         shared.renders.close(&std::env::temp_dir());
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn closed_drawers_are_waited_for_while_a_job_renders_and_let_no_other_begin() {
+        let shared = shared();
+        let (tx, rx) = crate::wake::outbox(256);
+        let (fake, open) = Fake::gated();
+        let worker = {
+            let (shared, tx) = (shared.clone(), tx.clone());
+            std::thread::spawn(move || worker(shared, tx))
+        };
+        let renders: Arc<dyn Renders> = fake.clone();
+        for name in ["One", "Two"] {
+            submit(&shared, renders.clone(), &request("full", Some(name)), &tx).unwrap();
+        }
+        let mut seen = Vec::new();
+        wait_for(&rx, &mut seen, |e| {
+            e["status"] == "running" && e["jobId"] == "render-1"
+        });
+        // The bridge is let go: its drawers close before its queue does.
+        shared.drawers.close();
+        // What is about to exit is told a render is still drawing.
+        assert!(!kerf_playback::drawing_settled(Duration::from_millis(50)));
+        // The render ends, as a cancelled one does: the wait is over, and the job that
+        // waited is cancelled with kerfd in place of rendered.
+        open.send(()).unwrap();
+        assert!(kerf_playback::drawing_settled(Duration::from_secs(30)));
+        let ended = crate::tests_support::wait(Duration::from_secs(10), || {
+            worker.is_finished().then_some(())
+        });
+        assert!(ended.is_some(), "the render thread went on to another job");
+        assert_eq!(*fake.rendered.lock().unwrap(), ["render-1"]);
+        assert_eq!(fake.status("render-2"), "cancelled");
+        assert_eq!(shared.renders.waiting(), 0);
     }
 
     #[test]

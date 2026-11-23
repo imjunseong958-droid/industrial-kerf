@@ -53,6 +53,11 @@ const ROOM_TO_GROW: f64 = 0.6;
 /// draw one has it start bringing the device up on a thread of its own, which loads them
 /// ([`kerf_compose::gpu_settled`]). A process that exits meanwhile runs those libraries'
 /// destructors under the threads at work in them, and now and then dies of it as it ends.
+///
+/// They are not a playback's alone. A playback draws its frames through the ones it is given
+/// ([`PlaybackConfig::with_drawers`](crate::PlaybackConfig::with_drawers)), and whatever else
+/// their owner has the compositor draw in this process (a still, a thumbnail, a render)
+/// [`begin`](Self::begin)s on them too: a frame drawn without is one nothing waits for.
 #[derive(Clone, Debug, Default)]
 pub struct Drawers(Arc<Gate>);
 
@@ -69,8 +74,13 @@ struct GateState {
     closed: bool,
 }
 
-/// A frame being drawn, or the compositor being asked about one, counted until this is dropped.
-struct OnFrame(Drawers);
+/// What [`Drawers::begin`] gives: a frame being drawn, the compositor being asked about one, or
+/// a run of frames that ends soon after the drawers close (a render cancelled with them),
+/// counted until this is dropped. [`drawing_settled`] waits for it, so it is held only while
+/// the compositor is at work.
+#[derive(Debug)]
+#[must_use = "the frame is counted as being drawn only until this is dropped"]
+pub struct OnFrame(Drawers);
 
 /// The drawers closed while a frame of theirs was being drawn, for [`drawing_settled`] to wait
 /// for. One whose frames are done is forgotten the next time this is looked at.
@@ -79,7 +89,7 @@ static CLOSED: Mutex<Vec<Drawers>> = Mutex::new(Vec::new());
 impl Drawers {
     /// Count a frame as being drawn until what this returns is dropped. `None` once
     /// [`close`](Self::close)d: the frame is to be left undrawn, and the compositor unasked.
-    fn begin(&self) -> Option<OnFrame> {
+    pub fn begin(&self) -> Option<OnFrame> {
         let mut state = self.state();
         if state.closed {
             return None;
