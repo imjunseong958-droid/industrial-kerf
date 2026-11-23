@@ -8,6 +8,9 @@
 //! clip, seconds of it, so it is done off the worker that answers the
 //! editor, and its edit is one of the project like any other: `shot_followed`
 //! once it is in, or `error`.
+//!
+//! Each frame drawn for either begins on the bridge's drawers (`Shared::drawers`). Once the
+//! bridge is let go no more are, and a clip half followed makes no edit and no answer.
 
 use crate::event::{ErrorEvent, Event};
 use crate::wake::Outbox;
@@ -86,7 +89,13 @@ pub(crate) fn picture(
     let (shared, client, tx) = (shared.clone(), client.clone(), tx.clone());
     std::thread::spawn(move || {
         let drawn = opened(&shared, &client).and_then(|(revision, project)| {
-            let frame = kerf_shots::tracks::picture(&project, &clip, of.what())?;
+            let frame = {
+                // The bridge was let go: nobody is left to point on a picture.
+                let Some(_drawing) = shared.drawers.begin() else {
+                    return Ok(None);
+                };
+                kerf_shots::tracks::picture(&project, &clip, of.what())?
+            };
             let path = std::env::temp_dir().join(format!(
                 "kerf-shot-picture-{}-{}.png",
                 std::process::id(),
@@ -94,17 +103,18 @@ pub(crate) fn picture(
             ));
             kerf_engine::render::still::write_png(&frame, &path)
                 .map_err(|error| error.to_string())?;
-            Ok(Event::ShotPicture {
+            Ok(Some(Event::ShotPicture {
                 clip: clip.clone(),
                 of,
                 path,
                 width: frame.width,
                 height: frame.height,
                 revision,
-            })
+            }))
         });
         match drawn {
-            Ok(event) => crate::emit(&tx, event),
+            Ok(Some(event)) => crate::emit(&tx, event),
+            Ok(None) => {}
             Err(why) => failed(&tx, "shot_picture", &clip, of, why),
         }
     });
@@ -126,18 +136,26 @@ pub(crate) fn follow(
             outside,
         } = asked;
         let done = opened(&shared, &client).and_then(|(revision, project)| {
+            // A frame at a time: the frames not begun when the bridge is let go are left.
+            let drawing = || shared.drawers.begin();
             let read = match (of, points.as_slice()) {
-                (Of::Moves, [point]) => kerf_shots::tracks::moves(&project, &clip, *point),
+                (Of::Moves, [point]) => kerf_shots::tracks::moves(&project, &clip, *point, drawing),
                 (Of::Moves, _) => Err("a clip follows one point".to_owned()),
-                (Of::Matte, inside) => kerf_shots::tracks::matte(&project, &clip, inside, &outside),
+                (Of::Matte, inside) => {
+                    kerf_shots::tracks::matte(&project, &clip, inside, &outside, drawing)
+                }
             }?;
+            // Followed part of its way for a bridge let go meanwhile: no edit is made of that.
+            let Some(read) = read else {
+                return Ok(None);
+            };
             client
                 .apply_script_request("ui", &crate::key(), &read.script, revision)
                 .map_err(|error| error.message)?;
-            Ok(read)
+            Ok(Some(read))
         });
         match done {
-            Ok(read) => crate::emit(
+            Ok(Some(read)) => crate::emit(
                 &tx,
                 Event::ShotFollowed {
                     clip,
@@ -148,6 +166,7 @@ pub(crate) fn follow(
                     says: read.says(),
                 },
             ),
+            Ok(None) => {}
             Err(why) => failed(&tx, "shot_follow", &clip, of, why),
         }
     });

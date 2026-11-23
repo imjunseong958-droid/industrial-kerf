@@ -213,18 +213,27 @@ fn export(
     let mut running = request.event(PreviewStatus::Running);
     running.progress = Some(0.0);
     emit(tx, Event::Preview(running.clone()));
-    let result = kerf_runtime::run_render_job(
-        client,
-        &job,
-        &document,
-        &output,
-        request.quality == "preview",
-        |progress| {
-            // Progress is replaceable; never stall rendering behind a busy GUI.
-            running.progress = Some(progress);
-            let _ = tx.try_send(Event::Preview(running.clone()));
-        },
-    );
+    // Its frames are drawn in this process, so it begins on the bridge's drawers and holds
+    // them until it is over: the bridge cancels it as it closes, and whoever is about to
+    // exit waits for it to stop. For a bridge let go already it is not begun.
+    let result = match shared.drawers.begin() {
+        Some(_drawing) => kerf_runtime::run_render_job(
+            client,
+            &job,
+            &document,
+            &output,
+            request.quality == "preview",
+            |progress| {
+                // Progress is replaceable; never stall rendering behind a busy GUI.
+                running.progress = Some(progress);
+                let _ = tx.try_send(Event::Preview(running.clone()));
+            },
+        ),
+        None => Err(kerf_runtime::RuntimeError::new(
+            "CANCELLED",
+            "render job was cancelled",
+        )),
+    };
     if preview && let Ok(mut running) = shared.preview_cancel.lock() {
         *running = None;
         // A cancel that came as the render finished outlives the job.

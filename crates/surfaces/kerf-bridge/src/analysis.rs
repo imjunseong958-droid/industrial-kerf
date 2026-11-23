@@ -18,7 +18,8 @@
 //! - `scope_signal {time, sequence?}`: an HDR sequence's frame at `time` as the signal its master gets,
 //!   small, for the Finish tray's scopes to read through `Bridge::signal`, on a thread of its own:
 //!   only the newest request waits for one that runs. `scope_signal {status}` says when it starts or
-//!   stops being a sequence with one. An SDR sequence draws nothing here.
+//!   stops being a sequence with one. An SDR sequence draws nothing here. A frame begins on the
+//!   bridge's drawers (`Shared::drawers`), so none is drawn once the bridge is let go.
 
 use crate::event::{
     ErrorEvent, Event, IndexRange, LoudnessEvent, LoudnessReady, MediaIndexEvent, MediaInfo,
@@ -188,7 +189,13 @@ fn draw_signal(shared: &Shared, tx: &Outbox, time: f64, sequence: Option<&str>) 
     }
     .map_or(SIGNAL_WIDTH, |found| f64::from(found.width.max(1)));
     let at = kerf_model::Time::from_seconds(time.max(0.0)).unwrap_or(kerf_model::Time::ZERO);
-    let frame = drawing.2.frame16(at, (SIGNAL_WIDTH / width).min(1.0));
+    let frame = {
+        // The bridge was let go: nobody reads a signal any more.
+        let Some(_drawing) = shared.drawers.begin() else {
+            return;
+        };
+        drawing.2.frame16(at, (SIGNAL_WIDTH / width).min(1.0))
+    };
     *lock(&shared.analysis.signal_frame) = Some(SignalFrame {
         pixels: frame.rgba.into(),
         width: frame.width,
@@ -510,4 +517,34 @@ fn index(shared: &Shared, media: &str) -> Result<Event, String> {
             .map_err(|error| error.to_string())?,
     };
     Ok(index_event(media, found.duration.seconds(), &index))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_bridge_draws_no_signal() {
+        // A solid, which needs no media to draw, on an HDR sequence.
+        let project = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Signal\"\n\
+             sequence s1 rate=24 size=64x36 audio=48000 color=rec2100-pq\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ffffff\n",
+        )
+        .expect("the document");
+        let shared = crate::tests_support::shared(&std::env::temp_dir());
+        *lock(&shared.model) = Some(project);
+        let (tx, _rx) = crate::wake::outbox(8);
+        let drawn = || {
+            draw_signal(&shared, &tx, 0.0, None);
+            lock(&shared.analysis.signal_frame).take().is_some()
+        };
+        // Open, it draws the frame asked for.
+        assert!(drawn());
+        // Its drawers closed, as the bridge closes them when it is let go, it draws none.
+        shared.drawers.close();
+        assert!(!drawn());
+    }
 }

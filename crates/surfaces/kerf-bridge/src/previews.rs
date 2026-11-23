@@ -10,6 +10,8 @@
 //! of a clip of footage, in the order of the stack and by the code a render
 //! runs; on a clip with no file of its own (a title, a nested sequence) and
 //! for generators, Kerf's compositor draws the picture, as playback does.
+//! Like a frame of playback's, each of those begins on the bridge's drawers
+//! (`Shared::drawers`): once the bridge is let go a batch draws no more.
 
 use crate::event::{EffectPreview, Event};
 use crate::wake::Outbox;
@@ -19,6 +21,7 @@ use kerf_model::{
     Catalog, Clip, Content, Effect, FxDef, FxKind, Id, Param, ParamType, Params, Project, Rgba,
     Sequence, Time, Track, TrackKind, Value,
 };
+use kerf_playback::Drawers;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as Json};
 use std::sync::atomic::Ordering;
@@ -210,13 +213,17 @@ fn find_clip<'a>(project: &'a Project, id: &str) -> Option<(&'a Sequence, &'a Cl
     Some((&project.sequences[at.sequence], project.clip_at(at)))
 }
 
-/// Draw `sequence` of `project` at `at`, `width` pixels wide (even).
+/// Draw `sequence` of `project` at `at`, `width` pixels wide (even). Nothing once `drawers`
+/// are closed.
 fn compose(
+    drawers: &Drawers,
     project: &Project,
     sequence: &Sequence,
     at: Time,
     width: u32,
 ) -> Option<(u32, u32, Vec<u8>)> {
+    // Asked first: with the drawers closed there is no frame to build a compositor for.
+    let _drawing = drawers.begin()?;
     let compositor = Compositor::new(
         project,
         Catalog::builtin(),
@@ -285,6 +292,7 @@ pub(crate) fn resample(rgba: &[u8], from: (u32, u32), to: (u32, u32)) -> Option<
 /// `clip` alone on `sequence` of `project`, with `effects` in place of its
 /// own, drawn by the compositor at `at`.
 fn compose_clip(
+    drawers: &Drawers,
     project: &Project,
     sequence: &Sequence,
     clip: &Clip,
@@ -302,12 +310,13 @@ fn compose_clip(
     lone.tracks = vec![track];
     lone.markers.clear();
     let lone = lone.clone();
-    compose(&project, &lone, at, width)
+    compose(drawers, &project, &lone, at, width)
 }
 
 /// Generator `def` with `given` parameters alone on black, on a canvas
 /// shaped like `like`, at its first frame.
 fn compose_generator(
+    drawers: &Drawers,
     def: &FxDef,
     given: Option<&Map<String, Json>>,
     like: Option<&Sequence>,
@@ -354,7 +363,7 @@ fn compose_generator(
         sequences: vec![sequence.clone()],
         ..Project::default()
     };
-    compose(&project, &sequence, Time::ZERO, width)
+    compose(drawers, &project, &sequence, Time::ZERO, width)
 }
 
 /// The clip's picture at `at`, decoded from its media, `width` pixels wide.
@@ -449,8 +458,8 @@ fn on_picture(
 }
 
 /// Emit a preview of each entry of `request`. Stops when a newer request
-/// than `generation` arrives. A clip that is not in the project is an
-/// error only when an effect needs its picture.
+/// than `generation` arrives, and when the bridge closes. A clip that is not
+/// in the project is an error only when an effect needs its picture.
 pub(crate) fn run(
     shared: &Shared,
     generation: u64,
@@ -467,7 +476,9 @@ pub(crate) fn run(
     let width = request.width.clamp(16, MAX_WIDTH) & !1;
     let mut picture: Option<Option<Picture>> = None;
     for entry in &request.effects {
-        if shared.previews.load(Ordering::SeqCst) != generation {
+        if shared.closed.load(Ordering::SeqCst)
+            || shared.previews.load(Ordering::SeqCst) != generation
+        {
             return Ok(());
         }
         let Some(def) = Catalog::builtin().fx(entry.fx()) else {
@@ -482,7 +493,7 @@ pub(crate) fn run(
                 let like = found
                     .map(|(sequence, _)| sequence)
                     .or(project.sequences.first());
-                compose_generator(def, entry.params(), like, width)
+                compose_generator(&shared.drawers, def, entry.params(), like, width)
             }
             Plan::Effect => {
                 let (sequence, clip) =
@@ -502,7 +513,15 @@ pub(crate) fn run(
                         let at = Time::from_seconds(request.at)
                             .unwrap_or(Time::ZERO)
                             .clamp(clip.start, clip.end() - sequence.rate.frame_duration());
-                        compose_clip(&project, sequence, clip, effects, at, width)
+                        compose_clip(
+                            &shared.drawers,
+                            &project,
+                            sequence,
+                            clip,
+                            effects,
+                            at,
+                            width,
+                        )
                     }
                 }
             }
@@ -533,5 +552,33 @@ mod tests {
         };
         run(&shared, 1, &request, &tx).unwrap();
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_closed_bridge_draws_no_preview() {
+        let thumbnail = Request {
+            clip: String::new(),
+            at: 0.0,
+            effects: vec![PreviewEffect::Id("solid".into())],
+            width: 64,
+            key: None,
+        };
+        let batch = |shared: &Shared| {
+            *shared.model.lock().unwrap() = Some(kerf_model::Project::default());
+            let (tx, rx) = crate::wake::outbox(8);
+            run(shared, 0, &thumbnail, &tx).unwrap();
+            rx.try_recv().is_ok()
+        };
+        // Open, it draws the thumbnail asked for.
+        let shared = crate::tests_support::shared(&std::env::temp_dir());
+        assert!(batch(&shared));
+        // Its drawers closed, as the bridge closes them when it is let go, the compositor
+        // draws nothing for it.
+        shared.drawers.close();
+        assert!(!batch(&shared));
+        // And a batch stops at a closed bridge, whatever would have drawn its pictures.
+        let shared = crate::tests_support::shared(&std::env::temp_dir());
+        shared.closed.store(true, Ordering::SeqCst);
+        assert!(!batch(&shared));
     }
 }

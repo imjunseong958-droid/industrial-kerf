@@ -11,6 +11,7 @@
 use kerf_engine::render::still::Frame;
 use kerf_model::{ClipAt, Project};
 use kerf_track::{Followed, FollowedObject, Hints};
+use std::cell::Cell;
 
 /// The most frames followed at a time.
 pub const MOST_FRAMES: i64 = 1800;
@@ -166,7 +167,7 @@ impl Read {
 
 /// The frames of clip `clip` as its sequence shows them for `what`. The project is one whose
 /// media say where their files are (`kerf_runtime::resolve_media_paths`), here and below.
-struct Seen {
+struct Seen<'a, G> {
     drawer: kerf_engine::render::still::Compositor,
     at: ClipAt,
     /// The clip's first frame on its sequence, how many frames it runs for, and what its
@@ -175,10 +176,19 @@ struct Seen {
     count: usize,
     scale: f64,
     rate: kerf_model::Rate,
+    /// Asked before each frame is drawn, and what it gives held until the frame is.
+    drawing: &'a dyn Fn() -> Option<G>,
+    /// A frame was not let be drawn, so what was read is not the clip's whole run.
+    stopped: Cell<bool>,
 }
 
-impl Seen {
-    fn of(project: &Project, clip: &str, what: For) -> Result<Self, String> {
+impl<'a, G> Seen<'a, G> {
+    fn of(
+        project: &Project,
+        clip: &str,
+        what: For,
+        drawing: &'a dyn Fn() -> Option<G>,
+    ) -> Result<Self, String> {
         let at = project.locate(clip).ok_or_else(|| project.no_clip(clip))?;
         let mut seen = project.clone();
         let found = seen.clip_at_mut(at);
@@ -218,19 +228,37 @@ impl Seen {
             count: count as usize,
             scale: (WIDTH / f64::from(sequence.width.max(1))).min(1.0),
             rate,
+            drawing,
+            stopped: Cell::new(false),
         })
     }
 
-    fn frame(&self, index: usize) -> Frame {
+    /// Frame `index` of the clip, whatever `drawing` says.
+    fn draw(&self, index: usize) -> Frame {
         self.drawer
             .frame(self.rate.time_of(self.first + index as i64), self.scale)
     }
 
+    /// Frame `index` of the clip; none once `drawing` lets no frame begin.
+    fn frame(&self, index: usize) -> Option<Frame> {
+        let Some(_drawing) = (self.drawing)() else {
+            self.stopped.set(true);
+            return None;
+        };
+        Some(self.draw(index))
+    }
+
+    /// The frames as a follower reads them. It takes one it is not given for where the clip is
+    /// lost, so what it followed is looked at only while nothing [`Self::stopped`] it.
     fn read(&self) -> impl FnMut(usize) -> Option<(usize, usize, Vec<u8>)> + '_ {
         |index| {
-            let frame = self.frame(index);
+            let frame = self.frame(index)?;
             Some((frame.width as usize, frame.height as usize, frame.rgba))
         }
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped.get()
     }
 
     fn width(&self, project: &Project) -> f64 {
@@ -239,9 +267,10 @@ impl Seen {
 }
 
 /// The picture a person points at for `what`: the sequence of `clip` on the clip's first frame,
-/// as it is followed.
+/// as it is followed. It is one frame, drawn before this returns: whoever keeps frames from
+/// being drawn does so around the call.
 pub fn picture(project: &Project, clip: &str, what: For) -> Result<Frame, String> {
-    Ok(Seen::of(project, clip, what)?.frame(0))
+    Ok(Seen::of(project, clip, what, &|| Some(()))?.draw(0))
 }
 
 fn within(points: &[[f64; 2]]) -> Result<(), String> {
@@ -259,10 +288,23 @@ fn within(points: &[[f64; 2]]) -> Result<(), String> {
 /// Have `clip` follow the point of its sequence's picture that is at `point` on the clip's first
 /// frame, 0 to 1 across the frame and down it, for as long as the clip runs: its `x` and `y`,
 /// keyed. What reads where the clip goes (`moves=<clip>`) then reads where that point went.
-pub fn moves(project: &Project, clip: &str, point: [f64; 2]) -> Result<Read, String> {
+///
+/// A clip is followed through as many as [`MOST_FRAMES`] frames, each drawn in this process,
+/// so whoever asks says when one may be: `drawing` is asked before each frame, and what it
+/// gives is held until the frame is drawn. Once it gives nothing no more of them are drawn and
+/// there is nothing read (`None`): a clip followed part of its way is no answer.
+pub fn moves<G>(
+    project: &Project,
+    clip: &str,
+    point: [f64; 2],
+    drawing: impl Fn() -> Option<G>,
+) -> Result<Option<Read>, String> {
     within(&[point])?;
-    let seen = Seen::of(project, clip, For::Moves)?;
+    let seen = Seen::of(project, clip, For::Moves, &drawing)?;
     let mut followed = kerf_track::follow(seen.count, point, seen.read());
+    if seen.stopped() {
+        return Ok(None);
+    }
     let mut as_a_thing = false;
     // A point is followed by the detail around it, and a thing of one colour, a ball, has none:
     // where the point cannot be followed at all, the thing it is on is cut out and followed by
@@ -277,6 +319,9 @@ pub fn moves(project: &Project, clip: &str, point: [f64; 2]) -> Result<Read, Str
             },
             seen.read(),
         );
+        if seen.stopped() {
+            return Ok(None);
+        }
         // A floor or a wall is cut out as readily as a ball, and its middle is no place of
         // anything: only what is small in the frame is a thing that goes somewhere.
         if cut.areas.iter().all(|area| *area <= MOST_OF_FRAME) {
@@ -291,13 +336,13 @@ pub fn moves(project: &Project, clip: &str, point: [f64; 2]) -> Result<Read, Str
         ));
     }
     let (kept, x, y) = point_keys(&followed, 0, seen.width(project));
-    Ok(Read {
+    Ok(Some(Read {
         script: format!("set {clip} x={x} y={y}"),
         frames: followed.points.len(),
         keyframes: kept.len(),
         lost_at: followed.lost_at,
         as_a_thing,
-    })
+    }))
 }
 
 /// A followed object as a followed point: the middle of the box around it on each frame, up to
@@ -342,25 +387,30 @@ fn middles(object: &FollowedObject) -> Followed {
 /// Cut out of `clip` the thing its sequence's picture shows at `inside` on the clip's first
 /// frame, and not at `outside`, as a mask that holds to it for as long as the clip runs. What
 /// draws the clip's matte (`render … matte=<clip>`) then draws that thing in white. It goes by
-/// colour and edges; an agent can pick a trained model with `look`.
-pub fn matte(
+/// colour and edges; an agent can pick a trained model with `look`. Its frames are drawn while
+/// `drawing` lets them begin, as those of [`moves`] are, and nothing is read once it does not.
+pub fn matte<G>(
     project: &Project,
     clip: &str,
     inside: &[[f64; 2]],
     outside: &[[f64; 2]],
-) -> Result<Read, String> {
+    drawing: impl Fn() -> Option<G>,
+) -> Result<Option<Read>, String> {
     if inside.is_empty() {
         return Err("point at what to cut out: at least one point on it".to_owned());
     }
     within(inside)?;
     within(outside)?;
-    let seen = Seen::of(project, clip, For::Matte)?;
+    let seen = Seen::of(project, clip, For::Matte, &drawing)?;
     let hints = Hints {
         inside: inside.to_vec(),
         outside: outside.to_vec(),
         bbox: None,
     };
     let followed = kerf_track::follow_object(seen.count, &hints, seen.read());
+    if seen.stopped() {
+        return Ok(None);
+    }
     if followed.outlines.is_empty() {
         return Err(format!(
             "nothing was cut out at those points on the first frame of `{clip}`: point at the thing itself, and off it at what is taken for it"
@@ -383,11 +433,11 @@ pub fn matte(
     } else {
         "add"
     };
-    Ok(Read {
+    Ok(Some(Read {
         script: format!("mask {clip} {verb} {MASK} points={}", cut.points),
         frames: cut.followed.outlines.len(),
         keyframes: cut.kept.len(),
         lost_at: cut.followed.lost_at,
         as_a_thing: false,
-    })
+    }))
 }
