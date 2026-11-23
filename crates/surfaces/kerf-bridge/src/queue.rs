@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 
 /// `export {quality: preview|full|review|master, codec?: h264|hevc|
-/// prores_hq, sequence?, output?, name?}`.
+/// hevc_hdr|prores_hq, sequence?, output?, name?}`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct ExportRequest {
     /// `preview` (a draft from proxies), `full`, `review` (full-size H.264 at 12 Mb/s) or
