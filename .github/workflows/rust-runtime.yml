@@ -150,9 +150,14 @@ jobs:
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
   # The editor: a workspace of its own (its manifest says why), so its lint
-  # and tests run here, not in the workspace's above. Then it is started as a
-  # desktop starts it: on a virtual X server, drawn by Mesa's lavapipe in
-  # place of a GPU, with kerfd beside it.
+  # and tests run here, not in the workspace's above. Before them it is
+  # started as a desktop starts it: on a virtual X server, drawn by Mesa's
+  # lavapipe in place of a GPU, with kerfd beside it. Before, because the
+  # tests build target/debug/kerf-editor again: their gpui has `test-support`
+  # (a dev-dependency's feature, which Cargo gives the whole build once
+  # tests are in it), and that editor is not the one a build makes or a
+  # package carries. Its gpui never awaits what a quit handler returns, and
+  # says "timed out waiting on app_will_quit" each time the editor quits.
   linux-editor:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
@@ -168,10 +173,6 @@ jobs:
           save-if: false
       - name: Build the editor and the daemon
         run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
-      - name: Lint the editor
-        run: cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targets -- -D warnings
-      - name: Test the editor
-        run: cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
       # It has to open its window and quit on its own when asked to. Xvfb
       # needs the Composite extension, or the editor's Vulkan frames come
       # out black.
@@ -203,6 +204,10 @@ jobs:
           xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
             target/debug/kerf-editor "$project" --quit-after-ms 8000
           test -f "$project/.kerf-runtime.checkpoint.json"
+      - name: Lint the editor
+        run: cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targets -- -D warnings
+      - name: Test the editor
+        run: cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
 
   windows-runtime:
     runs-on: windows-latest
