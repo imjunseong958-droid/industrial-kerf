@@ -134,6 +134,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use viewer::media_worker;
 use viewer::preview::{cancel_preview, discard_previews, exit_preview, stop_preview};
 use wake::Outbox;
@@ -203,6 +204,9 @@ struct Shared {
     analysis: analysis::Analysis,
     /// The workflow last said of each step a graph has open.
     workflows: workflows::Said,
+    /// What lets a frame be drawn in this process for the bridge, so that closing it can wait
+    /// for the ones under way.
+    drawers: kerf_playback::Drawers,
 }
 
 /// One project open in the editor: commands in through [`Bridge::send`], events out through
@@ -391,6 +395,7 @@ impl Bridge {
             renders: queue::Queue::default(),
             analysis: analysis::Analysis::default(),
             workflows: Default::default(),
+            drawers: Default::default(),
         });
         {
             let directory = directory.clone();
@@ -453,6 +458,17 @@ impl Bridge {
             events,
             shared,
         }
+    }
+
+    /// Close the bridge as letting it go does, then wait, for at most `within`, for the frames
+    /// its playback was drawing and for the GPU one of them may have begun to bring up: `false`
+    /// when either is still under way. For the moment before the process exits, which now and
+    /// then dies as it ends when it exits under a thread at work in the GPU's libraries (see
+    /// [`kerf_playback::Drawers`]).
+    pub fn close(self, within: Duration) -> bool {
+        let drawers = self.shared.drawers.clone();
+        drop(self);
+        drawers.wait(within)
     }
 
     /// Queue a command (see [`Command`] for every command). `false` means it was refused: it
@@ -703,6 +719,8 @@ impl Drop for Bridge {
     /// Close the bridge and signal the workers to shut down, without blocking the editor.
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
+        // No frame begins from here on; [`Bridge::close`] waits for those that had.
+        self.shared.drawers.close();
         // Nobody would see a preview still rendering, or the one playing. The
         // process may exit before the media worker stops, so the files go now;
         // one a playback worker still holds open is left for the media worker.

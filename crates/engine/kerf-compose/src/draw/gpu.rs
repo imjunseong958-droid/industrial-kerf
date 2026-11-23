@@ -9,7 +9,8 @@ use kerf_fx::video::catalog::Headroom;
 use kerf_fx::video::instance::GpuEffect;
 use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Once;
+use std::sync::{Condvar, Mutex, MutexGuard, Once, PoisonError};
+use std::time::Duration;
 
 /// Frames with fewer pixels than this gain nothing: the CPU draws them before a GPU round trip is
 /// over.
@@ -26,6 +27,48 @@ fn smallest_on_gpu_of(width: u32, height: u32) -> f64 {
         scale = (scale * 1.01).min(1.0);
     }
     scale
+}
+
+/// Whether the thread that builds the device and its kernels is at it, and what rings when it
+/// is done.
+static WARMING: Mutex<bool> = Mutex::new(false);
+static WARMED: Condvar = Condvar::new();
+
+fn warming() -> MutexGuard<'static, bool> {
+    WARMING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The device being built, from when this is made until it is dropped.
+struct Warming;
+
+impl Warming {
+    fn begin() -> Self {
+        *warming() = true;
+        Self
+    }
+}
+
+impl Drop for Warming {
+    fn drop(&mut self) {
+        *warming() = false;
+        WARMED.notify_all();
+    }
+}
+
+/// Wait while the device and its kernels are being built, for at most `within`: `false` when
+/// they still are.
+///
+/// A viewer's first frame large enough for the GPU starts building them, once, on a thread of
+/// their own, and that thread loads the GPU's libraries: the Vulkan loader, each driver it
+/// finds, and LLVM with Mesa's. A process that exits meanwhile runs those libraries'
+/// destructors under it, and now and then dies of it as it ends (a test binary whose tests had
+/// all passed, of SIGSEGV). So whoever is about to exit waits here, once no frame of its own
+/// can begin.
+pub fn gpu_settled(within: Duration) -> bool {
+    let (still, _) = WARMED
+        .wait_timeout_while(warming(), within, |still| *still)
+        .unwrap_or_else(PoisonError::into_inner);
+    !*still
 }
 
 /// The device, once it and every kernel are built.
@@ -156,10 +199,14 @@ impl Drawing {
             // Building the kernels takes a second or two, which a viewer should not wait for: the
             // CPU draws until they are ready.
             Accel::Auto => {
-                static WARMING: Once = Once::new();
+                static STARTED: Once = Once::new();
                 static READY: AtomicBool = AtomicBool::new(false);
-                WARMING.call_once(|| {
-                    std::thread::spawn(|| {
+                STARTED.call_once(|| {
+                    // Counted from here, so that [`gpu_settled`] never finds it between
+                    // started and running.
+                    let warming = Warming::begin();
+                    std::thread::spawn(move || {
+                        let _warming = warming;
                         READY.store(ready_gpu().is_some(), Ordering::Release);
                     });
                 });

@@ -58,6 +58,8 @@ mod stack;
 mod three_d;
 mod titles;
 
+pub use gpu::gpu_settled;
+
 use builder::*;
 use effects::*;
 use geometry::*;

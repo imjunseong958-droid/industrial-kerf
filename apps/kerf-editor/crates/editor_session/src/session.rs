@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::pin::{pin, Pin};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::task::Poll;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// How long Kerf's edits to a first cut are quiet before the cut renders
 /// by itself; on a change reel's Before side, how long the seek has to
@@ -345,6 +345,12 @@ impl EventEmitter<Change> for Session {}
 /// The most events one drain takes, so the window keeps drawing between them.
 const DRAIN_MOST: usize = 256;
 
+/// The longest quitting waits for the picture a session is drawing, and for the GPU its first
+/// picture began to bring up. A process that exits under a thread at work in the GPU's libraries
+/// now and then dies as it ends, most of all while they load, which takes a second or two.
+/// Past this the editor quits anyway, as it always did.
+const QUIT_WAITS: Duration = Duration::from_secs(5);
+
 /// What the pump does after a drain.
 enum Pump {
     /// Events are left over: drain again on the next turn, without waiting.
@@ -426,9 +432,15 @@ impl Session {
                 chosen_mask: None,
                 kerfd: kerfd.clone(),
                 // Quitting closes the bridge as closing the window does: the
-                // render running stops, the queued ones are cancelled.
+                // render running stops, the queued ones are cancelled. It
+                // waits for the picture being drawn, too, since the process
+                // exits next (see `QUIT_WAITS`).
                 _on_quit: cx.on_app_quit(|session: &mut Session, _| {
-                    session.bridge.take();
+                    if let Some(bridge) = session.bridge.take()
+                        && !bridge.close(QUIT_WAITS)
+                    {
+                        log::warn!("quitting while a picture is drawn or the GPU brought up");
+                    }
                     async {}
                 }),
                 link: None,
