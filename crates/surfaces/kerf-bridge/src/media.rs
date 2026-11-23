@@ -128,6 +128,16 @@ pub(crate) fn make(
     crate::emit(tx, making(id, plan.take, ""));
     let (shared, commands, tx, id) = (shared.clone(), commands.clone(), tx.clone(), id.to_owned());
     thread::spawn(move || {
+        // A making draws in this process (the guide a model follows), so it begins on the
+        // bridge's drawers and holds them until it is over: a bridge let go asks its program
+        // to end, and what is about to exit waits for it to have ended. Held to the end of
+        // the thread, past what it says of how it went.
+        let Some(_drawing) = shared.drawers.begin() else {
+            if let Ok(mut makings) = shared.makings.lock() {
+                makings.remove(&id);
+            }
+            return crate::emit(&tx, Event::MediaMakeCancelled { media: id });
+        };
         // The takes made so far, the last of which the media becomes.
         let mut last_made: Option<kerf_engine::recipe::Made> = None;
         let mut ended = Ok(());
