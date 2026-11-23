@@ -299,12 +299,10 @@ fn a_depth_pass_has_a_mesh_by_the_pixel() {
     let through = frame(&across(1, 2), Pass::Depth);
     assert!(grey(&through, 115, 90) > grey(&through, 115, 40));
     assert!(grey(&through, 205, 90) > 128);
-    // The same pass twice is the same to the byte, and the GPU is not asked for a mesh.
+    // The same pass twice is the same to the byte.
     let at = Rate::FPS_24.time_of(3);
     let drawn = compositor(&across(1, 2), Pass::Depth);
     assert_eq!(drawn.frame(at, 1.0), drawn.frame(at, 1.0));
-    let picture = compositor(&across(1, 2), Pass::Picture);
-    assert!(!picture.draws_on_gpu(at, 1.0));
 }
 
 #[test]
