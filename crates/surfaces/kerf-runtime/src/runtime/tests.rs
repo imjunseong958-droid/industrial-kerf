@@ -1218,3 +1218,52 @@ fn render_progress_is_not_journaled_and_finished_jobs_are_bounded() {
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
 }
+
+/// What `update_job` refuses, each by its own code: a status kerfd has no name for, as a
+/// client of another build may send one; a progress that is no fraction; and another end
+/// for a job that has ended.
+#[test]
+fn a_job_update_kerfd_cannot_take_is_refused_by_its_own_code() {
+    let root = std::env::temp_dir().join(format!("kerf-runtime-job-update-{}", unique_id()));
+    // Off the wire the name still reads: it is refused as a status, not as a request kerfd
+    // cannot read, and before the job is looked for. In a folder of its own: the runtime
+    // that answers lets go of its folder a moment after the answer.
+    let request = json!({
+        "protocolVersion": 1, "id": "u", "operation": "update_job",
+        "jobId": "none", "status": "paused", "error": null, "outputUrl": null,
+    });
+    let mut output = Vec::new();
+    run_stdio(
+        &root.join("wire"),
+        std::io::Cursor::new(format!("{request}\n")),
+        &mut output,
+    )
+    .unwrap();
+    let response: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(response["error"]["code"], "INVALID_RENDER_STATUS");
+
+    let mut runtime = Runtime::open(&root.join("jobs")).unwrap();
+    let (job, _, _) = runtime
+        .start_render_range("preview", None, None, None)
+        .unwrap();
+    let id = job.job_id.as_str();
+    let refused = runtime
+        .update_job(id, RenderStatus::Running, None, None, Some(2.0))
+        .unwrap_err();
+    assert_eq!(refused.code.as_str(), "INVALID_RENDER_PROGRESS");
+    runtime
+        .update_job(id, RenderStatus::Completed, None, None, None)
+        .unwrap();
+    let refused = runtime
+        .update_job(id, RenderStatus::Failed, Some("late".into()), None, None)
+        .unwrap_err();
+    assert_eq!(refused.code.as_str(), "RENDER_STATE_CONFLICT");
+    // The same end said again is no conflict, and the job keeps how it ended.
+    runtime
+        .update_job(id, RenderStatus::Completed, None, None, None)
+        .unwrap();
+    let kept = runtime.render_job(id).unwrap();
+    assert_eq!((kept.status.as_str(), kept.error), ("completed", None));
+    drop(runtime);
+    let _ = fs::remove_dir_all(root);
+}
