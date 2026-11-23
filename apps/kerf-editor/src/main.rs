@@ -285,9 +285,10 @@ fn main() {
         .detach();
         // That window's session is let go before the quit comes, and its
         // bridge with it, so its own wait for the picture being drawn never
-        // runs: the app waits here.
-        cx.on_app_quit(|_| {
-            session::settle_drawing();
+        // runs: the app waits here, within the one limit the sessions still
+        // open wait in.
+        cx.on_app_quit(|cx| {
+            session::settle_drawing(cx);
             async {}
         })
         .detach();

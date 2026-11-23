@@ -345,8 +345,20 @@ impl EventEmitter<Change> for Session {}
 /// The most events one drain takes, so the window keeps drawing between them.
 const DRAIN_MOST: usize = 256;
 
-/// The longest [`settle_drawing`] waits each time it is called.
+/// The longest one quit waits in [`settle_drawing`], over all its calls together.
 const QUIT_WAITS: Duration = Duration::from_secs(5);
+
+/// The quit under way: when it stops waiting in [`settle_drawing`], and whether it has said that
+/// it stopped. The first call of a quit starts the time and the rest wait out what is left of
+/// it. The app keeps it, not the process: a test process quits many apps, one after another,
+/// and each has its own time. An app quits once (GPUI runs its quit hooks once), so the time is
+/// never left over from a quit before.
+struct QuitWait {
+    until: Instant,
+    said: bool,
+}
+
+impl Global for QuitWait {}
 
 /// Wait, as the app quits, for the pictures the sessions already let go were still drawing, and
 /// for the GPU one of them began to bring up. A process that exits under a thread at work in
@@ -354,9 +366,20 @@ const QUIT_WAITS: Duration = Duration::from_secs(5);
 /// second or two. Past [`QUIT_WAITS`] the editor quits anyway, as it always did.
 ///
 /// Each session calls this when the app quits, having let its bridge go. A session whose window
-/// was the last to close is gone before then, so the app calls it too.
-pub fn settle_drawing() {
-    if !kerf_bridge::drawing_settled(QUIT_WAITS) {
+/// was the last to close is gone before then, so the app calls it too. GPUI runs those hooks
+/// one after another, and they share the one limit: however many projects are open, a quit
+/// waits [`QUIT_WAITS`] at most, and says once that it gave up.
+pub fn settle_drawing(cx: &mut App) {
+    if !cx.has_global::<QuitWait>() {
+        cx.set_global(QuitWait {
+            until: Instant::now() + QUIT_WAITS,
+            said: false,
+        });
+    }
+    let quit = cx.global_mut::<QuitWait>();
+    let left = quit.until.saturating_duration_since(Instant::now());
+    if !kerf_bridge::drawing_settled(left) && !quit.said {
+        quit.said = true;
         log::warn!("quitting while a picture is drawn or the GPU brought up");
     }
 }
@@ -445,9 +468,9 @@ impl Session {
                 // render running stops, the queued ones are cancelled. It
                 // waits for the picture being drawn, too, since the process
                 // exits next.
-                _on_quit: cx.on_app_quit(|session: &mut Session, _| {
+                _on_quit: cx.on_app_quit(|session: &mut Session, cx| {
                     session.bridge.take();
-                    settle_drawing();
+                    settle_drawing(cx);
                     async {}
                 }),
                 link: None,
