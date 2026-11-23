@@ -2,7 +2,7 @@
 //!
 //! A proposal says who made it, and a revision when it was made.
 
-use crate::RuntimeError;
+use crate::{ErrorCode, RuntimeError};
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -47,7 +47,7 @@ impl Author {
     }
 
     pub(crate) fn validate(&self) -> Result<(), RuntimeError> {
-        let invalid = |message: &str| RuntimeError::new("INVALID_AUTHOR", message);
+        let invalid = |message: &str| RuntimeError::new(ErrorCode::InvalidAuthor, message);
         if !AUTHOR_KINDS.contains(&self.kind.as_str()) {
             return Err(invalid("author kind must be kerf, mcp, person, or qc"));
         }

@@ -26,7 +26,7 @@ use crate::wake::Outbox;
 use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
 use kerf_playback::OnFrame;
-use kerf_runtime::{RenderJob, RuntimeClient, RuntimeError, StartRenderOptions};
+use kerf_runtime::{ErrorCode, RenderJob, RuntimeClient, RuntimeError, StartRenderOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -451,7 +451,7 @@ fn render(shared: &Shared, queued: &Queued, tx: &Outbox, drawing: OnFrame) {
                 1.0,
             ))),
         ),
-        Err(error) if error.code == "CANCELLED" => {
+        Err(error) if error.code == ErrorCode::Cancelled => {
             if shared.renders.lock().cancelled.insert(job.job_id.clone()) {
                 emit(
                     tx,
@@ -538,7 +538,7 @@ pub(crate) mod tests {
         ) -> Result<(RenderJob, String, PathBuf), RuntimeError> {
             if options.quality == "nope" {
                 return Err(RuntimeError::new(
-                    "INVALID_RENDER_QUALITY",
+                    ErrorCode::InvalidRenderQuality,
                     "quality must be preview, full, review, or master",
                 ));
             }
@@ -590,7 +590,7 @@ pub(crate) mod tests {
             jobs.iter()
                 .find(|job| job.job_id == job_id)
                 .cloned()
-                .ok_or_else(|| RuntimeError::new("RENDER_NOT_FOUND", "render job not found"))
+                .ok_or_else(|| RuntimeError::new(ErrorCode::RenderNotFound, "render job not found"))
         }
 
         fn render(
@@ -605,7 +605,10 @@ pub(crate) mod tests {
             progress(0.5);
             loop {
                 if self.status(&job.job_id) == "cancelled" {
-                    return Err(RuntimeError::new("CANCELLED", "render job was cancelled"));
+                    return Err(RuntimeError::new(
+                        ErrorCode::Cancelled,
+                        "render job was cancelled",
+                    ));
                 }
                 let gate = self.gate.lock().unwrap();
                 let opened = gate
@@ -756,7 +759,7 @@ pub(crate) mod tests {
         let (tx, _rx) = crate::wake::outbox(16);
         let fake = Arc::new(Fake::default());
         let error = submit(&shared, fake.clone(), &request("nope", None), &tx).unwrap_err();
-        assert_eq!(error.code, "INVALID_RENDER_QUALITY");
+        assert_eq!(error.code.as_str(), "INVALID_RENDER_QUALITY");
         assert_eq!(shared.renders.waiting(), 0);
         let event = serde_json::to_value(refused(&tx, "export", &error)).unwrap();
         assert_eq!(event["command"], "export");

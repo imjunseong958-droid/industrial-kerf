@@ -2,9 +2,9 @@
 //! listens on, the request-scoped client, and the JSONL server.
 
 use crate::{
-    io_error, kernel, unique_id, Author, EditOp, RenderJob, RenderRange, RequestEnvelope,
-    RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse, StartRenderOptions,
-    StateSnapshot,
+    io_error, kernel, unique_id, Author, EditOp, ErrorCode, RenderJob, RenderRange,
+    RequestEnvelope, RuntimeError, RuntimeHandle, RuntimeRequest, RuntimeResponse,
+    StartRenderOptions, StateSnapshot,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -367,7 +367,10 @@ impl RuntimeClient {
                 connected: true,
                 error,
             }) if request_is_read_only(&request)
-                && matches!(error.code.as_str(), "IPC_ERROR" | "RUNTIME_UNAVAILABLE") =>
+                && matches!(
+                    error.code,
+                    ErrorCode::IpcError | ErrorCode::RuntimeUnavailable
+                ) =>
             {
                 self.request_once(&request)
             }
@@ -784,12 +787,12 @@ impl RuntimeClient {
     fn request_attempt(&self, request: &RuntimeRequest) -> Result<RuntimeResponse, Failed> {
         let envelope = RequestEnvelope::new(format!("request-{}", unique_id()), request.clone());
         let mut payload = serde_json::to_vec(&envelope)
-            .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))
+            .map_err(|error| RuntimeError::new(ErrorCode::SerializeError, error.to_string()))
             .map_err(Failed::unconnected)?;
         payload.push(b'\n');
         if payload.len() > MAX_REQUEST_BYTES {
             return Err(Failed::unconnected(RuntimeError::new(
-                "REQUEST_TOO_LARGE",
+                ErrorCode::RequestTooLarge,
                 format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
             )));
         }
@@ -819,7 +822,7 @@ impl RuntimeClient {
         stream.flush().map_err(ipc_error)?;
         let line = read_bounded_line(stream)?;
         let value: Value = serde_json::from_slice(&line)
-            .map_err(|error| RuntimeError::new("INVALID_JSON", error.to_string()))?;
+            .map_err(|error| RuntimeError::new(ErrorCode::InvalidJson, error.to_string()))?;
         decode_response(&value, id)
     }
 
@@ -827,12 +830,12 @@ impl RuntimeClient {
     fn connect_or_start(&self) -> Result<LocalStream, RuntimeError> {
         match self.connect_once() {
             Ok(stream) => return Ok(stream),
-            Err(error) if error.code == "IPC_PERMISSION_DENIED" => return Err(error),
+            Err(error) if error.code == ErrorCode::IpcPermissionDenied => return Err(error),
             Err(_) => {}
         }
         let binary = self.inner.binary.as_ref().ok_or_else(|| {
             RuntimeError::new(
-                "RUNTIME_UNAVAILABLE",
+                ErrorCode::RuntimeUnavailable,
                 format!("no kerfd daemon is listening at {}", self.endpoint_label()),
             )
         })?;
@@ -845,14 +848,14 @@ impl RuntimeClient {
                 Err(error) if std::time::Instant::now() < deadline => {
                     // A competing client may have started the daemon, or the
                     // child may still be loading its checkpoint.
-                    if error.code == "IPC_PERMISSION_DENIED" {
+                    if error.code == ErrorCode::IpcPermissionDenied {
                         break Err(error);
                     }
                     if matches!(child.try_wait(), Ok(Some(_))) {
                         // A document it cannot read stays so, and says why:
                         // waiting cannot help, and that is what to show.
                         if let Some(stopped) = stopped_because(&said)
-                            .filter(|stopped| stopped.code == "INVALID_PROJECT")
+                            .filter(|stopped| stopped.code == ErrorCode::InvalidProject)
                         {
                             break Err(stopped);
                         }
@@ -877,7 +880,7 @@ impl RuntimeClient {
                 Err(error) => {
                     break Err(stopped_because(&said).unwrap_or_else(|| {
                         RuntimeError::new(
-                            "RUNTIME_UNAVAILABLE",
+                            ErrorCode::RuntimeUnavailable,
                             format!("kerfd did not become ready: {}", error.message),
                         )
                     }));
@@ -944,7 +947,7 @@ impl RuntimeClient {
                         // Empty, as nothing started to write to it.
                         let _ = fs::remove_file(&said);
                         RuntimeError::new(
-                            "RUNTIME_UNAVAILABLE",
+                            ErrorCode::RuntimeUnavailable,
                             format!("failed to start kerfd at {}: {error}", binary.display()),
                         )
                     })?;
@@ -957,7 +960,7 @@ impl RuntimeClient {
     #[cfg(not(any(unix, windows)))]
     fn request_attempt(&self, _request: &RuntimeRequest) -> Result<RuntimeResponse, Failed> {
         Err(Failed::unconnected(RuntimeError::new(
-            "IPC_UNSUPPORTED",
+            ErrorCode::IpcUnsupported,
             "no local transport on this platform",
         )))
     }
@@ -971,15 +974,13 @@ impl RuntimeClient {
     /// pipe instance on Windows.
     #[cfg(unix)]
     fn connect_within(&self, _timeout: Duration) -> Result<UnixStream, RuntimeError> {
-        let path = self
-            .inner
-            .endpoint
-            .as_path()
-            .ok_or_else(|| RuntimeError::new("IPC_UNSUPPORTED", "endpoint is not Unix IPC"))?;
+        let path = self.inner.endpoint.as_path().ok_or_else(|| {
+            RuntimeError::new(ErrorCode::IpcUnsupported, "endpoint is not Unix IPC")
+        })?;
         UnixStream::connect(path).map_err(|error| {
             let code = match error.kind() {
-                std::io::ErrorKind::PermissionDenied => "IPC_PERMISSION_DENIED",
-                _ => "IPC_CONNECT_ERROR",
+                std::io::ErrorKind::PermissionDenied => ErrorCode::IpcPermissionDenied,
+                _ => ErrorCode::IpcConnectError,
             };
             RuntimeError::new(
                 code,
@@ -992,14 +993,14 @@ impl RuntimeClient {
     fn connect_within(&self, timeout: Duration) -> Result<PipeStream, RuntimeError> {
         let EndpointAddress::WindowsNamedPipe { name } = &self.inner.endpoint else {
             return Err(RuntimeError::new(
-                "IPC_UNSUPPORTED",
+                ErrorCode::IpcUnsupported,
                 "endpoint is not a named pipe",
             ));
         };
         crate::named_pipe::connect(name, timeout).map_err(|error| {
             let code = match error.kind() {
-                std::io::ErrorKind::PermissionDenied => "IPC_PERMISSION_DENIED",
-                _ => "IPC_CONNECT_ERROR",
+                std::io::ErrorKind::PermissionDenied => ErrorCode::IpcPermissionDenied,
+                _ => ErrorCode::IpcConnectError,
             };
             RuntimeError::new(code, format!("cannot connect to {name}: {error}"))
         })
@@ -1027,7 +1028,7 @@ impl RuntimeClient {
                 }
                 // An older kerfd lives until its folder goes, so there is
                 // nothing to hold; ask again in case a newer one replaces it.
-                Err(error) if error.code == "UNKNOWN_OPERATION" => LEASE_UNSUPPORTED_RETRY,
+                Err(error) if error.code == ErrorCode::UnknownOperation => LEASE_UNSUPPORTED_RETRY,
                 Err(_) => LEASE_RETRY_INTERVAL,
             };
             let deadline = Instant::now() + retry;
@@ -1046,7 +1047,7 @@ impl RuntimeClient {
             "id": id,
             "operation": HOLD_OPERATION,
         }))
-        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::SerializeError, error.to_string()))?;
         line.push(b'\n');
         let mut stream = self.connect_within(LEASE_ANSWER_TIMEOUT)?;
         stream
@@ -1059,7 +1060,7 @@ impl RuntimeClient {
         stream.flush().map_err(ipc_error)?;
         let answer = read_bounded_line(&mut stream)?;
         let value: Value = serde_json::from_slice(&answer)
-            .map_err(|error| RuntimeError::new("INVALID_JSON", error.to_string()))?;
+            .map_err(|error| RuntimeError::new(ErrorCode::InvalidJson, error.to_string()))?;
         decode_response(&value, &id)?;
         // Short reads, so a dropped lease stops promptly.
         stream
@@ -1216,7 +1217,7 @@ fn request_has_stable_idempotency_key(request: &RuntimeRequest) -> bool {
 fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, RuntimeError> {
     let object = value.as_object().ok_or_else(|| {
         RuntimeError::new(
-            "RUNTIME_PROTOCOL_ERROR",
+            ErrorCode::RuntimeProtocolError,
             "runtime response must be an object",
         )
     })?;
@@ -1224,13 +1225,13 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
         != Some(RequestEnvelope::PROTOCOL_VERSION)
     {
         return Err(RuntimeError::new(
-            "PROTOCOL_VERSION_UNSUPPORTED",
+            ErrorCode::ProtocolVersionUnsupported,
             "runtime response protocolVersion must be 1",
         ));
     }
     if object.get("id").and_then(Value::as_str) != Some(expected_id) {
         return Err(RuntimeError::new(
-            "RUNTIME_PROTOCOL_ERROR",
+            ErrorCode::RuntimeProtocolError,
             "runtime response id does not match request",
         ));
     }
@@ -1239,7 +1240,9 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
             .get("error")
             .cloned()
             .and_then(|error| serde_json::from_value::<RuntimeError>(error).ok())
-            .unwrap_or_else(|| RuntimeError::new("RUNTIME_ERROR", "runtime request failed")));
+            .unwrap_or_else(|| {
+                RuntimeError::new(ErrorCode::RuntimeError, "runtime request failed")
+            }));
     }
     if let (Some(revision), Some(document)) = (
         object.get("revision").and_then(Value::as_u64),
@@ -1260,8 +1263,9 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
         });
     }
     if let Some(state) = object.get("state") {
-        let state = serde_json::from_value::<StateSnapshot>(state.clone())
-            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        let state = serde_json::from_value::<StateSnapshot>(state.clone()).map_err(|error| {
+            RuntimeError::new(ErrorCode::RuntimeProtocolError, error.to_string())
+        })?;
         if let Some(report) = object.get("collab") {
             return Ok(RuntimeResponse::Collab {
                 state,
@@ -1281,19 +1285,22 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
         return Ok(RuntimeResponse::State(state));
     }
     if let Some(jobs) = object.get("jobs") {
-        let jobs = serde_json::from_value::<Vec<RenderJob>>(jobs.clone())
-            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        let jobs = serde_json::from_value::<Vec<RenderJob>>(jobs.clone()).map_err(|error| {
+            RuntimeError::new(ErrorCode::RuntimeProtocolError, error.to_string())
+        })?;
         return Ok(RuntimeResponse::RenderJobs(jobs));
     }
     if let Some(job) = object.get("job") {
-        let job = serde_json::from_value::<RenderJob>(job.clone())
-            .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+        let job = serde_json::from_value::<RenderJob>(job.clone()).map_err(|error| {
+            RuntimeError::new(ErrorCode::RuntimeProtocolError, error.to_string())
+        })?;
         if let (Some(document), Some(output)) = (
             object.get("document").and_then(Value::as_str),
             object.get("output"),
         ) {
-            let output = serde_json::from_value::<PathBuf>(output.clone())
-                .map_err(|error| RuntimeError::new("RUNTIME_PROTOCOL_ERROR", error.to_string()))?;
+            let output = serde_json::from_value::<PathBuf>(output.clone()).map_err(|error| {
+                RuntimeError::new(ErrorCode::RuntimeProtocolError, error.to_string())
+            })?;
             return Ok(RuntimeResponse::RenderStarted {
                 job,
                 document: document.to_owned(),
@@ -1307,8 +1314,8 @@ fn decode_response(value: &Value, expected_id: &str) -> Result<RuntimeResponse, 
 
 fn ipc_error(error: std::io::Error) -> RuntimeError {
     let code = match error.kind() {
-        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => "IPC_TIMEOUT",
-        _ => "IPC_ERROR",
+        std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => ErrorCode::IpcTimeout,
+        _ => ErrorCode::IpcError,
     };
     RuntimeError::new(code, error.to_string())
 }
@@ -1334,20 +1341,20 @@ fn read_bounded_line<R: Read>(reader: &mut R) -> Result<Vec<u8>, RuntimeError> {
         bytes.extend_from_slice(&chunk[..count]);
         if bytes.len() > MAX_REQUEST_BYTES {
             return Err(RuntimeError::new(
-                "REQUEST_TOO_LARGE",
+                ErrorCode::RequestTooLarge,
                 format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
             ));
         }
     }
     if bytes.len() > MAX_REQUEST_BYTES {
         return Err(RuntimeError::new(
-            "REQUEST_TOO_LARGE",
+            ErrorCode::RequestTooLarge,
             format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
         ));
     }
     if bytes.is_empty() {
         return Err(RuntimeError::new(
-            "RUNTIME_UNAVAILABLE",
+            ErrorCode::RuntimeUnavailable,
             "runtime connection closed before a response",
         ));
     }
@@ -1369,7 +1376,7 @@ fn read_bounded_bufread_line<R: BufRead>(reader: &mut R) -> Result<Option<Vec<u8
         let length = newline.unwrap_or(buffer.len());
         if bytes.len() + length > MAX_REQUEST_BYTES {
             return Err(RuntimeError::new(
-                "REQUEST_TOO_LARGE",
+                ErrorCode::RequestTooLarge,
                 format!("request exceeds {MAX_REQUEST_BYTES} bytes"),
             ));
         }
@@ -1404,7 +1411,7 @@ fn expect_job(response: RuntimeResponse) -> Result<RenderJob, RuntimeError> {
 
 fn unexpected_response(expected: &str) -> RuntimeError {
     RuntimeError::new(
-        "RUNTIME_PROTOCOL_ERROR",
+        ErrorCode::RuntimeProtocolError,
         format!("expected {expected} response"),
     )
 }
@@ -1562,7 +1569,10 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
         let handle = open_runtime(&directory)?;
         _media = StopMediaOnExit(&directory);
         let path = endpoint.as_path().ok_or_else(|| {
-            RuntimeError::new("IPC_UNSUPPORTED", "Unix daemon requires a Unix endpoint")
+            RuntimeError::new(
+                ErrorCode::IpcUnsupported,
+                "Unix daemon requires a Unix endpoint",
+            )
         })?;
         let listener = bind_unix_listener(path)?;
         // Poll with a timeout instead of blocking in `accept` so the daemon
@@ -1651,7 +1661,7 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
         _media = StopMediaOnExit(&directory);
         let EndpointAddress::WindowsNamedPipe { name } = &endpoint else {
             return Err(RuntimeError::new(
-                "IPC_UNSUPPORTED",
+                ErrorCode::IpcUnsupported,
                 "Windows daemon requires a named-pipe endpoint",
             ));
         };
@@ -1661,7 +1671,7 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
         let mut listener = PipeListener::bind(name).map_err(|error| {
             if error.kind() == std::io::ErrorKind::AddrInUse {
                 RuntimeError::new(
-                    "RUNTIME_ALREADY_RUNNING",
+                    ErrorCode::RuntimeAlreadyRunning,
                     format!("another process already listens at {name}"),
                 )
             } else {
@@ -1699,7 +1709,7 @@ pub fn run_ipc_with(directory: &Path, options: IpcOptions) -> Result<(), Runtime
     {
         let _ = (directory, options);
         Err(RuntimeError::new(
-            "IPC_UNSUPPORTED",
+            ErrorCode::IpcUnsupported,
             "no local transport on this platform",
         ))
     }
@@ -1713,7 +1723,9 @@ fn open_runtime(directory: &Path) -> Result<RuntimeHandle, RuntimeError> {
     let deadline = Instant::now() + STARTUP_LOCK_WAIT;
     loop {
         match RuntimeHandle::open(directory) {
-            Err(error) if error.code == "RUNTIME_ALREADY_RUNNING" && Instant::now() < deadline => {
+            Err(error)
+                if error.code == ErrorCode::RuntimeAlreadyRunning && Instant::now() < deadline =>
+            {
                 thread::sleep(Duration::from_millis(50));
             }
             result => return result,
@@ -1886,7 +1898,7 @@ fn bind_unix_listener(path: &Path) -> Result<UnixListener, RuntimeError> {
             }
             match UnixStream::connect(path) {
                 Ok(_) => Err(RuntimeError::new(
-                    "RUNTIME_ALREADY_RUNNING",
+                    ErrorCode::RuntimeAlreadyRunning,
                     format!("another kerfd is listening at {}", path.display()),
                 )),
                 Err(connect_error)
@@ -2099,7 +2111,7 @@ fn write_ipc_response<W: Write>(
 ) -> Result<(), RuntimeError> {
     let value = response_value(id, result);
     let bytes = serde_json::to_vec(&value)
-        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::SerializeError, error.to_string()))?;
     stream.write_all(&bytes).map_err(ipc_error)?;
     stream.write_all(b"\n").map_err(ipc_error)?;
     stream.flush().map_err(ipc_error)
@@ -2133,7 +2145,7 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
         // SAFETY: `geteuid` is a side-effect-free libc query with no pointer argument.
         if credentials.uid != unsafe { libc::geteuid() } {
             return Err(RuntimeError::new(
-                "IPC_UNAUTHORIZED_PEER",
+                ErrorCode::IpcUnauthorizedPeer,
                 "kerfd rejected a connection from a different user",
             ));
         }
@@ -2153,7 +2165,7 @@ fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
         // SAFETY: `geteuid` is a side-effect-free libc query with no pointer argument.
         if effective_uid != unsafe { libc::geteuid() } {
             return Err(RuntimeError::new(
-                "IPC_UNAUTHORIZED_PEER",
+                ErrorCode::IpcUnauthorizedPeer,
                 "kerfd rejected a connection from a different user",
             ));
         }
@@ -2169,7 +2181,7 @@ fn process_request_line(
     match serde_json::from_slice::<Value>(line) {
         Err(error) => (
             String::new(),
-            Err(RuntimeError::new("INVALID_JSON", error.to_string())),
+            Err(RuntimeError::new(ErrorCode::InvalidJson, error.to_string())),
         ),
         Ok(value) => {
             let id = value
@@ -2186,9 +2198,9 @@ fn process_request_line(
                 }
                 Err(error) => {
                     let code = if error.to_string().contains("unknown variant") {
-                        "UNKNOWN_OPERATION"
+                        ErrorCode::UnknownOperation
                     } else {
-                        "INVALID_REQUEST"
+                        ErrorCode::InvalidRequest
                     };
                     (id, Err(RuntimeError::new(code, error.to_string())))
                 }

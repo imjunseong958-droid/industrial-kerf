@@ -4,7 +4,9 @@
 use super::{JournalEvent, Runtime, MAX_FINISHED_JOBS};
 use crate::kernel;
 use crate::render::{render_cancel_path, render_name, render_output, Encoding};
-use crate::{io_error, unique_id, RenderJob, RenderRange, RuntimeError, StartRenderOptions};
+use crate::{
+    io_error, unique_id, ErrorCode, RenderJob, RenderRange, RuntimeError, StartRenderOptions,
+};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -60,7 +62,7 @@ impl Runtime {
             RenderRange::new(range.start, range.duration)?;
             if range.end() > duration + 1e-9 {
                 return Err(RuntimeError::new(
-                    "INVALID_RENDER_RANGE",
+                    ErrorCode::InvalidRenderRange,
                     format!(
                         "render range ends at {:.3}s but project duration is {duration:.3}s",
                         range.end(),
@@ -82,7 +84,7 @@ impl Runtime {
         };
         if writes(&target.file, |status| !job_finished(status)) {
             return Err(RuntimeError::new(
-                "RENDER_OUTPUT_BUSY",
+                ErrorCode::RenderOutputBusy,
                 format!("another render is writing {}", target.file.display()),
             ));
         }
@@ -136,12 +138,15 @@ impl Runtime {
             "queued" | "running" | "completed" | "failed" | "cancelled"
         ) {
             return Err(RuntimeError::new(
-                "INVALID_RENDER_STATUS",
+                ErrorCode::InvalidRenderStatus,
                 format!("unsupported render status: {status}"),
             ));
         }
         let current = self.state.jobs.get(id).cloned().ok_or_else(|| {
-            RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
+            RuntimeError::new(
+                ErrorCode::RenderNotFound,
+                format!("render job not found: {id}"),
+            )
         })?;
         if matches!(
             current.status.as_str(),
@@ -149,7 +154,7 @@ impl Runtime {
         ) && current.status != status
         {
             return Err(RuntimeError::new(
-                "RENDER_STATE_CONFLICT",
+                ErrorCode::RenderStateConflict,
                 format!("render job {id} is already {}", current.status),
             ));
         }
@@ -160,7 +165,7 @@ impl Runtime {
         if let Some(progress) = progress {
             if !progress.is_finite() || !(0.0..=1.0).contains(&progress) {
                 return Err(RuntimeError::new(
-                    "INVALID_RENDER_PROGRESS",
+                    ErrorCode::InvalidRenderProgress,
                     "render progress must be finite and between 0 and 1",
                 ));
             }
@@ -200,7 +205,10 @@ impl Runtime {
 
     pub fn render_job(&self, id: &str) -> Result<RenderJob, RuntimeError> {
         self.state.jobs.get(id).cloned().ok_or_else(|| {
-            RuntimeError::new("RENDER_NOT_FOUND", format!("render job not found: {id}"))
+            RuntimeError::new(
+                ErrorCode::RenderNotFound,
+                format!("render job not found: {id}"),
+            )
         })
     }
 

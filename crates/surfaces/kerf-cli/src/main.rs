@@ -20,7 +20,7 @@ use kerf_collab::git::{self, Pushed};
 use kerf_collab::scaffold::{self, Created, GitHubRepository, NewProject, Template};
 use kerf_mcp::{docs::add_agents_pointer, inbound, load_project_skills, KerfMcpRouter};
 use kerf_model::Catalog;
-use kerf_runtime::RuntimeClient;
+use kerf_runtime::{ErrorCode, RuntimeClient};
 use kerf_skills::Skill;
 use serde_json::{json, Value};
 use std::env;
@@ -711,8 +711,8 @@ fn run_sync(directory: &Path, kerfd: Option<&Path>, message: Option<&str>) -> Re
         .with_request_timeout(Duration::from_secs(60));
     let (_, report) = runtime
         .collab_integrate("ui", &operation_key("sync"), message)
-        .map_err(|error| match error.code.as_str() {
-            "PROJECTION_DIVERGED" => anyhow!(
+        .map_err(|error| match error.code {
+            ErrorCode::ProjectionDiverged => anyhow!(
                 "project.kerf was changed outside Kerf; `kerf load` takes it as the project, or open the project in the editor and choose Load from Disk or Keep Editor Version, then sync"
             ),
             _ => runtime_error(error),

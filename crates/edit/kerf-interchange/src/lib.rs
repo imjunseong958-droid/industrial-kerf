@@ -113,18 +113,21 @@ pub fn export(
     let chosen = match sequence {
         Some(id) => project.sequence(id).ok_or_else(|| {
             InterchangeError::new(
-                "INTERCHANGE_PROJECT_INVALID",
+                InterchangeCode::ProjectInvalid,
                 format!("the project has no sequence `{id}`"),
             )
         })?,
         None => project.sequences.first().ok_or_else(|| {
-            InterchangeError::new("INTERCHANGE_PROJECT_INVALID", "the project has no sequence")
+            InterchangeError::new(
+                InterchangeCode::ProjectInvalid,
+                "the project has no sequence",
+            )
         })?,
     };
     let (text, issues) = render(project, chosen, format)?;
     let failed = |error: io::Error| {
         InterchangeError::new(
-            "INTERCHANGE_IO_FAILED",
+            InterchangeCode::IoFailed,
             format!("could not write {}: {error}", output_path.display()),
         )
     };
@@ -148,7 +151,7 @@ pub fn import_otio(input_path: &Path) -> Result<ImportResult, InterchangeError> 
     validate_path(input_path, "inputPath")?;
     let text = std::fs::read_to_string(input_path).map_err(|error| {
         InterchangeError::new(
-            "INTERCHANGE_IO_FAILED",
+            InterchangeCode::IoFailed,
             format!("could not read {}: {error}", input_path.display()),
         )
     })?;
@@ -238,16 +241,53 @@ pub struct ProcessInvocation {
 
 #[derive(Debug)]
 pub struct InterchangeError {
-    pub code: String,
+    pub code: InterchangeCode,
     pub message: String,
 }
 
 impl InterchangeError {
-    pub(crate) fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn new(code: InterchangeCode, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
         }
+    }
+}
+
+/// Which failure an [`InterchangeError`] is. Its name ([`InterchangeCode::as_str`]) is what
+/// the error prints before its message.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterchangeCode {
+    ConfigInvalid,
+    FormatInvalid,
+    InputInvalid,
+    IoFailed,
+    OutputInvalid,
+    PathInvalid,
+    ProcessFailed,
+    ProjectInvalid,
+    Timeout,
+}
+
+impl InterchangeCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ConfigInvalid => "INTERCHANGE_CONFIG_INVALID",
+            Self::FormatInvalid => "INTERCHANGE_FORMAT_INVALID",
+            Self::InputInvalid => "INTERCHANGE_INPUT_INVALID",
+            Self::IoFailed => "INTERCHANGE_IO_FAILED",
+            Self::OutputInvalid => "INTERCHANGE_OUTPUT_INVALID",
+            Self::PathInvalid => "INTERCHANGE_PATH_INVALID",
+            Self::ProcessFailed => "INTERCHANGE_PROCESS_FAILED",
+            Self::ProjectInvalid => "INTERCHANGE_PROJECT_INVALID",
+            Self::Timeout => "INTERCHANGE_TIMEOUT",
+        }
+    }
+}
+
+impl fmt::Display for InterchangeCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
     }
 }
 
@@ -261,7 +301,7 @@ impl std::error::Error for InterchangeError {}
 
 impl From<io::Error> for InterchangeError {
     fn from(error: io::Error) -> Self {
-        Self::new("INTERCHANGE_PROCESS_FAILED", error.to_string())
+        Self::new(InterchangeCode::ProcessFailed, error.to_string())
     }
 }
 
@@ -278,13 +318,13 @@ impl OpenTimelineIoAdapter {
     pub fn new(config: InterchangeConfig) -> Result<Self, InterchangeError> {
         if config.python_executable.as_os_str().is_empty() {
             return Err(InterchangeError::new(
-                "INTERCHANGE_CONFIG_INVALID",
+                InterchangeCode::ConfigInvalid,
                 "python executable must be non-empty",
             ));
         }
         if config.timeout.is_zero() {
             return Err(InterchangeError::new(
-                "INTERCHANGE_CONFIG_INVALID",
+                InterchangeCode::ConfigInvalid,
                 "timeout must be positive",
             ));
         }
@@ -350,7 +390,7 @@ impl OpenTimelineIoAdapter {
             adapter,
         ];
         let stdin = serde_json::to_string(&json!({ "timeline": timeline })).map_err(|error| {
-            InterchangeError::new("INTERCHANGE_CONFIG_INVALID", error.to_string())
+            InterchangeError::new(InterchangeCode::ConfigInvalid, error.to_string())
         })?;
         let invocation = ProcessInvocation {
             command: self.config.python_executable.clone(),
@@ -377,13 +417,13 @@ impl OpenTimelineIoAdapter {
         let parsed = self.run_bridge(invocation)?;
         let timeline = parsed.get("timeline").cloned().ok_or_else(|| {
             InterchangeError::new(
-                "INTERCHANGE_OUTPUT_INVALID",
+                InterchangeCode::OutputInvalid,
                 "OTIO bridge response does not contain a timeline",
             )
         })?;
         let timeline: otio::Timeline = serde_json::from_value(timeline).map_err(|error| {
             InterchangeError::new(
-                "INTERCHANGE_OUTPUT_INVALID",
+                InterchangeCode::OutputInvalid,
                 format!("bridge returned an invalid timeline: {error}"),
             )
         })?;
@@ -443,7 +483,7 @@ impl OpenTimelineIoAdapter {
         )?;
         if output.timed_out {
             return Err(InterchangeError::new(
-                "INTERCHANGE_TIMEOUT",
+                InterchangeCode::Timeout,
                 format!(
                     "OpenTimelineIO conversion timed out after {:?}",
                     self.config.timeout
@@ -452,7 +492,7 @@ impl OpenTimelineIoAdapter {
         }
         if output.code != Some(0) {
             return Err(InterchangeError::new(
-                "INTERCHANGE_PROCESS_FAILED",
+                InterchangeCode::ProcessFailed,
                 process_error_message(output.code, &output.stderr),
             ));
         }
@@ -494,7 +534,7 @@ pub fn validate_adapter_name(value: &str) -> Result<String, InterchangeError> {
         || !value.as_bytes()[0].is_ascii_alphanumeric()
     {
         return Err(InterchangeError::new(
-            "INTERCHANGE_FORMAT_INVALID",
+            InterchangeCode::FormatInvalid,
             "adapter must contain 1-128 letters, numbers, dots, underscores, or hyphens and start with a letter or number",
         ));
     }
@@ -504,7 +544,7 @@ pub fn validate_adapter_name(value: &str) -> Result<String, InterchangeError> {
 pub fn validate_path(path: &Path, field: &str) -> Result<(), InterchangeError> {
     if path.as_os_str().is_empty() || path.as_os_str().as_encoded_bytes().contains(&0) {
         return Err(InterchangeError::new(
-            "INTERCHANGE_PATH_INVALID",
+            InterchangeCode::PathInvalid,
             format!("{field} must be a non-empty path without NUL bytes"),
         ));
     }
@@ -616,19 +656,19 @@ fn report_from_value(
 fn parse_bridge_output(stdout: &str) -> Result<Map<String, Value>, InterchangeError> {
     let value: Value = serde_json::from_str(stdout.trim()).map_err(|error| {
         InterchangeError::new(
-            "INTERCHANGE_OUTPUT_INVALID",
+            InterchangeCode::OutputInvalid,
             format!("OTIO bridge returned invalid JSON: {error}"),
         )
     })?;
     let object = value.as_object().cloned().ok_or_else(|| {
         InterchangeError::new(
-            "INTERCHANGE_OUTPUT_INVALID",
+            InterchangeCode::OutputInvalid,
             "OTIO bridge response must be an object",
         )
     })?;
     if object.get("ok").and_then(Value::as_bool) == Some(false) {
         return Err(InterchangeError::new(
-            "INTERCHANGE_OUTPUT_INVALID",
+            InterchangeCode::OutputInvalid,
             object
                 .get("error")
                 .and_then(Value::as_str)
@@ -665,7 +705,7 @@ fn run_process(
         .spawn()
         .map_err(|error| {
             InterchangeError::new(
-                "INTERCHANGE_PROCESS_FAILED",
+                InterchangeCode::ProcessFailed,
                 format!("could not start {}: {error}", command.display()),
             )
         })?;
@@ -695,10 +735,10 @@ fn run_process(
     };
     Ok(ProcessResult {
         stdout: stdout_thread.join().map_err(|_| {
-            InterchangeError::new("INTERCHANGE_PROCESS_FAILED", "stdout reader panicked")
+            InterchangeError::new(InterchangeCode::ProcessFailed, "stdout reader panicked")
         })??,
         stderr: stderr_thread.join().map_err(|_| {
-            InterchangeError::new("INTERCHANGE_PROCESS_FAILED", "stderr reader panicked")
+            InterchangeError::new(InterchangeCode::ProcessFailed, "stderr reader panicked")
         })??,
         code,
         timed_out,

@@ -6,7 +6,7 @@ use super::{
     catalog, inline_image, io_error, program, program_position, resolve_project_source_path,
     MAX_SHEET_FRAMES,
 };
-use crate::{engine_error, KerfMcpRouter, McpError};
+use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_engine::media::derivatives::{DerivativeCache, SourceIdentity};
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::{print_document, Clock, PrintOptions};
@@ -90,7 +90,7 @@ fn unheard(
 fn position(clock: &Clock, text: &str) -> Result<Time, McpError> {
     clock
         .position(text)
-        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))
+        .map_err(|error| McpError::new(McpCode::InvalidArguments, error))
 }
 
 /// `seconds` from the clock's origin, on the nearest frame.
@@ -242,7 +242,7 @@ impl KerfMcpRouter {
         };
         if from.is_negative() || to <= from {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!("choose a range inside media `{}`", media.id),
             ));
         }
@@ -259,7 +259,7 @@ impl KerfMcpRouter {
     ) -> Result<Value, McpError> {
         if media.video.is_none() {
             return Err(McpError::new(
-                "NO_VIDEO",
+                McpCode::NoVideo,
                 format!("media `{}` has no picture", media.id),
             ));
         }
@@ -334,7 +334,7 @@ impl KerfMcpRouter {
         };
         if from.is_negative() || to <= from {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!("choose a range inside sequence `{}`", sequence.id),
             ));
         }
@@ -389,7 +389,7 @@ impl KerfMcpRouter {
     ) -> Result<Value, McpError> {
         if media.audio.is_none() {
             return Err(McpError::new(
-                "NO_AUDIO",
+                McpCode::NoAudio,
                 format!("media `{}` has no audio", media.id),
             ));
         }
@@ -404,12 +404,12 @@ impl KerfMcpRouter {
         let (from, to) = (from.seconds(), to.seconds().min(media.duration.seconds()));
         if to - from > kerf_engine::MAX_TRANSCRIPTION_RANGE_SECONDS + 1e-9 {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "a transcript covers at most 15 minutes; choose a range with from and to",
             ));
         }
         let range = kerf_engine::TimeRange::new(from, to)
-            .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
+            .map_err(|error| McpError::new(McpCode::InvalidArguments, error.to_string()))?;
         let result = kerf_engine::transcribe_cached(
             &path.to_string_lossy(),
             &DerivativeCache::new(&self.dir),
@@ -443,13 +443,13 @@ impl KerfMcpRouter {
         };
         if from.is_negative() || to <= from {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!("choose a range inside sequence `{}`", sequence.id),
             ));
         }
         if (to - from).seconds() > kerf_engine::MAX_TRANSCRIPTION_RANGE_SECONDS + 1e-9 {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "a transcript covers at most 15 minutes; choose a range with from and to",
             ));
         }
@@ -481,7 +481,7 @@ impl KerfMcpRouter {
             log::warn!("older program sounds were not cleared from the cache: {error}");
         }
         let range = kerf_engine::TimeRange::new(0.0, (to - from).seconds())
-            .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))?;
+            .map_err(|error| McpError::new(McpCode::InvalidArguments, error.to_string()))?;
         let result = kerf_engine::transcribe_cached(
             &sound.to_string_lossy(),
             &DerivativeCache::new(&self.dir),
@@ -523,13 +523,13 @@ impl KerfMcpRouter {
         options: &Value,
     ) -> Result<kerf_engine::media::derivatives::CacheEntry, McpError> {
         kerf_engine::render::renderable(project, Some(sequence))
-            .map_err(|error| McpError::new("UNRENDERABLE", error.to_string()))?;
+            .map_err(|error| McpError::new(McpCode::Unrenderable, error.to_string()))?;
         let document = print_document(project, catalog(), PrintOptions::default());
         let identities = crate::qc::used_media(project)
             .map(|media| {
                 SourceIdentity::from_path(std::path::Path::new(&media.path)).map_err(|error| {
                     McpError::new(
-                        "MEDIA_UNAVAILABLE",
+                        McpCode::MediaUnavailable,
                         format!("media `{}` cannot be read: {error}", media.id),
                     )
                 })
@@ -550,7 +550,7 @@ impl KerfMcpRouter {
     ) -> Result<Value, McpError> {
         if media.video.is_none() {
             return Err(McpError::new(
-                "NO_VIDEO",
+                McpCode::NoVideo,
                 format!("media `{}` has no picture", media.id),
             ));
         }
@@ -561,7 +561,7 @@ impl KerfMcpRouter {
                 let time = position(&clock, text)?;
                 if time.is_negative() || time >= media.duration {
                     return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
+                        McpCode::InvalidArguments,
                         format!("`{text}` is outside media `{}`", media.id),
                     ));
                 }
@@ -600,7 +600,7 @@ impl KerfMcpRouter {
                 let time = program_position(project, sequence, text)?;
                 if time.is_negative() || time >= duration {
                     return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
+                        McpCode::InvalidArguments,
                         format!(
                             "`{text}` is outside sequence `{}`{}",
                             sequence.id,
@@ -699,7 +699,7 @@ impl KerfMcpRouter {
                 for handle in handles {
                     let frame = handle.join().unwrap_or_else(|_| {
                         Err(McpError::new(
-                            "RENDER_FAILED",
+                            McpCode::RenderFailed,
                             "a frame's render stopped with a panic",
                         ))
                     });

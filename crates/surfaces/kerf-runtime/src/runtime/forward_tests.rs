@@ -85,7 +85,7 @@ fn a_proposal_whose_clip_changed_is_refused_by_name_and_stays() {
     let before = runtime.snapshot();
     let records = runtime.journal_sequence;
     let error = runtime.forward_proposal("forward-1", 1, &id).unwrap_err();
-    assert_eq!(error.code, "PROPOSAL_NOT_FORWARDED");
+    assert_eq!(error.code.as_str(), "PROPOSAL_NOT_FORWARDED");
     assert!(
         error
             .message

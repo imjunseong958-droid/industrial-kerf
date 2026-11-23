@@ -10,7 +10,7 @@ use kerf_model::{
     AudioInfo, Clip, Content, Id, Media, Project, Ratio, Sequence, Time, Track, TrackKind,
     VideoInfo,
 };
-use kerf_runtime::RuntimeClient;
+use kerf_runtime::{ErrorCode, RuntimeClient};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -157,7 +157,7 @@ fn spawn_render(
         };
         match result {
             Ok(_) => {}
-            Err(err) if stopped && err.code == "CANCELLED" => {}
+            Err(err) if stopped && err.code == ErrorCode::Cancelled => {}
             Err(err) => {
                 error(&tx, err.message);
                 emit(
@@ -230,7 +230,7 @@ fn export(
             },
         ),
         None => Err(kerf_runtime::RuntimeError::new(
-            "CANCELLED",
+            ErrorCode::Cancelled,
             "render job was cancelled",
         )),
     };
@@ -258,7 +258,7 @@ fn export(
             if preview {
                 discard_preview(shared, output);
             }
-            if !(err.code == "CANCELLED" && shared.preview_turns.stopped(turn)) {
+            if !(err.code == ErrorCode::Cancelled && shared.preview_turns.stopped(turn)) {
                 emit(tx, Event::Preview(request.event(PreviewStatus::Failed)));
             }
             Err(err)

@@ -15,6 +15,7 @@
 
 pub mod author;
 pub mod crash;
+mod error;
 mod ipc;
 mod kernel;
 #[cfg(windows)]
@@ -26,6 +27,7 @@ mod timeline;
 mod view;
 
 pub use author::Author;
+pub use error::{ErrorCode, RuntimeError};
 pub use ipc::{
     response_value, run_ipc, run_ipc_with, run_stdio, EndpointAddress, IpcOptions, RuntimeClient,
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
@@ -263,7 +265,7 @@ impl RenderRange {
             || !(start + duration).is_finite()
         {
             return Err(RuntimeError::new(
-                "INVALID_RENDER_RANGE",
+                ErrorCode::InvalidRenderRange,
                 format!(
                     "render range requires start >= 0, 0 < duration <= {MAX_RENDER_RANGE_SECONDS}s"
                 ),
@@ -355,47 +357,6 @@ impl StartRenderOptions {
         Self {
             quality: quality.into(),
             ..Self::default()
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RuntimeError {
-    pub code: String,
-    pub message: String,
-    pub expected_revision: Option<u64>,
-    pub actual_revision: Option<u64>,
-}
-
-impl RuntimeError {
-    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            expected_revision: None,
-            actual_revision: None,
-        }
-    }
-
-    /// Whether the request did not reach kerfd, or its answer was lost.
-    pub fn is_transport(&self) -> bool {
-        matches!(
-            self.code.as_str(),
-            "IPC_UNSUPPORTED"
-                | "IPC_CONNECT_ERROR"
-                | "IPC_PERMISSION_DENIED"
-                | "IPC_TIMEOUT"
-                | "IPC_ERROR"
-                | "RUNTIME_UNAVAILABLE"
-        )
-    }
-
-    pub fn conflict(expected: u64, actual: u64) -> Self {
-        Self {
-            code: "REVISION_CONFLICT".into(),
-            message: format!("revision conflict: expected {expected}, actual {actual}"),
-            expected_revision: Some(expected),
-            actual_revision: Some(actual),
         }
     }
 }
@@ -641,13 +602,13 @@ impl RequestEnvelope {
     pub fn validate(&self) -> Result<(), RuntimeError> {
         if self.protocol_version != Self::PROTOCOL_VERSION {
             return Err(RuntimeError::new(
-                "PROTOCOL_VERSION_UNSUPPORTED",
+                ErrorCode::ProtocolVersionUnsupported,
                 "protocolVersion must be 1",
             ));
         }
         if self.id.trim().is_empty() {
             return Err(RuntimeError::new(
-                "INVALID_REQUEST",
+                ErrorCode::InvalidRequest,
                 "request id must be a non-empty string",
             ));
         }
@@ -772,7 +733,7 @@ impl RuntimeHandle {
             Ok(Ok(())) => Ok(Self { sender }),
             Ok(Err(error)) => Err(error),
             Err(_) => Err(RuntimeError::new(
-                "RUNTIME_UNAVAILABLE",
+                ErrorCode::RuntimeUnavailable,
                 "runtime actor exited during startup",
             )),
         }
@@ -782,9 +743,14 @@ impl RuntimeHandle {
         let (reply, response) = mpsc::channel();
         self.sender
             .send(MailboxMessage { request, reply })
-            .map_err(|_| RuntimeError::new("RUNTIME_UNAVAILABLE", "runtime actor is stopped"))?;
+            .map_err(|_| {
+                RuntimeError::new(ErrorCode::RuntimeUnavailable, "runtime actor is stopped")
+            })?;
         response.recv().map_err(|_| {
-            RuntimeError::new("RUNTIME_UNAVAILABLE", "runtime actor dropped the response")
+            RuntimeError::new(
+                ErrorCode::RuntimeUnavailable,
+                "runtime actor dropped the response",
+            )
         })?
     }
 }
@@ -794,14 +760,14 @@ pub fn validate_actor(actor: &str) -> Result<(), RuntimeError> {
         Ok(())
     } else {
         Err(RuntimeError::new(
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "actor must be ui, agent, mcp, or system",
         ))
     }
 }
 
 fn io_error(error: std::io::Error) -> RuntimeError {
-    RuntimeError::new("IO_ERROR", error.to_string())
+    RuntimeError::new(ErrorCode::IoError, error.to_string())
 }
 
 fn unique_id() -> String {

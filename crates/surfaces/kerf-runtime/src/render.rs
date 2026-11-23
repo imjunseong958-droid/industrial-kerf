@@ -1,7 +1,7 @@
 //! Render workers. A worker renders a job's document in-process; the
 //! runtime keeps the job's durable state.
 
-use crate::{kernel, RenderJob, RenderRange, RuntimeClient, RuntimeError};
+use crate::{kernel, ErrorCode, RenderJob, RenderRange, RuntimeClient, RuntimeError};
 use kerf_engine::render::RenderPreset;
 use kerf_engine::VideoCodec;
 use std::fs;
@@ -40,7 +40,7 @@ impl Encoding {
             .find(|known| *known == quality)
             .ok_or_else(|| {
                 RuntimeError::new(
-                    "INVALID_RENDER_QUALITY",
+                    ErrorCode::InvalidRenderQuality,
                     "quality must be preview, full, review, or master",
                 )
             })?;
@@ -52,7 +52,7 @@ impl Encoding {
                 .find(|known| *known == codec)
                 .ok_or_else(|| {
                     RuntimeError::new(
-                        "INVALID_RENDER_CODEC",
+                        ErrorCode::InvalidRenderCodec,
                         "codec must be h264, hevc, hevc_hdr, or prores_hq",
                     )
                 })?,
@@ -63,7 +63,7 @@ impl Encoding {
             _ => None,
         };
         if let Some(reason) = refused {
-            return Err(RuntimeError::new("INVALID_RENDER_CODEC", reason));
+            return Err(RuntimeError::new(ErrorCode::InvalidRenderCodec, reason));
         }
         Ok(Self {
             quality,
@@ -106,7 +106,7 @@ pub(crate) fn render_name(name: Option<&str>) -> Result<Option<String>, RuntimeE
     };
     if name.chars().any(char::is_control) || name.chars().count() > MAX_RENDER_NAME {
         return Err(RuntimeError::new(
-            "INVALID_RENDER_NAME",
+            ErrorCode::InvalidRenderName,
             format!("a render name is one line of at most {MAX_RENDER_NAME} characters"),
         ));
     }
@@ -127,7 +127,7 @@ fn file_stem(name: &str) -> String {
 }
 
 fn output_error(message: impl Into<String>) -> RuntimeError {
-    RuntimeError::new("INVALID_RENDER_OUTPUT", message)
+    RuntimeError::new(ErrorCode::InvalidRenderOutput, message)
 }
 
 /// Where a render goes, worked out before anything is made on disk.
@@ -158,7 +158,7 @@ impl RenderTarget {
         }
         if self.named_file {
             return Err(RuntimeError::new(
-                "RENDER_OUTPUT_EXISTS",
+                ErrorCode::RenderOutputExists,
                 format!(
                     "{} already holds a render; choose another file name",
                     self.file.display()
@@ -180,7 +180,7 @@ impl RenderTarget {
             }
         }
         Err(RuntimeError::new(
-            "RENDER_OUTPUT_EXISTS",
+            ErrorCode::RenderOutputExists,
             format!(
                 "{} holds too many renders named {stem}; choose another name",
                 self.folder.display()
@@ -411,7 +411,7 @@ pub fn run_render_job(
             None,
             Some(output.to_string_lossy().into_owned()),
         ),
-        Err(error) if error.code == "CANCELLED" => Ok(()),
+        Err(error) if error.code == ErrorCode::Cancelled => Ok(()),
         Err(error) => client.update_job(&job.job_id, "failed", Some(error.message.clone()), None),
     };
     // There is one only when the job was cancelled.
@@ -473,13 +473,14 @@ fn render(
     match result {
         Ok(()) if output.is_file() => Ok(()),
         Ok(()) => Err(RuntimeError::new(
-            "ENGINE_ERROR",
+            ErrorCode::EngineError,
             format!("render completed without producing {}", output.display()),
         )),
-        Err(kerf_engine::EngineError::Cancelled) => {
-            Err(RuntimeError::new("CANCELLED", "render job was cancelled"))
-        }
-        Err(error) => Err(RuntimeError::new("ENGINE_ERROR", error.to_string())),
+        Err(kerf_engine::EngineError::Cancelled) => Err(RuntimeError::new(
+            ErrorCode::Cancelled,
+            "render job was cancelled",
+        )),
+        Err(error) => Err(RuntimeError::new(ErrorCode::EngineError, error.to_string())),
     }
 }
 

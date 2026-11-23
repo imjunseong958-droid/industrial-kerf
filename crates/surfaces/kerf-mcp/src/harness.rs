@@ -24,7 +24,7 @@ pub use project::models_listed;
 pub use tools::system_prompt;
 pub(crate) use tools::{input, metadata};
 
-use super::{KerfMcpRouter, McpError};
+use super::{KerfMcpRouter, McpCode, McpError};
 use base64::Engine;
 use kerf_lang::{apply_script, parse_document};
 use kerf_model::{Catalog, Project, Sequence, Time};
@@ -175,7 +175,7 @@ fn catalog() -> &'static Catalog {
 fn parse(text: &str) -> Result<Project, McpError> {
     parse_document(text, catalog())
         .map(|document| document.project)
-        .map_err(|errors| McpError::new("INVALID_PROJECT", diagnostics(&errors)))
+        .map_err(|errors| McpError::new(McpCode::InvalidProject, diagnostics(&errors)))
 }
 
 fn diagnostics(errors: &[kerf_model::Diagnostic]) -> String {
@@ -191,14 +191,14 @@ fn program<'a>(project: &'a Project, id: Option<&str>) -> Result<&'a Sequence, M
     match id {
         Some(id) => project.sequence(id).ok_or_else(|| {
             McpError::new(
-                "UNKNOWN_SEQUENCE",
+                McpCode::UnknownSequence,
                 format!("no sequence `{id}` in the project"),
             )
         }),
         None => project
             .sequences
             .first()
-            .ok_or_else(|| McpError::new("NO_SEQUENCE", "the project has no sequence")),
+            .ok_or_else(|| McpError::new(McpCode::NoSequence, "the project has no sequence")),
     }
 }
 
@@ -206,7 +206,7 @@ fn program<'a>(project: &'a Project, id: Option<&str>) -> Result<&'a Sequence, M
 /// seconds, or an anchor such as `c3.end-1f`, `beat1` or `end`.
 fn program_position(project: &Project, sequence: &Sequence, text: &str) -> Result<Time, McpError> {
     kerf_lang::sequence_position(project, sequence, text)
-        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error))
+        .map_err(|error| McpError::new(McpCode::InvalidArguments, error))
 }
 
 impl KerfMcpRouter {
@@ -294,7 +294,7 @@ impl KerfMcpRouter {
         let (script, _, base_revision) = self.pending(id)?;
         if base_revision != revision {
             return Err(McpError::new(
-                "PROPOSAL_STALE",
+                McpCode::ProposalStale,
                 format!(
                     "proposal {id} was made at revision {base_revision} and the project is \
                      at revision {revision}; bring it forward (`edit` with it as `forward`) \
@@ -303,7 +303,7 @@ impl KerfMcpRouter {
             ));
         }
         let proposed = apply_script(&project, catalog(), &script)
-            .map_err(|errors| McpError::new("PROPOSAL_STALE", diagnostics(&errors)))?;
+            .map_err(|errors| McpError::new(McpCode::ProposalStale, diagnostics(&errors)))?;
         Ok((revision, proposed.project))
     }
 
@@ -363,14 +363,14 @@ fn inline_image(object: &mut Value) -> Result<(), McpError> {
     let path = object
         .get("path")
         .and_then(Value::as_str)
-        .ok_or_else(|| McpError::new("HANDLER_FAILED", "artifact path is missing"))?
+        .ok_or_else(|| McpError::new(McpCode::HandlerFailed, "artifact path is missing"))?
         .to_owned();
     let media_type = match Path::new(&path).extension().and_then(|ext| ext.to_str()) {
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("png") => "image/png",
         _ => {
             return Err(McpError::new(
-                "HANDLER_FAILED",
+                McpCode::HandlerFailed,
                 format!("artifact is not an image: {path}"),
             ))
         }
@@ -378,7 +378,7 @@ fn inline_image(object: &mut Value) -> Result<(), McpError> {
     let metadata = fs::metadata(&path).map_err(io_error)?;
     if metadata.len() > MAX_INLINE_ARTIFACT_BYTES as u64 {
         return Err(McpError::new(
-            "RESULT_TOO_LARGE",
+            McpCode::ResultTooLarge,
             format!("inline artifact exceeds {MAX_INLINE_ARTIFACT_BYTES} bytes"),
         ));
     }
@@ -389,12 +389,12 @@ fn inline_image(object: &mut Value) -> Result<(), McpError> {
 }
 
 fn io_error(error: io::Error) -> McpError {
-    McpError::new("HANDLER_FAILED", error.to_string())
+    McpError::new(McpCode::HandlerFailed, error.to_string())
 }
 
 fn not_pending(id: &str) -> McpError {
     McpError::new(
-        "NOT_PENDING",
+        McpCode::NotPending,
         format!("proposal {id} is not waiting for review"),
     )
 }

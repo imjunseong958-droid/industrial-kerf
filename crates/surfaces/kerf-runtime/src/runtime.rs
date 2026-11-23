@@ -12,8 +12,9 @@ use crate::store::{
 };
 use crate::timeline;
 use crate::{
-    validate_actor, Author, MailboxMessage, PendingProposal, RenderJob, RenderRange, RuntimeError,
-    RuntimeRequest, RuntimeResponse, StartRenderOptions, StateSnapshot, SOURCE_VERSION,
+    validate_actor, Author, ErrorCode, MailboxMessage, PendingProposal, RenderJob, RenderRange,
+    RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions, StateSnapshot,
+    SOURCE_VERSION,
 };
 use kerf_model::Project;
 use projection::{collab_error, merge_driver, Undo};
@@ -344,7 +345,7 @@ impl Runtime {
             self.projection_status = inspect_projection(&self.project_path, &self.state.project);
             if self.projection_status == ProjectionStatus::Diverged && !allow_diverged_projection {
                 return Err(RuntimeError::new(
-                    "PROJECTION_DIVERGED",
+                    ErrorCode::ProjectionDiverged,
                     "project.kerf differs from authoritative kerfd state; repair or explicitly import the projection before editing",
                 ));
             }
@@ -405,7 +406,7 @@ impl Runtime {
             Ok(self.snapshot())
         } else {
             Err(RuntimeError::new(
-                "IDEMPOTENCY_CONFLICT",
+                ErrorCode::IdempotencyConflict,
                 "idempotency key was already used for a different request",
             ))
         })
@@ -580,7 +581,7 @@ impl Runtime {
                     (Some(start), Some(duration)) => Some(RenderRange::new(start, duration)?),
                     _ => {
                         return Err(RuntimeError::new(
-                            "INVALID_RENDER_RANGE",
+                            ErrorCode::InvalidRenderRange,
                             "render start and duration must be provided together",
                         ))
                     }
@@ -693,7 +694,7 @@ impl Runtime {
                     )?))
                 }
                 _ => Err(RuntimeError::new(
-                    "INVALID_REQUEST",
+                    ErrorCode::InvalidRequest,
                     "proposal rejection requires actor, idempotencyKey, and baseRevision together",
                 )),
             },
@@ -727,7 +728,7 @@ fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError>
     validate_actor(actor)?;
     if key.trim().is_empty() {
         return Err(RuntimeError::new(
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "idempotencyKey is required",
         ));
     }

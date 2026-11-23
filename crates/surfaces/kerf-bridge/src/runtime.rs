@@ -10,7 +10,7 @@ use crate::{
     workflows, Command, Event, MediaProject, Shared,
 };
 use kerf_mcp::KerfMcpRouter;
-use kerf_runtime::{RuntimeClient, StateSnapshot};
+use kerf_runtime::{ErrorCode, RuntimeClient, StateSnapshot};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -620,7 +620,7 @@ impl Worker {
                     &clip,
                     None,
                 )
-                .map_err(|why| kerf_runtime::RuntimeError::new("SIGNAL_FAILED", why))?;
+                .map_err(|why| kerf_runtime::RuntimeError::new(ErrorCode::SignalFailed, why))?;
                 active_client.apply_script_request("ui", operation, &read.script(&clip), revision)
             })
     }

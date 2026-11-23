@@ -44,7 +44,11 @@ fn render_outputs_outside_the_project_are_refused() {
     let missing = std::env::temp_dir().join(format!("kerf-e1-missing-{}", unique_id()));
     let refused = |runtime: &mut Runtime, output: Value| {
         let error = render(runtime, json!({"quality": "master", "output": output})).unwrap_err();
-        assert_eq!(error.code, "INVALID_RENDER_OUTPUT", "{output}: {error:?}");
+        assert_eq!(
+            error.code.as_str(),
+            "INVALID_RENDER_OUTPUT",
+            "{output}: {error:?}"
+        );
         error.message
     };
     assert!(refused(&mut runtime, json!("../elsewhere/")).contains("climbs out"));
@@ -80,7 +84,7 @@ fn render_outputs_outside_the_project_are_refused() {
     // Two queued renders never write one file.
     render(&mut runtime, json!({"quality": "master", "name": "Master"})).unwrap();
     let error = render(&mut runtime, json!({"quality": "master", "name": "Master"})).unwrap_err();
-    assert_eq!(error.code, "RENDER_OUTPUT_BUSY");
+    assert_eq!(error.code.as_str(), "RENDER_OUTPUT_BUSY");
     assert_eq!(runtime.render_jobs().len(), 1);
     // A busy render is refused before any folder is made for it.
     render(
@@ -94,7 +98,7 @@ fn render_outputs_outside_the_project_are_refused() {
         json!({"quality": "master", "output": "busy/", "name": "B"}),
     )
     .unwrap_err();
-    assert_eq!(error.code, "RENDER_OUTPUT_BUSY");
+    assert_eq!(error.code.as_str(), "RENDER_OUTPUT_BUSY");
     assert!(
         !directory.join("busy").exists(),
         "a refused render makes nothing"
@@ -144,7 +148,7 @@ fn finished_renders_are_never_written_over() {
         json!({"quality": "master", "output": "deliveries/Master.mov"}),
     )
     .unwrap_err();
-    assert_eq!(error.code, "RENDER_OUTPUT_EXISTS");
+    assert_eq!(error.code.as_str(), "RENDER_OUTPUT_EXISTS");
     // A job that failed without leaving a file does not hold its name.
     let (failed, _, _) = render(
         &mut runtime,

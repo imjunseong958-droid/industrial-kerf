@@ -8,7 +8,7 @@ use crate::store::{
     Change, HistoryEntry, ImportRecord, JournalAction, JournalImport, ProposalReceipt,
     ProposalRecord,
 };
-use crate::{EditOp, RuntimeError, StateSnapshot};
+use crate::{EditOp, ErrorCode, RuntimeError, StateSnapshot};
 use kerf_model::Project;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -227,7 +227,7 @@ impl Runtime {
         if let Some(record) = self.state.imports.get(&operation) {
             if record.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
+                    ErrorCode::IdempotencyConflict,
                     "idempotency key was already used for a different import",
                 ));
             }
@@ -299,11 +299,9 @@ impl Runtime {
             return replayed;
         }
         self.check_revision(Some(base_revision))?;
-        let existing = self
-            .state
-            .project
-            .media(media)
-            .ok_or_else(|| RuntimeError::new("UNKNOWN_MEDIA", format!("no media `{media}`")))?;
+        let existing = self.state.project.media(media).ok_or_else(|| {
+            RuntimeError::new(ErrorCode::UnknownMedia, format!("no media `{media}`"))
+        })?;
         let MediaFile { file, stored } = media_file(self.directory(), path)?;
         let mesh = is_mesh_file(&file);
         let file = file.to_string_lossy().into_owned();
@@ -316,7 +314,7 @@ impl Runtime {
         } else {
             let probe = kerf_engine::media::probe::info(&file).map_err(|error| {
                 RuntimeError::new(
-                    "MEDIA_UNREADABLE",
+                    ErrorCode::MediaUnreadable,
                     format!("{path} cannot be read as media: {error}"),
                 )
             })?;
@@ -396,7 +394,7 @@ fn is_mesh_file(file: &Path) -> bool {
 fn media_file(directory: &Path, path: &str) -> Result<MediaFile, RuntimeError> {
     if path.trim().is_empty() {
         return Err(RuntimeError::new(
-            "INVALID_IMPORT",
+            ErrorCode::InvalidImport,
             "media path is required",
         ));
     }
@@ -408,7 +406,7 @@ fn media_file(directory: &Path, path: &str) -> Result<MediaFile, RuntimeError> {
     };
     let metadata = fs::metadata(&file).map_err(|error| {
         RuntimeError::new(
-            "INVALID_IMPORT",
+            ErrorCode::InvalidImport,
             format!(
                 "media path is not a readable file: {} ({error})",
                 file.display()
@@ -417,13 +415,13 @@ fn media_file(directory: &Path, path: &str) -> Result<MediaFile, RuntimeError> {
     })?;
     if !metadata.is_file() {
         return Err(RuntimeError::new(
-            "INVALID_IMPORT",
+            ErrorCode::InvalidImport,
             format!("media path is not a file: {}", file.display()),
         ));
     }
     if kerf_collab::git::is_lfs_pointer(&file) {
         return Err(RuntimeError::new(
-            "MEDIA_NOT_DOWNLOADED",
+            ErrorCode::MediaNotDownloaded,
             format!(
                 "{path} is a Git LFS pointer, not the media itself; download it (git lfs pull) first"
             ),

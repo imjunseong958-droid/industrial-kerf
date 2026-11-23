@@ -26,9 +26,9 @@ pub use kerf_collab::git::{Status as GitStatus, User as GitUser};
 pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
 pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
 pub use kerf_runtime::{
-    Author, PendingProposal, ProposalEntry, ProposalFreshness, ProposalVersion, TimelineView,
-    ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey, ViewSequence,
-    ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    Author, ErrorCode, PendingProposal, ProposalEntry, ProposalFreshness, ProposalVersion,
+    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
+    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -536,7 +536,7 @@ pub struct ErrorEvent {
     pub message: String,
     /// kerfd's code for a refusal (`INVALID_RENDER_OUTPUT`, `REVISION_CONFLICT`, ...).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub code: Option<String>,
+    pub code: Option<ErrorCode>,
     /// The command refused, by its `type` (`export`, `media_make`, `look_save`, ...), or
     /// what it is about (`agent`, `conversation`, `recipe`, `workflow`).
     #[serde(skip_serializing_if = "Option::is_none")]

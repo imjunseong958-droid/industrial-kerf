@@ -4,7 +4,7 @@
 
 use super::tools::MeshInput;
 use super::{catalog, resolve_project_source_path};
-use crate::{KerfMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_compose::{CameraPlace, Compositor, MeshFile};
 use kerf_model::{ClipAt, Content, Project, Sequence};
 use serde_json::{json, Value};
@@ -25,7 +25,7 @@ struct MeshClip<'a> {
 }
 
 fn invalid(message: String) -> McpError {
-    McpError::new("INVALID_ARGUMENTS", message)
+    McpError::new(McpCode::InvalidArguments, message)
 }
 
 /// `value` to three places, as `mesh` says its numbers.
@@ -54,7 +54,7 @@ impl KerfMcpRouter {
                 ..Default::default()
             },
         )
-        .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
         let file = compositor.mesh_file(&input.clip).map_err(|why| {
             invalid(format!(
                 "`{}`: {why}; `mesh` is of a `gen=mesh@1` clip with a `file`",
@@ -94,7 +94,7 @@ impl KerfMcpRouter {
         };
         if places.is_empty() {
             return Err(McpError::new(
-                "RENDER_FAILED",
+                McpCode::RenderFailed,
                 format!("the camera could not be placed on `{}`", input.clip),
             ));
         }
@@ -246,7 +246,7 @@ impl KerfMcpRouter {
         };
         let size = seen.size().ok_or_else(|| {
             McpError::new(
-                "RENDER_FAILED",
+                McpCode::RenderFailed,
                 format!("`{}` could not be drawn", input.clip),
             )
         })?;
@@ -268,7 +268,7 @@ impl KerfMcpRouter {
                 number += 1;
             },
         )
-        .map_err(|error| McpError::new("MEDIA_FAILED", error.to_string()))?;
+        .map_err(|error| McpError::new(McpCode::MediaFailed, error.to_string()))?;
         let Some(pictures) = pictures.into_iter().collect::<Option<Vec<_>>>() else {
             return Err(invalid(format!(
                 "`{footage}` has {number} frames at {per_second} a second, and `{from}` is of more: `fits` is the footage the path was found of, and `rate` its frames a second"

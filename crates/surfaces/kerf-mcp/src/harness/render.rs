@@ -3,9 +3,9 @@
 
 use super::tools::{input, RenderInput};
 use super::{program, program_position};
-use crate::{KerfMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Time;
-use kerf_runtime::{RenderJob, RenderRange};
+use kerf_runtime::{ErrorCode, RenderJob, RenderRange};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -59,7 +59,7 @@ impl KerfMcpRouter {
             // kerfd has the job's end, which the agent asks it for; a render that failed, or
             // whose end kerfd could not be told, is said here too. A cancel is not a failure.
             if let Err(error) = rendered
-                && error.code != "CANCELLED"
+                && error.code != ErrorCode::Cancelled
             {
                 log::warn!(
                     "render {} failed, or kerfd was not told how it ended: {}",
@@ -85,7 +85,7 @@ impl KerfMcpRouter {
             .find(|known| known.name() == format)
             .ok_or_else(|| {
                 McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!("handoff `{format}` is not otio or fcpxml"),
                 )
             })?;
@@ -101,7 +101,7 @@ impl KerfMcpRouter {
             format.name()
         ));
         let written = kerf_interchange::export(&project, Some(&id), &output, format)
-            .map_err(|error| McpError::new("HANDLER_FAILED", error.to_string()))?;
+            .map_err(|error| McpError::new(McpCode::HandlerFailed, error.to_string()))?;
         let listed = |issues: &[kerf_interchange::InterchangeIssue]| -> Vec<Value> {
             issues
                 .iter()
@@ -132,7 +132,7 @@ impl KerfMcpRouter {
                 || input.to.is_some()
             {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`handoff` writes the whole sequence as a timeline file; it takes no job, quality, or range",
                 ));
             }
@@ -146,7 +146,7 @@ impl KerfMcpRouter {
                 || input.proposal.is_some()
             {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`job` reads a render; it takes no quality, range, sequence, or proposal",
                 ));
             }
@@ -164,14 +164,17 @@ impl KerfMcpRouter {
             }));
         }
         if input.cancel {
-            return Err(McpError::new("INVALID_ARGUMENTS", "cancel needs `job`"));
+            return Err(McpError::new(
+                McpCode::InvalidArguments,
+                "cancel needs `job`",
+            ));
         }
         let draft = match input.quality.as_deref() {
             None | Some("draft") => true,
             Some("full") => false,
             Some(other) => {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!("quality `{other}` is not draft or full"),
                 ))
             }
@@ -180,7 +183,7 @@ impl KerfMcpRouter {
         let sequence = program(&project, input.sequence.as_deref())?;
         if !sequence.duration().is_positive() {
             return Err(McpError::new(
-                "EMPTY_SEQUENCE",
+                McpCode::EmptySequence,
                 format!(
                     "sequence `{}` is empty{}",
                     sequence.id,

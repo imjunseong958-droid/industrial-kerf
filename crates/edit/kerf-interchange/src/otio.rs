@@ -12,7 +12,7 @@
 //! editor does not read it, so the frame size is still reported as not
 //! carried.
 
-use crate::{issue, InterchangeError, InterchangeIssue, IssueSeverity};
+use crate::{issue, InterchangeCode, InterchangeError, InterchangeIssue, IssueSeverity};
 use kerf_model::{
     validate, Align, AudioInfo, Catalog, Clip, Content, Diagnostic, Id, IdGen, Marker, MarkerColor,
     Media, Params, Project, Rate, Ratio, Sequence, Track, TrackKind, Transition, VideoInfo,
@@ -146,7 +146,10 @@ pub fn to_timeline(
     project: &Project,
 ) -> Result<(Timeline, Vec<InterchangeIssue>), InterchangeError> {
     let sequence = project.sequences.first().ok_or_else(|| {
-        InterchangeError::new("INTERCHANGE_PROJECT_INVALID", "the project has no sequence")
+        InterchangeError::new(
+            InterchangeCode::ProjectInvalid,
+            "the project has no sequence",
+        )
     })?;
     Ok(sequence_timeline(project, sequence))
 }
@@ -493,7 +496,7 @@ pub(crate) fn ratio_of(value: f64) -> Option<Ratio> {
 pub fn from_timeline(
     timeline: &Timeline,
 ) -> Result<(Project, Vec<InterchangeIssue>), InterchangeError> {
-    let invalid = |message: String| InterchangeError::new("INTERCHANGE_OUTPUT_INVALID", message);
+    let invalid = |message: String| InterchangeError::new(InterchangeCode::OutputInvalid, message);
     let rate = Rate::from_fps(timeline.rate).map_err(|e| invalid(format!("timeline rate: {e}")))?;
     let mut issues = Vec::new();
     let wire = timeline.sequence.clone().unwrap_or_default();

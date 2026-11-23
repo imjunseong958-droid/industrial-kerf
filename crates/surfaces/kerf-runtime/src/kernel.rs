@@ -4,7 +4,7 @@
 //! as an edit script or as typed operations from the editor, and is
 //! journaled as the script of the operations it ran.
 
-use crate::RuntimeError;
+use crate::{ErrorCode, RuntimeError};
 use kerf_engine::ProbeInfo;
 use kerf_lang::{
     apply_script_with, bring_forward, parse_document, print_document, print_ops, Breaks, Facts,
@@ -46,11 +46,11 @@ pub(crate) fn render_sequence<'a>(
     id: Option<&str>,
 ) -> Result<&'a kerf_model::Sequence, RuntimeError> {
     match id {
-        Some(id) => project
-            .sequence(id)
-            .ok_or_else(|| RuntimeError::new("UNKNOWN_SEQUENCE", format!("no sequence `{id}`"))),
+        Some(id) => project.sequence(id).ok_or_else(|| {
+            RuntimeError::new(ErrorCode::UnknownSequence, format!("no sequence `{id}`"))
+        }),
         None => project.sequences.first().ok_or_else(|| {
-            RuntimeError::new("INVALID_RENDER_RANGE", "the project has no sequence")
+            RuntimeError::new(ErrorCode::InvalidRenderRange, "the project has no sequence")
         }),
     }
 }
@@ -65,12 +65,14 @@ pub(crate) fn time_range(
     let time = |seconds: f64| {
         Time::from_seconds(seconds)
             .map(|time| rate.round(time))
-            .ok_or_else(|| RuntimeError::new("INVALID_RENDER_RANGE", "the range is out of bounds"))
+            .ok_or_else(|| {
+                RuntimeError::new(ErrorCode::InvalidRenderRange, "the range is out of bounds")
+            })
     };
     let (from, to) = (time(start)?, time(end)?);
     if to <= from {
         return Err(RuntimeError::new(
-            "INVALID_RENDER_RANGE",
+            ErrorCode::InvalidRenderRange,
             "the range is shorter than a frame",
         ));
     }
@@ -423,16 +425,16 @@ pub(crate) fn print_annotated(project: &Project) -> String {
 pub(crate) fn parse(text: &str) -> Result<Project, RuntimeError> {
     parse_document(text, catalog())
         .map(|document| document.project)
-        .map_err(|errors| diagnostics_error("INVALID_PROJECT", &errors))
+        .map_err(|errors| diagnostics_error(ErrorCode::InvalidProject, &errors))
 }
 
-pub(crate) fn diagnostics_error(code: &str, diagnostics: &[Diagnostic]) -> RuntimeError {
+pub(crate) fn diagnostics_error(code: ErrorCode, diagnostics: &[Diagnostic]) -> RuntimeError {
     let message: Vec<String> = diagnostics.iter().map(ToString::to_string).collect();
     RuntimeError::new(code, message.join("; "))
 }
 
 fn rejected_error(rejected: Rejected) -> RuntimeError {
-    diagnostics_error("EDIT_REJECTED", &rejected.diagnostics)
+    diagnostics_error(ErrorCode::EditRejected, &rejected.diagnostics)
 }
 
 /// A new project: one empty 1920x1080, 30 fps sequence.
@@ -491,7 +493,7 @@ impl Edit {
         match self {
             Self::Script { script } => {
                 let applied = apply_script_with(project, catalog(), facts, script)
-                    .map_err(|errors| diagnostics_error("EDIT_REJECTED", &errors))?;
+                    .map_err(|errors| diagnostics_error(ErrorCode::EditRejected, &errors))?;
                 Ok(Edited {
                     script: print_ops(project, catalog(), &applied.ops),
                     project: applied.project,
@@ -515,7 +517,8 @@ pub(crate) fn forward(
     current: &Project,
     script: &str,
 ) -> Result<Edited, RuntimeError> {
-    let refused = |errors: Vec<Diagnostic>| diagnostics_error("PROPOSAL_NOT_FORWARDED", &errors);
+    let refused =
+        |errors: Vec<Diagnostic>| diagnostics_error(ErrorCode::ProposalNotForwarded, &errors);
     let forwarded = bring_forward(base, current, catalog(), script).map_err(refused)?;
     // What is kept is the script, so it is the script that has to make this
     // project.
@@ -523,10 +526,10 @@ pub(crate) fn forward(
         script: print_ops(current, catalog(), &forwarded.ops),
     }
     .run(current, &NoFacts)
-    .map_err(|error| RuntimeError::new("PROPOSAL_NOT_FORWARDED", error.message))?;
+    .map_err(|error| RuntimeError::new(ErrorCode::ProposalNotForwarded, error.message))?;
     if edited.project != forwarded.project {
         return Err(RuntimeError::new(
-            "PROPOSAL_NOT_FORWARDED",
+            ErrorCode::ProposalNotForwarded,
             "the operations do not read back as the edit they made on the project as it is",
         ));
     }
@@ -550,10 +553,9 @@ pub(crate) fn add_media(
     path: &str,
     probe: Option<&ProbeInfo>,
 ) -> Result<(Vec<Op>, Id), RuntimeError> {
-    let sequence = project
-        .sequences
-        .first()
-        .ok_or_else(|| RuntimeError::new("INVALID_IMPORT", "the project has no sequence"))?;
+    let sequence = project.sequences.first().ok_or_else(|| {
+        RuntimeError::new(ErrorCode::InvalidImport, "the project has no sequence")
+    })?;
     let id = project.id_gen().next("m");
     let media = match probe.map(|probe| media_from_probe(id.clone(), path, probe, sequence.rate)) {
         Some(Ok(media)) => media,
@@ -573,10 +575,9 @@ pub(crate) fn import_media(
     path: &str,
     probe: Option<&ProbeInfo>,
 ) -> Result<(Vec<Op>, Id, Id), RuntimeError> {
-    let sequence = project
-        .sequences
-        .first()
-        .ok_or_else(|| RuntimeError::new("INVALID_IMPORT", "the project has no sequence"))?;
+    let sequence = project.sequences.first().ok_or_else(|| {
+        RuntimeError::new(ErrorCode::InvalidImport, "the project has no sequence")
+    })?;
     let mut ids = project.id_gen();
     let id = ids.next("m");
     let media = match probe.map(|probe| media_from_probe(id.clone(), path, probe, sequence.rate)) {
@@ -651,7 +652,8 @@ pub(crate) fn media_from_probe(
     probe: &ProbeInfo,
     rate: Rate,
 ) -> Result<Media, RuntimeError> {
-    let unreadable = |what: &str| RuntimeError::new("MEDIA_UNREADABLE", format!("{path} {what}"));
+    let unreadable =
+        |what: &str| RuntimeError::new(ErrorCode::MediaUnreadable, format!("{path} {what}"));
     let rate = probe
         .fps
         .and_then(|fps| Rate::from_fps(fps).ok())
@@ -755,7 +757,7 @@ pub(crate) fn replace_media(project: &Project, mut media: Media) -> Result<Edite
             .map(|diagnostic| diagnostic.message.clone())
             .collect();
         RuntimeError::new(
-            "MEDIA_DOES_NOT_FIT",
+            ErrorCode::MediaDoesNotFit,
             format!("{path} cannot replace media `{id}`: {}", reasons.join("; ")),
         )
     })?;
@@ -1273,7 +1275,7 @@ fn new_mask_name(project: &Project, clip: &str) -> Result<Id, RuntimeError> {
 }
 
 fn invalid(message: impl Into<String>) -> RuntimeError {
-    RuntimeError::new("INVALID_EDIT", message)
+    RuntimeError::new(ErrorCode::InvalidEdit, message)
 }
 
 fn edit_id(text: &str) -> Result<Id, RuntimeError> {

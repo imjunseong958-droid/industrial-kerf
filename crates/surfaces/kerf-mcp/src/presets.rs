@@ -2,7 +2,7 @@
 //! harness's normal edit proposal, checks, and before/after preview; the looks
 //! it carries join the project's.
 
-use crate::{KerfMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_lang::preset::{self, Preset};
 use kerf_lang::Clock;
@@ -36,10 +36,10 @@ fn zero() -> String {
     "0f".into()
 }
 fn invalid(message: impl Into<String>) -> McpError {
-    McpError::new("INVALID_PRESET", message)
+    McpError::new(McpCode::InvalidPreset, message)
 }
 fn io_error(error: std::io::Error) -> McpError {
-    McpError::new("PRESET_IO", error.to_string())
+    McpError::new(McpCode::PresetIo, error.to_string())
 }
 
 impl KerfMcpRouter {

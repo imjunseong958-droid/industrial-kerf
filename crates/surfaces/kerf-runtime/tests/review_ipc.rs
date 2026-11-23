@@ -241,7 +241,7 @@ fn a_stale_proposal_is_brought_forward_by_either_client_or_refused_by_name() {
     let error = mcp
         .forward_proposal("forward-again", cut.revision, &v2.proposal_id)
         .unwrap_err();
-    assert_eq!(error.code, "PROPOSAL_NOT_FORWARDED");
+    assert_eq!(error.code.as_str(), "PROPOSAL_NOT_FORWARDED");
     assert!(error.message.contains("clip `c1`"), "{}", error.message);
     let after = editor.get_state().unwrap();
     assert_eq!(after.proposals[0].proposal_id, v2.proposal_id);

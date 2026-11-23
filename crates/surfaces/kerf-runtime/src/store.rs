@@ -3,7 +3,8 @@
 
 use crate::kernel;
 use crate::{
-    io_error, Author, PendingProposal, ProposalVersion, RenderJob, RuntimeError, StateSnapshot,
+    io_error, Author, ErrorCode, PendingProposal, ProposalVersion, RenderJob, RuntimeError,
+    StateSnapshot,
 };
 use fs2::FileExt;
 use kerf_model::Project;
@@ -60,7 +61,7 @@ impl RuntimeLock {
                 == fs2::lock_contended_error().raw_os_error();
             if is_contention {
                 RuntimeError::new(
-                    "RUNTIME_ALREADY_RUNNING",
+                    ErrorCode::RuntimeAlreadyRunning,
                     format!("another kerf runtime already owns {}", directory.display()),
                 )
             } else {
@@ -384,7 +385,7 @@ pub(crate) fn seal_journal_record(
 ) -> Result<JournalRecord, RuntimeError> {
     record.checksum.clear();
     let bytes = serde_json::to_vec(&record)
-        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::SerializeError, error.to_string()))?;
     record.checksum = sha256_hex(&bytes);
     Ok(record)
 }
@@ -392,7 +393,7 @@ pub(crate) fn seal_journal_record(
 fn verify_journal_record(record: &JournalRecord) -> Result<(), RuntimeError> {
     if !(OLDEST_JOURNAL_VERSION..=JOURNAL_VERSION).contains(&record.format_version) {
         return Err(RuntimeError::new(
-            "JOURNAL_VERSION_UNSUPPORTED",
+            ErrorCode::JournalVersionUnsupported,
             format!(
                 "journal record format {} is not supported",
                 record.format_version
@@ -403,10 +404,10 @@ fn verify_journal_record(record: &JournalRecord) -> Result<(), RuntimeError> {
     let checksum = unsigned.checksum.clone();
     unsigned.checksum.clear();
     let bytes = serde_json::to_vec(&unsigned)
-        .map_err(|error| RuntimeError::new("INVALID_JOURNAL", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::InvalidJournal, error.to_string()))?;
     if checksum != sha256_hex(&bytes) {
         return Err(RuntimeError::new(
-            "JOURNAL_CHECKSUM_MISMATCH",
+            ErrorCode::JournalChecksumMismatch,
             format!(
                 "journal record {} failed checksum verification",
                 record.sequence
@@ -426,7 +427,7 @@ pub(crate) fn append_journal_record(
     record: &JournalRecord,
 ) -> Result<(), RuntimeError> {
     let bytes = serde_json::to_vec(record)
-        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::SerializeError, error.to_string()))?;
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -486,7 +487,7 @@ pub(crate) fn load_journal(
             }
             Err(error) => {
                 return Err(RuntimeError::new(
-                    "INVALID_JOURNAL",
+                    ErrorCode::InvalidJournal,
                     format!("journal record at byte {start} is invalid: {error}"),
                 ));
             }
@@ -583,7 +584,7 @@ pub(crate) fn load_checkpoint(directory: &Path) -> Result<Loaded, RuntimeError> 
                 // be recovered from the last complete atomic temp write.
                 let value = read_checkpoint(&temporary_path).map_err(|temporary_error| {
                     RuntimeError::new(
-                        "INVALID_CHECKPOINT",
+                        ErrorCode::InvalidCheckpoint,
                         format!(
                             "canonical checkpoint failed: {}; temp checkpoint failed: {}",
                             canonical_error.message, temporary_error.message
@@ -613,32 +614,32 @@ fn checkpoint_format(path: &Path) -> Option<u64> {
 fn read_checkpoint(path: &Path) -> Result<PersistedCheckpoint, RuntimeError> {
     let text = fs::read_to_string(path).map_err(io_error)?;
     let value: Value = serde_json::from_str(&text)
-        .map_err(|error| RuntimeError::new("INVALID_CHECKPOINT", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::InvalidCheckpoint, error.to_string()))?;
     let format_version = value
         .get("format_version")
         .or_else(|| value.get("formatVersion"))
         .and_then(Value::as_u64)
         .ok_or_else(|| {
             RuntimeError::new(
-                "INVALID_CHECKPOINT",
+                ErrorCode::InvalidCheckpoint,
                 "checkpoint format_version is required",
             )
         })?;
     if !(OLDEST_CHECKPOINT_VERSION..=CHECKPOINT_VERSION).contains(&format_version) {
         return Err(RuntimeError::new(
-            "CHECKPOINT_VERSION_UNSUPPORTED",
+            ErrorCode::CheckpointVersionUnsupported,
             format!("checkpoint format {format_version} is not supported"),
         ));
     }
     serde_json::from_value(value)
-        .map_err(|error| RuntimeError::new("INVALID_CHECKPOINT", error.to_string()))
+        .map_err(|error| RuntimeError::new(ErrorCode::InvalidCheckpoint, error.to_string()))
 }
 
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), RuntimeError> {
     // Compact: a checkpoint is written on the actor's thread, and nobody
     // reads it by eye.
     let bytes = serde_json::to_vec(value)
-        .map_err(|error| RuntimeError::new("SERIALIZE_ERROR", error.to_string()))?;
+        .map_err(|error| RuntimeError::new(ErrorCode::SerializeError, error.to_string()))?;
     write_bytes_atomic(path, &bytes)
 }
 

@@ -6,10 +6,10 @@ use super::preview::changed_range;
 use super::shots::{ShotChanges, WorkflowKept};
 use super::tools::{input, EditInput};
 use super::{catalog, diagnostics, not_pending, operation_key, parse};
-use crate::{engine_error, KerfMcpRouter, McpError};
+use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_lang::{apply_script, apply_script_with, print_document, PrintOptions};
 use kerf_model::Project;
-use kerf_runtime::{Author, CachedFacts, ProposalEntry, StateSnapshot};
+use kerf_runtime::{Author, CachedFacts, ErrorCode, ProposalEntry, StateSnapshot};
 use serde_json::{json, Value};
 
 impl KerfMcpRouter {
@@ -18,7 +18,7 @@ impl KerfMcpRouter {
         let building_on = arguments.get("extend").is_some();
         self.run_edit(arguments).map_err(|mut error| {
             // What is not in the project may be in a proposal not built on.
-            if !building_on && error.code == "SCRIPT_REFUSED" {
+            if !building_on && error.code == McpCode::ScriptRefused {
                 let hint = ["no clip `", "unknown media `", "no clip or marker `"]
                     .iter()
                     .find_map(|before| {
@@ -40,7 +40,7 @@ impl KerfMcpRouter {
         if let Some(id) = &input.forward {
             if !alone {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`forward` is passed alone: it runs the proposal's own operations again, with no script of this edit's",
                 ));
             }
@@ -97,7 +97,7 @@ impl KerfMcpRouter {
             Vec::new()
         } else {
             kerf_engine::recipe::cast::Cast::add(&self.dir, &input.cast)
-                .map_err(|error| McpError::new("INVALID_CAST", error.to_string()))?
+                .map_err(|error| McpError::new(McpCode::InvalidCast, error.to_string()))?
         };
         if print_document(&applied.project, catalog(), PrintOptions::default())
             == print_document(&before, catalog(), PrintOptions::default())
@@ -109,7 +109,10 @@ impl KerfMcpRouter {
                     "cast": cast_added,
                 }));
             }
-            return Err(McpError::new("NO_CHANGE", "the script changes nothing"));
+            return Err(McpError::new(
+                McpCode::NoChange,
+                "the script changes nothing",
+            ));
         }
         // An extension runs the operations of the proposal it extends, which
         // read nothing that could have changed since, and then this script;
@@ -179,7 +182,7 @@ impl KerfMcpRouter {
             || !input.texts.is_empty()
         {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "savePreset takes only sequence and name",
             ));
         }
@@ -210,7 +213,7 @@ impl KerfMcpRouter {
             && let Some((version, newest, newest_id)) = self.newer_version(id)?
         {
             return Err(McpError::new(
-                "PROPOSAL_SUPERSEDED",
+                McpCode::ProposalSuperseded,
                 format!(
                     "proposal {id} is version {version} of a proposal now at version \
                          {newest}: built on it, this script would leave out what the versions \
@@ -232,7 +235,7 @@ impl KerfMcpRouter {
         for id in &input.carry {
             let carry = kerf_engine::recipe::carry(before, &self.dir, id).map_err(|error| {
                 McpError::new(
-                    "INVALID_RECIPE",
+                    McpCode::InvalidRecipe,
                     format!("{error}{}", self.in_pending(id, "extend")),
                 )
             })?;
@@ -262,7 +265,7 @@ impl KerfMcpRouter {
             != print_document(applied, catalog(), PrintOptions::default())
         {
             return Err(McpError::new(
-                "SCRIPT_REFUSED",
+                McpCode::ScriptRefused,
                 "after the operations of the proposal it extends, this script does \
                  something else than it did on its own; start it with `use <sequence>`",
             ));
@@ -292,15 +295,15 @@ impl KerfMcpRouter {
                 author,
                 replaced,
             )
-            .map_err(|error| match error.code.as_str() {
-                "PROPOSAL_PENDING" => McpError::new(
-                    "PROPOSAL_PENDING",
+            .map_err(|error| match error.code {
+                ErrorCode::ProposalPending => McpError::new(
+                    McpCode::ProposalPending,
                     format!(
                         "{}; pass one's id as `revise` to replace it, or `extend` to build on it",
                         error.message
                     ),
                 ),
-                "PROPOSAL_NOT_PENDING" | "PROPOSAL_NOT_FOUND" => {
+                ErrorCode::ProposalNotPending | ErrorCode::ProposalNotFound => {
                     not_pending(replaced.unwrap_or_default())
                 }
                 _ => McpError::from(error),
@@ -348,7 +351,7 @@ impl KerfMcpRouter {
                         error.message
                     );
                 }
-                return Err(McpError::new("INVALID_RECIPE", why));
+                return Err(McpError::new(McpCode::InvalidRecipe, why));
             }
         }
         Ok(())
@@ -420,19 +423,26 @@ impl KerfMcpRouter {
         let snapshot = self
             .runtime
             .forward_proposal(&operation_key("agent-forward"), revision, id)
-            .map_err(|error| match error.code.as_str() {
-                "PROPOSAL_NOT_PENDING" | "PROPOSAL_NOT_FOUND" => not_pending(id),
+            .map_err(|error| match error.code {
+                ErrorCode::ProposalNotPending | ErrorCode::ProposalNotFound => not_pending(id),
                 // The line and the clip that stopped it, as the runtime
                 // said them, and what is left to do.
-                "PROPOSAL_NOT_FORWARDED" => McpError::new(
-                    "PROPOSAL_NOT_FORWARDED",
+                ErrorCode::ProposalNotForwarded => McpError::new(
+                    McpCode::ProposalNotForwarded,
                     format!(
                         "{}. Nothing was staged and proposal {id} waits as it was; pass it as `revise` with a script written on the project as it is",
                         error.message
                     ),
                 ),
-                "PROPOSAL_SUPERSEDED" | "PROPOSAL_NOT_STALE" | "PROPOSAL_BASE_GONE" => {
-                    McpError::new(&error.code, error.message)
+                // These three an agent is told under the runtime's own name.
+                ErrorCode::ProposalSuperseded => {
+                    McpError::new(McpCode::ProposalSuperseded, error.message)
+                }
+                ErrorCode::ProposalNotStale => {
+                    McpError::new(McpCode::ProposalNotStale, error.message)
+                }
+                ErrorCode::ProposalBaseGone => {
+                    McpError::new(McpCode::ProposalBaseGone, error.message)
                 }
                 _ => McpError::from(error),
             })?;
@@ -499,7 +509,7 @@ fn one_kind_asked(input: &EditInput) -> Result<(), McpError> {
         != 1
     {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "pass exactly one of script (with or without workflowSet, carry and cast), any of those alone, preset, or savePreset",
         ));
     }
@@ -507,7 +517,7 @@ fn one_kind_asked(input: &EditInput) -> Result<(), McpError> {
     // it writes after, as lines of a script that set the steps it became.
     if !input.carry.is_empty() && (!input.workflow_set.is_empty() || input.restore_take.is_some()) {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "`carry` writes a recipe's steps under its media as they are: change them in the script of the same edit (`step <media> set <n> …`), or in an edit after it",
         ));
     }
@@ -521,13 +531,13 @@ fn script_asked(input: &EditInput) -> Result<(), McpError> {
             && (input.sequence.is_some() || !input.bindings.is_empty() || !input.texts.is_empty()))
     {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "sequence, bindings and texts are for presets; name is for savePreset",
         ));
     }
     if input.extend.is_some() && input.revise.is_some() {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "pass `extend` or `revise`, not both",
         ));
     }
@@ -542,7 +552,7 @@ fn first_pending(snapshot: &StateSnapshot) -> Result<&ProposalEntry, McpError> {
         .filter(|entry| entry.status == "pending")
     else {
         return Err(McpError::new(
-            "RUNTIME_ERROR",
+            McpCode::RuntimeError,
             "the runtime did not keep the proposal",
         ));
     };
@@ -574,7 +584,7 @@ fn with_shot_lines(workflows: &[WorkflowKept], steps: &[String], source_script: 
 
 /// A script refusal, with each line numbered as the agent wrote it.
 fn refused(errors: Vec<kerf_model::Diagnostic>) -> McpError {
-    McpError::new("SCRIPT_REFUSED", diagnostics(&errors))
+    McpError::new(McpCode::ScriptRefused, diagnostics(&errors))
 }
 
 /// `errors` of a script run after `lines` lines of other script, with

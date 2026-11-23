@@ -20,16 +20,104 @@ pub const MERGE_REPORT_ENV: &str = "KERF_MERGE_REPORT";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CollabError {
-    pub code: &'static str,
+    pub code: CollabCode,
     pub message: String,
 }
 
 impl CollabError {
-    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(code: CollabCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
         }
+    }
+}
+
+/// Which refusal a [`CollabError`] is. Its name ([`CollabCode::as_str`]) is what kerfd
+/// answers a sync with and what a log shows, so a name stays as it is once given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollabCode {
+    AlreadyExists,
+    DefaultBranch,
+    GhFailed,
+    GhUnavailable,
+    GitAddFailed,
+    GitCloneFailed,
+    GitCommitFailed,
+    GitConfigFailed,
+    GitFailed,
+    GitFetchFailed,
+    GitInitFailed,
+    GitLfsFailed,
+    GitPushFailed,
+    GitRemoteFailed,
+    GitResetFailed,
+    GitSwitchFailed,
+    GitUnavailable,
+    InvalidBranch,
+    InvalidName,
+    InvalidRate,
+    InvalidUrl,
+    IoError,
+    LargeFile,
+    LocalSettingsTracked,
+    MergeFailed,
+    MergeInProgress,
+    NotARepository,
+    NotGithub,
+    NoBranch,
+    NoRemote,
+}
+
+impl CollabCode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AlreadyExists => "ALREADY_EXISTS",
+            Self::DefaultBranch => "DEFAULT_BRANCH",
+            Self::GhFailed => "GH_FAILED",
+            Self::GhUnavailable => "GH_UNAVAILABLE",
+            Self::GitAddFailed => "GIT_ADD_FAILED",
+            Self::GitCloneFailed => "GIT_CLONE_FAILED",
+            Self::GitCommitFailed => "GIT_COMMIT_FAILED",
+            Self::GitConfigFailed => "GIT_CONFIG_FAILED",
+            Self::GitFailed => "GIT_FAILED",
+            Self::GitFetchFailed => "GIT_FETCH_FAILED",
+            Self::GitInitFailed => "GIT_INIT_FAILED",
+            Self::GitLfsFailed => "GIT_LFS_FAILED",
+            Self::GitPushFailed => "GIT_PUSH_FAILED",
+            Self::GitRemoteFailed => "GIT_REMOTE_FAILED",
+            Self::GitResetFailed => "GIT_RESET_FAILED",
+            Self::GitSwitchFailed => "GIT_SWITCH_FAILED",
+            Self::GitUnavailable => "GIT_UNAVAILABLE",
+            Self::InvalidBranch => "INVALID_BRANCH",
+            Self::InvalidName => "INVALID_NAME",
+            Self::InvalidRate => "INVALID_RATE",
+            Self::InvalidUrl => "INVALID_URL",
+            Self::IoError => "IO_ERROR",
+            Self::LargeFile => "LARGE_FILE",
+            Self::LocalSettingsTracked => "LOCAL_SETTINGS_TRACKED",
+            Self::MergeFailed => "MERGE_FAILED",
+            Self::MergeInProgress => "MERGE_IN_PROGRESS",
+            Self::NotARepository => "NOT_A_REPOSITORY",
+            Self::NotGithub => "NOT_GITHUB",
+            Self::NoBranch => "NO_BRANCH",
+            Self::NoRemote => "NO_REMOTE",
+        }
+    }
+}
+
+impl std::fmt::Display for CollabCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for CollabCode {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -334,13 +422,16 @@ fn non_interactive_env(
 }
 
 fn output(mut command: Command, what: &str) -> Result<Output> {
-    command
-        .output()
-        .map_err(|error| CollabError::new("GIT_UNAVAILABLE", format!("cannot run {what}: {error}")))
+    command.output().map_err(|error| {
+        CollabError::new(
+            CollabCode::GitUnavailable,
+            format!("cannot run {what}: {error}"),
+        )
+    })
 }
 
 /// Run `command`, returning trimmed stdout, or its stderr as the error.
-fn run(command: Command, code: &'static str) -> Result<String> {
+fn run(command: Command, code: CollabCode) -> Result<String> {
     let program = command.get_program().to_string_lossy().into_owned();
     let out = output(command, &program)?;
     if out.status.success() {
@@ -383,12 +474,12 @@ fn git_ok(dir: &Path, args: &[&str]) -> bool {
 fn git_text(dir: &Path, args: &[&str]) -> Option<String> {
     let mut command = git(dir);
     command.args(args);
-    run(command, "GIT_FAILED")
+    run(command, CollabCode::GitFailed)
         .ok()
         .filter(|text| !text.is_empty())
 }
 
-fn git_run(dir: &Path, args: &[&str], code: &'static str) -> Result<String> {
+fn git_run(dir: &Path, args: &[&str], code: CollabCode) -> Result<String> {
     let mut command = git(dir);
     command.args(args);
     run(command, code)
@@ -430,7 +521,7 @@ pub fn tools() -> Tools {
         command
             .args(["api", "user", "--jq", ".login"])
             .env("GH_PROMPT_DISABLED", "1");
-        tools.gh_user = run(command, "GH_FAILED")
+        tools.gh_user = run(command, CollabCode::GhFailed)
             .ok()
             .filter(|login| !login.is_empty());
     }
@@ -517,7 +608,7 @@ pub fn status(dir: &Path) -> Result<Status> {
     let git_text = |dir: &Path, args: &[&str]| {
         let mut command = git(dir);
         command.env("GIT_OPTIONAL_LOCKS", "0").args(args);
-        run(command, "GIT_FAILED")
+        run(command, CollabCode::GitFailed)
             .ok()
             .filter(|text| !text.is_empty())
     };
@@ -603,18 +694,21 @@ pub fn ensure_merge_driver(dir: &Path, driver: &Path) -> Result<()> {
                 "merge.kerf.name",
                 "Kerf structural merge",
             ],
-            "GIT_CONFIG_FAILED",
+            CollabCode::GitConfigFailed,
         )?;
         git_run(
             dir,
             &["config", "--local", "merge.kerf.driver", &command],
-            "GIT_CONFIG_FAILED",
+            CollabCode::GitConfigFailed,
         )?;
     }
     let attributes = git_text(dir, &["rev-parse", "--git-path", "info/attributes"])
         .map(|path| absolute_in(dir, &path))
         .ok_or_else(|| {
-            CollabError::new("GIT_FAILED", "cannot find the repository's info directory")
+            CollabError::new(
+                CollabCode::GitFailed,
+                "cannot find the repository's info directory",
+            )
         })?;
     let lines = ["project.kerf merge=kerf"];
     let existing = fs::read_to_string(&attributes).unwrap_or_default();
@@ -650,7 +744,7 @@ fn absolute_in(dir: &Path, path: &str) -> PathBuf {
 }
 
 fn io(error: std::io::Error) -> CollabError {
-    CollabError::new("IO_ERROR", error.to_string())
+    CollabError::new(CollabCode::IoError, error.to_string())
 }
 
 /// Everything in the project but its machine-local settings, as pathspecs
@@ -688,7 +782,7 @@ fn unstage_local_settings(dir: &Path) -> Result<()> {
         .env("GIT_LITERAL_PATHSPECS", "1")
         .args(["reset", "-q", "--"])
         .args(&settings);
-    run(command, "GIT_ADD_FAILED").map(|_| ())
+    run(command, CollabCode::GitAddFailed).map(|_| ())
 }
 
 /// Stage everything in the project directory, as a commit would. Hashing
@@ -699,14 +793,14 @@ fn unstage_local_settings(dir: &Path) -> Result<()> {
 pub fn stage(dir: &Path) -> Result<bool> {
     if !is_repository(dir) {
         return Err(CollabError::new(
-            "NOT_A_REPOSITORY",
+            CollabCode::NotARepository,
             "the project is not a Git repository",
         ));
     }
     exclude_runtime_files(dir)?;
-    git_run(dir, &["add", "-A", "--", "."], "GIT_ADD_FAILED")?;
+    git_run(dir, &["add", "-A", "--", "."], CollabCode::GitAddFailed)?;
     if let Err(error) = unstage_local_settings(dir).and_then(|()| refuse_large_files(dir)) {
-        if let Err(reset) = git_run(dir, &["reset", "-q", "--", "."], "GIT_FAILED") {
+        if let Err(reset) = git_run(dir, &["reset", "-q", "--", "."], CollabCode::GitFailed) {
             log::warn!("{}: what was staged stays staged: {reset}", dir.display());
         }
         return Err(error);
@@ -731,7 +825,7 @@ pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
         command.arg("-c").arg(format!("{key}={value}"));
     }
     command.args(["commit", "-q", "--no-verify", "-m", message]);
-    run(command, "GIT_COMMIT_FAILED")?;
+    run(command, CollabCode::GitCommitFailed)?;
     Ok(git_text(dir, &["rev-parse", "--short", "HEAD"]))
 }
 
@@ -742,7 +836,10 @@ fn exclude_runtime_files(dir: &Path) -> Result<()> {
     let exclude = git_text(dir, &["rev-parse", "--git-path", "info/exclude"])
         .map(|path| absolute_in(dir, &path))
         .ok_or_else(|| {
-            CollabError::new("GIT_FAILED", "cannot find the repository's info directory")
+            CollabError::new(
+                CollabCode::GitFailed,
+                "cannot find the repository's info directory",
+            )
         })?;
     let existing = fs::read_to_string(&exclude).unwrap_or_default();
     let missing: Vec<&str> = crate::scaffold::GITIGNORE
@@ -822,7 +919,7 @@ fn refuse_large_files(dir: &Path) -> Result<()> {
         Ok(())
     } else {
         Err(CollabError::new(
-            "LARGE_FILE",
+            CollabCode::LargeFile,
             format!(
                 "GitHub refuses files of 100 MB or more: {}. Install Git LFS (brew install git-lfs) so media/ is stored with it, or keep these files out of the project.",
                 refused.join(", ")
@@ -839,12 +936,12 @@ pub fn fetch(dir: &Path) -> Result<bool> {
     network_run(
         dir,
         &["fetch", "--quiet", "--prune", &remote],
-        "GIT_FETCH_FAILED",
+        CollabCode::GitFetchFailed,
     )?;
     Ok(true)
 }
 
-fn network_run(dir: &Path, args: &[&str], code: &'static str) -> Result<String> {
+fn network_run(dir: &Path, args: &[&str], code: CollabCode) -> Result<String> {
     let mut command = network(dir);
     command.args(args);
     run(command, code)
@@ -894,7 +991,7 @@ fn refuse_local_settings(dir: &Path, revision: &str, what: &str) -> Result<()> {
         return Ok(());
     }
     Err(CollabError::new(
-        "LOCAL_SETTINGS_TRACKED",
+        CollabCode::LocalSettingsTracked,
         format!(
             "{what} tracks {}, machine-local settings that can hold credentials and start programs, so Kerf will not check it out. Remove them from the repository with `git rm --cached` and push, then try again.",
             found.join(", ")
@@ -926,13 +1023,13 @@ fn is_local_setting(path: &str) -> bool {
 pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration> {
     if !is_repository(dir) {
         return Err(CollabError::new(
-            "NOT_A_REPOSITORY",
+            CollabCode::NotARepository,
             "the project is not a Git repository",
         ));
     }
     if git_text(dir, &["diff", "--name-only", "--diff-filter=U"]).is_some() {
         return Err(CollabError::new(
-            "MERGE_IN_PROGRESS",
+            CollabCode::MergeInProgress,
             "a merge is in progress in this repository; finish or abort it in a terminal first",
         ));
     }
@@ -991,7 +1088,7 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
             .lines()
             .map(str::to_owned)
             .collect::<Vec<_>>();
-        if let Err(error) = git_run(dir, &["merge", "--abort"], "GIT_FAILED") {
+        if let Err(error) = git_run(dir, &["merge", "--abort"], CollabCode::GitFailed) {
             log::warn!(
                 "{}: the failed merge was not aborted: {error}",
                 dir.display()
@@ -1008,7 +1105,7 @@ pub fn integrate(dir: &Path, driver: &Path, message: &str) -> Result<Integration
             )
         };
         return Err(CollabError::new(
-            "MERGE_FAILED",
+            CollabCode::MergeFailed,
             format!("could not merge the upstream changes: {detail}"),
         ));
     }
@@ -1047,7 +1144,7 @@ pub fn lfs_pull(dir: &Path) -> Result<bool> {
     if !tracked {
         return Ok(false);
     }
-    network_run(dir, &["lfs", "pull"], "GIT_LFS_FAILED")?;
+    network_run(dir, &["lfs", "pull"], CollabCode::GitLfsFailed)?;
     Ok(true)
 }
 
@@ -1102,7 +1199,7 @@ pub fn push(dir: &Path) -> Result<Pushed> {
                 &remote,
                 &format!("HEAD:refs/heads/{branch}"),
             ],
-            "GIT_PUSH_FAILED",
+            CollabCode::GitPushFailed,
         )?;
         return Ok(Pushed {
             pushed: true,
@@ -1112,7 +1209,7 @@ pub fn push(dir: &Path) -> Result<Pushed> {
     if commits(dir, "@{upstream}..HEAD").is_empty() {
         return Ok(Pushed::default());
     }
-    network_run(dir, &["push", "--quiet"], "GIT_PUSH_FAILED")?;
+    network_run(dir, &["push", "--quiet"], CollabCode::GitPushFailed)?;
     Ok(Pushed {
         pushed: true,
         set_upstream: false,
@@ -1142,7 +1239,7 @@ pub fn switch(dir: &Path, branch_name: &str, create: bool, message: &str) -> Res
         command.arg("-c");
     }
     command.arg(branch_name);
-    run(command, "GIT_SWITCH_FAILED")?;
+    run(command, CollabCode::GitSwitchFailed)?;
     Ok(Switched {
         committed,
         branch: branch_name.to_owned(),
@@ -1184,7 +1281,7 @@ pub fn undo_merge(dir: &Path, previous: &str) -> Result<()> {
     command
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .args(["reset", "-q", "--hard", previous]);
-    run(command, "GIT_RESET_FAILED").map(|_| ())
+    run(command, CollabCode::GitResetFailed).map(|_| ())
 }
 
 /// Switch back to `previous` after a switch whose project cannot be loaded.
@@ -1193,13 +1290,13 @@ pub fn undo_switch(dir: &Path, previous: &str) -> Result<()> {
     command
         .env("GIT_LFS_SKIP_SMUDGE", "1")
         .args(["switch", "-q", previous]);
-    run(command, "GIT_SWITCH_FAILED").map(|_| ())
+    run(command, CollabCode::GitSwitchFailed).map(|_| ())
 }
 
 fn validate_branch(dir: &Path, name: &str) -> Result<()> {
     if name.trim().is_empty() || !git_ok(dir, &["check-ref-format", "--branch", name]) {
         return Err(CollabError::new(
-            "INVALID_BRANCH",
+            CollabCode::InvalidBranch,
             format!("`{name}` is not a valid branch name"),
         ));
     }
@@ -1210,10 +1307,10 @@ fn validate_branch(dir: &Path, name: &str) -> Result<()> {
 /// return GitHub's compare page for the branch.
 pub fn pull_request(dir: &Path, title: &str, body: &str) -> Result<PullRequest> {
     let branch = branch(dir)
-        .ok_or_else(|| CollabError::new("NO_BRANCH", "the project is not on a branch"))?;
+        .ok_or_else(|| CollabError::new(CollabCode::NoBranch, "the project is not on a branch"))?;
     if default_branch(dir).as_deref() == Some(branch.as_str()) {
         return Err(CollabError::new(
-            "DEFAULT_BRANCH",
+            CollabCode::DefaultBranch,
             format!("`{branch}` is the main branch; make a branch for this change first"),
         ));
     }
@@ -1247,16 +1344,16 @@ pub fn pull_request(dir: &Path, title: &str, body: &str) -> Result<PullRequest> 
         .and_then(|name| git_text(dir, &["remote", "get-url", &name]))
         .ok_or_else(|| {
             CollabError::new(
-                "NO_REMOTE",
+                CollabCode::NoRemote,
                 "the project has no remote to open a pull request on",
             )
         })?;
     let web = github_web_url(&remote).ok_or_else(|| {
         if let Some(failure) = &gh_failure {
-            return CollabError::new("GH_FAILED", failure.clone());
+            return CollabError::new(CollabCode::GhFailed, failure.clone());
         }
         CollabError::new(
-            "NOT_GITHUB",
+            CollabCode::NotGithub,
             format!("{remote} is not a GitHub repository; install gh or open the pull request on its site"),
         )
     })?;
@@ -1327,9 +1424,17 @@ pub fn init(dir: &Path) -> Result<bool> {
     if is_repository(dir) {
         return Ok(false);
     }
-    git_run(dir, &["init", "-q", "-b", "main"], "GIT_INIT_FAILED")?;
+    git_run(
+        dir,
+        &["init", "-q", "-b", "main"],
+        CollabCode::GitInitFailed,
+    )?;
     if git_ok(dir, &["lfs", "version"]) {
-        git_run(dir, &["lfs", "install", "--local"], "GIT_LFS_FAILED")?;
+        git_run(
+            dir,
+            &["lfs", "install", "--local"],
+            CollabCode::GitLfsFailed,
+        )?;
     }
     Ok(true)
 }
@@ -1338,8 +1443,16 @@ pub fn init(dir: &Path) -> Result<bool> {
 /// one under another name).
 pub fn set_remote(dir: &Path, url: &str) -> Result<()> {
     match remote_name(dir) {
-        Some(name) => git_run(dir, &["remote", "set-url", &name, url], "GIT_REMOTE_FAILED"),
-        None => git_run(dir, &["remote", "add", "origin", url], "GIT_REMOTE_FAILED"),
+        Some(name) => git_run(
+            dir,
+            &["remote", "set-url", &name, url],
+            CollabCode::GitRemoteFailed,
+        ),
+        None => git_run(
+            dir,
+            &["remote", "add", "origin", url],
+            CollabCode::GitRemoteFailed,
+        ),
     }
     .map(|_| ())
 }
@@ -1357,7 +1470,7 @@ pub fn create_github_repository(dir: &Path, name: &str, private: bool) -> Result
     non_interactive(&mut command, dir);
     let out = output(command, "gh")?;
     if !out.status.success() {
-        return Err(CollabError::new("GH_FAILED", failure(&out)));
+        return Err(CollabError::new(CollabCode::GhFailed, failure(&out)));
     }
     let text = String::from_utf8_lossy(&out.stdout);
     Ok(first_url(&text)
@@ -1370,7 +1483,10 @@ pub fn create_github_repository(dir: &Path, name: &str, private: bool) -> Result
 /// machine-local settings is refused, and the clone removed.
 pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
     let name = repository_name(url).ok_or_else(|| {
-        CollabError::new("INVALID_URL", format!("cannot name a folder for {url}"))
+        CollabError::new(
+            CollabCode::InvalidUrl,
+            format!("cannot name a folder for {url}"),
+        )
     })?;
     let target = location.join(&name);
     let existed = target.exists();
@@ -1380,14 +1496,14 @@ pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
             .unwrap_or(true)
     {
         return Err(CollabError::new(
-            "ALREADY_EXISTS",
+            CollabCode::AlreadyExists,
             format!("{} already exists", target.display()),
         ));
     }
     fs::create_dir_all(location).map_err(io)?;
     let mut command = network(location);
     command.args(["clone", "--quiet", url]).arg(&target);
-    run(command, "GIT_CLONE_FAILED")?;
+    run(command, CollabCode::GitCloneFailed)?;
     if has_head(&target)
         && let Err(error) = refuse_local_settings(&target, "HEAD", url)
     {
@@ -1405,10 +1521,14 @@ pub fn clone(url: &str, location: &Path) -> Result<PathBuf> {
     if git_ok(&target, &["lfs", "version"]) {
         // The project opens without its media too; what it lacks shows as
         // Git LFS pointers.
-        if let Err(error) = git_run(&target, &["lfs", "install", "--local"], "GIT_LFS_FAILED") {
+        if let Err(error) = git_run(
+            &target,
+            &["lfs", "install", "--local"],
+            CollabCode::GitLfsFailed,
+        ) {
             log::warn!("{}: Git LFS was not set up: {error}", target.display());
         }
-        if let Err(error) = network_run(&target, &["lfs", "pull"], "GIT_LFS_FAILED") {
+        if let Err(error) = network_run(&target, &["lfs", "pull"], CollabCode::GitLfsFailed) {
             log::warn!(
                 "{}: its media was not downloaded: {error}",
                 target.display()

@@ -3,7 +3,7 @@
 
 use super::tools::LookInput;
 use super::{program, program_position, SCOPE_WIDTH};
-use crate::{KerfMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::{Clip, Project, Sequence};
 use serde_json::{json, Value};
 
@@ -26,7 +26,7 @@ impl KerfMcpRouter {
         input: &LookInput,
     ) -> Result<Value, McpError> {
         let Some(track) = &input.track else {
-            return Err(McpError::new("INVALID_ARGUMENTS", "nothing to track"));
+            return Err(McpError::new(McpCode::InvalidArguments, "nothing to track"));
         };
         let sequence = program(project, input.sequence.as_deref())?;
         let duration = sequence.duration();
@@ -47,14 +47,14 @@ impl KerfMcpRouter {
             (None, None, Some(whole)) => whole,
             _ => {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "track needs `from` and `to`, or a `clip` of the sequence to follow for as long as it runs",
                 ))
             }
         };
         if from.is_negative() || to > duration || to <= from {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!("`from`–`to` is not a range of sequence `{}`", sequence.id),
             ));
         }
@@ -66,7 +66,7 @@ impl KerfMcpRouter {
             | (None, None, None, false, true) => None,
             _ => {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "give `x` and `y` to follow a point, `corners` to follow a surface, `inside` or `box` to follow an object, or `camera` to solve the camera",
                 ))
             }
@@ -75,13 +75,13 @@ impl KerfMcpRouter {
             && (!track.camera || !(1.0..=170.0).contains(&fov))
         {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`fov` goes with `camera`, from 1 to 170 degrees",
             ));
         }
         if !object && !track.outside.is_empty() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`outside` goes with `inside` or `box`",
             ));
         }
@@ -96,7 +96,7 @@ impl KerfMcpRouter {
             .all(within);
         if !all_within {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`x` and `y` run 0 to 1 across the frame",
             ));
         }
@@ -106,7 +106,7 @@ impl KerfMcpRouter {
         let count = (to.flicks() - from.flicks()).div_euclid(frame).max(1);
         if count > MAX_TRACK_FRAMES {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!("track follows at most {MAX_TRACK_FRAMES} frames at a time"),
             ));
         }
@@ -119,7 +119,7 @@ impl KerfMcpRouter {
                     .find(|clip| clip.id.as_str() == id)
                     .ok_or_else(|| {
                         McpError::new(
-                            "INVALID_ARGUMENTS",
+                            McpCode::InvalidArguments,
                             format!("no clip `{id}` in the sequence"),
                         )
                     })?,
@@ -142,7 +142,7 @@ impl KerfMcpRouter {
         // frame decoded each from its media's last keyframe again, and following a point for
         // five seconds of a clip with one keyframe took 70 s.
         let drawer = kerf_engine::render::still::drawer(&resolved, Some(id))
-            .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
         let read = |index: usize| {
             let at = rate.time_of(first + index as i64);
             let at = if at >= duration { to } else { at };
@@ -269,7 +269,8 @@ impl KerfMcpRouter {
             }
             return Ok(result);
         }
-        let point = point.ok_or_else(|| McpError::new("INVALID_ARGUMENTS", "nothing to follow"))?;
+        let point =
+            point.ok_or_else(|| McpError::new(McpCode::InvalidArguments, "nothing to follow"))?;
         let followed = kerf_track::follow(count as usize + 1, point, read);
         let (kept, x, y) = kerf_shots::tracks::point_keys(&followed, first - origin, drawn_width);
         let mut result = json!({

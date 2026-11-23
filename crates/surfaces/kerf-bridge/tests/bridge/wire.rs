@@ -4,8 +4,8 @@
 
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, CollabSync, ConnectionStatus,
-    ConversationSummary, ErrorEvent, Export, ExportStatus, LoudnessEvent, MeterReading, Preview,
-    PreviewStatus, QueuedRender, RenderExport, ToolState,
+    ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, LoudnessEvent, MeterReading,
+    Preview, PreviewStatus, QueuedRender, RenderExport, ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::vec;
@@ -138,10 +138,23 @@ fn meter() -> impl Strategy<Value = Event> {
         })
 }
 
+/// A refusal's code: one of kerfd's own, or any other name (a newer kerfd's).
+fn code() -> impl Strategy<Value = ErrorCode> {
+    prop_oneof![
+        select(vec![
+            "REVISION_CONFLICT",
+            "CANCELLED",
+            "INVALID_RENDER_OUTPUT"
+        ])
+        .prop_map(ErrorCode::from),
+        text().prop_map(ErrorCode::from),
+    ]
+}
+
 fn error() -> impl Strategy<Value = Event> {
     (
         text(),
-        some_text(),
+        option::of(code()),
         some_text(),
         some_text(),
         some_text(),

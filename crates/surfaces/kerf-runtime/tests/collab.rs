@@ -199,7 +199,7 @@ fn a_hand_edited_project_file_is_not_synced_until_it_is_settled() {
     fs::write(&path, format!("{text}\n# edited by hand\n  ")).unwrap();
     fs::write(&path, text.replace("name=\"Film\"", "name=\"Hand\"")).unwrap();
     let error = alice.collab_integrate("ui", "hand-1", None).unwrap_err();
-    assert_eq!(error.code, "PROJECTION_DIVERGED");
+    assert_eq!(error.code.as_str(), "PROJECTION_DIVERGED");
     let revision = alice.get_state().unwrap().revision;
     let state = alice
         .import_projection_request("ui", "hand-load", revision)

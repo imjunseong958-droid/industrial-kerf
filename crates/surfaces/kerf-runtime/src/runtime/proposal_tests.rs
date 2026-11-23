@@ -108,9 +108,13 @@ fn two_proposals_wait_together_and_accepting_one_stales_the_other() {
     let stale = runtime
         .accept_proposal(&cursor_id, "ui", "accept-cursor", 1)
         .unwrap_err();
-    assert_eq!(stale.code, "PROPOSAL_BASE_MISMATCH");
+    assert_eq!(stale.code.as_str(), "PROPOSAL_BASE_MISMATCH");
     assert_eq!(
-        runtime.proposal_documents(&cursor_id).unwrap_err().code,
+        runtime
+            .proposal_documents(&cursor_id)
+            .unwrap_err()
+            .code
+            .as_str(),
         "PROPOSAL_STALE"
     );
     // A retried accept still converges on its receipt.

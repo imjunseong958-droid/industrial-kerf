@@ -4,8 +4,8 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    EndpointAddress, RuntimeClient, RuntimeLease, StartRenderOptions, StateSnapshot,
-    MAX_REQUEST_BYTES,
+    response_value, EndpointAddress, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease,
+    StartRenderOptions, StateSnapshot, MAX_REQUEST_BYTES,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -169,7 +169,7 @@ fn two_clients_share_one_daemon_and_recover_after_lost_response_and_restart() {
         .err()
         .or_else(|| right_result.err())
         .expect("one simultaneous request conflicts");
-    assert_eq!(conflict.code, "REVISION_CONFLICT");
+    assert_eq!(conflict.code.as_str(), "REVISION_CONFLICT");
 
     let revision_one = left.get_state().unwrap();
     assert_eq!(revision_one.revision, 1);
@@ -313,7 +313,7 @@ sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:0
             4,
         )
         .unwrap_err();
-    assert_eq!(reused.code, "EDIT_REJECTED");
+    assert_eq!(reused.code.as_str(), "EDIT_REJECTED");
     assert!(
         reused.message.contains("never reused"),
         "{}",
@@ -388,7 +388,12 @@ fn media_is_replaced_through_the_client_relative_to_the_project() {
     let refused = client
         .replace_media_request("ui", "short", &media, "media/short.mp4", 2)
         .unwrap_err();
-    assert_eq!(refused.code, "MEDIA_DOES_NOT_FIT", "{}", refused.message);
+    assert_eq!(
+        refused.code.as_str(),
+        "MEDIA_DOES_NOT_FIT",
+        "{}",
+        refused.message
+    );
     assert_eq!(
         fs::read_to_string(directory.join("project.kerf")).unwrap(),
         replaced.document
@@ -492,7 +497,12 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
             ..StartRenderOptions::new("master")
         })
         .unwrap_err();
-    assert_eq!(refused.code, "INVALID_RENDER_OUTPUT", "{}", refused.message);
+    assert_eq!(
+        refused.code.as_str(),
+        "INVALID_RENDER_OUTPUT",
+        "{}",
+        refused.message
+    );
     assert_eq!(client.list_renders().unwrap().len(), 1);
     stop_daemon(daemon);
 }
@@ -608,7 +618,7 @@ fn a_document_kerfd_cannot_read_is_what_the_client_is_told() {
     let error = client.get_state().unwrap_err();
     // Says where and what, rather than that nothing was listening, and at once
     // rather than at the end of the wait for a daemon that has already gone.
-    assert_eq!(error.code, "INVALID_PROJECT", "{}", error.message);
+    assert_eq!(error.code.as_str(), "INVALID_PROJECT", "{}", error.message);
     assert!(error.message.contains("6:"), "{}", error.message);
     assert!(error.message.contains("no_such_thing"), "{}", error.message);
     assert!(
@@ -812,9 +822,30 @@ fn a_daemon_that_cannot_start_is_not_started_again_for_a_read() {
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
     let client = RuntimeClient::connect_or_spawn(&directory, Some(&binary)).unwrap();
     let error = client.get_state().unwrap_err();
-    assert_eq!(error.code, "RUNTIME_UNAVAILABLE", "{error:?}");
+    assert_eq!(error.code.as_str(), "RUNTIME_UNAVAILABLE", "{error:?}");
     // One start, and one more once the first has exited; the read is not
     // tried again on top.
     let count = fs::read_to_string(&starts).unwrap().lines().count();
     assert_eq!(count, 2);
+}
+
+/// A client tells refusals apart by their code, so the code it reads has to be the one kerfd
+/// wrote, whatever build either is.
+#[test]
+fn a_refusal_reads_as_the_code_kerfd_wrote() {
+    let read = |error: RuntimeError| -> RuntimeError {
+        let answer = response_value("1", Err(error));
+        serde_json::from_value(answer["error"].clone()).unwrap()
+    };
+    let conflict = read(RuntimeError::conflict(3, 4));
+    assert_eq!(conflict.code, ErrorCode::RevisionConflict);
+    assert_eq!(conflict.code.as_str(), "REVISION_CONFLICT");
+    assert_eq!(conflict.actual_revision, Some(4));
+
+    // A code a newer kerfd has and this build does not: kept by its name, and written the same.
+    let newer = read(RuntimeError::new("NOT_NAMED_YET".into(), "said"));
+    assert_eq!(newer.code.as_str(), "NOT_NAMED_YET");
+    assert_ne!(newer.code, ErrorCode::RevisionConflict);
+    let again = response_value("2", Err(newer));
+    assert_eq!(again["error"]["code"], "NOT_NAMED_YET");
 }
