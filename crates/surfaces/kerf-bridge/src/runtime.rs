@@ -662,6 +662,7 @@ impl Worker {
     fn preset_inspect(&self, path: String) {
         match KerfMcpRouter::new(&self.directory, Some(&self.binary)) {
             Ok(router) => {
+                crate::tools::begin_on_drawers(&router, &self.shared);
                 let response = router.call("look", json!({"preset":path}));
                 if response["ok"] == true {
                     emit(
@@ -698,6 +699,7 @@ impl Worker {
             Ok(state) if state.revision == revision => {
                 match KerfMcpRouter::new(&self.directory, Some(&self.binary)) {
                     Ok(router) => {
+                        crate::tools::begin_on_drawers(&router, &self.shared);
                         let response = router.call(
                             "edit",
                             json!({"preset":path,"bindings":bindings,"texts":texts}),

@@ -10,18 +10,20 @@
 //! rather than an event or an accumulating queue. All text is UTF-8.
 //!
 //! Dropping the bridge closes it without waiting for its workers: the agent's turn, the
-//! viewer preview rendering, the QC check, the makings it started and the render queue's
-//! jobs are stopped. A making another program runs on the project goes on.
+//! viewer preview rendering, the QC check, the makings it started, the render queue's jobs
+//! and the renders its agent's tools started are stopped. A making another program runs on
+//! the project goes on.
 //!
 //! One thing an editor waits for, just before its process exits, with [`drawing_settled`]:
 //! the frames a closed bridge was still drawing, and the GPU a frame had begun to bring up.
 //! A process that exits under a thread at work in the GPU's libraries now and then dies as
 //! it ends. The frames are its playback's, its effect previews', its scope signal's, its
 //! shot pictures', its take readings', its renders' (the viewer's preview and the render
-//! queue's jobs), its QC check's and its makings': a closed bridge begins none of them, and
-//! a render, a check or a making it was on is cancelled, so the wait is for the frames
-//! under way and for what was cancelled to stop. The tools its agent runs in this process
-//! draw too, and nothing waits for theirs yet.
+//! queue's jobs), its QC check's, its makings' and those of the tools its agent runs in this
+//! process: a closed bridge begins none of them, and a render, a check or a making it or a
+//! tool was on is cancelled, so the wait is for the frames under way and for what was
+//! cancelled to stop. A tool call under way is the one thing with nothing to stop it: it is
+//! waited for to its end, for as long as the editor will wait.
 //!
 //! # Commands and events
 //!
@@ -105,6 +107,7 @@ mod takes;
 mod tasks;
 #[cfg(test)]
 mod tests_support;
+mod tools;
 mod tracks;
 mod updates;
 mod viewer;
@@ -210,15 +213,17 @@ struct Shared {
     others_makings: Mutex<std::collections::BTreeMap<String, (u32, String)>>,
     /// The render queue the export thread works through.
     renders: queue::Queue,
+    /// The renders Kerf's own tools started in this process and are still on.
+    tool_renders: tools::Renders,
     /// Loudness, media info and media index work.
     analysis: analysis::Analysis,
     /// The workflow last said of each step a graph has open.
     workflows: workflows::Said,
     /// What lets the bridge draw a frame with the compositor in this process, for its
     /// playback, an effect preview, the scope signal, a shot picture or follow, a take
-    /// reading, a render, a QC check and a making. Closed with the bridge, so that
-    /// [`drawing_settled`] can wait for the ones under way before the process exits. Its
-    /// agent's tools draw too and do not ask it yet: nothing waits for theirs.
+    /// reading, a render, a QC check, a making, and what Kerf's own tools do here for its
+    /// agent ([`tools`]). Closed with the bridge, so that [`drawing_settled`] can wait for
+    /// the ones under way before the process exits.
     drawers: kerf_playback::Drawers,
 }
 
@@ -406,6 +411,7 @@ impl Bridge {
             makings: Mutex::new(std::collections::BTreeMap::new()),
             others_makings: Mutex::new(std::collections::BTreeMap::new()),
             renders: queue::Queue::default(),
+            tool_renders: Default::default(),
             analysis: analysis::Analysis::default(),
             workflows: Default::default(),
             drawers: Default::default(),
@@ -723,7 +729,7 @@ impl Drop for Bridge {
         self.shared.closed.store(true, Ordering::SeqCst);
         // Nothing that draws through them begins a frame from here on; [`drawing_settled`]
         // waits for those that had, and for the renders, the check and the makings
-        // cancelled below to stop.
+        // cancelled below to stop, the bridge's own and its tools'.
         self.shared.drawers.close();
         // Nobody would see a preview still rendering, or the one playing. The
         // process may exit before the media worker stops, so the files go now;
@@ -734,6 +740,7 @@ impl Drop for Bridge {
         // A making nobody would see the end of: its program is asked to end.
         media::cancel_makings(&self.shared);
         self.shared.renders.close(&self.shared.directory);
+        tools::stop_renders(&self.shared);
         self.shared.analysis.close();
         if let Ok(abort) = self.shared.abort.lock()
             && let Some(abort) = &*abort

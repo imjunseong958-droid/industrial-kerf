@@ -329,7 +329,12 @@ pub(crate) fn agent_makings(shared: Arc<Shared>, tx: Outbox) -> kerf_mcp::Making
     Arc::new(move |event| match event {
         MakingEvent::Began { media, take, stop } => {
             if let Ok(mut makings) = shared.makings.lock() {
-                makings.entry(media.clone()).or_insert(stop);
+                makings.entry(media.clone()).or_insert(stop.clone());
+            }
+            // Let begin just before the bridge closed, and told of only now: the makings were
+            // stopped in between, without this one among them.
+            if shared.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                stop.cancel();
             }
             crate::emit(&tx, making(&media, take, ""));
         }
@@ -644,6 +649,36 @@ mod tests {
         }
         text.push_str("sequence s1 rate=24 size=64x64 audio=48000\n");
         kerf_runtime::parse_document(&text).unwrap()
+    }
+
+    #[test]
+    fn a_making_an_agent_began_as_the_bridge_closed_is_stopped() {
+        use kerf_mcp::MakingEvent;
+        let folder = tempfile::tempdir().unwrap();
+        let shared = Arc::new(shared(folder.path()));
+        let (tx, _rx) = crate::wake::outbox(8);
+        let told = agent_makings(shared.clone(), tx);
+        let began = |media: &str| {
+            let stop = kerf_engine::CancellationToken::new();
+            told(MakingEvent::Began {
+                media: media.to_owned(),
+                take: 1,
+                stop: stop.clone(),
+            });
+            stop
+        };
+        // Open, a making an agent began goes on, and the bridge has what stops it.
+        let going = began("m1");
+        assert!(!going.is_cancelled());
+        // The bridge is let go, as `Drop for Bridge` does it: the makings it has are stopped.
+        shared
+            .closed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        cancel_makings(&shared);
+        assert!(going.is_cancelled());
+        // One let begin just before, and told of only now, was not among them: it is
+        // stopped as it is told of.
+        assert!(began("m2").is_cancelled());
     }
 
     #[test]

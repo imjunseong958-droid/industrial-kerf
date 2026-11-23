@@ -41,6 +41,7 @@ use kerf_runtime::{Author, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease}
 use kerf_skills::{load_skills_with_bundled, Skill};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::any::Any;
 use std::fmt;
 use std::fs;
 use std::io::{self, BufRead, Write};
@@ -255,7 +256,29 @@ pub struct KerfMcpRouter {
     /// shared by every copy: Kerf for the built-in agents, the client an
     /// [`McpServer`] serves once it has said who it is.
     author: Arc<Mutex<Author>>,
+    /// Who is asked before anything here begins, shared by every copy; see
+    /// [`KerfMcpRouter::draw_through`].
+    drawing: Arc<Mutex<Option<DrawingGate>>>,
 }
+
+/// What a router is about to begin, for the host it runs in to let or refuse
+/// ([`KerfMcpRouter::draw_through`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Begins<'a> {
+    /// A tool call, over when it has answered.
+    Call,
+    /// The render of this job, on a thread that goes on after the call that started it. The
+    /// file [`kerf_runtime::render_cancel_path`] names for the job stops it.
+    Render(&'a str),
+    /// A making of this media, on a thread that goes on likewise. Whoever watches the
+    /// router's makings ([`KerfMcpRouter::watch_makings`]) is given what stops it.
+    Making(&'a str),
+}
+
+/// What a host gives for the length of what it let begin: dropped when that is over.
+pub type Held = Box<dyn Any + Send>;
+
+type DrawingGate = Arc<dyn Fn(Begins<'_>) -> Result<Held, String> + Send + Sync>;
 
 /// A render job running on a thread of this process.
 struct RenderWorker {
@@ -297,7 +320,46 @@ impl KerfMcpRouter {
             makings: Arc::default(),
             permissions: Arc::default(),
             author: Arc::new(Mutex::new(Author::kerf())),
+            drawing: Arc::default(),
         })
+    }
+
+    /// Have `gate` asked before a tool call, a render or a making begins, through this router
+    /// and every copy of it: what it gives is held until that is over, and when it refuses,
+    /// saying why, the call is refused as cancelled with those words. A render refused once
+    /// its call had begun has a job with kerfd by then, which is cancelled; nothing else is
+    /// left of what was refused.
+    ///
+    /// A tool draws in the process its router is in, and the renders and makings it starts
+    /// go on there after it has answered. A host that will exit while they may be at it (an
+    /// editor, whose person closes a project when they like) has them counted here, so that
+    /// it can stop them and wait for them before it does. `kerf-mcp` and `kerf` set none:
+    /// they finish what they started before they end
+    /// ([`finish_renders`](Self::finish_renders), [`finish_makings`](Self::finish_makings)).
+    ///
+    /// The gate is asked from inside the router, for a making with the router's makings
+    /// held: it must not call the router back.
+    pub fn draw_through(
+        &self,
+        gate: impl Fn(Begins<'_>) -> Result<Held, String> + Send + Sync + 'static,
+    ) {
+        *self.drawing.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(gate));
+    }
+
+    /// Ask the host, where there is one to ask, whether `what` may begin: what to hold until
+    /// it is over, or the refusal when it may not.
+    fn begin_drawing(&self, what: Begins<'_>) -> Result<Option<Held>, McpError> {
+        let gate = self
+            .drawing
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match gate {
+            None => Ok(None),
+            Some(gate) => gate(what)
+                .map(Some)
+                .map_err(|why| McpError::new(McpCode::Cancelled, why)),
+        }
     }
 
     /// Who the proposals and notes made through this router are by.
@@ -380,13 +442,22 @@ impl KerfMcpRouter {
     }
 
     /// Run `job_id`'s render on a thread [`KerfMcpRouter::finish_renders`]
-    /// waits for, dropping the ones that have finished.
-    fn spawn_render(&self, job_id: String, render: impl FnOnce() + Send + 'static) {
+    /// waits for, dropping the ones that have finished. The thread holds `drawing`, what the
+    /// host gave for the render, until it ends.
+    fn spawn_render(
+        &self,
+        job_id: String,
+        drawing: Option<Held>,
+        render: impl FnOnce() + Send + 'static,
+    ) {
         let mut workers = self.renders.lock().unwrap_or_else(PoisonError::into_inner);
         workers.retain(|worker| !worker.thread.is_finished());
         workers.push(RenderWorker {
             job_id,
-            thread: thread::spawn(render),
+            thread: thread::spawn(move || {
+                let _drawing = drawing;
+                render();
+            }),
         });
     }
 
@@ -499,6 +570,7 @@ impl KerfMcpRouter {
     }
 
     fn call_base(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
+        let _drawing = self.begin_drawing(Begins::Call)?;
         match name {
             "look" => self.look(arguments),
             "edit" => self.edit(arguments),
