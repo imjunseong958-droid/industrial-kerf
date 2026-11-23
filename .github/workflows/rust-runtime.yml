@@ -26,6 +26,7 @@ on:
       - "crates/**"
       - "tools/**"
       - "apps/kerf-editor/**"
+      - "scripts/smoke-editor-close.sh"
       - ".github/workflows/rust-runtime.yml"
       - ".github/actions/**"
   pull_request:
@@ -38,6 +39,7 @@ on:
       - "crates/**"
       - "tools/**"
       - "apps/kerf-editor/**"
+      - "scripts/smoke-editor-close.sh"
       - ".github/workflows/rust-runtime.yml"
       - ".github/actions/**"
   workflow_dispatch:
@@ -204,6 +206,20 @@ jobs:
           xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
             target/debug/kerf-editor "$project" --quit-after-ms 8000
           test -f "$project/.kerf-runtime.checkpoint.json"
+      # And with that project's window closed as a window manager closes it
+      # for the title bar's button, which --quit-after-ms never goes through:
+      # GPUI's X11 client is still closing the window when the editor's own
+      # code runs, and a quit made from there panicked, exit 101. The script
+      # asks until the editor ends, and fails unless that is within 30 s,
+      # with exit 0 and no panic.
+      - name: Close the editor's window
+        timeout-minutes: 5
+        env:
+          KERFD_BIN: ${{ github.workspace }}/target/debug/kerfd
+          KERF_EDITOR_PREFS: ${{ runner.temp }}/editor-prefs/editor.json
+        run: |
+          xvfb-run -a -s "-screen 0 1600x1000x24 +extension Composite" \
+            scripts/smoke-editor-close.sh target/debug/kerf-editor "$RUNNER_TEMP/smoke-project"
       - name: Lint the editor
         run: cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targets -- -D warnings
       - name: Test the editor
