@@ -7,8 +7,8 @@ use crate::author::timestamp;
 use crate::kernel::{self, Edit, Edited};
 use crate::store::{JournalAction, ProposalMeta, ProposalReceipt, ProposalRecord};
 use crate::{
-    unique_id, Author, PendingProposal, ProposalEntry, ProposalFreshness, ProposalVersion,
-    RuntimeError, StateSnapshot, MAX_PROPOSALS,
+    unique_id, Author, ErrorCode, PendingProposal, ProposalEntry, ProposalFreshness,
+    ProposalStatus, ProposalVersion, RuntimeError, StateSnapshot, MAX_PROPOSALS,
 };
 use kerf_lang::NoFacts;
 use kerf_model::Project;
@@ -66,7 +66,7 @@ impl Runtime {
     ) -> Result<StateSnapshot, RuntimeError> {
         if request_key.trim().is_empty() {
             return Err(RuntimeError::new(
-                "AGENT_PROTOCOL_ERROR",
+                ErrorCode::AgentProtocolError,
                 "agent request requires a non-empty idempotency key",
             ));
         }
@@ -91,7 +91,7 @@ impl Runtime {
         {
             if existing.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
+                    ErrorCode::IdempotencyConflict,
                     "agent request key was already used for a different proposal",
                 ));
             }
@@ -106,7 +106,7 @@ impl Runtime {
                     PendingProposal::Pending { .. }
                 ) {
                     return Err(RuntimeError::new(
-                        "PROPOSAL_NOT_PENDING",
+                        ErrorCode::ProposalNotPending,
                         format!("only an open proposal can be revised: {id}"),
                     ));
                 }
@@ -121,7 +121,7 @@ impl Runtime {
                     .count();
                 if open >= MAX_PROPOSALS {
                     return Err(RuntimeError::new(
-                        "PROPOSAL_PENDING",
+                        ErrorCode::ProposalPending,
                         format!(
                             "{MAX_PROPOSALS} proposals are awaiting review; accept, reject, or revise one first"
                         ),
@@ -231,7 +231,7 @@ impl Runtime {
     ) -> Result<StateSnapshot, RuntimeError> {
         if request_key.trim().is_empty() || proposal_id.trim().is_empty() {
             return Err(RuntimeError::new(
-                "INVALID_REQUEST",
+                ErrorCode::InvalidRequest,
                 "requestKey and proposalId are required",
             ));
         }
@@ -245,7 +245,7 @@ impl Runtime {
         {
             if existing.fingerprint != fingerprint {
                 return Err(RuntimeError::new(
-                    "IDEMPOTENCY_CONFLICT",
+                    ErrorCode::IdempotencyConflict,
                     "request key was already used for a different proposal",
                 ));
             }
@@ -262,13 +262,13 @@ impl Runtime {
         } = &record.lifecycle
         else {
             return Err(RuntimeError::new(
-                "PROPOSAL_NOT_PENDING",
+                ErrorCode::ProposalNotPending,
                 format!("only an open proposal can be brought forward: {proposal_id}"),
             ));
         };
         if newest != proposal_id {
             return Err(RuntimeError::new(
-                "PROPOSAL_SUPERSEDED",
+                ErrorCode::ProposalSuperseded,
                 format!(
                     "{proposal_id} is an earlier version of a proposal; its newest, {newest}, is the one to bring forward"
                 ),
@@ -276,7 +276,7 @@ impl Runtime {
         }
         if *made == self.state.revision {
             return Err(RuntimeError::new(
-                "PROPOSAL_NOT_STALE",
+                ErrorCode::ProposalNotStale,
                 format!(
                     "proposal {proposal_id} was made on revision {made}, which the project is at; it can be accepted as it is"
                 ),
@@ -284,7 +284,7 @@ impl Runtime {
         }
         let base = self.state.bases.get(made).ok_or_else(|| {
             RuntimeError::new(
-                "PROPOSAL_BASE_GONE",
+                ErrorCode::ProposalBaseGone,
                 format!(
                     "the project as it was at revision {made}, which proposal {proposal_id} was made on, is no longer kept; revise the proposal instead"
                 ),
@@ -315,7 +315,7 @@ impl Runtime {
         validate_request_identity(actor, key)?;
         if proposal_id.trim().is_empty() {
             return Err(RuntimeError::new(
-                "INVALID_REQUEST",
+                ErrorCode::InvalidRequest,
                 "proposalId is required",
             ));
         }
@@ -331,7 +331,7 @@ impl Runtime {
                         return Ok(());
                     }
                     Err(RuntimeError::new(
-                        "PROPOSAL_BASE_MISMATCH",
+                        ErrorCode::ProposalBaseMismatch,
                         format!(
                             "proposal was created at revision {}, not {base_revision}",
                             version.base_revision
@@ -382,13 +382,13 @@ impl Runtime {
             } => {
                 if current_id != proposal_id {
                     return Err(RuntimeError::new(
-                        "PROPOSAL_ALREADY_ACCEPTED",
+                        ErrorCode::ProposalAlreadyAccepted,
                         format!("another version of this proposal was accepted: {current_id}"),
                     ));
                 }
                 let receipt = record.receipt.as_ref().ok_or_else(|| {
                     RuntimeError::new(
-                        "IDEMPOTENCY_CONFLICT",
+                        ErrorCode::IdempotencyConflict,
                         "proposal has no durable acceptance receipt",
                     )
                 })?;
@@ -397,7 +397,7 @@ impl Runtime {
                     || receipt.base_revision != base_revision
                 {
                     return Err(RuntimeError::new(
-                        "IDEMPOTENCY_CONFLICT",
+                        ErrorCode::IdempotencyConflict,
                         "proposal acceptance was already recorded for a different request",
                     ));
                 }
@@ -407,7 +407,7 @@ impl Runtime {
                 Ok((*receipt.snapshot).clone())
             }
             PendingProposal::Rejected { .. } => Err(RuntimeError::new(
-                "PROPOSAL_REJECTED",
+                ErrorCode::ProposalRejected,
                 "proposal has already been rejected",
             )),
         }
@@ -421,7 +421,7 @@ impl Runtime {
     pub fn reject_proposal(&mut self, proposal_id: &str) -> Result<StateSnapshot, RuntimeError> {
         if proposal_id.trim().is_empty() {
             return Err(RuntimeError::new(
-                "INVALID_REQUEST",
+                ErrorCode::InvalidRequest,
                 "proposalId is required",
             ));
         }
@@ -474,7 +474,7 @@ impl Runtime {
         validate_request_identity(actor, key)?;
         if proposal_id.trim().is_empty() {
             return Err(RuntimeError::new(
-                "INVALID_REQUEST",
+                ErrorCode::InvalidRequest,
                 "proposalId is required",
             ));
         }
@@ -533,13 +533,13 @@ impl Runtime {
                 )
             }
             PendingProposal::Accepted { .. } => Err(RuntimeError::new(
-                "PROPOSAL_ALREADY_ACCEPTED",
+                ErrorCode::ProposalAlreadyAccepted,
                 "proposal has already been accepted",
             )),
             PendingProposal::Rejected { .. } => {
                 let receipt = record.receipt.as_ref().ok_or_else(|| {
                     RuntimeError::new(
-                        "IDEMPOTENCY_CONFLICT",
+                        ErrorCode::IdempotencyConflict,
                         "proposal has no durable rejection receipt",
                     )
                 })?;
@@ -548,7 +548,7 @@ impl Runtime {
                     || receipt.base_revision != base_revision
                 {
                     return Err(RuntimeError::new(
-                        "IDEMPOTENCY_CONFLICT",
+                        ErrorCode::IdempotencyConflict,
                         "proposal rejection was already recorded for a different request",
                     ));
                 }
@@ -574,7 +574,7 @@ impl Runtime {
             .ok_or_else(|| proposal_not_found(proposal_id))?;
         if !matches!(record.lifecycle, PendingProposal::Pending { .. }) {
             return Err(RuntimeError::new(
-                "PROPOSAL_NOT_PENDING",
+                ErrorCode::ProposalNotPending,
                 format!("proposal is not pending: {proposal_id}"),
             ));
         }
@@ -582,7 +582,7 @@ impl Runtime {
             proposal_version(record, proposal_id).ok_or_else(|| proposal_not_found(proposal_id))?;
         if version.base_revision != self.state.revision {
             return Err(RuntimeError::new(
-                "PROPOSAL_STALE",
+                ErrorCode::ProposalStale,
                 format!(
                     "proposal was created at revision {}, current revision is {}",
                     version.base_revision, self.state.revision
@@ -712,7 +712,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
             base_revision,
             ..
         } => (
-            "pending",
+            ProposalStatus::Pending,
             proposal_id,
             *base_revision,
             None,
@@ -723,7 +723,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
             base_revision,
             applied_revision,
         } => (
-            "accepted",
+            ProposalStatus::Accepted,
             proposal_id,
             *base_revision,
             Some(*applied_revision),
@@ -733,7 +733,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
             proposal_id,
             base_revision,
         } => (
-            "rejected",
+            ProposalStatus::Rejected,
             proposal_id,
             *base_revision,
             None,
@@ -747,7 +747,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
         .or(meta.versions.last());
     ProposalEntry {
         proposal_id: proposal_id.clone(),
-        status: status.into(),
+        status,
         freshness,
         base_revision,
         applied_revision,
@@ -770,7 +770,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
 
 fn proposal_not_found(proposal_id: &str) -> RuntimeError {
     RuntimeError::new(
-        "PROPOSAL_NOT_FOUND",
+        ErrorCode::ProposalNotFound,
         format!("proposal not found: {proposal_id}"),
     )
 }

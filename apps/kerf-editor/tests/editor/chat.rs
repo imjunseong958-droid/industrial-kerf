@@ -17,8 +17,8 @@ use kerf_editor::chat::{
     CARD_PICTURE_WIDEST, DRAFT_BEAT, MODE_HOLD,
 };
 use kerf_editor::model::{
-    timecode, ConversationSummary, Proposal, ProposalFreshness, Snapshot, SnapshotShow, Speaker,
-    Timeline, TimelineShow, Turn,
+    timecode, ConversationSummary, Proposal, ProposalFreshness, ProposalStatus, Snapshot,
+    SnapshotShow, Speaker, Timeline, TimelineShow, Turn,
 };
 use kerf_editor::palette::unavailable;
 use kerf_editor::prefs::{Permissions, Provider};
@@ -1299,7 +1299,7 @@ fn each_mode_chosen_takes_the_place_of_the_mode_said_last() {
 fn proposal(freshness: &str) -> Proposal {
     Proposal {
         proposal_id: "p1".into(),
-        status: "pending".into(),
+        status: ProposalStatus::Pending,
         freshness: if freshness == "stale" {
             ProposalFreshness::Stale
         } else {

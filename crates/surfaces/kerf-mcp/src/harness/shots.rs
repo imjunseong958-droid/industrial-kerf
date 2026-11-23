@@ -4,7 +4,7 @@
 
 use super::tools::{EditInput, HeldInput, PlacedInput, SignalInput, StepInput, WorkflowSetInput};
 use super::{cannot_said, program, resolve_project_source_path};
-use crate::{KerfMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Project;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -18,7 +18,7 @@ impl KerfMcpRouter {
         } else {
             String::new()
         };
-        McpError::new("INVALID_ARGUMENTS", format!("{why}{hint}"))
+        McpError::new(McpCode::InvalidArguments, format!("{why}{hint}"))
     }
 
     /// `look` with `graph`: a media's recipe as the graph the editor shows of it, the same
@@ -147,7 +147,7 @@ impl KerfMcpRouter {
         project: &Project,
         input: &EditInput,
     ) -> Result<ShotChanges, McpError> {
-        let invalid = |why: String| McpError::new("INVALID_STEPS", why);
+        let invalid = |why: String| McpError::new(McpCode::InvalidSteps, why);
         // The steps of each media named, as text: as they were, and as this edit has them.
         let mut texts: BTreeMap<String, (String, String)> = BTreeMap::new();
         let read = |texts: &mut BTreeMap<String, (String, String)>,
@@ -165,7 +165,7 @@ impl KerfMcpRouter {
         if let Some(restore) = &input.restore_take {
             if !input.workflow_set.is_empty() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`restoreTake` writes every step as the take had it: change them in an edit after this one",
                 ));
             }
@@ -294,7 +294,7 @@ impl KerfMcpRouter {
                     } else {
                         String::new()
                     };
-                    McpError::new("INVALID_ARGUMENTS", format!("{why}{hint}"))
+                    McpError::new(McpCode::InvalidArguments, format!("{why}{hint}"))
                 })?;
         Ok(json!({
             "revision": revision,
@@ -318,7 +318,7 @@ impl KerfMcpRouter {
         let sequence = program(project, sequence)?;
         let media = project.media(take).ok_or_else(|| {
             McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!(
                     "no media `{take}`: `follows` is a media whose picture is a take's depth, as a model read it back{}",
                     self.any_pending("proposal")
@@ -333,7 +333,7 @@ impl KerfMcpRouter {
             &resolve_project_source_path(&self.dir, &media.path),
             media.rate.fps().round().max(1.0) as u32,
         )
-        .map_err(|error| McpError::new("MEDIA_FAILED", error.to_string()))?;
+        .map_err(|error| McpError::new(McpCode::MediaFailed, error.to_string()))?;
         Ok(json!({
             "revision": revision,
             "sequence": sequence.id.to_string(),
@@ -365,7 +365,7 @@ impl KerfMcpRouter {
         // and which clips are which is the scene's to say and not their size's.
         if input.clips.is_empty() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`held` names in `clips` the guide's clips that are its subjects, as [\"crate\"]",
             ));
         }
@@ -379,7 +379,7 @@ impl KerfMcpRouter {
                 .find(|clip| clip["clip"] == name.as_str())
             else {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!(
                         "the guide has no clip `{name}` in depth: `clips` are clips in depth that `follows` reads"
                     ),
@@ -410,7 +410,7 @@ impl KerfMcpRouter {
                         overlap,
                     )
                 }
-                Err(error) if error.code == "MEDIA_FAILED" => (json!({"overlap": 0.0}), 0.0),
+                Err(error) if error.code == McpCode::MediaFailed => (json!({"overlap": 0.0}), 0.0),
                 Err(error) => return Err(error),
             };
             let off = clip["off"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
@@ -449,7 +449,7 @@ impl KerfMcpRouter {
         let sequence = program(project, sequence)?;
         let media = project.media(input.take.as_str()).ok_or_else(|| {
             McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!(
                     "no media `{}`: `take` is the media whose picture is the take{}",
                     input.take,
@@ -466,7 +466,7 @@ impl KerfMcpRouter {
             &resolve_project_source_path(&self.dir, &media.path),
             media.rate.fps().round().max(1.0) as u32,
         )
-        .map_err(|error| McpError::new("MEDIA_FAILED", error.to_string()))?;
+        .map_err(|error| McpError::new(McpCode::MediaFailed, error.to_string()))?;
         let mut result = json!({
             "revision": revision,
             "sequence": sequence.id.to_string(),

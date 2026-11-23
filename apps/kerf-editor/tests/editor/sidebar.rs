@@ -1,7 +1,7 @@
 //! The sidebar: the project's conversations, their folders and search.
 
 use kerf_editor::commands::catalog;
-use kerf_editor::model::{Conversation, Proposal, Speaker, SummaryShow, Turn};
+use kerf_editor::model::{Conversation, Proposal, ProposalStatus, Speaker, SummaryShow, Turn};
 use kerf_editor::prefs::Provider;
 use kerf_editor::sidebar;
 use kerf_editor::sidebar::{
@@ -469,7 +469,7 @@ fn conversation(id: &str, items: Vec<Turn>) -> Conversation {
 fn proposal(id: &str, status: &str) -> Proposal {
     Proposal {
         proposal_id: id.into(),
-        status: status.into(),
+        status: ProposalStatus::from_name(status),
         ..Proposal::default()
     }
 }

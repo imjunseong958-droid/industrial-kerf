@@ -59,7 +59,7 @@ fn edits_are_atomic_and_revisioned() {
     assert_eq!(state.revision, 1);
     assert!(state.can_undo);
     let error = edit(&mut runtime, "marker add at=0f\ntrack remove missing", 1).unwrap_err();
-    assert_eq!(error.code, "EDIT_REJECTED");
+    assert_eq!(error.code.as_str(), "EDIT_REJECTED");
     assert_eq!(runtime.snapshot().revision, 1);
     assert!(!has_marker(&runtime.snapshot(), "mk1"));
     undo(&mut runtime, 1).unwrap();
@@ -73,7 +73,7 @@ fn one_runtime_owns_a_project_directory() {
     let directory = std::env::temp_dir().join(format!("kerf-runtime-lock-{}", unique_id()));
     let runtime = Runtime::open(&directory).unwrap();
     let error = Runtime::open(&directory).unwrap_err();
-    assert_eq!(error.code, "RUNTIME_ALREADY_RUNNING");
+    assert_eq!(error.code.as_str(), "RUNTIME_ALREADY_RUNNING");
     drop(runtime);
     let reopened = Runtime::open(&directory).unwrap();
     drop(reopened);
@@ -166,7 +166,7 @@ fn accepted_proposal_receipt_survives_later_mutation_and_rejects_reuse() {
     let error = runtime
         .accept_proposal(&proposal_id, "ui", "accept-other", 0)
         .unwrap_err();
-    assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+    assert_eq!(error.code.as_str(), "IDEMPOTENCY_CONFLICT");
 }
 
 #[test]
@@ -180,7 +180,7 @@ fn accepting_a_stale_proposal_conflicts_without_clearing_it() {
     let error = runtime
         .accept_proposal(&proposal_id, "ui", "accept-stale", 0)
         .unwrap_err();
-    assert_eq!(error.code, "REVISION_CONFLICT");
+    assert_eq!(error.code.as_str(), "REVISION_CONFLICT");
     assert!(matches!(
         runtime.snapshot().pending_proposal,
         Some(PendingProposal::Pending {
@@ -202,7 +202,7 @@ fn invalid_proposal_scripts_stage_nothing() {
             None,
         )
         .unwrap_err();
-    assert_eq!(error.code, "EDIT_REJECTED");
+    assert_eq!(error.code.as_str(), "EDIT_REJECTED");
     let after = runtime.snapshot();
     assert_eq!(after.document, before.document);
     assert_eq!(after.revision, before.revision);
@@ -234,11 +234,11 @@ fn import_rejects_paths_that_are_not_files() {
     let missing = runtime
         .import_media_request("ui", "missing", "/definitely/not-a-file", 0)
         .unwrap_err();
-    assert_eq!(missing.code, "INVALID_IMPORT");
+    assert_eq!(missing.code.as_str(), "INVALID_IMPORT");
     let directory_error = runtime
         .import_media_request("ui", "directory", directory.to_str().unwrap(), 0)
         .unwrap_err();
-    assert_eq!(directory_error.code, "INVALID_IMPORT");
+    assert_eq!(directory_error.code.as_str(), "INVALID_IMPORT");
     assert_eq!(runtime.snapshot().revision, 0);
     drop(runtime);
     let _ = fs::remove_dir_all(directory);
@@ -296,7 +296,7 @@ fn a_replacement_replays_from_the_journal_after_a_restart() {
     let recovered = reopened.snapshot();
     assert_eq!(recovered.revision, 2);
     assert_eq!(recovered.document, replaced.document);
-    assert_eq!(recovered.projection_status, "current");
+    assert_eq!(recovered.projection_status.as_str(), "current");
     assert!(recovered.can_undo);
     // The receipt survived too.
     let replay = reopened
@@ -321,7 +321,7 @@ fn durable_journal_recovers_after_projection_failure() {
     fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
     let committed = edit(&mut runtime, "track add T1 subtitle", before.revision).unwrap();
     assert_eq!(committed.revision, before.revision + 1);
-    assert_eq!(committed.projection_status, "diverged");
+    assert_eq!(committed.projection_status.as_str(), "diverged");
     assert!(directory.join(JOURNAL_FILE).is_file());
     drop(runtime);
     fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
@@ -329,7 +329,7 @@ fn durable_journal_recovers_after_projection_failure() {
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().revision, committed.revision);
     assert!(reopened.document(false).contains("track T1 subtitle"));
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
 }
@@ -344,7 +344,7 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
     fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
     fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
     let second = edit(&mut runtime, "marker add at=0f as=second", first.revision).unwrap();
-    assert_eq!(second.projection_status, "diverged");
+    assert_eq!(second.projection_status.as_str(), "diverged");
     drop(runtime);
 
     // The projection is the last successfully published journal state,
@@ -354,7 +354,7 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().revision, second.revision);
     assert!(has_marker(&reopened.snapshot(), "second"));
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     drop(reopened);
 
     // An edit that does not match any recognized journal state must remain
@@ -367,7 +367,7 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
         );
     fs::write(directory.join(PROJECT_FILE), edited).unwrap();
     let mut diverged = Runtime::open(&directory).unwrap();
-    assert_eq!(diverged.snapshot().projection_status, "diverged");
+    assert_eq!(diverged.snapshot().projection_status.as_str(), "diverged");
     assert_eq!(
         edit(
             &mut diverged,
@@ -375,7 +375,8 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
             second.revision
         )
         .unwrap_err()
-        .code,
+        .code
+        .as_str(),
         "PROJECTION_DIVERGED"
     );
     let on_disk = fs::read_to_string(directory.join(PROJECT_FILE)).unwrap();
@@ -399,7 +400,7 @@ fn failed_startup_projection_repair_reports_project_status() {
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().revision, committed.revision);
     assert_eq!(reopened.snapshot().timeline["width"], 1280);
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     assert!(fs::read_to_string(directory.join(PROJECT_FILE))
         .unwrap()
         .contains("size=1280x1080"));
@@ -425,7 +426,7 @@ fn operation_receipts_and_revision_survive_restart() {
     let conflict = reopened
         .apply_script_request("ui", "request-1", "marker add at=0f", 1)
         .unwrap_err();
-    assert_eq!(conflict.code, "IDEMPOTENCY_CONFLICT");
+    assert_eq!(conflict.code.as_str(), "IDEMPOTENCY_CONFLICT");
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
 }
@@ -486,7 +487,7 @@ fn mailbox_serializes_two_clients_against_one_revision() {
     } else {
         second.unwrap_err()
     };
-    assert_eq!(error.code, "REVISION_CONFLICT");
+    assert_eq!(error.code.as_str(), "REVISION_CONFLICT");
     let state = expect_state(handle.request(RuntimeRequest::GetState).unwrap()).unwrap();
     assert_eq!(state.revision, 1);
     drop(handle);
@@ -610,7 +611,7 @@ fn durable_rejection_receipt_survives_later_mutation_and_rejects_reuse() {
     let error = runtime
         .reject_proposal_request(&proposal_id, "ui", "reject-other", 0)
         .unwrap_err();
-    assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+    assert_eq!(error.code.as_str(), "IDEMPOTENCY_CONFLICT");
 }
 
 #[test]
@@ -642,7 +643,7 @@ fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
     let error = runtime
         .reject_proposal_request(&proposal_id, "ui", "reject-made-on", 0)
         .unwrap_err();
-    assert_eq!(error.code, "REVISION_CONFLICT");
+    assert_eq!(error.code.as_str(), "REVISION_CONFLICT");
     assert_eq!(error.actual_revision, Some(1));
 
     let rejected = runtime
@@ -652,7 +653,7 @@ fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
     assert_eq!(rejected.document, later.document);
     assert_eq!(rejected.can_undo, later.can_undo);
     assert_eq!(rejected.proposals[0].proposal_id, proposal_id);
-    assert_eq!(rejected.proposals[0].status, "rejected");
+    assert_eq!(rejected.proposals[0].status.as_str(), "rejected");
     // No open proposal was made on revision 0 now: its project goes.
     assert!(runtime.state.bases.is_empty());
 
@@ -663,22 +664,22 @@ fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
         .unwrap();
     assert_eq!(replay.revision, rejected.revision);
     assert_eq!(replay.document, rejected.document);
-    assert_eq!(replay.proposals[0].status, "rejected");
+    assert_eq!(replay.proposals[0].status.as_str(), "rejected");
     let error = runtime
         .reject_proposal_request(&proposal_id, "ui", "reject-again", 1)
         .unwrap_err();
-    assert_eq!(error.code, "IDEMPOTENCY_CONFLICT");
+    assert_eq!(error.code.as_str(), "IDEMPOTENCY_CONFLICT");
     let error = runtime
         .accept_proposal(&proposal_id, "ui", "accept-rejected", 1)
         .unwrap_err();
-    assert_eq!(error.code, "PROPOSAL_REJECTED");
+    assert_eq!(error.code.as_str(), "PROPOSAL_REJECTED");
 
     // The journal keeps the rejection and its receipt.
     drop(runtime);
     let mut reopened = Runtime::open(&directory).unwrap();
     let state = reopened.snapshot();
     assert_eq!(state.revision, 1);
-    assert_eq!(state.proposals[0].status, "rejected");
+    assert_eq!(state.proposals[0].status.as_str(), "rejected");
     let replay = reopened
         .reject_proposal_request(&proposal_id, "ui", "reject-stale", 1)
         .unwrap();
@@ -792,11 +793,11 @@ fn divergent_projection_requires_repair_or_explicit_import() {
     .unwrap();
 
     let mut runtime = Runtime::open(&directory).unwrap();
-    assert_eq!(runtime.snapshot().projection_status, "diverged");
+    assert_eq!(runtime.snapshot().projection_status.as_str(), "diverged");
     let blocked = edit(&mut runtime, "marker add at=0f as=blocked", 1);
-    assert_eq!(blocked.unwrap_err().code, "PROJECTION_DIVERGED");
+    assert_eq!(blocked.unwrap_err().code.as_str(), "PROJECTION_DIVERGED");
     let repaired = runtime.repair_projection().unwrap();
-    assert_eq!(repaired.projection_status, "current");
+    assert_eq!(repaired.projection_status.as_str(), "current");
     assert_eq!(repaired.timeline["name"], "Untitled project");
 
     // A text edit of the canonical document, made outside kerfd.
@@ -812,12 +813,12 @@ fn divergent_projection_requires_repair_or_explicit_import() {
     assert_eq!(imported_state.revision, repaired.revision + 1);
     assert_eq!(imported_state.timeline["name"], "explicit import");
     assert!(!imported_state.can_undo);
-    assert_eq!(imported_state.projection_status, "current");
+    assert_eq!(imported_state.projection_status.as_str(), "current");
     drop(runtime);
 
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().timeline["name"], "explicit import");
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
 }
@@ -901,7 +902,7 @@ fn typed_ops_apply_atomically_and_replay_by_key() {
     let error = runtime
         .apply_ops_request("ui", "ops-2", failing, 1)
         .unwrap_err();
-    assert_eq!(error.code, "INVALID_EDIT");
+    assert_eq!(error.code.as_str(), "INVALID_EDIT");
     assert_eq!(runtime.document(false), before);
     assert_eq!(runtime.snapshot().revision, 1);
     drop(runtime);
@@ -954,7 +955,7 @@ fn replay_refuses_a_record_that_does_not_reproduce_its_project() {
     )
     .unwrap();
     let error = Runtime::open(&directory).unwrap_err();
-    assert_eq!(error.code, "JOURNAL_REPLAY_MISMATCH");
+    assert_eq!(error.code.as_str(), "JOURNAL_REPLAY_MISMATCH");
     let _ = fs::remove_dir_all(directory);
 }
 
@@ -1076,7 +1077,7 @@ fn receipts_written_with_their_state_still_load() {
     let conflict = reopened
         .apply_script_request("ui", "checkpointed", "marker add at=1f", 1)
         .unwrap_err();
-    assert_eq!(conflict.code, "IDEMPOTENCY_CONFLICT");
+    assert_eq!(conflict.code.as_str(), "IDEMPOTENCY_CONFLICT");
     reopened.persist_checkpoint().unwrap();
     let rewritten = fs::read_to_string(&checkpoint_path).unwrap();
     assert!(rewritten.contains("\"format_version\":5"), "{rewritten}");

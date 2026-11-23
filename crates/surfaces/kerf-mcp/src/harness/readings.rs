@@ -5,7 +5,7 @@
 
 use super::tools::LookInput;
 use super::{catalog, program, program_position, resolve_project_source_path, SCOPE_WIDTH};
-use crate::{engine_error, KerfMcpRouter, McpError};
+use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_lang::Clock;
 use kerf_model::{Project, Sequence, Time};
@@ -39,7 +39,7 @@ impl KerfMcpRouter {
                 ..Default::default()
             },
         )
-        .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
         // The middle of three, the first having had a decoder to open. Only how long a
         // frame takes is wanted, not the frame.
         let median_ms = |at: Time, scale: f64| {
@@ -59,7 +59,7 @@ impl KerfMcpRouter {
             let time = program_position(project, sequence, text)?;
             if time.is_negative() || time >= duration {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!(
                         "`{text}` is outside sequence `{}`{}",
                         sequence.id,
@@ -102,7 +102,7 @@ impl KerfMcpRouter {
             let time = program_position(project, sequence, text)?;
             if time.is_negative() || time >= duration {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!(
                         "`{text}` is outside sequence `{}`{}",
                         sequence.id,
@@ -112,7 +112,7 @@ impl KerfMcpRouter {
             }
             let showing =
                 kerf_engine::analysis::shows::showing(&resolved, Some(sequence.id.as_str()), time)
-                    .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+                    .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
             let clips: Vec<Value> = showing
                 .clips
                 .iter()
@@ -169,7 +169,7 @@ impl KerfMcpRouter {
             let time = program_position(project, sequence, text)?;
             if time.is_negative() || time >= duration {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!(
                         "`{text}` is outside sequence `{}`{}",
                         sequence.id,
@@ -183,7 +183,7 @@ impl KerfMcpRouter {
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
         let standing =
             kerf_engine::analysis::stands::standing(&resolved, Some(sequence.id.as_str()), &times)
-                .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+                .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
         Ok(crate::stands::said(&standing))
     }
 
@@ -199,7 +199,7 @@ impl KerfMcpRouter {
         let sequence = program(project, input.sequence.as_deref())?;
         if let Some(media) = subjects.keys().find(|media| project.media(media).is_none()) {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!(
                     "`subjects` names the media `{media}`, which the project does not have: each is a shot's media, with the clip of its guide the eye is on{}",
                     self.in_pending(media, "proposal")
@@ -227,7 +227,7 @@ impl KerfMcpRouter {
             subjects,
             &mut kerf_engine::analysis::eye::file_picture,
         )
-        .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+        .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
         Ok(json!({
             "sequence": sequence.id.to_string(),
             "revision": revision,
@@ -243,7 +243,7 @@ impl KerfMcpRouter {
         revision: u64,
         ids: &[String],
     ) -> Result<Value, McpError> {
-        let invalid = |message: String| McpError::new("INVALID_ARGUMENTS", message);
+        let invalid = |message: String| McpError::new(McpCode::InvalidArguments, message);
         if ids.len() < 2 {
             return Err(invalid("`sync` lines up two or more media".to_owned()));
         }
@@ -264,7 +264,7 @@ impl KerfMcpRouter {
             .map(|media| std::path::Path::new(&media.path))
             .collect();
         let found = kerf_engine::analysis::sync::align_sound(&paths)
-            .map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            .map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
         let first = media[0];
         let rate = first.rate;
         let lined = crate::lined_up::lined_up(&found, rate.frame_duration().seconds());
@@ -391,7 +391,7 @@ impl KerfMcpRouter {
             || input.sheet.is_some()
         {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`cuts` is of a sequence's sound: use it with `sequence` or `proposal`, and \
                  `from` and `to` for a part of it",
             ));
@@ -408,7 +408,7 @@ impl KerfMcpRouter {
             );
             if to <= from {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`to` must come after `from`",
                 ));
             }
@@ -461,7 +461,7 @@ impl KerfMcpRouter {
             || input.sheet.is_some()
         {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`loudness` is of a whole sequence as it plays: use it with `sequence` or \
                  `proposal` only; a media's own loudness is in its `facts`",
             ));
@@ -561,13 +561,14 @@ impl KerfMcpRouter {
                 Some(_) => kerf_engine::render::still::draw_signal(&resolved, id, time, scale),
                 None => kerf_engine::render::still::draw_frame(&resolved, id, time, scale),
             };
-            let frame = drawn.map_err(|error| McpError::new("RENDER_FAILED", error.to_string()))?;
+            let frame =
+                drawn.map_err(|error| McpError::new(McpCode::RenderFailed, error.to_string()))?;
             let (w, h) = (frame.width as usize, frame.height as usize);
             match hdr {
                 Some(curve) => kerf_scopes::read_signal(&frame.rgba, w, h, curve),
                 None => kerf_scopes::read(&frame.rgba, w, h),
             }
-            .ok_or_else(|| McpError::new("RENDER_FAILED", "the frame came back empty"))
+            .ok_or_else(|| McpError::new(McpCode::RenderFailed, "the frame came back empty"))
         };
         // The same sequence as the project has it, when it has it.
         let before =
@@ -577,7 +578,7 @@ impl KerfMcpRouter {
             let time = program_position(project, sequence, text)?;
             if time.is_negative() || time >= duration {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!("`{text}` is outside sequence `{}`", sequence.id),
                 ));
             }

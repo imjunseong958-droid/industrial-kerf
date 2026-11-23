@@ -18,7 +18,7 @@
 //! the same whichever wrote or read it.
 
 use crate::otio::{Item, Timeline, WireKind, WireMarker, WireMedia, WireSequence, WireTrack};
-use crate::{issue, InterchangeError, InterchangeIssue, IssueSeverity};
+use crate::{issue, InterchangeCode, InterchangeError, InterchangeIssue, IssueSeverity};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -230,7 +230,7 @@ fn track(track: &WireTrack, timeline: &Timeline) -> Result<Json, InterchangeErro
             } => {
                 let media = timeline.media.get(*index).ok_or_else(|| {
                     InterchangeError::new(
-                        "INTERCHANGE_PROJECT_INVALID",
+                        InterchangeCode::ProjectInvalid,
                         format!("a clip names media {index}, which the timeline does not have"),
                     )
                 })?;
@@ -569,7 +569,7 @@ fn read_marker(marker: &Value, rate: f64, offset: i64) -> Option<WireMarker> {
 /// The timeline an `.otio` file's text holds, and what of the file it does
 /// not.
 pub fn read(text_of_file: &str) -> Result<(Timeline, Vec<InterchangeIssue>), InterchangeError> {
-    let invalid = |message: String| InterchangeError::new("INTERCHANGE_INPUT_INVALID", message);
+    let invalid = |message: String| InterchangeError::new(InterchangeCode::InputInvalid, message);
     let root: Value = serde_json::from_str(text_of_file)
         .map_err(|error| invalid(format!("the file is not OpenTimelineIO JSON: {error}")))?;
     if schema(&root) != "Timeline" {

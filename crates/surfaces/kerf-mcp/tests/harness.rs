@@ -599,7 +599,7 @@ fn edit_stages_a_checked_proposal_with_a_preview() {
     let open: Vec<_> = state
         .proposals
         .iter()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.status.as_str() == "pending")
         .collect();
     assert_eq!(open.len(), 1, "one proposal, two versions: {open:#?}");
     assert_eq!(open[0].proposal_id, id);
@@ -2695,7 +2695,7 @@ fn an_mcp_clients_proposals_are_by_the_client_and_keep_their_versions() {
     let open: Vec<_> = state
         .proposals
         .iter()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.status.as_str() == "pending")
         .collect();
     assert_eq!(open.len(), 3, "{open:#?}");
     let claude = open

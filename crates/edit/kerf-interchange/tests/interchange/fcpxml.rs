@@ -633,7 +633,7 @@ fn export_writes_the_file_and_reports_by_severity() {
     assert_eq!(written.report.losses.len(), 8);
     assert_eq!(written.report.omissions, written.report.losses);
     let error = export(&project, Some("s9"), &path, Format::Fcpxml).unwrap_err();
-    assert_eq!(error.code, "INTERCHANGE_PROJECT_INVALID");
+    assert_eq!(error.code.as_str(), "INTERCHANGE_PROJECT_INVALID");
     assert_eq!(Format::of_path(&path), Some(Format::Fcpxml));
     assert_eq!(Format::of_path(Path::new("cut.OTIO")), Some(Format::Otio));
     assert_eq!(Format::of_path(Path::new("cut.edl")), None);

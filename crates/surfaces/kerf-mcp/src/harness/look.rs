@@ -3,7 +3,7 @@
 
 use super::tools::{input, LookInput};
 use super::{catalog, program, MAX_LOOK_FRAMES, MAX_SHEET_FRAMES};
-use crate::{engine_error, KerfMcpRouter, McpError};
+use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_lang::{print_document, PrintOptions};
 use kerf_model::Project;
 use serde_json::{json, Value};
@@ -36,7 +36,7 @@ impl KerfMcpRouter {
         }
         if input.media.is_some() && input.sequence.is_some() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`sequence` chooses program frames or what a sequence says; not with `media`",
             ));
         }
@@ -72,7 +72,7 @@ impl KerfMcpRouter {
         let area = match input.area.as_deref() {
             Some(name) => Some(kerf_model::Area::parse(name).ok_or_else(|| {
                 McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     format!("no area `{name}`: edit, color, motion, vfx, or image"),
                 )
             })?),
@@ -80,14 +80,14 @@ impl KerfMcpRouter {
         };
         if let Some(font) = &input.font {
             if !preset_only {
-                return Err(McpError::new("INVALID_ARGUMENTS", "use font alone"));
+                return Err(McpError::new(McpCode::InvalidArguments, "use font alone"));
             }
             return Ok(Some(font_description(font)));
         }
         if let Some(words) = &input.effects {
             if !(preset_only || area.is_some() && only_area_beside) {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "use effects alone, or with area",
                 ));
             }
@@ -97,26 +97,26 @@ impl KerfMcpRouter {
         }
         if area.is_some() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "area narrows effects; pass effects too",
             ));
         }
         if let Some(id) = &input.effect {
             if !preset_only {
-                return Err(McpError::new("INVALID_ARGUMENTS", "use effect alone"));
+                return Err(McpError::new(McpCode::InvalidArguments, "use effect alone"));
             }
             return effect_reference(id).map(Some);
         }
         if let Some(file) = &input.file {
             if !preset_only {
-                return Err(McpError::new("INVALID_ARGUMENTS", "use file alone"));
+                return Err(McpError::new(McpCode::InvalidArguments, "use file alone"));
             }
             return self.look_at_file(file).map(Some);
         }
         if input.preset.is_some() || input.presets {
             if !preset_only {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "use preset or presets alone",
                 ));
             }
@@ -137,7 +137,7 @@ impl KerfMcpRouter {
         if let Some(subjects) = eye_subjects(input.eye.as_ref())? {
             if !beside_eye {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`eye` is of the cuts of a sequence's picture, and is used alone, or with `sequence`, `proposal`, `from`, or `to`",
                 ));
             }
@@ -149,13 +149,13 @@ impl KerfMcpRouter {
         if input.cost {
             if input.media.is_some() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`cost` is of program frames, not with `media`",
                 ));
             }
             if input.at.is_empty() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`cost` is of the frames at `at`: pass the positions to read",
                 ));
             }
@@ -167,7 +167,7 @@ impl KerfMcpRouter {
         if let Some(signal) = &input.signal {
             if input.media.is_some() || !input.at.is_empty() || input.sequence.is_some() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`signal` names its clips, and is used alone or with `proposal`",
                 ));
             }
@@ -177,7 +177,7 @@ impl KerfMcpRouter {
         if let Some(take) = &input.follows {
             if input.media.is_some() || !input.at.is_empty() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`follows` names its media, and is used alone, or with `sequence` or `proposal`",
                 ));
             }
@@ -189,7 +189,7 @@ impl KerfMcpRouter {
         if let Some(held) = &input.held {
             if input.media.is_some() || !input.at.is_empty() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`held` names a take and its depth, and is used alone, or with `sequence` or `proposal`",
                 ));
             }
@@ -201,7 +201,7 @@ impl KerfMcpRouter {
         if let Some(placed) = &input.placed {
             if input.media.is_some() || !input.at.is_empty() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`placed` names its take and its clip, and is used alone, or with `sequence` or `proposal`",
                 ));
             }
@@ -216,7 +216,7 @@ impl KerfMcpRouter {
         if let Some(mesh) = &input.mesh {
             if input.media.is_some() || !input.at.is_empty() || input.sequence.is_some() {
                 return Err(McpError::new(
-                    "INVALID_ARGUMENTS",
+                    McpCode::InvalidArguments,
                     "`mesh` names its clip, and is used alone or with `proposal`",
                 ));
             }
@@ -250,7 +250,7 @@ impl KerfMcpRouter {
             || input.sequence.is_some()
         {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`graph` and `takes` name a media and `workflow` a step of one: each is used alone, or with `proposal`",
             ));
         }
@@ -273,7 +273,7 @@ impl KerfMcpRouter {
     fn look_shows(&self, input: &LookInput) -> Result<Value, McpError> {
         if input.media.is_some() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 if input.shows {
                     "`shows` is of program frames, not with `media`"
                 } else {
@@ -283,7 +283,7 @@ impl KerfMcpRouter {
         }
         if input.shows && input.at.is_empty() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "`shows` is of the frames at `at`: pass the positions to read",
             ));
         }
@@ -394,7 +394,7 @@ impl KerfMcpRouter {
     ) -> Result<Value, McpError> {
         let media = project.media(media_id).ok_or_else(|| {
             McpError::new(
-                "UNKNOWN_MEDIA",
+                McpCode::UnknownMedia,
                 format!(
                     "no media `{media_id}` in the project{}",
                     self.in_pending(media_id, "proposal")
@@ -416,7 +416,7 @@ impl KerfMcpRouter {
 fn asked_together(input: &LookInput) -> Result<(), McpError> {
     if input.track.is_some() && (input.media.is_some() || !input.at.is_empty()) {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "track follows the program over `from`–`to`; not with `media` or `at`",
         ));
     }
@@ -428,33 +428,33 @@ fn asked_together(input: &LookInput) -> Result<(), McpError> {
         || cuts_asked(input.cuts.as_ref())?.is_some();
     if !ranged && (input.from.is_some() || input.to.is_some()) {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "from and to choose a range for `transcript`, `sheet`, `contrast`, `cuts`, `eye`, or a media's onsets",
         ));
     }
     if let Some(count) = input.sheet {
         if !(2..=MAX_SHEET_FRAMES).contains(&count) {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 format!("a sheet has 2 to {MAX_SHEET_FRAMES} frames"),
             ));
         }
         if input.transcript || !input.at.is_empty() {
             return Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "pass one of `sheet`, `at`, or `transcript`",
             ));
         }
     }
     if input.media.is_none() && input.transcript && !input.at.is_empty() {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "pass `at` for frames or `transcript` for what is said, not both",
         ));
     }
     if input.words && !input.transcript {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "words times a transcript; pass transcript: true",
         ));
     }
@@ -465,13 +465,13 @@ fn asked_together(input: &LookInput) -> Result<(), McpError> {
             || input.sheet.is_some())
     {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "scopes read the program at `at`; pass `at`, and not `media`, `transcript`, or `sheet`",
         ));
     }
     if input.facts && input.media.is_none() {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "facts are of a media; pass `media`",
         ));
     }
@@ -484,13 +484,13 @@ fn asked_together(input: &LookInput) -> Result<(), McpError> {
             || input.scopes)
     {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "contrast reads the sequence's text; pass only `from`, `to`, `sequence`, or `proposal`",
         ));
     }
     if input.at.len() > MAX_LOOK_FRAMES {
         return Err(McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             format!("look shows at most {MAX_LOOK_FRAMES} frames at a time"),
         ));
     }
@@ -507,7 +507,7 @@ fn asked_together(input: &LookInput) -> Result<(), McpError> {
 fn cuts_asked(given: Option<&Value>) -> Result<Option<f64>, McpError> {
     let wrong = || {
         McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             format!(
                 "`cuts` is `true`, or says from what length a pause is listed, as {{\"pauses\": 0.5}}: \
                  seconds, {} or more",
@@ -540,7 +540,7 @@ fn cuts_asked(given: Option<&Value>) -> Result<Option<f64>, McpError> {
 fn eye_subjects(given: Option<&Value>) -> Result<Option<BTreeMap<String, String>>, McpError> {
     let wrong = || {
         McpError::new(
-            "INVALID_ARGUMENTS",
+            McpCode::InvalidArguments,
             "`eye` is `true`, or names what the eye is on in a shot whose steps do not, as {\"subjects\": {\"<media>\": \"<clip of its guide>\"}}",
         )
     };
@@ -635,7 +635,7 @@ fn effect_reference(id: &str) -> Result<Value, McpError> {
     let (id, version) = match id.split_once('@') {
         Some(_) => {
             let (id, version) = kerf_lang::parse_fx_ref(id)
-                .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
+                .map_err(|message| McpError::new(McpCode::InvalidArguments, message))?;
             (id.to_string(), version)
         }
         None => (id.to_owned(), None),
@@ -659,11 +659,11 @@ fn effect_reference(id: &str) -> Result<Value, McpError> {
                 }
             }
         };
-        McpError::new("INVALID_ARGUMENTS", message)
+        McpError::new(McpCode::InvalidArguments, message)
     })?;
     if let Some(version) = version {
         fx.reads(version)
-            .map_err(|message| McpError::new("INVALID_ARGUMENTS", message))?;
+            .map_err(|message| McpError::new(McpCode::InvalidArguments, message))?;
     }
     Ok(json!({
         "effect": fx.id.as_str(),

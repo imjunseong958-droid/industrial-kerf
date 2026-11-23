@@ -4,7 +4,7 @@
 //! file or a folder of it holds, and the takes a media's steps have made.
 
 use super::{cannot_said, parse, proposals_status};
-use crate::{KerfMcpRouter, McpError};
+use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::{Project, Time};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -285,7 +285,7 @@ impl KerfMcpRouter {
     fn media_fields(&self, file: &str) -> Result<String, McpError> {
         let path = self.dir.join(file);
         let info = kerf_engine::info(&path.to_string_lossy())
-            .map_err(|error| McpError::new("UNREADABLE_FILE", format!("{file}: {error}")))?;
+            .map_err(|error| McpError::new(McpCode::UnreadableFile, format!("{file}: {error}")))?;
         let fps = info.fps.unwrap_or(30.0);
         let seconds = info.duration.unwrap_or(0.0);
         // Whole frames and stereo at 48 kHz, as an import reads a file.
@@ -370,7 +370,7 @@ impl KerfMcpRouter {
         }
         if !path.is_file() {
             return Err(McpError::new(
-                "UNKNOWN_FILE",
+                McpCode::UnknownFile,
                 format!("no file `{file}` in the project's folder"),
             ));
         }
@@ -387,7 +387,7 @@ impl KerfMcpRouter {
         let path = self.dir.join(file);
         let fields = self.media_fields(file)?;
         let info = kerf_engine::info(&path.to_string_lossy())
-            .map_err(|error| McpError::new("UNREADABLE_FILE", format!("{file}: {error}")))?;
+            .map_err(|error| McpError::new(McpCode::UnreadableFile, format!("{file}: {error}")))?;
         let fps = info.fps.unwrap_or(30.0);
         let stem = path
             .file_stem()

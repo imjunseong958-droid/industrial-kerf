@@ -9,7 +9,7 @@ use crate::wake::Outbox;
 use crate::{emit, key, media, tasks, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
-use kerf_runtime::{RuntimeClient, RuntimeError, StateSnapshot};
+use kerf_runtime::{ErrorCode, RuntimeClient, RuntimeError, StateSnapshot};
 use serde_json::{json, Map, Value};
 use std::ffi::OsStr;
 use std::fs;
@@ -718,7 +718,9 @@ impl Collab {
                 .map_err(|error| self.lost(error))?
                 .revision;
             match client.apply_script_request("ui", &key(), script, revision) {
-                Err(error) if error.code == "REVISION_CONFLICT" && attempt == 0 => attempt += 1,
+                Err(error) if error.code == ErrorCode::RevisionConflict && attempt == 0 => {
+                    attempt += 1
+                }
                 result => return result.map_err(|error| self.lost(error)),
             }
         }

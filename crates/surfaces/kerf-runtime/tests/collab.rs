@@ -161,7 +161,7 @@ fn edits_made_at_the_same_time_on_two_machines_both_survive_a_sync() {
         !state.can_undo,
         "a sync that changed the project clears history"
     );
-    assert_eq!(state.projection_status, "current");
+    assert_eq!(state.projection_status.as_str(), "current");
     assert!(!git::status(&team.bob).unwrap().changed);
 
     let report = sync(&team.alice, &alice, "sync-a2");
@@ -189,6 +189,18 @@ fn a_sync_with_nothing_new_changes_nothing() {
     assert!(replayed.is_object());
 }
 
+/// What git refuses, kerfd passes on to its client under the name kerf-collab gives it.
+#[test]
+fn a_sync_of_a_folder_that_is_no_repository_is_refused_by_gits_name() {
+    let folder = root("norepo");
+    let client = daemon(&folder);
+    let answered = client.collab_integrate("ui", "norepo-1", None);
+    // Before anything is asserted: removing the folder orphans the daemon, which then exits.
+    let _ = fs::remove_dir_all(&folder);
+    let error = answered.unwrap_err();
+    assert_eq!(error.code.as_str(), "NOT_A_REPOSITORY", "{error:?}");
+}
+
 #[test]
 fn a_hand_edited_project_file_is_not_synced_until_it_is_settled() {
     let team = team("hand");
@@ -199,7 +211,7 @@ fn a_hand_edited_project_file_is_not_synced_until_it_is_settled() {
     fs::write(&path, format!("{text}\n# edited by hand\n  ")).unwrap();
     fs::write(&path, text.replace("name=\"Film\"", "name=\"Hand\"")).unwrap();
     let error = alice.collab_integrate("ui", "hand-1", None).unwrap_err();
-    assert_eq!(error.code, "PROJECTION_DIVERGED");
+    assert_eq!(error.code.as_str(), "PROJECTION_DIVERGED");
     let revision = alice.get_state().unwrap().revision;
     let state = alice
         .import_projection_request("ui", "hand-load", revision)

@@ -12,10 +12,11 @@ use std::collections::{BTreeMap, HashMap};
 
 pub use kerf_bridge::event::{
     Author, Conversation, ConversationAsk as Ask, ConversationItem as Turn, ConversationSummary,
-    ProposalEntry as Proposal, ProposalFreshness, ProposalVersion, QueuedRender as RenderJob,
-    Snapshot, TimelineView as Timeline, ViewClip as Clip, ViewEffect, ViewMarker as Marker,
-    ViewSequence as SequenceInfo, ViewSource as Source, ViewTake as Take, ViewTrack as Track,
-    ViewTrackKind as TrackKind, ViewTransition as Transition,
+    ProjectionStatus, ProposalEntry as Proposal, ProposalFreshness, ProposalStatus,
+    ProposalVersion, QueuedRender as RenderJob, Snapshot, TimelineView as Timeline,
+    ViewClip as Clip, ViewEffect, ViewMarker as Marker, ViewSequence as SequenceInfo,
+    ViewSource as Source, ViewTake as Take, ViewTrack as Track, ViewTrackKind as TrackKind,
+    ViewTransition as Transition,
 };
 
 /// How the editor reads and shows a timeline.
@@ -413,10 +414,9 @@ impl SnapshotShow for Snapshot {
             proposals: read.proposals,
             proposal_timeline: read.proposal_timeline,
             proposal_timelines: read.proposal_timelines,
-            projection_status: value["projectionStatus"]
-                .as_str()
-                .unwrap_or("current")
-                .to_owned(),
+            projection_status: ProjectionStatus::from_name(
+                value["projectionStatus"].as_str().unwrap_or("current"),
+            ),
             import_warnings: value["importWarnings"]
                 .as_array()
                 .map(|items| {

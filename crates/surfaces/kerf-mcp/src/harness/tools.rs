@@ -2,7 +2,7 @@
 //! description and input schema, and the inputs its arguments are read into.
 
 use super::{MAX_LOOK_FRAMES, MAX_SHEET_FRAMES};
-use crate::{McpError, ToolAnnotations};
+use crate::{McpCode, McpError, ToolAnnotations};
 use kerf_lang::reference;
 use kerf_model::Catalog;
 use kerf_skills::Skill;
@@ -505,5 +505,5 @@ pub(crate) fn input<T: serde::de::DeserializeOwned>(arguments: Value) -> Result<
         arguments
     };
     serde_json::from_value(arguments)
-        .map_err(|error| McpError::new("INVALID_ARGUMENTS", error.to_string()))
+        .map_err(|error| McpError::new(McpCode::InvalidArguments, error.to_string()))
 }

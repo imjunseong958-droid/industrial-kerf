@@ -10,7 +10,7 @@
 //! and can stop, and the media becomes the new take once it is made: an
 //! edit undo takes back, and a take kept beside the ones before it.
 
-use super::{KerfMcpRouter, McpError};
+use super::{KerfMcpRouter, McpCode, McpError};
 use crate::harness::operation_key;
 use kerf_engine::recipe::{self, model::Models};
 use kerf_engine::{CancellationToken, EngineError};
@@ -199,7 +199,7 @@ impl KerfMcpRouter {
             (None, Some(job)) => {
                 if input.why.is_some() || input.rolls.is_some() {
                     return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
+                        McpCode::InvalidArguments,
                         "`why` and `rolls` go with a `media` to make",
                     ));
                 }
@@ -208,21 +208,21 @@ impl KerfMcpRouter {
             (Some(media), None) => {
                 if input.cancel {
                     return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
+                        McpCode::InvalidArguments,
                         "`cancel` stops a `job`; pass the job a making answered with",
                     ));
                 }
                 let rolls = input.rolls.unwrap_or(1);
                 if !(1..=8).contains(&rolls) {
                     return Err(McpError::new(
-                        "INVALID_ARGUMENTS",
+                        McpCode::InvalidArguments,
                         "`rolls` is how many takes to make, 1 to 8",
                     ));
                 }
                 self.make_media(media, input.why.as_deref(), input.wait, rolls)
             }
             _ => Err(McpError::new(
-                "INVALID_ARGUMENTS",
+                McpCode::InvalidArguments,
                 "pass `media` to make one, or `job` to read a making",
             )),
         }
@@ -246,18 +246,18 @@ impl KerfMcpRouter {
             };
             if let Some(proposal) = self.pending_with(media).filter(adds) {
                 return Err(McpError::new(
-                    "CANNOT_MAKE",
+                    McpCode::CannotMake,
                     format!(
                         "no media `{media}` in this project yet: it is in proposal {proposal}, which waits for the person; ask for the making once it is accepted"
                     ),
                 ));
             }
         }
-        let models =
-            Models::load().map_err(|error| McpError::new("CANNOT_MAKE", error.to_string()))?;
+        let models = Models::load()
+            .map_err(|error| McpError::new(McpCode::CannotMake, error.to_string()))?;
         let cannot = |error: EngineError| {
             McpError::new(
-                "CANNOT_MAKE",
+                McpCode::CannotMake,
                 super::harness::cannot_said(error.to_string(), Some(&models)),
             )
         };
@@ -272,7 +272,7 @@ impl KerfMcpRouter {
             recipe::plan_rolled(&project, &self.dir, media, &models, first).map_err(cannot)?;
         let permissions = self.permissions().map_err(|error| {
             McpError::new(
-                "PERMISSIONS",
+                McpCode::Permissions,
                 format!("{error}; the person mends their own permissions file"),
             )
         })?;
@@ -288,7 +288,7 @@ impl KerfMcpRouter {
                 )
         }) {
             return Err(McpError::new(
-                "MAKING",
+                McpCode::Making,
                 format!("{media} is being made already: job {}", running.id),
             ));
         }
@@ -534,7 +534,7 @@ impl KerfMcpRouter {
         };
         let (media, take, token, state) = found.ok_or_else(|| {
             McpError::new(
-                "UNKNOWN_JOB",
+                McpCode::UnknownJob,
                 format!("no making `{id}` in this session: a job lasts as long as the session that started it"),
             )
         })?;

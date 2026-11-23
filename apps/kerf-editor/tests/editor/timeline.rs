@@ -2,8 +2,8 @@
 
 use kerf_editor::model::{
     default_targets, proposal_changes, signal_keys, source_targets, toggle_target, ClipShow,
-    GainKey, Proposal, ProposalBand, ProposalVersion, Snapshot, SnapshotShow, Timeline,
-    TimelineShow, TrackKind, TrackShow,
+    GainKey, Proposal, ProposalBand, ProposalStatus, ProposalVersion, Snapshot, SnapshotShow,
+    Timeline, TimelineShow, TrackKind, TrackShow,
 };
 use kerf_editor::prefs::TrackHeights;
 use kerf_editor::store::MediaActivity;
@@ -612,7 +612,7 @@ proptest! {
 fn proposal(id: &str, versions: &[&str]) -> Proposal {
     Proposal {
         proposal_id: id.to_owned(),
-        status: "pending".to_owned(),
+        status: ProposalStatus::Pending,
         versions: versions
             .iter()
             .enumerate()

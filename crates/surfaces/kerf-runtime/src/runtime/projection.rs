@@ -9,9 +9,8 @@ use super::{
 use crate::kernel;
 use crate::store::{
     inspect_projection, projection_digest, truncate_journal, write_bytes_atomic, Change,
-    ProjectionStatus,
 };
-use crate::{io_error, RuntimeError, RuntimeResponse, StateSnapshot};
+use crate::{io_error, ErrorCode, ProjectionStatus, RuntimeError, RuntimeResponse, StateSnapshot};
 use kerf_model::Project;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -55,7 +54,7 @@ impl Runtime {
         self.check_revision(Some(base_revision))?;
         if !self.project_path.is_file() {
             return Err(RuntimeError::new(
-                "INVALID_PROJECT",
+                ErrorCode::InvalidProject,
                 "project.kerf is required for an explicit projection import",
             ));
         }
@@ -126,7 +125,7 @@ impl Runtime {
         }
         if self.projection_status == ProjectionStatus::Diverged {
             return Err(RuntimeError::new(
-                "PROJECTION_DIVERGED",
+                ErrorCode::ProjectionDiverged,
                 "project.kerf was changed outside Kerf; load it or keep the editor's version before syncing",
             ));
         }
@@ -161,7 +160,7 @@ impl Runtime {
                     }
                 }
                 return Err(RuntimeError::new(
-                    "COLLAB_UNREADABLE_PROJECT",
+                    ErrorCode::CollabUnreadableProject,
                     format!(
                         "the project the other branch has cannot be read here, so it was not merged: {}",
                         error.message
@@ -254,6 +253,7 @@ pub(super) fn merge_driver() -> Result<PathBuf, RuntimeError> {
     }
 }
 
+/// What git or GitHub refused, under the name kerf-collab gives it.
 pub(super) fn collab_error(error: kerf_collab::git::CollabError) -> RuntimeError {
-    RuntimeError::new(error.code, error.message)
+    RuntimeError::new(ErrorCode::from_name(error.code.as_str()), error.message)
 }

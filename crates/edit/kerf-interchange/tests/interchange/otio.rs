@@ -146,11 +146,11 @@ fn the_adapter_writes_and_reads_otio_files_without_python() {
     let error = adapter
         .export(&original, &folder.path().join("d.otioz"), None)
         .unwrap_err();
-    assert_eq!(error.code, "INTERCHANGE_PROCESS_FAILED");
+    assert_eq!(error.code.as_str(), "INTERCHANGE_PROCESS_FAILED");
     let error = adapter
         .import(&folder.path().join("a.otio"), Some("cmx_3600"))
         .unwrap_err();
-    assert_eq!(error.code, "INTERCHANGE_PROCESS_FAILED");
+    assert_eq!(error.code.as_str(), "INTERCHANGE_PROCESS_FAILED");
 }
 
 #[test]

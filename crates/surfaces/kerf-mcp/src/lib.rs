@@ -37,7 +37,7 @@ pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
 pub use text_lint::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS, TITLE_SAFE};
 
 use kerf_agent::{AgentTool, ToolMap};
-use kerf_runtime::{Author, RuntimeClient, RuntimeError, RuntimeLease};
+use kerf_runtime::{Author, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease};
 use kerf_skills::{load_skills_with_bundled, Skill};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -70,23 +70,129 @@ pub struct ToolAnnotations {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct McpErrorShape {
-    pub code: String,
+    pub code: McpCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
 }
 
+/// Which refusal a tool answers with: what an agent decides by, where the message is what it
+/// reads. An agent is told a code by its name ([`McpCode::as_str`]), so a name stays as it is
+/// once given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpCode {
+    Cancelled,
+    CannotMake,
+    CapabilityUnavailable,
+    EmptySequence,
+    HandlerFailed,
+    InvalidArguments,
+    InvalidCast,
+    InvalidPreset,
+    InvalidProject,
+    InvalidRecipe,
+    InvalidSteps,
+    Making,
+    MediaFailed,
+    MediaUnavailable,
+    NotPending,
+    NoAudio,
+    NoChange,
+    NoSequence,
+    NoVideo,
+    Permissions,
+    PresetIo,
+    ProposalBaseGone,
+    ProposalNotForwarded,
+    ProposalNotStale,
+    ProposalPending,
+    ProposalStale,
+    ProposalSuperseded,
+    RenderFailed,
+    ResultTooLarge,
+    RevisionConflict,
+    RuntimeError,
+    ScriptRefused,
+    UnknownFile,
+    UnknownJob,
+    UnknownMedia,
+    UnknownSequence,
+    UnknownTool,
+    UnreadableFile,
+    Unrenderable,
+}
+
+impl McpCode {
+    // Two codes with one name would be two arms the same.
+    #[deny(clippy::match_same_arms)]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => "CANCELLED",
+            Self::CannotMake => "CANNOT_MAKE",
+            Self::CapabilityUnavailable => "CAPABILITY_UNAVAILABLE",
+            Self::EmptySequence => "EMPTY_SEQUENCE",
+            Self::HandlerFailed => "HANDLER_FAILED",
+            Self::InvalidArguments => "INVALID_ARGUMENTS",
+            Self::InvalidCast => "INVALID_CAST",
+            Self::InvalidPreset => "INVALID_PRESET",
+            Self::InvalidProject => "INVALID_PROJECT",
+            Self::InvalidRecipe => "INVALID_RECIPE",
+            Self::InvalidSteps => "INVALID_STEPS",
+            Self::Making => "MAKING",
+            Self::MediaFailed => "MEDIA_FAILED",
+            Self::MediaUnavailable => "MEDIA_UNAVAILABLE",
+            Self::NotPending => "NOT_PENDING",
+            Self::NoAudio => "NO_AUDIO",
+            Self::NoChange => "NO_CHANGE",
+            Self::NoSequence => "NO_SEQUENCE",
+            Self::NoVideo => "NO_VIDEO",
+            Self::Permissions => "PERMISSIONS",
+            Self::PresetIo => "PRESET_IO",
+            Self::ProposalBaseGone => "PROPOSAL_BASE_GONE",
+            Self::ProposalNotForwarded => "PROPOSAL_NOT_FORWARDED",
+            Self::ProposalNotStale => "PROPOSAL_NOT_STALE",
+            Self::ProposalPending => "PROPOSAL_PENDING",
+            Self::ProposalStale => "PROPOSAL_STALE",
+            Self::ProposalSuperseded => "PROPOSAL_SUPERSEDED",
+            Self::RenderFailed => "RENDER_FAILED",
+            Self::ResultTooLarge => "RESULT_TOO_LARGE",
+            Self::RevisionConflict => "REVISION_CONFLICT",
+            Self::RuntimeError => "RUNTIME_ERROR",
+            Self::ScriptRefused => "SCRIPT_REFUSED",
+            Self::UnknownFile => "UNKNOWN_FILE",
+            Self::UnknownJob => "UNKNOWN_JOB",
+            Self::UnknownMedia => "UNKNOWN_MEDIA",
+            Self::UnknownSequence => "UNKNOWN_SEQUENCE",
+            Self::UnknownTool => "UNKNOWN_TOOL",
+            Self::UnreadableFile => "UNREADABLE_FILE",
+            Self::Unrenderable => "UNRENDERABLE",
+        }
+    }
+}
+
+impl fmt::Display for McpCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for McpCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug)]
 struct McpError {
-    code: String,
+    code: McpCode,
     message: String,
     details: Option<Value>,
 }
 
 impl McpError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    fn new(code: McpCode, message: impl Into<String>) -> Self {
         Self {
-            code: code.into(),
+            code,
             message: message.into(),
             details: None,
         }
@@ -99,7 +205,7 @@ impl McpError {
 
     fn shape(&self) -> McpErrorShape {
         McpErrorShape {
-            code: self.code.clone(),
+            code: self.code,
             message: self.message.clone(),
             details: self.details.clone(),
         }
@@ -115,9 +221,9 @@ impl fmt::Display for McpError {
 impl From<RuntimeError> for McpError {
     fn from(error: RuntimeError) -> Self {
         // The refusals an agent acts on keep their own code.
-        let code = match error.code.as_str() {
-            "REVISION_CONFLICT" => "REVISION_CONFLICT",
-            _ => "RUNTIME_ERROR",
+        let code = match error.code {
+            ErrorCode::RevisionConflict => McpCode::RevisionConflict,
+            _ => McpCode::RuntimeError,
         };
         Self::new(code, error.message).with_details(json!({
             "runtimeCode": error.code,
@@ -399,7 +505,7 @@ impl KerfMcpRouter {
             "render" => self.render(arguments),
             "make" => self.make(arguments),
             _ => Err(McpError::new(
-                "UNKNOWN_TOOL",
+                McpCode::UnknownTool,
                 format!("unknown tool: {name}"),
             )),
         }
@@ -679,10 +785,12 @@ fn engine_error(error: kerf_engine::EngineError) -> McpError {
         kerf_engine::EngineError::CapabilityUnavailable {
             capability,
             message,
-        } => McpError::new("CAPABILITY_UNAVAILABLE", message)
+        } => McpError::new(McpCode::CapabilityUnavailable, message)
             .with_details(json!({"capability": capability})),
-        kerf_engine::EngineError::Cancelled => McpError::new("CANCELLED", "operation cancelled"),
-        error => McpError::new("HANDLER_FAILED", error.to_string()),
+        kerf_engine::EngineError::Cancelled => {
+            McpError::new(McpCode::Cancelled, "operation cancelled")
+        }
+        error => McpError::new(McpCode::HandlerFailed, error.to_string()),
     }
 }
 

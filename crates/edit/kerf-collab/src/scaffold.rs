@@ -1,7 +1,7 @@
 //! New project folders: the document, the media and preset folders, and,
 //! for a shared project, the repository and its ignore and attribute files.
 
-use crate::git::{self, CollabError, Result};
+use crate::git::{self, CollabCode, CollabError, Result};
 use kerf_lang::{print_document, PrintOptions};
 use kerf_model::{Catalog, Id, Project, Rate, Sequence, Time};
 use serde::{Deserialize, Serialize};
@@ -139,7 +139,10 @@ pub fn folder_name(name: &str) -> Result<String> {
         .collect();
     let cleaned = cleaned.trim_matches('.').trim().to_owned();
     if cleaned.is_empty() {
-        return Err(CollabError::new("INVALID_NAME", "the project needs a name"));
+        return Err(CollabError::new(
+            CollabCode::InvalidName,
+            "the project needs a name",
+        ));
     }
     Ok(cleaned)
 }
@@ -170,8 +173,9 @@ pub fn initial_project(name: &str, template: Template, rate: Rate) -> Project {
 /// or a GitHub repository to create.
 pub fn create(new: &NewProject, catalog: &Catalog) -> Result<Created> {
     let rate = match new.rate.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
-        Some(text) => Rate::parse(text)
-            .map_err(|error| CollabError::new("INVALID_RATE", format!("{text}: {error}")))?,
+        Some(text) => Rate::parse(text).map_err(|error| {
+            CollabError::new(CollabCode::InvalidRate, format!("{text}: {error}"))
+        })?,
         None => Rate::FPS_30,
     };
     let directory = new.location.join(folder_name(&new.name)?);
@@ -181,11 +185,11 @@ pub fn create(new: &NewProject, catalog: &Catalog) -> Result<Created> {
             .unwrap_or(true)
     {
         return Err(CollabError::new(
-            "ALREADY_EXISTS",
+            CollabCode::AlreadyExists,
             format!("{} already exists", directory.display()),
         ));
     }
-    let io = |error: std::io::Error| CollabError::new("IO_ERROR", error.to_string());
+    let io = |error: std::io::Error| CollabError::new(CollabCode::IoError, error.to_string());
     fs::create_dir_all(directory.join(MEDIA_DIR)).map_err(io)?;
     fs::create_dir_all(directory.join(PRESETS_DIR)).map_err(io)?;
     let project = initial_project(new.name.trim(), new.template, rate);
@@ -203,7 +207,10 @@ pub fn create(new: &NewProject, catalog: &Catalog) -> Result<Created> {
     }
     let tools = git::local_tools();
     if !tools.git {
-        return Err(CollabError::new("GIT_UNAVAILABLE", "git is not installed"));
+        return Err(CollabError::new(
+            CollabCode::GitUnavailable,
+            "git is not installed",
+        ));
     }
     prepare_repository_files(&directory, tools.git_lfs).map_err(io)?;
     git::init(&directory)?;
@@ -217,7 +224,7 @@ pub fn create(new: &NewProject, catalog: &Catalog) -> Result<Created> {
     if let Some(github) = &new.github {
         if !tools.gh {
             return Err(CollabError::new(
-                "GH_UNAVAILABLE",
+                CollabCode::GhUnavailable,
                 "creating a GitHub repository needs the GitHub CLI (brew install gh, then gh auth login)",
             ));
         }

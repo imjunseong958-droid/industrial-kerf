@@ -13,11 +13,11 @@ use crate::kernel::{self, Edit};
 use crate::store::{
     inspect_projection, load_checkpoint, load_journal, preserve_previous_state, projection_digest,
     projection_matches, truncate_journal, write_json_atomic, Change, HistoryEntry, ImportRecord,
-    JournalAction, JournalRecord, Loaded, OperationRecord, PersistedCheckpoint, ProjectionStatus,
-    ProposalBase, RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE,
-    PREVIOUS_STATE_PREFIX, PROJECT_FILE,
+    JournalAction, JournalRecord, Loaded, OperationRecord, PersistedCheckpoint, ProposalBase,
+    RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE, PREVIOUS_STATE_PREFIX,
+    PROJECT_FILE,
 };
-use crate::{io_error, RuntimeError};
+use crate::{io_error, ErrorCode, ProjectionStatus, RuntimeError};
 use kerf_lang::NoFacts;
 use kerf_model::Project;
 use std::collections::HashMap;
@@ -217,7 +217,7 @@ impl Runtime {
     fn replay_journal_record(&mut self, mut record: JournalRecord) -> Result<(), RuntimeError> {
         if record.sequence != self.journal_sequence + 1 {
             return Err(RuntimeError::new(
-                "JOURNAL_SEQUENCE_ERROR",
+                ErrorCode::JournalSequenceError,
                 format!(
                     "expected journal sequence {}, got {}",
                     self.journal_sequence + 1,
@@ -226,7 +226,10 @@ impl Runtime {
             ));
         }
         let missing = |what: &str| {
-            RuntimeError::new("INVALID_JOURNAL", format!("{what} record has no change"))
+            RuntimeError::new(
+                ErrorCode::InvalidJournal,
+                format!("{what} record has no change"),
+            )
         };
         // As a commit keeps it: the project an open proposal was made on,
         // when this record leaves its revision.
@@ -259,7 +262,7 @@ impl Runtime {
                 };
                 if self.history(direction).is_empty() {
                     return Err(RuntimeError::new(
-                        "INVALID_JOURNAL",
+                        ErrorCode::InvalidJournal,
                         format!("{} record has no history entry", direction.name()),
                     ));
                 }
@@ -283,9 +286,9 @@ impl Runtime {
                 self.state.proposals = record.take_proposals();
             }
             JournalAction::Job => {
-                let job = record
-                    .job
-                    .ok_or_else(|| RuntimeError::new("INVALID_JOURNAL", "job record has no job"))?;
+                let job = record.job.ok_or_else(|| {
+                    RuntimeError::new(ErrorCode::InvalidJournal, "job record has no job")
+                })?;
                 self.state.jobs.insert(job.job_id.clone(), job);
                 bound_jobs(&mut self.state.jobs);
             }
@@ -295,7 +298,10 @@ impl Runtime {
                     .as_ref()
                     .ok_or_else(|| missing("projection import"))?;
                 let document = change.document.as_deref().ok_or_else(|| {
-                    RuntimeError::new("INVALID_JOURNAL", "projection import has no document")
+                    RuntimeError::new(
+                        ErrorCode::InvalidJournal,
+                        "projection import has no document",
+                    )
                 })?;
                 let project = kernel::parse(document)?;
                 verify_change(change, &project, record.sequence)?;
@@ -378,7 +384,7 @@ fn verify_change(change: &Change, project: &Project, sequence: u64) -> Result<()
         Ok(())
     } else {
         Err(RuntimeError::new(
-            "JOURNAL_REPLAY_MISMATCH",
+            ErrorCode::JournalReplayMismatch,
             format!("journal record {sequence} did not reproduce its project"),
         ))
     }

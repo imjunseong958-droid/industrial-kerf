@@ -258,7 +258,7 @@ fn a_merge_git_cannot_finish_is_aborted_and_reported() {
     fs::write(team.bob.join("presets/same.kerfpreset"), "kerf 1\n# bob\n").unwrap();
     git::fetch(&team.bob).unwrap();
     let error = git::integrate(&team.bob, Path::new("kerfd"), "bob").unwrap_err();
-    assert_eq!(error.code, "MERGE_FAILED");
+    assert_eq!(error.code.as_str(), "MERGE_FAILED");
     assert!(
         error.message.contains("presets/same.kerfpreset"),
         "{}",
@@ -317,7 +317,12 @@ fn an_upstream_branch_that_tracks_local_settings_is_not_merged_or_cloned() {
     fs::write(team.bob.join(".kerf/mcp.json"), "bob's own").unwrap();
     git::fetch(&team.bob).unwrap();
     let error = git::integrate(&team.bob, Path::new("kerfd"), "").unwrap_err();
-    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED", "{}", error.message);
+    assert_eq!(
+        error.code.as_str(),
+        "LOCAL_SETTINGS_TRACKED",
+        "{}",
+        error.message
+    );
     assert!(
         error.message.contains(".kerf/mcp.json"),
         "{}",
@@ -331,7 +336,7 @@ fn an_upstream_branch_that_tracks_local_settings_is_not_merged_or_cloned() {
 
     let location = team.remote.parent().unwrap().join("carol");
     let error = git::clone(&team.remote.to_string_lossy(), &location).unwrap_err();
-    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
+    assert_eq!(error.code.as_str(), "LOCAL_SETTINGS_TRACKED");
     assert!(!location.join("remote").exists());
 }
 
@@ -344,14 +349,14 @@ fn a_branch_that_tracks_local_settings_is_not_switched_to() {
     git::push(&team.alice).unwrap();
     git::switch(&team.alice, "main", false, "").unwrap();
     let error = git::switch(&team.alice, "alice/settings", false, "").unwrap_err();
-    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
+    assert_eq!(error.code.as_str(), "LOCAL_SETTINGS_TRACKED");
     assert_eq!(git::branch(&team.alice).as_deref(), Some("main"));
 
     fs::create_dir_all(team.bob.join(".kerf")).unwrap();
     fs::write(team.bob.join(".kerf/mcp.json"), "bob's own").unwrap();
     git::fetch(&team.bob).unwrap();
     let error = git::switch(&team.bob, "alice/settings", false, "").unwrap_err();
-    assert_eq!(error.code, "LOCAL_SETTINGS_TRACKED");
+    assert_eq!(error.code.as_str(), "LOCAL_SETTINGS_TRACKED");
     assert!(
         error.message.contains(".KERF/MCP.json"),
         "{}",
@@ -380,19 +385,19 @@ fn network_git_runs_ssh_without_prompts() {
     };
     ssh_remote(&team.bob);
     let error = git::fetch(&team.bob).unwrap_err();
-    assert_eq!(error.code, "GIT_FETCH_FAILED");
+    assert_eq!(error.code.as_str(), "GIT_FETCH_FAILED");
     batch(&error.message);
 
     ssh_remote(&team.alice);
     fs::write(team.alice.join("presets/a.kerfpreset"), "kerf 1\n").unwrap();
     git::commit(&team.alice, "a").unwrap();
     let error = git::push(&team.alice).unwrap_err();
-    assert_eq!(error.code, "GIT_PUSH_FAILED");
+    assert_eq!(error.code.as_str(), "GIT_PUSH_FAILED");
     batch(&error.message);
 
     let location = team.remote.parent().unwrap().join("carol");
     let error = git::clone("git@kerf.invalid:team/film.git", &location).unwrap_err();
-    assert_eq!(error.code, "GIT_CLONE_FAILED");
+    assert_eq!(error.code.as_str(), "GIT_CLONE_FAILED");
     batch(&error.message);
     assert!(!location.join("film").exists());
 }
@@ -439,7 +444,7 @@ fn files_too_large_for_github_are_refused_unless_lfs_stores_them() {
     // machine has Git LFS.
     sparse_file(&team.alice.join("huge.mov"), git::LARGE_FILE_BYTES);
     let error = git::commit(&team.alice, "huge").unwrap_err();
-    assert_eq!(error.code, "LARGE_FILE");
+    assert_eq!(error.code.as_str(), "LARGE_FILE");
     assert!(error.message.contains("huge.mov"), "{}", error.message);
     assert!(sh(&team.alice, &["diff", "--cached", "--name-only"]).is_empty());
 }
@@ -467,7 +472,7 @@ fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
         .output();
     sparse_file(&team.alice.join("media/huge.mov"), git::LARGE_FILE_BYTES);
     let error = git::commit(&team.alice, "huge").unwrap_err();
-    assert_eq!(error.code, "LARGE_FILE");
+    assert_eq!(error.code.as_str(), "LARGE_FILE");
     assert!(
         error.message.contains("media/huge.mov"),
         "{}",
@@ -523,7 +528,7 @@ fn a_local_project_without_git_is_just_a_folder() {
         },
         Catalog::builtin(),
     );
-    assert_eq!(again.unwrap_err().code, "ALREADY_EXISTS");
+    assert_eq!(again.unwrap_err().code.as_str(), "ALREADY_EXISTS");
 }
 
 #[test]

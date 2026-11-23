@@ -7,13 +7,13 @@ use crate::kernel::{self, CachedFacts, Edited};
 use crate::store::{
     append_journal_record, inspect_projection, projection_digest, seal_journal_record, sha256_hex,
     truncate_journal, Change, HistoryEntry, ImportRecord, JournalAction, JournalImport,
-    JournalOperation, JournalRecord, OperationRecord, ProjectionStatus, ProposalRecord,
-    RuntimeLock, JOURNAL_VERSION,
+    JournalOperation, JournalRecord, OperationRecord, ProposalRecord, RuntimeLock, JOURNAL_VERSION,
 };
 use crate::timeline;
 use crate::{
-    validate_actor, Author, MailboxMessage, PendingProposal, RenderJob, RenderRange, RuntimeError,
-    RuntimeRequest, RuntimeResponse, StartRenderOptions, StateSnapshot, SOURCE_VERSION,
+    validate_actor, Author, ErrorCode, MailboxMessage, PendingProposal, ProjectionStatus,
+    RenderJob, RenderRange, RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions,
+    StateSnapshot, SOURCE_VERSION,
 };
 use kerf_model::Project;
 use projection::{collab_error, merge_driver, Undo};
@@ -253,7 +253,7 @@ impl Runtime {
                     lifecycle
                 }),
             source_version: SOURCE_VERSION,
-            projection_status: self.projection_status.as_str().into(),
+            projection_status: self.projection_status.clone(),
             import_warnings: self.import_warnings.clone(),
             proposals: state
                 .proposals
@@ -344,7 +344,7 @@ impl Runtime {
             self.projection_status = inspect_projection(&self.project_path, &self.state.project);
             if self.projection_status == ProjectionStatus::Diverged && !allow_diverged_projection {
                 return Err(RuntimeError::new(
-                    "PROJECTION_DIVERGED",
+                    ErrorCode::ProjectionDiverged,
                     "project.kerf differs from authoritative kerfd state; repair or explicitly import the projection before editing",
                 ));
             }
@@ -405,7 +405,7 @@ impl Runtime {
             Ok(self.snapshot())
         } else {
             Err(RuntimeError::new(
-                "IDEMPOTENCY_CONFLICT",
+                ErrorCode::IdempotencyConflict,
                 "idempotency key was already used for a different request",
             ))
         })
@@ -580,7 +580,7 @@ impl Runtime {
                     (Some(start), Some(duration)) => Some(RenderRange::new(start, duration)?),
                     _ => {
                         return Err(RuntimeError::new(
-                            "INVALID_RENDER_RANGE",
+                            ErrorCode::InvalidRenderRange,
                             "render start and duration must be provided together",
                         ))
                     }
@@ -693,7 +693,7 @@ impl Runtime {
                     )?))
                 }
                 _ => Err(RuntimeError::new(
-                    "INVALID_REQUEST",
+                    ErrorCode::InvalidRequest,
                     "proposal rejection requires actor, idempotencyKey, and baseRevision together",
                 )),
             },
@@ -727,7 +727,7 @@ fn validate_request_identity(actor: &str, key: &str) -> Result<(), RuntimeError>
     validate_actor(actor)?;
     if key.trim().is_empty() {
         return Err(RuntimeError::new(
-            "INVALID_REQUEST",
+            ErrorCode::InvalidRequest,
             "idempotencyKey is required",
         ));
     }

@@ -13,7 +13,7 @@ use super::ChatView;
 use editor_session::commands::RevealPicture;
 use editor_state::book::{pin_order, Version};
 use editor_state::changes::{clip_changes, reel_plan, reel_total, signed_frames, Segment};
-use editor_state::model::{self, Proposal, Timeline};
+use editor_state::model::{self, Proposal, ProposalStatus, Timeline};
 use editor_state::store::Connection;
 use editor_ui::icons::Icon;
 use editor_ui::motion;
@@ -295,7 +295,7 @@ impl ChatView {
     fn settled_card(&self, proposal: &Proposal, cx: &Context<Self>) -> AnyElement {
         let session = self.session.read(cx);
         // Settled, it keeps to one line; settled here, it says when.
-        let accepted = proposal.status == "accepted";
+        let accepted = proposal.status == ProposalStatus::Accepted;
         let ago = session
             .settled_at(|sent| self.book.is(proposal, sent))
             .map(|at| at.elapsed());

@@ -75,7 +75,7 @@ fn two_proposals_wait_together_and_accepting_one_stales_the_other() {
     assert_eq!(both.proposals[1].author, Author::kerf());
     assert_eq!(pending_id(&both), cursor_id);
     for entry in &both.proposals {
-        assert_eq!(entry.status, "pending");
+        assert_eq!(entry.status.as_str(), "pending");
         assert_eq!(entry.freshness, ProposalFreshness::Current);
         assert_eq!(entry.version, 1);
         assert_eq!(entry.versions.len(), 1);
@@ -92,11 +92,11 @@ fn two_proposals_wait_together_and_accepting_one_stales_the_other() {
     assert!(accepted.document.contains("marker kerf "));
     assert!(!accepted.document.contains("marker cursor "));
     let kerf_entry = entry(&accepted, &kerf_id);
-    assert_eq!(kerf_entry.status, "accepted");
+    assert_eq!(kerf_entry.status.as_str(), "accepted");
     assert_eq!(kerf_entry.applied_revision, Some(1));
     assert!(kerf_entry.script.contains("as=kerf"));
     let cursor_entry = entry(&accepted, &cursor_id);
-    assert_eq!(cursor_entry.status, "pending");
+    assert_eq!(cursor_entry.status.as_str(), "pending");
     assert_eq!(cursor_entry.freshness, ProposalFreshness::Stale);
     assert!(matches!(
         accepted.pending_proposal,
@@ -108,9 +108,13 @@ fn two_proposals_wait_together_and_accepting_one_stales_the_other() {
     let stale = runtime
         .accept_proposal(&cursor_id, "ui", "accept-cursor", 1)
         .unwrap_err();
-    assert_eq!(stale.code, "PROPOSAL_BASE_MISMATCH");
+    assert_eq!(stale.code.as_str(), "PROPOSAL_BASE_MISMATCH");
     assert_eq!(
-        runtime.proposal_documents(&cursor_id).unwrap_err().code,
+        runtime
+            .proposal_documents(&cursor_id)
+            .unwrap_err()
+            .code
+            .as_str(),
         "PROPOSAL_STALE"
     );
     // A retried accept still converges on its receipt.
@@ -180,5 +184,5 @@ fn state_from_the_one_proposal_slot_still_loads() {
         reopened.pending_proposal,
         Some(PendingProposal::Rejected { .. })
     ));
-    assert_eq!(reopened.proposals[0].status, "rejected");
+    assert_eq!(reopened.proposals[0].status.as_str(), "rejected");
 }
