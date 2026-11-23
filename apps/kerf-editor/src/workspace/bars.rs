@@ -7,6 +7,7 @@
 
 use super::Workspace;
 use editor_session::session::Session;
+use editor_state::model::ProjectionStatus;
 use editor_state::store::Connection;
 use editor_ui::motion;
 use editor_ui::theme::{self, layout, motion as scene, text};
@@ -70,7 +71,7 @@ impl Workspace {
                 None,
             ));
         }
-        if session.state.snapshot.projection_status == "diverged" {
+        if session.state.snapshot.projection_status == ProjectionStatus::Diverged {
             bars.push(bar(
                 "bar-diverged".into(),
                 theme::warn(),

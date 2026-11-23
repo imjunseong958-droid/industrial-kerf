@@ -20,7 +20,7 @@ use kerf_collab::git::{self, Pushed};
 use kerf_collab::scaffold::{self, Created, GitHubRepository, NewProject, Template};
 use kerf_mcp::{docs::add_agents_pointer, inbound, load_project_skills, KerfMcpRouter};
 use kerf_model::Catalog;
-use kerf_runtime::{ErrorCode, RuntimeClient};
+use kerf_runtime::{ErrorCode, ProjectionStatus, RuntimeClient};
 use kerf_skills::Skill;
 use serde_json::{json, Value};
 use std::env;
@@ -823,7 +823,7 @@ fn runtime_for(directory: &Path, kerfd: Option<&Path>) -> Result<RuntimeClient> 
 /// the file, and writes nothing to the document until one of the two is chosen. Said before
 /// anything runs, so a making is not paid for and then lost.
 fn in_step(state: &kerf_runtime::StateSnapshot) -> Result<()> {
-    if state.projection_status == "diverged" {
+    if state.projection_status == ProjectionStatus::Diverged {
         bail!(
             "project.kerf was changed outside Kerf, so the project Kerf has is not the one the file says; `kerf load` takes the file as the project (the editor's Load from Disk), and Keep Editor Version there puts back what Kerf has"
         );
@@ -1105,7 +1105,7 @@ fn run_load(directory: &Path, kerfd: Option<&Path>, yes: bool) -> Result<()> {
         kerf_lang::PrintOptions::default(),
     );
     let changes = kerf_lang::diff_text(&state.document, &printed);
-    if changes.is_empty() && state.projection_status == "current" {
+    if changes.is_empty() && state.projection_status == ProjectionStatus::Current {
         println!(
             "project.kerf is the project as Kerf has it (revision {}); nothing to load",
             state.revision
@@ -1143,7 +1143,7 @@ fn waiting(state: &kerf_runtime::StateSnapshot) -> Vec<&kerf_runtime::ProposalEn
     let mut waiting: Vec<_> = state
         .proposals
         .iter()
-        .filter(|proposal| proposal.status == "pending")
+        .filter(|proposal| proposal.is_pending())
         .collect();
     // A snapshot lists the newest first.
     waiting.reverse();

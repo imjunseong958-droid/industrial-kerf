@@ -79,7 +79,7 @@ fn pending(state: &StateSnapshot) -> Vec<&kerf_runtime::ProposalEntry> {
     state
         .proposals
         .iter()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.status.as_str() == "pending")
         .collect()
 }
 
@@ -139,7 +139,7 @@ fn proposals_from_two_clients_wait_side_by_side_and_a_revise_makes_version_two()
         .iter()
         .find(|entry| entry.proposal_id == theirs)
         .unwrap();
-    assert_eq!(stale.status, "pending");
+    assert_eq!(stale.status.as_str(), "pending");
     assert_eq!(stale.freshness, kerf_runtime::ProposalFreshness::Stale);
     // A stale proposal cannot be accepted until it is revised.
     assert!(editor

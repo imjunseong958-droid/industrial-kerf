@@ -8,7 +8,7 @@ use crate::kernel::{self, Edit, Edited};
 use crate::store::{JournalAction, ProposalMeta, ProposalReceipt, ProposalRecord};
 use crate::{
     unique_id, Author, ErrorCode, PendingProposal, ProposalEntry, ProposalFreshness,
-    ProposalVersion, RuntimeError, StateSnapshot, MAX_PROPOSALS,
+    ProposalStatus, ProposalVersion, RuntimeError, StateSnapshot, MAX_PROPOSALS,
 };
 use kerf_lang::NoFacts;
 use kerf_model::Project;
@@ -712,7 +712,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
             base_revision,
             ..
         } => (
-            "pending",
+            ProposalStatus::Pending,
             proposal_id,
             *base_revision,
             None,
@@ -723,7 +723,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
             base_revision,
             applied_revision,
         } => (
-            "accepted",
+            ProposalStatus::Accepted,
             proposal_id,
             *base_revision,
             Some(*applied_revision),
@@ -733,7 +733,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
             proposal_id,
             base_revision,
         } => (
-            "rejected",
+            ProposalStatus::Rejected,
             proposal_id,
             *base_revision,
             None,
@@ -747,7 +747,7 @@ pub(super) fn proposal_entry(record: &ProposalRecord, revision: u64) -> Proposal
         .or(meta.versions.last());
     ProposalEntry {
         proposal_id: proposal_id.clone(),
-        status: status.into(),
+        status,
         freshness,
         base_revision,
         applied_revision,

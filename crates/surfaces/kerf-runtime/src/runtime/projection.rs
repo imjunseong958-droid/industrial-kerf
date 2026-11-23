@@ -9,9 +9,8 @@ use super::{
 use crate::kernel;
 use crate::store::{
     inspect_projection, projection_digest, truncate_journal, write_bytes_atomic, Change,
-    ProjectionStatus,
 };
-use crate::{io_error, ErrorCode, RuntimeError, RuntimeResponse, StateSnapshot};
+use crate::{io_error, ErrorCode, ProjectionStatus, RuntimeError, RuntimeResponse, StateSnapshot};
 use kerf_model::Project;
 use std::fs;
 use std::path::{Path, PathBuf};

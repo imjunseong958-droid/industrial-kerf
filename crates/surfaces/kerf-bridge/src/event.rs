@@ -26,9 +26,10 @@ pub use kerf_collab::git::{Status as GitStatus, User as GitUser};
 pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
 pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
 pub use kerf_runtime::{
-    Author, ErrorCode, PendingProposal, ProposalEntry, ProposalFreshness, ProposalVersion,
-    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    Author, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness,
+    ProposalStatus, ProposalVersion, TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask,
+    ViewOutline, ViewOutlineKey, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
+    ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -432,9 +433,8 @@ pub struct Snapshot {
     pub pending_proposal: Option<PendingProposal>,
     /// 3 for the canonical `.kerf` document.
     pub source_version: u8,
-    /// `current`, `missing` or `diverged`: how `project.kerf` on disk stands against the
-    /// project.
-    pub projection_status: String,
+    /// How `project.kerf` on disk stands against the project.
+    pub projection_status: ProjectionStatus,
     /// What opening the project changed or left behind. Left out when empty.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub import_warnings: Vec<String>,
@@ -500,7 +500,7 @@ impl Default for Snapshot {
             duration: 0.0,
             pending_proposal: None,
             source_version: 3,
-            projection_status: "current".into(),
+            projection_status: ProjectionStatus::Current,
             import_warnings: Vec::new(),
             proposals: Vec::new(),
             review_revision: 0,

@@ -549,7 +549,7 @@ fn first_pending(snapshot: &StateSnapshot) -> Result<&ProposalEntry, McpError> {
     let Some(staged) = snapshot
         .proposals
         .first()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.is_pending())
     else {
         return Err(McpError::new(
             McpCode::RuntimeError,

@@ -4,8 +4,8 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    response_value, EndpointAddress, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease,
-    StartRenderOptions, StateSnapshot, MAX_REQUEST_BYTES,
+    response_value, EndpointAddress, ErrorCode, ProjectionStatus, RuntimeClient, RuntimeError,
+    RuntimeLease, StartRenderOptions, StateSnapshot, MAX_REQUEST_BYTES,
 };
 use std::fs;
 use std::io::{Read, Write};
@@ -851,4 +851,36 @@ fn a_refusal_reads_as_the_code_kerfd_wrote() {
     assert_ne!(newer.code, ErrorCode::RevisionConflict);
     let again = response_value("2", Err(newer));
     assert_eq!(again["error"]["code"], "NOT_NAMED_YET");
+}
+
+/// A state from a kerfd of another build, where a proposal or the project file stands in a
+/// way this build has no name for: it still reads, and is written as it came, which a
+/// journal's checksum over the states it keeps depends on.
+#[test]
+fn a_state_with_a_status_this_build_has_no_name_for_reads_and_writes_the_same() {
+    let read = |written: &serde_json::Value| -> StateSnapshot {
+        serde_json::from_value(written.clone()).unwrap()
+    };
+    // What this build writes of a state with one proposal waiting.
+    let mut written = serde_json::to_value(read(&serde_json::json!({
+        "document": "", "timeline": {}, "revision": 3, "canUndo": false, "canRedo": false,
+        "duration": 0.0, "pendingProposal": null,
+        "proposals": [{
+            "proposalId": "p1", "status": "pending", "freshness": "current",
+            "baseRevision": 2, "script": "", "documentDiff": "", "version": 1,
+            "author": {"kind": "kerf", "name": "Kerf"},
+        }],
+    })))
+    .unwrap();
+    assert_eq!(written["projectionStatus"], "current");
+    let state = read(&written);
+    assert!(state.proposals[0].is_pending());
+    assert_eq!(state.projection_status, ProjectionStatus::Current);
+
+    written["projectionStatus"] = "frozen".into();
+    written["proposals"][0]["status"] = "withdrawn".into();
+    let state = read(&written);
+    assert!(!state.proposals[0].is_pending());
+    assert_ne!(state.projection_status, ProjectionStatus::Current);
+    assert_eq!(serde_json::to_value(&state).unwrap(), written);
 }

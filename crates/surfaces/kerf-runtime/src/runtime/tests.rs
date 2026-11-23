@@ -296,7 +296,7 @@ fn a_replacement_replays_from_the_journal_after_a_restart() {
     let recovered = reopened.snapshot();
     assert_eq!(recovered.revision, 2);
     assert_eq!(recovered.document, replaced.document);
-    assert_eq!(recovered.projection_status, "current");
+    assert_eq!(recovered.projection_status.as_str(), "current");
     assert!(recovered.can_undo);
     // The receipt survived too.
     let replay = reopened
@@ -321,7 +321,7 @@ fn durable_journal_recovers_after_projection_failure() {
     fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
     let committed = edit(&mut runtime, "track add T1 subtitle", before.revision).unwrap();
     assert_eq!(committed.revision, before.revision + 1);
-    assert_eq!(committed.projection_status, "diverged");
+    assert_eq!(committed.projection_status.as_str(), "diverged");
     assert!(directory.join(JOURNAL_FILE).is_file());
     drop(runtime);
     fs::remove_dir_all(directory.join(PROJECT_FILE)).unwrap();
@@ -329,7 +329,7 @@ fn durable_journal_recovers_after_projection_failure() {
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().revision, committed.revision);
     assert!(reopened.document(false).contains("track T1 subtitle"));
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
 }
@@ -344,7 +344,7 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
     fs::remove_file(directory.join(PROJECT_FILE)).unwrap();
     fs::create_dir(directory.join(PROJECT_FILE)).unwrap();
     let second = edit(&mut runtime, "marker add at=0f as=second", first.revision).unwrap();
-    assert_eq!(second.projection_status, "diverged");
+    assert_eq!(second.projection_status.as_str(), "diverged");
     drop(runtime);
 
     // The projection is the last successfully published journal state,
@@ -354,7 +354,7 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().revision, second.revision);
     assert!(has_marker(&reopened.snapshot(), "second"));
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     drop(reopened);
 
     // An edit that does not match any recognized journal state must remain
@@ -367,7 +367,7 @@ fn journal_tail_recovery_keeps_external_projection_edits_divergent() {
         );
     fs::write(directory.join(PROJECT_FILE), edited).unwrap();
     let mut diverged = Runtime::open(&directory).unwrap();
-    assert_eq!(diverged.snapshot().projection_status, "diverged");
+    assert_eq!(diverged.snapshot().projection_status.as_str(), "diverged");
     assert_eq!(
         edit(
             &mut diverged,
@@ -400,7 +400,7 @@ fn failed_startup_projection_repair_reports_project_status() {
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().revision, committed.revision);
     assert_eq!(reopened.snapshot().timeline["width"], 1280);
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     assert!(fs::read_to_string(directory.join(PROJECT_FILE))
         .unwrap()
         .contains("size=1280x1080"));
@@ -653,7 +653,7 @@ fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
     assert_eq!(rejected.document, later.document);
     assert_eq!(rejected.can_undo, later.can_undo);
     assert_eq!(rejected.proposals[0].proposal_id, proposal_id);
-    assert_eq!(rejected.proposals[0].status, "rejected");
+    assert_eq!(rejected.proposals[0].status.as_str(), "rejected");
     // No open proposal was made on revision 0 now: its project goes.
     assert!(runtime.state.bases.is_empty());
 
@@ -664,7 +664,7 @@ fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
         .unwrap();
     assert_eq!(replay.revision, rejected.revision);
     assert_eq!(replay.document, rejected.document);
-    assert_eq!(replay.proposals[0].status, "rejected");
+    assert_eq!(replay.proposals[0].status.as_str(), "rejected");
     let error = runtime
         .reject_proposal_request(&proposal_id, "ui", "reject-again", 1)
         .unwrap_err();
@@ -679,7 +679,7 @@ fn a_stale_proposal_is_rejected_at_the_revision_the_client_is_at() {
     let mut reopened = Runtime::open(&directory).unwrap();
     let state = reopened.snapshot();
     assert_eq!(state.revision, 1);
-    assert_eq!(state.proposals[0].status, "rejected");
+    assert_eq!(state.proposals[0].status.as_str(), "rejected");
     let replay = reopened
         .reject_proposal_request(&proposal_id, "ui", "reject-stale", 1)
         .unwrap();
@@ -793,11 +793,11 @@ fn divergent_projection_requires_repair_or_explicit_import() {
     .unwrap();
 
     let mut runtime = Runtime::open(&directory).unwrap();
-    assert_eq!(runtime.snapshot().projection_status, "diverged");
+    assert_eq!(runtime.snapshot().projection_status.as_str(), "diverged");
     let blocked = edit(&mut runtime, "marker add at=0f as=blocked", 1);
     assert_eq!(blocked.unwrap_err().code.as_str(), "PROJECTION_DIVERGED");
     let repaired = runtime.repair_projection().unwrap();
-    assert_eq!(repaired.projection_status, "current");
+    assert_eq!(repaired.projection_status.as_str(), "current");
     assert_eq!(repaired.timeline["name"], "Untitled project");
 
     // A text edit of the canonical document, made outside kerfd.
@@ -813,12 +813,12 @@ fn divergent_projection_requires_repair_or_explicit_import() {
     assert_eq!(imported_state.revision, repaired.revision + 1);
     assert_eq!(imported_state.timeline["name"], "explicit import");
     assert!(!imported_state.can_undo);
-    assert_eq!(imported_state.projection_status, "current");
+    assert_eq!(imported_state.projection_status.as_str(), "current");
     drop(runtime);
 
     let reopened = Runtime::open(&directory).unwrap();
     assert_eq!(reopened.snapshot().timeline["name"], "explicit import");
-    assert_eq!(reopened.snapshot().projection_status, "current");
+    assert_eq!(reopened.snapshot().projection_status.as_str(), "current");
     drop(reopened);
     let _ = fs::remove_dir_all(directory);
 }

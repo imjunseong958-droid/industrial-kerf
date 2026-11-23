@@ -161,7 +161,7 @@ fn edits_made_at_the_same_time_on_two_machines_both_survive_a_sync() {
         !state.can_undo,
         "a sync that changed the project clears history"
     );
-    assert_eq!(state.projection_status, "current");
+    assert_eq!(state.projection_status.as_str(), "current");
     assert!(!git::status(&team.bob).unwrap().changed);
 
     let report = sync(&team.alice, &alice, "sync-a2");

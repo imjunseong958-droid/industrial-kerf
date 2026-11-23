@@ -3,8 +3,8 @@
 
 use crate::kernel;
 use crate::{
-    io_error, Author, ErrorCode, PendingProposal, ProposalVersion, RenderJob, RuntimeError,
-    StateSnapshot,
+    io_error, Author, ErrorCode, PendingProposal, ProjectionStatus, ProposalVersion, RenderJob,
+    RuntimeError, StateSnapshot,
 };
 use fs2::FileExt;
 use kerf_model::Project;
@@ -228,23 +228,6 @@ pub(crate) struct PersistedCheckpoint {
     pub(crate) import_warnings: Vec<String>,
     #[serde(default)]
     pub(crate) projection_digest: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProjectionStatus {
-    Current,
-    Missing,
-    Diverged,
-}
-
-impl ProjectionStatus {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Current => "current",
-            Self::Missing => "missing",
-            Self::Diverged => "diverged",
-        }
-    }
 }
 
 /// The receipt of a keyed request: what it asked, and the revision it

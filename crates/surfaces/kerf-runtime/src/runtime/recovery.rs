@@ -13,11 +13,11 @@ use crate::kernel::{self, Edit};
 use crate::store::{
     inspect_projection, load_checkpoint, load_journal, preserve_previous_state, projection_digest,
     projection_matches, truncate_journal, write_json_atomic, Change, HistoryEntry, ImportRecord,
-    JournalAction, JournalRecord, Loaded, OperationRecord, PersistedCheckpoint, ProjectionStatus,
-    ProposalBase, RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE,
-    PREVIOUS_STATE_PREFIX, PROJECT_FILE,
+    JournalAction, JournalRecord, Loaded, OperationRecord, PersistedCheckpoint, ProposalBase,
+    RuntimeLock, CHECKPOINT_FILE, CHECKPOINT_VERSION, JOURNAL_FILE, PREVIOUS_STATE_PREFIX,
+    PROJECT_FILE,
 };
-use crate::{io_error, ErrorCode, RuntimeError};
+use crate::{io_error, ErrorCode, ProjectionStatus, RuntimeError};
 use kerf_lang::NoFacts;
 use kerf_model::Project;
 use std::collections::HashMap;

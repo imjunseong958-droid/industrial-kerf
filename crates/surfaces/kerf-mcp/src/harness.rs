@@ -85,7 +85,7 @@ fn proposals_status(state: &StateSnapshot) -> Option<String> {
     let open: Vec<&ProposalEntry> = state
         .proposals
         .iter()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.is_pending())
         .collect();
     if open.is_empty() {
         return proposal_status(state.pending_proposal.as_ref());
@@ -217,7 +217,7 @@ impl KerfMcpRouter {
         Ok(state
             .proposals
             .iter()
-            .filter(|entry| entry.status == "pending" && entry.proposal_id != id)
+            .filter(|entry| entry.is_pending() && entry.proposal_id != id)
             .find_map(|entry| {
                 let version = entry
                     .versions
@@ -236,11 +236,7 @@ impl KerfMcpRouter {
             |source: &str, script: &str| if source.is_empty() { script } else { source }.to_owned();
         // Any version of an open proposal: the current one, or one the
         // user can still accept in its place.
-        for entry in state
-            .proposals
-            .iter()
-            .filter(|entry| entry.status == "pending")
-        {
+        for entry in state.proposals.iter().filter(|entry| entry.is_pending()) {
             if entry.proposal_id == id {
                 return Ok((
                     entry.script.clone(),
@@ -326,7 +322,7 @@ impl KerfMcpRouter {
         state
             .proposals
             .iter()
-            .filter(|entry| entry.status == "pending")
+            .filter(|entry| entry.is_pending())
             .find(|entry| holds(&entry.script))
             .map(|entry| entry.proposal_id.clone())
     }
@@ -339,7 +335,7 @@ impl KerfMcpRouter {
         state
             .proposals
             .iter()
-            .find(|entry| entry.status == "pending")
+            .find(|entry| entry.is_pending())
             .map_or_else(String::new, |entry| {
                 format!(
                     ", which stays as it is until a proposal is accepted; to see pending proposal {}, pass it as `{argument}`",

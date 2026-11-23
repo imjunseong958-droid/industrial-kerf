@@ -18,10 +18,12 @@ pub mod crash;
 mod error;
 mod ipc;
 mod kernel;
+mod named;
 #[cfg(windows)]
 mod named_pipe;
 mod render;
 mod runtime;
+mod status;
 mod store;
 mod timeline;
 mod view;
@@ -37,6 +39,7 @@ pub use kernel::{
     TrimSide, RATE_NEEDS_EMPTY,
 };
 pub use render::{render_cancel_path, run_render_job, RENDER_CODECS, RENDER_QUALITIES};
+pub use status::{ProjectionStatus, ProposalStatus};
 pub use timeline::{fx_catalog_all_json, properties_json};
 pub use view::{
     TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
@@ -62,8 +65,8 @@ fn default_source_version() -> u8 {
     SOURCE_VERSION
 }
 
-fn default_projection_status() -> String {
-    "current".into()
+fn default_projection_status() -> ProjectionStatus {
+    ProjectionStatus::Current
 }
 
 /// The most proposals kept at once, open and settled together.
@@ -90,7 +93,7 @@ pub struct StateSnapshot {
     #[serde(default = "default_source_version")]
     pub source_version: u8,
     #[serde(default = "default_projection_status")]
-    pub projection_status: String,
+    pub projection_status: ProjectionStatus,
     /// What opening the project changed or left behind.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub import_warnings: Vec<String>,
@@ -135,8 +138,7 @@ pub struct ProposalEntry {
     /// The current version's id; for an accepted proposal, the version
     /// accepted.
     pub proposal_id: String,
-    /// `pending`, `accepted` or `rejected`.
-    pub status: String,
+    pub status: ProposalStatus,
     pub freshness: ProposalFreshness,
     pub base_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,7 +163,7 @@ pub struct ProposalEntry {
 impl ProposalEntry {
     /// Still open: neither accepted nor rejected.
     pub fn is_pending(&self) -> bool {
-        self.status == "pending"
+        self.status == ProposalStatus::Pending
     }
 
     /// Made on a revision the project has moved on from.

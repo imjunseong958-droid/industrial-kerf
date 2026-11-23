@@ -7,14 +7,13 @@ use crate::kernel::{self, CachedFacts, Edited};
 use crate::store::{
     append_journal_record, inspect_projection, projection_digest, seal_journal_record, sha256_hex,
     truncate_journal, Change, HistoryEntry, ImportRecord, JournalAction, JournalImport,
-    JournalOperation, JournalRecord, OperationRecord, ProjectionStatus, ProposalRecord,
-    RuntimeLock, JOURNAL_VERSION,
+    JournalOperation, JournalRecord, OperationRecord, ProposalRecord, RuntimeLock, JOURNAL_VERSION,
 };
 use crate::timeline;
 use crate::{
-    validate_actor, Author, ErrorCode, MailboxMessage, PendingProposal, RenderJob, RenderRange,
-    RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions, StateSnapshot,
-    SOURCE_VERSION,
+    validate_actor, Author, ErrorCode, MailboxMessage, PendingProposal, ProjectionStatus,
+    RenderJob, RenderRange, RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions,
+    StateSnapshot, SOURCE_VERSION,
 };
 use kerf_model::Project;
 use projection::{collab_error, merge_driver, Undo};
@@ -254,7 +253,7 @@ impl Runtime {
                     lifecycle
                 }),
             source_version: SOURCE_VERSION,
-            projection_status: self.projection_status.as_str().into(),
+            projection_status: self.projection_status.clone(),
             import_warnings: self.import_warnings.clone(),
             proposals: state
                 .proposals

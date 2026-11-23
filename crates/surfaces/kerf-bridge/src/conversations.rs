@@ -569,7 +569,7 @@ pub(crate) fn open_proposals(
     state
         .proposals
         .iter()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.is_pending())
         .map(|entry| entry.proposal_id.clone())
         .collect()
 }
@@ -583,7 +583,7 @@ pub(crate) fn staged_proposal(
     after
         .proposals
         .iter()
-        .filter(|entry| entry.status == "pending")
+        .filter(|entry| entry.is_pending())
         .find(|entry| !before.contains(&entry.proposal_id))
         .map(|entry| entry.proposal_id.clone())
 }

@@ -92,11 +92,7 @@ fn snapshot_of(state: &StateSnapshot) -> Snapshot {
         _ => None,
     };
     let mut proposal_timelines = std::collections::BTreeMap::new();
-    for entry in state
-        .proposals
-        .iter()
-        .filter(|entry| entry.status == "pending")
-    {
+    for entry in state.proposals.iter().filter(|entry| entry.is_pending()) {
         let earlier = entry.versions.iter().filter(|version| {
             version.proposal_id != entry.proposal_id && version.base_revision == state.revision
         });

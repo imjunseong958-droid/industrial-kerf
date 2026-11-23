@@ -164,7 +164,7 @@ fn a_proposal_made_before_the_project_changed_is_rejected_from_a_terminal() {
     let after = runtime.get_state().unwrap();
     assert_eq!(after.revision, 1);
     assert_eq!(after.document, before.document);
-    assert_eq!(after.proposals[0].status, "rejected");
+    assert_eq!(after.proposals[0].status.as_str(), "rejected");
 }
 
 #[test]
@@ -240,7 +240,7 @@ fn a_project_changed_by_hand_is_loaded_before_anything_is_made_from_it() {
         "{loaded}"
     );
     let state = runtime.get_state().unwrap();
-    assert_eq!(state.projection_status, "current");
+    assert_eq!(state.projection_status.as_str(), "current");
     assert!(state.document.contains("clip c2"), "{}", state.document);
     assert_eq!(run(&["proposals"]).0, "no proposal is waiting\n");
 

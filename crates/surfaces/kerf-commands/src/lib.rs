@@ -9,7 +9,7 @@
 //! carried out by the frontend; the registry still owns their metadata and
 //! enabled state.
 
-use kerf_runtime::{EditOp, TrimSide};
+use kerf_runtime::{EditOp, ProjectionStatus, TrimSide};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
@@ -91,9 +91,9 @@ pub struct Context {
     /// key, or a Kerf Cloud access state such as `signedOut`. Absent when it
     /// can.
     pub ai_access: Option<String>,
-    /// `diverged` when project.kerf changed outside Kerf since the editor
+    /// Diverged when project.kerf changed outside Kerf since the editor
     /// last wrote it.
-    pub projection_status: Option<String>,
+    pub projection_status: Option<ProjectionStatus>,
     /// Where the project stands against its Git repository; absent until
     /// the first status arrives.
     pub collab: Option<CollabState>,
@@ -475,7 +475,7 @@ const SYNCING: &str = "A sync is running";
 const DIVERGED: &str = "project.kerf changed on disk: load it or keep the editor's version first";
 
 fn diverged(context: &Context) -> bool {
-    context.projection_status.as_deref() == Some("diverged")
+    context.projection_status == Some(ProjectionStatus::Diverged)
 }
 
 fn collab(context: &Context) -> Result<&CollabState, &'static str> {
