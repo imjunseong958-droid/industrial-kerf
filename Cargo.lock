@@ -1721,7 +1721,7 @@ name = "kerf-commands"
 version = "0.1.5"
 dependencies = [
  "kerf-cloud",
- "kerf-runtime",
+ "kerf-protocol",
  "serde",
  "serde_json",
 ]
@@ -1950,6 +1950,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kerf-protocol"
+version = "0.1.5"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kerf-raster"
 version = "0.1.5"
 dependencies = [
@@ -1976,6 +1984,7 @@ dependencies = [
  "kerf-engine",
  "kerf-lang",
  "kerf-model",
+ "kerf-protocol",
  "libc",
  "log",
  "serde",

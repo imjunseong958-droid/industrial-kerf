@@ -1,0 +1,15 @@
+[package]
+name = "kerf-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "What kerfd and its clients say to each other: requests, answers, states, and the names in them"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+# Times and positions cross as JSON numbers, and read back as they were written.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
+[lints]
+workspace = true

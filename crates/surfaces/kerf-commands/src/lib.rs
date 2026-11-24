@@ -9,7 +9,7 @@
 //! carried out by the frontend; the registry still owns their metadata and
 //! enabled state.
 
-use kerf_runtime::{EditOp, ProjectionStatus, RenderQuality, TrimSide};
+use kerf_protocol::{EditOp, ProjectionStatus, RenderQuality, TrimSide};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
