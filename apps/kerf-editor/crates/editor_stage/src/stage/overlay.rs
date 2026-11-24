@@ -406,8 +406,7 @@ pub fn parent_motion(props: &Props, picture: Pt, fit: bool, canvas: Pt, clip_tim
     }
 }
 
-/// The canvas a timeline is drawn on, in pixels: the viewer's
-/// ([`TimelineShow::canvas`]), so the overlays and the picture agree.
+/// The canvas a timeline is drawn on, in pixels ([`TimelineShow::canvas`]).
 pub fn canvas_of(timeline: &Timeline) -> Pt {
     let (width, height) = timeline.canvas();
     (f64::from(width), f64::from(height))
