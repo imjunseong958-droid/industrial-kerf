@@ -8,6 +8,7 @@ use kerf_lang::preset::{self, Preset};
 use kerf_lang::Clock;
 use kerf_model::look::Look;
 use kerf_model::{Catalog, Content, Id, Project, Time};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -21,13 +22,15 @@ const MAX_PRESET_BYTES: u64 = 1024 * 1024;
 /// project folder itself.
 pub const PRESET_FOLDERS: [&str; 3] = ["presets", ".kerf/presets", ""];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct BindingInput {
+    /// Imported replacement media id.
     media: String,
+    /// Source start, including handles; default 0f.
     #[serde(default = "zero")]
     from: String,
-    /// Place the pattern's markers on this music's onsets.
+    /// Music: move the markers over its clips to its nearest sound onsets, so looks that hit them land on its beats.
     #[serde(default)]
     beats: bool,
 }

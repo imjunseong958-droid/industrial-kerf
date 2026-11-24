@@ -14,9 +14,11 @@ use serde_json::{json, Value};
 
 impl KerfMcpRouter {
     pub(crate) fn edit(&self, arguments: Value) -> Result<Value, McpError> {
+        let alone = arguments.as_object().is_some_and(|given| given.len() == 1);
+        let input: EditInput = input(arguments)?;
         // `revise` starts again from the project, so what its proposal added is not there either.
-        let building_on = arguments.get("extend").is_some();
-        self.run_edit(arguments).map_err(|mut error| {
+        let building_on = input.extend.is_some();
+        self.run_edit(input, alone).map_err(|mut error| {
             // What is not in the project may be in a proposal not built on.
             if !building_on && error.code == McpCode::ScriptRefused {
                 let hint = [
@@ -35,9 +37,8 @@ impl KerfMcpRouter {
         })
     }
 
-    fn run_edit(&self, arguments: Value) -> Result<Value, McpError> {
-        let alone = arguments.as_object().is_some_and(|given| given.len() == 1);
-        let input: EditInput = input(arguments)?;
+    /// Run the edit `input` asks for; `alone` where it was given no other argument.
+    fn run_edit(&self, input: EditInput, alone: bool) -> Result<Value, McpError> {
         if let Some(id) = &input.forward {
             if !alone {
                 return Err(McpError::new(

@@ -1,7 +1,7 @@
 //! `look`: which reading its arguments ask for, refused where they do not go together, and
 //! what it reads beside the project: the catalog's effects and clip properties, and fonts.
 
-use super::tools::{input, LookInput};
+use super::tools::{input, CutsWith, EyeWith, LookInput, Toggle};
 use super::{catalog, program, MAX_LOOK_FRAMES, MAX_SHEET_FRAMES};
 use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_lang::{print_document, PrintOptions};
@@ -49,7 +49,7 @@ impl KerfMcpRouter {
             && !input.transcript
             && !input.contrast
             && !input.loudness
-            && matches!(input.cuts, None | Some(Value::Bool(false)))
+            && matches!(input.cuts, None | Some(Toggle::Off))
             && input.track.is_none()
             && input.sheet.is_none()
             && input.sequence.is_none()
@@ -506,7 +506,7 @@ fn asked_together(input: &LookInput) -> Result<(), McpError> {
 
 /// What `cuts` is given: nothing where it is not asked for, and else from what length a pause
 /// is listed, in seconds.
-fn cuts_asked(given: Option<&Value>) -> Result<Option<f64>, McpError> {
+fn cuts_asked(given: Option<&Toggle<CutsWith>>) -> Result<Option<f64>, McpError> {
     let wrong = || {
         McpError::new(
             McpCode::InvalidArguments,
@@ -518,28 +518,22 @@ fn cuts_asked(given: Option<&Value>) -> Result<Option<f64>, McpError> {
         )
     };
     match given {
-        None | Some(Value::Bool(false)) => Ok(None),
-        Some(Value::Bool(true)) => Ok(Some(crate::cuts::KEPT_PAUSE_SECONDS)),
-        Some(Value::Object(with)) => {
-            if with.keys().any(|name| name != "pauses") {
-                return Err(wrong());
-            }
-            match with.get("pauses") {
-                None => Ok(Some(crate::cuts::KEPT_PAUSE_SECONDS)),
-                Some(pauses) => pauses
-                    .as_f64()
-                    .filter(|seconds| *seconds >= crate::cuts::LEAST_PAUSE_SECONDS)
-                    .map(Some)
-                    .ok_or_else(wrong),
-            }
+        None | Some(Toggle::Off) => Ok(None),
+        Some(Toggle::On | Toggle::With(CutsWith { pauses: None })) => {
+            Ok(Some(crate::cuts::KEPT_PAUSE_SECONDS))
         }
-        Some(_) => Err(wrong()),
+        Some(Toggle::With(CutsWith {
+            pauses: Some(seconds),
+        })) if *seconds >= crate::cuts::LEAST_PAUSE_SECONDS => Ok(Some(*seconds)),
+        Some(Toggle::With(_) | Toggle::Wrong) => Err(wrong()),
     }
 }
 
 /// What `eye` is given: nothing where it is not asked for, and else what the eye is on in
 /// each shot it names, a clip of the shot's guide by the shot's media.
-fn eye_subjects(given: Option<&Value>) -> Result<Option<BTreeMap<String, String>>, McpError> {
+fn eye_subjects(
+    given: Option<&Toggle<EyeWith>>,
+) -> Result<Option<BTreeMap<String, String>>, McpError> {
     let wrong = || {
         McpError::new(
             McpCode::InvalidArguments,
@@ -547,20 +541,10 @@ fn eye_subjects(given: Option<&Value>) -> Result<Option<BTreeMap<String, String>
         )
     };
     match given {
-        None | Some(Value::Bool(false)) => Ok(None),
-        Some(Value::Bool(true)) => Ok(Some(BTreeMap::new())),
-        Some(Value::Object(with)) => {
-            if with.keys().any(|name| name != "subjects") {
-                return Err(wrong());
-            }
-            match with.get("subjects") {
-                None => Ok(Some(BTreeMap::new())),
-                Some(subjects) => serde_json::from_value(subjects.clone())
-                    .map(Some)
-                    .map_err(|_| wrong()),
-            }
-        }
-        Some(_) => Err(wrong()),
+        None | Some(Toggle::Off) => Ok(None),
+        Some(Toggle::On) => Ok(Some(BTreeMap::new())),
+        Some(Toggle::With(EyeWith { subjects })) => Ok(Some(subjects.clone().unwrap_or_default())),
+        Some(Toggle::Wrong) => Err(wrong()),
     }
 }
 

@@ -14,6 +14,7 @@ use super::{Begins, KerfMcpRouter, McpCode, McpError};
 use crate::harness::operation_key;
 use kerf_engine::recipe::{self, model::Models};
 use kerf_engine::{CancellationToken, EngineError};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::VecDeque;
@@ -149,17 +150,23 @@ impl JobState {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct MakeInput {
+    /// The media to make.
     media: Option<String>,
+    /// What this making is for, said to the person with the plan: what changed since the last take, and what to look for.
     why: Option<String>,
+    /// A making this session started: what it has said, and how it ended.
     job: Option<String>,
+    /// Answer once the making has ended, up to twenty minutes, rather than at once.
     #[serde(default)]
     wait: bool,
+    /// With `job`: stop it. Its step is asked to end, so a model's program can take back what it asked a server for.
     #[serde(default)]
     cancel: bool,
-    /// How many takes to make, each with its seeds one on from the last.
+    /// With `media`: make this many takes, one after another, each with its steps' seeds one on from the last, to choose among. Each is a making the person pays for and their limit counts: ask for more than one only when they asked for takes to choose from.
+    #[schemars(range(min = 1, max = 8))]
     rolls: Option<u32>,
 }
 
@@ -172,18 +179,7 @@ pub(super) fn metadata() -> (&'static str, Value, super::ToolAnnotations) {
          (`asked`), in the conversation, and make it themselves. Call it right after the edit \
          that wrote the steps, once that is accepted. Mend what `look`'s `toMake` says would \
          refuse it first.",
-        json!({
-            "type": "object",
-            "properties": {
-                "media": {"type": "string", "description": "The media to make."},
-                "rolls": {"type": "integer", "minimum": 1, "maximum": 8, "description": "With `media`: make this many takes, one after another, each with its steps' seeds one on from the last, to choose among. Each is a making the person pays for and their limit counts: ask for more than one only when they asked for takes to choose from."},
-                "why": {"type": "string", "description": "What this making is for, said to the person with the plan: what changed since the last take, and what to look for."},
-                "job": {"type": "string", "description": "A making this session started: what it has said, and how it ended."},
-                "wait": {"type": "boolean", "description": "Answer once the making has ended, up to twenty minutes, rather than at once."},
-                "cancel": {"type": "boolean", "description": "With `job`: stop it. Its step is asked to end, so a model's program can take back what it asked a server for."}
-            },
-            "additionalProperties": false
-        }),
+        super::harness::input_schema::<MakeInput>(),
         super::ToolAnnotations {
             read_only_hint: Some(false),
             destructive_hint: Some(false),

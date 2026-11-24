@@ -75,6 +75,10 @@ linesweeper = "0.4"
 log = "0.4"
 proptest = "1"
 rayon = "1"
+# The input schema kerf-mcp shows an agent for each tool, derived from the type
+# the tool reads its arguments into, so that what the agent is told a tool takes
+# and what the tool reads cannot drift apart.
+schemars = "1"
 serde = "1"
 serde_json = "1"
 sha2 = "0.10"
