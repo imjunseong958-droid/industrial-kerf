@@ -225,26 +225,14 @@ pub(crate) fn input_schema<T: JsonSchema>() -> Value {
 
 /// Leave out of a schema what schemars adds and the input schemas do not say, which agents
 /// have been shown and work by: a number's `format`, a field's `default` (where it matters,
-/// the field's description says it), and the `null` an optional field's type takes, which its
-/// reading takes as the field not given.
+/// the field's description says it), and the `null` schemars adds to an optional field's
+/// type. The schemas say what a field is when it is given.
 fn as_written(schema: &mut Schema) {
     let Some(object) = schema.as_object_mut() else {
         return;
     };
     object.remove("format");
     object.remove("default");
-    // An optional object or array is `{"anyOf": [its schema, {"type": "null"}]}`, with the
-    // field's description beside the `anyOf`.
-    if let Some(Value::Array(either)) = object.get_mut("anyOf")
-        && let [Value::Object(own), null] = either.as_mut_slice()
-        && *null == json!({"type": "null"})
-    {
-        let own = std::mem::take(own);
-        object.remove("anyOf");
-        for (key, value) in own {
-            object.entry(key).or_insert(value);
-        }
-    }
     if let Some(Value::Array(types)) = object.get_mut("type") {
         types.retain(|name| name != "null");
         if let [only] = types.as_slice() {
@@ -254,8 +242,8 @@ fn as_written(schema: &mut Schema) {
     }
 }
 
-/// What `cuts` is said to take: `true` or an object. What the object says is in the field's
-/// description; the schema does not list it.
+/// What `cuts` is said to take: `true`, `false`, or an object. What the object says is in the
+/// field's description; the schema does not list it.
 fn true_or_object(_: &mut SchemaGenerator) -> Schema {
     json_schema!({"type": ["boolean", "object"]})
 }
