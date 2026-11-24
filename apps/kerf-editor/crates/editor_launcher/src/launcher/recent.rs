@@ -10,7 +10,6 @@ use editor_ui::icons::Icon;
 use editor_ui::theme::{self, height, radius, text};
 use editor_ui::ui::{self, icon_button};
 use gpui::{div, prelude::*, px, AnimationExt, Context, ElementId, Window};
-use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -50,12 +49,12 @@ impl Recent {
     /// files and ask Git.
     pub(super) fn inspected(path: &Path) -> Self {
         let mut recent = Self::quick(path);
-        let info = kerf_bridge::project_inspect(&json!({"path": path.to_string_lossy()}));
-        if let Some(name) = info["name"].as_str().filter(|name| !name.trim().is_empty()) {
-            recent.name = name.to_owned();
+        let info = kerf_bridge::project_inspect(path);
+        if !info.name.trim().is_empty() {
+            recent.name = info.name;
         }
-        recent.branch = info["branch"].as_str().map(str::to_owned);
-        recent.presets = info["presets"].as_u64().unwrap_or(0) as usize;
+        recent.branch = info.branch;
+        recent.presets = info.presets;
         recent
     }
 

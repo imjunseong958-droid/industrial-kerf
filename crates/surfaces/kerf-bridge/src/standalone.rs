@@ -2,9 +2,10 @@
 //! kerfd runs, Kerf's tools served over MCP, crash reports, the system keychain, the
 //! project launcher, the command registry and the catalog.
 
+use crate::tasks::ProjectInfo;
 use crate::{secrets, tasks, updates, SERVE_MCP};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---- about ---------------------------------------------------------------------
 
@@ -125,11 +126,10 @@ pub fn keychain_off() {
 
 // ---- project launcher ------------------------------------------------------------
 
-/// What the launcher shows of a project folder, before any bridge exists; synchronous and
-/// local: `{path}` -> `{path, exists, project (has project.kerf), name, repository, branch,
-/// remote, modified (ISO 8601 of project.kerf), presets (how many)}`.
-pub fn project_inspect(request: &Value) -> Value {
-    tasks::inspect_project(request)
+/// What the launcher shows of the project folder at `path`, before any bridge exists;
+/// synchronous and local.
+pub fn project_inspect(path: &Path) -> ProjectInfo {
+    tasks::inspect_project(path)
 }
 
 /// A preset file's slots, and how files would fill them: `{path, files?: [path]}` -> `{name,

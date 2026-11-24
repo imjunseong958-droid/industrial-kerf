@@ -6,7 +6,7 @@
 
 #![cfg(unix)]
 
-use kerf_bridge::{preset_inspect, project_inspect, Bridge, Task};
+use kerf_bridge::{preset_inspect, project_inspect, Bridge, Task, TaskDone, TaskStatus};
 use kerf_collab::git;
 use kerf_collab::scaffold::{self, NewProject, Template};
 use kerf_model::Catalog;
@@ -474,17 +474,19 @@ fn the_launcher_starts_a_shared_project_from_a_preset() {
     let deadline = Instant::now() + Duration::from_secs(90);
     let status = loop {
         let status = task.status();
-        if status["status"] != "running" {
+        if !matches!(status, TaskStatus::Running { .. }) {
             break status;
         }
         assert!(
             Instant::now() < deadline,
-            "the task did not finish: {status}"
+            "the task did not finish: {status:?}"
         );
         std::thread::sleep(Duration::from_millis(50));
     };
-    assert_eq!(status["status"], "done", "{status}");
-    let project = PathBuf::from(status["path"].as_str().unwrap());
+    let TaskStatus::Done(TaskDone::Project(created)) = status else {
+        panic!("{status:?}");
+    };
+    let project = created.path;
     assert!(project.join("presets/Two Cuts.kerfpreset").is_file());
     let copies: Vec<String> = fs::read_dir(project.join("media"))
         .unwrap()
@@ -524,8 +526,8 @@ fn the_launcher_starts_a_shared_project_from_a_preset() {
     );
     assert_eq!(sh(&project, &["status", "--porcelain"]), "");
 
-    let inspected = project_inspect(&json!({"path": project}));
-    assert_eq!(inspected["repository"], true);
-    assert_eq!(inspected["presets"], 1);
-    assert_eq!(inspected["name"], "From Preset");
+    let inspected = project_inspect(&project);
+    assert!(inspected.repository);
+    assert_eq!(inspected.presets, 1);
+    assert_eq!(inspected.name, "From Preset");
 }

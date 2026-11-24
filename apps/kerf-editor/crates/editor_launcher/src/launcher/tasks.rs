@@ -8,8 +8,8 @@ use super::{LauncherView, Mode};
 use editor_ui::theme::{self, text};
 use editor_ui::ui;
 use gpui::{div, prelude::*, px, App, Context};
+use kerf_bridge::{TaskDone, TaskStatus};
 use serde_json::{json, Value};
-use std::path::PathBuf;
 use std::time::Duration;
 
 /// How often a running project task is asked how it is getting on.
@@ -76,7 +76,7 @@ impl LauncherView {
         self._task = Some(cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(TASK_POLL).await;
             let status = task.status();
-            let running = status["status"] == "running";
+            let running = matches!(status, TaskStatus::Running { .. });
             let followed = this.update(cx, |this, cx| this.task_status(&status, made, cx));
             if followed.is_err() || !running {
                 break;
@@ -87,41 +87,27 @@ impl LauncherView {
 
     /// How a running task stands: its words while it runs; done, its
     /// project opens; failed, why.
-    fn task_status(&mut self, status: &Value, made: bool, cx: &mut Context<Self>) {
-        match status["status"].as_str() {
-            Some("running") => {
-                if let Some(message) = status["message"]
-                    .as_str()
-                    .filter(|message| !message.is_empty())
-                {
-                    self.busy = Some(message.to_owned().into());
+    fn task_status(&mut self, status: &TaskStatus, made: bool, cx: &mut Context<Self>) {
+        match status {
+            TaskStatus::Running { message } => {
+                if let Some(message) = message.as_ref().filter(|message| !message.is_empty()) {
+                    self.busy = Some(message.clone().into());
                 }
             }
-            Some("done") => {
+            TaskStatus::Done(done) => {
                 self.busy = None;
-                // Said once the project is open: this window closes at once.
-                let warnings: Vec<String> = status["warnings"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect();
-                match status["path"].as_str().filter(|path| !path.is_empty()) {
-                    Some(path) => {
-                        self.open(PathBuf::from(path), made.then_some(true), warnings, cx)
+                match done {
+                    TaskDone::Project(created) if !created.path.as_os_str().is_empty() => {
+                        // Said once the project is open: this window closes at once.
+                        let warnings = created.warnings.clone();
+                        self.open(created.path.clone(), made.then_some(true), warnings, cx)
                     }
-                    None => {
-                        self.problem = Some("The task finished without a project folder".into())
-                    }
+                    _ => self.problem = Some("The task finished without a project folder".into()),
                 }
             }
-            _ => {
+            TaskStatus::Failed { error } => {
                 self.busy = None;
-                let error = status["error"]
-                    .as_str()
-                    .unwrap_or("Kerf could not make the project");
-                self.problem = Some(error.to_owned().into());
+                self.problem = Some(error.clone().into());
             }
         }
         cx.notify();
