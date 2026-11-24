@@ -6,8 +6,10 @@
 
 use super::layout::INSPECTOR;
 use super::ShotGraph;
+use crate::making::Holds;
 use editor_ui::theme::radius;
 use gpui::{canvas, div, prelude::*, px, App, Context, RenderImage, Window};
+use kerf_bridge::event::graph::{Gives, What};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -234,18 +236,17 @@ impl ShotGraph {
         let mut paths: Vec<PathBuf> = Vec::new();
         if let Some(recipe) = &self.recipe {
             for node in &recipe.nodes {
-                let holds = &node.holds;
-                let mut named = vec![holds["made"]["path"].as_str().unwrap_or_default()];
-                if node.kind == "file" && node.gives == "image" {
-                    named.push(
-                        holds["inProject"]
-                            .as_str()
-                            .or_else(|| holds["path"].as_str())
-                            .unwrap_or_default(),
-                    );
+                let Holds::Shot(what) = &node.holds else {
+                    continue;
+                };
+                let mut named = vec![what.made().map_or("", |made| made.path.as_str())];
+                if let What::File(file) = what
+                    && node.gives == Gives::Image
+                {
+                    named.push(file.in_project.as_deref().unwrap_or(&file.path));
                 }
-                for take in holds["takes"].as_array().into_iter().flatten() {
-                    named.push(take["path"].as_str().unwrap_or_default());
+                if let What::Takes(takes) = what {
+                    named.extend(takes.takes.iter().map(|take| take.path.as_str()));
                 }
                 paths.extend(
                     named

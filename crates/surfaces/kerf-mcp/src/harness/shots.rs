@@ -28,8 +28,10 @@ impl KerfMcpRouter {
             Ok(models) => (models, None),
             Err(error) => (Default::default(), Some(error.to_string())),
         };
-        let mut shown = kerf_shots::graph::shown(project, &self.dir, media, &models)
+        let graph = kerf_shots::graph::shown(project, &self.dir, media, &models)
             .map_err(|why| self.no_shot(media, why))?;
+        // An agent reads it as JSON, with what is said here for an agent alone.
+        let mut shown = json!(graph);
         if let Some(cannot) = shown["cannot"].as_str().map(str::to_owned) {
             shown["cannot"] = json!(cannot_said(
                 cannot,
@@ -88,18 +90,19 @@ impl KerfMcpRouter {
         let read =
             kerf_shots::workflow::read(project, &self.dir, &step.media, step.line + 1, &models)
                 .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
-        let mut shown =
+        let mut workflow =
             kerf_shots::workflow::shown(&step.media, step.line, &read).map_err(invalid)?;
         // What each input takes on the server the model is run on, as its program says:
         // the names to choose among, a number's least and most.
         match kerf_shots::workflow::taken(&models, &read) {
-            Ok(taken) => kerf_shots::workflow::with_taken(&mut shown, &taken),
+            Ok(taken) => kerf_shots::workflow::with_taken(&mut workflow, &taken),
             Err(why) => {
-                shown["takenError"] = json!(format!(
+                workflow.taken_error = Some(format!(
                     "what each input takes on the server could not be asked ({why}); a value is still set, and is refused there if it is not one it takes"
                 ));
             }
         }
+        let mut shown = json!(workflow);
         // The file's own text is what an editor holds a change to; here the nodes say it all.
         if let Some(shown) = shown.as_object_mut() {
             shown.remove("text");
@@ -123,11 +126,11 @@ impl KerfMcpRouter {
         let takes = kerf_shots::takes::takes(project, &self.dir, media).map_err(invalid)?;
         let mut resolved = project.clone();
         kerf_runtime::resolve_media_paths(&mut resolved, &self.dir);
-        let readings: Vec<Value> = takes
+        let readings: Vec<kerf_shots::takes::Reading> = takes
             .iter()
             .map(|take| kerf_shots::takes::read(&resolved, &self.dir, media, take, &guide))
             .collect();
-        let mut result = kerf_shots::takes::summary(&guide, &readings);
+        let mut result = json!(kerf_shots::takes::summary(&guide, &readings));
         result["media"] = json!(media);
         result["takes"] = json!(readings);
         result["choose"] = json!(

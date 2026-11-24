@@ -7,9 +7,7 @@ use super::fields::{field_box, INPUT_LABEL};
 use super::inspector::{note, section};
 use super::layout::load_places;
 use super::{MenuKind, ShotGraph};
-use crate::making::{
-    input_kind, part_id, shown_value, strings, value_text, GraphNode, InputKind, Recipe, Workflow,
-};
+use crate::making::{input_kind, part_id, shown_value, GraphNode, InputKind, Recipe, Workflow};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, text};
 use editor_ui::ui;
@@ -17,6 +15,8 @@ use gpui::{
     div, point, prelude::*, px, AnyElement, Context, ElementId, MouseDownEvent, SharedString,
     Window,
 };
+use kerf_bridge::event::graph::Kind;
+use kerf_bridge::event::workflow::OriginKind;
 use kerf_bridge::{Command, RecipeEdit, WorkflowEdit};
 use serde_json::Value;
 
@@ -104,7 +104,7 @@ impl ShotGraph {
             recipe
                 .nodes
                 .iter()
-                .find(|node| node.kind == "model" && node.line == Some(line))
+                .find(|node| node.is(Kind::Model) && node.line == Some(line))
                 .map(|node| node.id.clone())
         });
         self.fitted = true;
@@ -175,7 +175,7 @@ impl ShotGraph {
                 ),
             );
         } else {
-            let from = if workflow.origin == "file" {
+            let from = if workflow.origin == OriginKind::File {
                 ", from the file your models entry names"
             } else {
                 " with kerf-comfy"
@@ -189,7 +189,7 @@ impl ShotGraph {
         }
         if !workflow.blanks.is_empty() {
             column = column.child(section("Blanks the steps fill"));
-            for name in workflow.blanks.keys() {
+            for name in workflow.blanks.names() {
                 column = column
                     .child(ui::label(
                         format!("{{{name}}}"),
@@ -221,7 +221,10 @@ impl ShotGraph {
                 theme::ink3(),
             ));
         }
-        let part = value_text(&node.holds["id"]);
+        let Some(of) = node.part() else {
+            return column;
+        };
+        let part = of.id.clone();
         let row = |name: &str, control: AnyElement| {
             div()
                 .flex()
@@ -234,22 +237,15 @@ impl ShotGraph {
                 )
                 .child(div().flex_1().min_w_0().child(control))
         };
-        for (index, input) in node.holds["inputs"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .enumerate()
-        {
-            let name = input["name"].as_str().unwrap_or_default().to_owned();
-            match input_kind(&input) {
+        for (index, input) in of.inputs.iter().enumerate() {
+            let name = input.name.clone();
+            match input_kind(input) {
                 InputKind::Link => {
                     // Where it comes from: the graph's own shape, said; wired, it is re-pointed.
-                    let from = input["link"]
-                        .as_array()
-                        .and_then(|link| link.first())
-                        .map(value_text)
-                        .unwrap_or_default();
+                    let from = input
+                        .link
+                        .as_ref()
+                        .map_or_else(String::new, |(from, _)| from.clone());
                     let title = graph
                         .node(&part_id(&from))
                         .map_or("a node".to_owned(), |node| node.title.clone());
@@ -264,13 +260,14 @@ impl ShotGraph {
                     column = column.child(row(
                         &name,
                         ui::label(
-                            shown_value(&input["value"]),
+                            shown_value(&input.value),
                             text::TIMECODE,
                             theme::accent_ink(),
                         )
                         .into_any_element(),
                     ));
-                    let says: Vec<String> = strings(&input["blanks"])
+                    let says: Vec<String> = input
+                        .blanks
                         .iter()
                         .filter_map(|blank| {
                             let says = self.workflow.as_ref()?.blank_says(blank);
@@ -282,7 +279,7 @@ impl ShotGraph {
                     }
                 }
                 InputKind::Value => {
-                    let held = input["value"].clone();
+                    let held = input.value.clone();
                     if let Value::Bool(on) = held {
                         let (part, input_name) = (part.clone(), name.clone());
                         let this = cx.weak_entity();
@@ -315,7 +312,7 @@ impl ShotGraph {
                         ));
                         continue;
                     }
-                    let choices = input["choices"].as_array().cloned().unwrap_or_default();
+                    let choices = input.choices.clone().unwrap_or_default();
                     if !choices.is_empty() {
                         // One of the values the server takes there: chosen, not typed.
                         let trigger = self.choice_trigger(index, &part, &name, held, choices, cx);

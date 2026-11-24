@@ -15,7 +15,6 @@ use gpui::{
 };
 use kerf_bridge::event::{Recipe as RecipeEvent, TakeRead};
 use kerf_bridge::{Command, Event, RecipeEdit};
-use serde_json::Value;
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -250,8 +249,8 @@ impl ShotGraph {
     fn heard(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
         // What is said of this shot's media; a recipe and a workflow say it among their fields.
         let media = match event {
-            Event::Recipe(recipe) => recipe.graph.get("media").and_then(Value::as_str),
-            Event::Workflow(fields) => fields.get("media").and_then(Value::as_str),
+            Event::Recipe(recipe) => Some(recipe.graph.media.as_str()),
+            Event::Workflow(shown) => Some(shown.media.as_str()),
             Event::Error(error) => error.media.as_deref(),
             Event::TakeRead(read) => Some(read.media.as_str()),
             Event::TakesRead(read) => Some(read.media.as_str()),
@@ -263,10 +262,9 @@ impl ShotGraph {
         let ours = media == Some(self.media.as_str());
         match event {
             Event::Recipe(recipe) if ours => self.set_recipe(recipe, window, cx),
-            Event::Workflow(fields) if ours => {
-                let line = fields.get("line").and_then(Value::as_u64).unwrap_or(0) as usize;
-                if line > 0 && line == self.workflow_line {
-                    self.set_workflow(Workflow::read(fields), window, cx);
+            Event::Workflow(shown) if ours => {
+                if shown.line > 0 && shown.line == self.workflow_line {
+                    self.set_workflow(Workflow::read(shown), window, cx);
                 }
             }
             Event::Error(error) => {

@@ -46,7 +46,10 @@ impl ShotGraph {
             );
         }
         let takes = recipe.node("takes");
-        if let Some(wants) = takes.and_then(|takes| takes.holds["wants"].as_str()) {
+        if let Some(wants) = takes
+            .and_then(|takes| takes.takes())
+            .and_then(|takes| takes.wants.as_ref())
+        {
             let said = format!("Wants making: {wants}");
             return (said.clone(), theme::warn(), said);
         }
@@ -158,8 +161,8 @@ impl ShotGraph {
             .recipe
             .as_ref()
             .and_then(|recipe| recipe.node("takes"))
-            .and_then(|takes| takes.holds["takes"].as_array())
-            .is_some_and(|takes| !takes.is_empty());
+            .and_then(|takes| takes.takes())
+            .is_some_and(|takes| !takes.takes.is_empty());
         let can = connected && reads;
         let open_menu = self.menu.as_ref().map(|open| open.kind);
         let why = if !connected {

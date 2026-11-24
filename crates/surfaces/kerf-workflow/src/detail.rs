@@ -29,7 +29,8 @@ use crate::names::{
     guide_named, names_a_file, names_a_signal, names_points, MOVES, MOVES_BOX, MOVES_VIDEO,
 };
 use crate::workflow::Workflow;
-use serde_json::{json, Map, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Number, Value};
 use std::ops::Range;
 
 /// A JSON text read only as far as where each thing in it is.
@@ -271,55 +272,56 @@ fn blanks_of(value: &Value) -> Vec<String> {
 
 /// What fills the blank `name`, as a person is told it; and the value the
 /// workflow sets for it, where it is one a line can replace.
-fn filled(name: &str, workflow: &Workflow) -> (&'static str, String, Option<Value>) {
+fn filled(name: &str, workflow: &Workflow) -> (By, String, Option<Value>) {
     let (by, says) = match name {
         "prompt" => (
-            "line",
+            By::Line,
             "the line's prompt, with the cast and styles it names".to_owned(),
         ),
         "seed" => (
-            "line",
+            By::Line,
             "the line's seed, or one picked where it gives none".to_owned(),
         ),
         "width" | "height" => (
-            "line",
+            By::Line,
             "the line's size, brought to what the model takes".to_owned(),
         ),
         "frames" => (
-            "line",
+            By::Line,
             "the line's seconds, as frames of the model's".to_owned(),
         ),
         "fps" => (
-            "kerf",
+            By::Kerf,
             "the rate the model makes frames at, or its guide's for one made of its guide"
                 .to_owned(),
         ),
         "no_picture" => (
-            "kerf",
+            By::Kerf,
             "a small black picture, for a node that will not run without one".to_owned(),
         ),
         MOVES | MOVES_VIDEO | MOVES_BOX => (
-            "moves",
+            By::Moves,
             "where the clips the line names with moves= go".to_owned(),
         ),
         name if names_points(name) => {
             // A line's to give as any value it sets, and none until it does.
             return (
-                "set",
+                By::Set,
                 format!(
                     "the points the line gives as {name}=\"x,y x,y\", each across and down the guide's first frame from 0 to 1; none unless it does"
                 ),
                 workflow.set.get(name).cloned(),
             );
         }
-        name if names_a_signal(name) => {
-            ("signal", "a signal the line names with signal=".to_owned())
-        }
+        name if names_a_signal(name) => (
+            By::Signal,
+            "a signal the line names with signal=".to_owned(),
+        ),
         name if guide_named(name).is_some() => {
-            ("file", format!("the guide the line gives as {name}="))
+            (By::File, format!("the guide the line gives as {name}="))
         }
         name if names_a_file(name) => (
-            "file",
+            By::File,
             format!(
                 "the file the line gives as {}=",
                 if name.starts_with("ref") { "ref" } else { name }
@@ -328,12 +330,12 @@ fn filled(name: &str, workflow: &Workflow) -> (&'static str, String, Option<Valu
         name => {
             return match workflow.set.get(name) {
                 Some(value) => (
-                    "set",
+                    By::Set,
                     format!("{} unless the line says {name}=", shown(value)),
                     Some(value.clone()),
                 ),
                 None => (
-                    "line",
+                    By::Line,
                     format!("what the line says as {name}=, which it has to"),
                     None,
                 ),
@@ -351,61 +353,276 @@ fn shown(value: &Value) -> String {
     }
 }
 
+/// What fills a blank.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum By {
+    /// What the step's line says of it: its prompt, its seed, a name it has to give.
+    #[default]
+    Line,
+    /// Kerf itself.
+    Kerf,
+    /// Where the clips the line names with `moves=` go.
+    Moves,
+    /// A value the workflow sets unless the line says otherwise.
+    Set,
+    /// A signal the line names.
+    Signal,
+    /// A file the line gives.
+    File,
+}
+
+/// One blank of a workflow: what fills it, in words too, and the value the workflow sets
+/// for it where a line can replace it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Blank {
+    pub by: By,
+    pub says: String,
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pub default: Option<Value>,
+    /// What the step's line gives for it now, as it writes it. [`described`] reads a file
+    /// and knows no step: whoever shows the workflow of one says it.
+    pub given: Option<String>,
+}
+
+/// A workflow's blanks by name, in the order its nodes first hold them: the order a
+/// person meets them in. Written as an object, a field a blank; read back in the order
+/// the object has them.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Blanks(Vec<(String, Blank)>);
+
+impl Blanks {
+    pub fn get(&self, name: &str) -> Option<&Blank> {
+        self.iter()
+            .find_map(|(named, blank)| (named == name).then_some(blank))
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Blank)> {
+        self.0.iter().map(|(name, blank)| (name.as_str(), blank))
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&str, &mut Blank)> {
+        self.0
+            .iter_mut()
+            .map(|(name, blank)| (name.as_str(), blank))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The blanks' names, in their order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.iter().map(|(name, _)| name)
+    }
+
+    /// Add blank `name` after the ones there are, unless it is one of them.
+    fn add(&mut self, name: &str, blank: impl FnOnce() -> Blank) {
+        if self.get(name).is_none() {
+            self.0.push((name.to_owned(), blank()));
+        }
+    }
+}
+
+impl Serialize for Blanks {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_map(self.iter())
+    }
+}
+
+impl<'de> Deserialize<'de> for Blanks {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Read;
+        impl<'de> serde::de::Visitor<'de> for Read {
+            type Value = Blanks;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("blanks by name")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Blanks, A::Error> {
+                let mut blanks = Blanks::default();
+                while let Some((name, blank)) = map.next_entry::<String, Blank>()? {
+                    blanks.0.push((name, blank));
+                }
+                Ok(blanks)
+            }
+        }
+        deserializer.deserialize_map(Read)
+    }
+}
+
+/// A value that is there, `null` too: a workflow may set a blank to it.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
+/// One input of a node: a `link` to output `link.1` of node `link.0`, or a `value` with
+/// the `blanks` it holds, if any.
+///
+/// What a server takes there is not the file's to say, and [`described`] leaves it out:
+/// whoever has asked the server fills in what another node hands a link (`type`), the
+/// values to choose among (`choices`), or a number's `min`, `max` and `step`, each as the
+/// server wrote it.
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[serde(default)]
+pub struct DescribedInput {
+    pub name: String,
+    pub link: Option<(String, u64)>,
+    pub value: Value,
+    pub blanks: Vec<String>,
+    #[serde(rename = "type")]
+    pub takes: Option<String>,
+    pub choices: Option<Vec<Value>>,
+    pub min: Option<Number>,
+    pub max: Option<Number>,
+    pub step: Option<Number>,
+}
+
+impl Serialize for DescribedInput {
+    /// A link is written without a value, and a value without a link: `null` is a value
+    /// a workflow may hold.
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("name", &self.name)?;
+        match &self.link {
+            Some(link) => map.serialize_entry("link", link)?,
+            None => {
+                map.serialize_entry("value", &self.value)?;
+                if !self.blanks.is_empty() {
+                    map.serialize_entry("blanks", &self.blanks)?;
+                }
+            }
+        }
+        if let Some(takes) = &self.takes {
+            map.serialize_entry("type", takes)?;
+        }
+        if let Some(choices) = &self.choices {
+            map.serialize_entry("choices", choices)?;
+        }
+        for (name, bound) in [("min", &self.min), ("max", &self.max), ("step", &self.step)] {
+            if let Some(bound) = bound {
+                map.serialize_entry(name, bound)?;
+            }
+        }
+        map.end()
+    }
+}
+
+/// One node of a workflow: its id in the file, its kind, what ComfyUI's own editor calls
+/// it where its export says, and its inputs in the file's order.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DescribedNode {
+    pub id: String,
+    pub class: String,
+    pub inputs: Vec<DescribedInput>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// What a node of its kind gives at each output, as a server says it: filled in by
+    /// whoever has asked one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outputs: Option<Vec<Value>>,
+}
+
+/// How many frames a workflow's model makes: the most in one shot, and one frame and a
+/// multiple of `step`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DescribedFrames {
+    pub most: u32,
+    pub step: u32,
+}
+
+/// A workflow, for an editor to show: see [`described`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Described {
+    /// What it makes, in a line.
+    pub about: String,
+    pub frames: DescribedFrames,
+    /// The picture its model makes, across and down.
+    pub size: (u32, u32),
+    pub nodes: Vec<DescribedNode>,
+    /// Each blank by its name.
+    pub blanks: Blanks,
+    /// The rate its model makes frames at: left out where the workflow says none.
+    #[serde(skip_serializing_if = "not_positive")]
+    pub fps: f64,
+}
+
+fn not_positive(fps: &f64) -> bool {
+    *fps <= 0.0 || fps.is_nan()
+}
+
 /// The workflow `text` holds, for an editor to show: what it makes, and
 /// each node with each of its inputs, in the file's order, an input being a
 /// `link` to a node's output, or a `value` with the `blanks` it holds, if
 /// any. `blanks` at the top says of each blank what fills it. A text that is
 /// no workflow is refused with why.
-pub fn described(text: &str) -> Result<Value, String> {
+pub fn described(text: &str) -> Result<Described, String> {
     let workflow = Workflow::parse(text)?;
     let nodes = nodes(text)?;
-    let mut blanks = Map::new();
-    let described: Vec<Value> = nodes
+    let mut blanks = Blanks::default();
+    let described = nodes
         .iter()
         .map(|node| {
-            let inputs: Vec<Value> = node
+            let inputs = node
                 .inputs
                 .iter()
                 .map(|input| match link(&input.value) {
-                    Some((to, output)) => json!({"name": input.name, "link": [to, output]}),
+                    Some((to, output)) => DescribedInput {
+                        name: input.name.clone(),
+                        link: Some((to.to_owned(), output)),
+                        ..DescribedInput::default()
+                    },
                     None => {
                         let named = blanks_of(&input.value);
                         for name in &named {
-                            if !blanks.contains_key(name) {
+                            blanks.add(name, || {
                                 let (by, says, default) = filled(name, &workflow);
-                                let mut blank = json!({"by": by, "says": says});
-                                if let Some(default) = default {
-                                    blank["default"] = default;
+                                Blank {
+                                    by,
+                                    says,
+                                    default,
+                                    given: None,
                                 }
-                                blanks.insert(name.clone(), blank);
-                            }
+                            });
                         }
-                        let mut said = json!({"name": input.name, "value": input.value});
-                        if !named.is_empty() {
-                            said["blanks"] = json!(named);
+                        DescribedInput {
+                            name: input.name.clone(),
+                            value: input.value.clone(),
+                            blanks: named,
+                            ..DescribedInput::default()
                         }
-                        said
                     }
                 })
                 .collect();
-            let mut said = json!({"id": node.id, "class": node.class, "inputs": inputs});
-            if let Some(title) = &node.title {
-                said["title"] = json!(title);
+            DescribedNode {
+                id: node.id.clone(),
+                class: node.class.clone(),
+                inputs,
+                title: node.title.clone(),
+                outputs: None,
             }
-            said
         })
         .collect();
-    let mut said = json!({
-        "about": workflow.about,
-        "frames": {"most": workflow.frames.most, "step": workflow.frames.step},
-        "size": [workflow.size.0, workflow.size.1],
-        "nodes": described,
-        "blanks": blanks,
-    });
-    if workflow.fps > 0.0 {
-        said["fps"] = json!(workflow.fps);
-    }
-    Ok(said)
+    Ok(Described {
+        about: workflow.about.clone(),
+        frames: DescribedFrames {
+            most: workflow.frames.most,
+            step: workflow.frames.step,
+        },
+        size: workflow.size,
+        nodes: described,
+        blanks,
+        fps: workflow.fps,
+    })
 }
 
 /// `text` with input `input` of node `node` set to `value`, and nothing
@@ -570,22 +787,19 @@ mod tests {
             let said = described(text).unwrap_or_else(|error| panic!("{name}: {error}"));
             let workflow = Workflow::parse(text).unwrap();
             // Every blank the workflow has is said, with what fills it.
-            let named: Vec<&String> = said["blanks"].as_object().unwrap().keys().collect();
+            let mut named: Vec<&str> = said.blanks.names().collect();
+            named.sort_unstable();
             let mut have: Vec<String> = workflow.blanks().into_iter().collect();
             have.sort();
-            assert_eq!(named, have.iter().collect::<Vec<_>>(), "{name}");
-            assert!(!said["nodes"].as_array().unwrap().is_empty(), "{name}");
+            assert_eq!(named, have, "{name}");
+            assert!(!said.nodes.is_empty(), "{name}");
             // A value of it set and set back is the text it was.
-            let node = said["nodes"].as_array().unwrap().iter().find_map(|node| {
-                let input = node["inputs"]
-                    .as_array()?
+            let node = said.nodes.iter().find_map(|node| {
+                let input = node
+                    .inputs
                     .iter()
-                    .find(|input| input.get("blanks").is_none() && input["value"].is_string())?;
-                Some((
-                    node["id"].as_str()?.to_owned(),
-                    input["name"].as_str()?.to_owned(),
-                    input["value"].clone(),
-                ))
+                    .find(|input| input.blanks.is_empty() && input.value.is_string())?;
+                Some((node.id.clone(), input.name.clone(), input.value.clone()))
             });
             if let Some((id, input, was)) = node {
                 let changed = set_input(text, &id, &input, &json!("something else")).unwrap();
@@ -600,17 +814,13 @@ mod tests {
         // Points are the line's to give, as a value it sets, and said as points.
         let matte =
             described(BUNDLED.iter().find(|(name, _)| *name == "matte").unwrap().1).unwrap();
-        let inside = &matte["blanks"]["inside"];
-        assert_eq!(
-            (&inside["by"], &inside["default"]),
-            (&json!("set"), &json!(""))
-        );
+        let inside = matte.blanks.get("inside").unwrap();
+        assert_eq!((inside.by, &inside.default), (By::Set, &Some(json!(""))));
         assert!(
-            inside["says"]
-                .as_str()
-                .unwrap()
+            inside
+                .says
                 .starts_with("the points the line gives as inside="),
-            "{inside}"
+            "{inside:?}"
         );
     }
 }

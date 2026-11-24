@@ -9,13 +9,13 @@ use super::layout::INSPECTOR;
 use super::pictures::picture_box;
 use super::{MenuKind, ShotGraph};
 use crate::making::plan::notes_block;
-use crate::making::{strings, value_text, GraphNode, Recipe};
+use crate::making::{gives_word, GraphNode, Holds, Recipe};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, text};
 use editor_ui::ui::{self, icon_button};
 use gpui::{div, point, prelude::*, px, AnyElement, Context, ElementId, MouseDownEvent, Rgba};
+use kerf_bridge::event::graph::{Gives, Kind, What};
 use kerf_bridge::{RecipeEdit, ShotOf};
-use serde_json::Value;
 
 /// What a guide draws, and its name.
 const PASSES: [(&str, &str); 5] = [
@@ -57,11 +57,10 @@ impl ShotGraph {
                 column = column.child(self.shot_column(&recipe, making, connected, cx));
             }
             (Some(graph), Some(node)) => {
-                let color = gives_color(&node.gives);
-                let tag = if node.is_part() {
-                    format!("#{}", value_text(&node.holds["id"]))
-                } else {
-                    node.gives.clone()
+                let color = gives_color(node.gives);
+                let tag = match node.part() {
+                    Some(part) => format!("#{}", part.id),
+                    None => gives_word(node.gives).to_owned(),
                 };
                 column = column.child(
                     div()
@@ -69,7 +68,7 @@ impl ShotGraph {
                         .items_center()
                         .gap(px(theme::space::S8))
                         .when(!node.is_part(), |head| {
-                            head.child(kind_icon(&node.kind).view(16.0, color))
+                            head.child(kind_icon(node.kind()).view(16.0, color))
                         })
                         .child(
                             ui::line(node.title.clone(), text::TITLE, theme::ink())
@@ -200,13 +199,15 @@ impl ShotGraph {
         connected: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let holds = &node.holds;
-        let missing = holds["there"] == Value::Bool(false);
         let mut column = div().flex().flex_col().gap(px(theme::space::S8));
-        match node.kind.as_str() {
-            "part" => return column.child(self.part_column(graph, node, cx)),
-            "model" => return column.child(self.model_column(graph, node, cx)),
-            "render" => {
+        let what = match &node.holds {
+            Holds::Part(_) => return column.child(self.part_column(graph, node, cx)),
+            Holds::Shot(what) => what,
+        };
+        let missing = !what.there();
+        match what {
+            What::Model(_) => return column.child(self.model_column(graph, node, cx)),
+            What::Render(render) => {
                 column = column
                     .child(note(
                         "Kerf draws a sequence of this project into a file a model follows, with no sound.".into(),
@@ -216,25 +217,21 @@ impl ShotGraph {
                     .child(self.pass_row(node, cx))
                     .children(self.fields_named(&["size", "rate", "matte", "from", "seconds"]));
                 // A matte is one clip in white on black: of footage, as much of it as a mask cuts out.
-                if let Some(matte) = holds["matte"].as_str().filter(|matte| !matte.is_empty()) {
+                if let Some(matte) = render.matte.as_deref().filter(|matte| !matte.is_empty()) {
                     column = column.child(self.pointing(matte, ShotOf::Matte, cx));
                 }
                 // The guide as it was drawn for the take that shows: what the model was handed.
-                let made = &holds["made"];
-                let drawn = made["path"]
-                    .as_str()
-                    .and_then(|path| self.in_project(path, cx))
-                    .and_then(|path| self.still(&path));
-                if let Some(image) = drawn {
+                let drawn = render.made.as_ref().and_then(|made| {
+                    let path = self.in_project(&made.path, cx)?;
+                    Some((made.take, self.still(&path)?))
+                });
+                if let Some((take, image)) = drawn {
                     column = column
-                        .child(section(&format!(
-                            "As drawn for take {}",
-                            made["take"].as_u64().unwrap_or(0)
-                        )))
+                        .child(section(&format!("As drawn for take {take}")))
                         .child(picture_box(image));
                 }
             }
-            "join" => {
+            What::Join(_) => {
                 column = column
                     .child(note(
                         "Kerf sets the parts it reads end to end into one file: a shot longer than a model makes at once, made a part at a time.".into(),
@@ -246,7 +243,7 @@ impl ShotGraph {
                         theme::ink3(),
                     ));
             }
-            "sequence" => {
+            What::Sequence(_) => {
                 column = column
                     .child(note(
                         node.detail.clone(),
@@ -257,22 +254,16 @@ impl ShotGraph {
                         theme::ink3(),
                     ));
             }
-            "file" => {
+            What::File(file) => {
                 // A picture shows; any file says where it is.
-                let shown = holds["inProject"]
-                    .as_str()
-                    .or_else(|| holds["path"].as_str())
-                    .and_then(|path| self.in_project(path, cx))
-                    .filter(|_| node.gives == "image")
+                let shown = self
+                    .in_project(file.in_project.as_deref().unwrap_or(&file.path), cx)
+                    .filter(|_| node.gives == Gives::Image)
                     .and_then(|path| self.still(&path));
                 if let Some(image) = shown {
                     column = column.child(picture_box(image));
                 }
-                column = column.child(ui::label(
-                    value_text(&holds["path"]),
-                    text::TIMECODE,
-                    theme::ink2(),
-                ));
+                column = column.child(ui::label(file.path.clone(), text::TIMECODE, theme::ink2()));
                 if missing {
                     column = column.child(note(
                         "This file is not there. The steps cannot run until it is.".into(),
@@ -280,14 +271,14 @@ impl ShotGraph {
                     ));
                 }
             }
-            "signal" => column = column.child(self.signal_column(node, cx)),
-            "moves" => {
+            What::Signal(_) => column = column.child(self.signal_column(node, cx)),
+            What::Moves(moves) => {
                 let said = if missing {
                     node.detail.clone()
                 } else {
                     format!(
                         "The model is handed where this clip is on each frame of {}: its place as the sequence draws it, so a camera that moves and what hides it are in it. Move the clip, or its path on the picture, to change it.",
-                        holds["sequence"].as_str().unwrap_or("its sequence")
+                        moves.sequence.as_deref().unwrap_or("its sequence")
                     )
                 };
                 column = column.child(note(
@@ -295,16 +286,15 @@ impl ShotGraph {
                     if missing { theme::neg() } else { theme::ink2() },
                 ));
                 if !missing {
-                    let clip = holds["clip"].as_str().unwrap_or_default();
-                    column = column.child(self.pointing(clip, ShotOf::Moves, cx));
+                    column = column.child(self.pointing(&moves.clip, ShotOf::Moves, cx));
                 }
             }
-            "cast" | "style" => {
+            What::Cast(named) | What::Style(named) => {
                 column = column.child(note(
                     node.detail.clone(),
                     if missing { theme::neg() } else { theme::ink2() },
                 ));
-                let refs = strings(&holds["refs"]);
+                let refs = named.refs.clone().unwrap_or_default();
                 if !refs.is_empty() {
                     column =
                         column.child(ui::label(refs.join("\n"), text::MONO_SMALL, theme::ink3()));
@@ -319,12 +309,7 @@ impl ShotGraph {
                     ),
                 );
             }
-            "takes" => return column.child(self.takes(node, making, connected, cx)),
-            _ => {
-                if !node.detail.is_empty() {
-                    column = column.child(note(node.detail.clone(), theme::ink2()));
-                }
-            }
+            What::Takes(_) => return column.child(self.takes(node, making, connected, cx)),
         }
         column.child(self.reads(graph, node, cx))
     }
@@ -338,9 +323,11 @@ impl ShotGraph {
     }
 
     fn model_column(&self, graph: &Recipe, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
-        let holds = &node.holds;
         let mut column = div().flex().flex_col().gap(px(theme::space::S8));
-        if let Some(about) = holds["about"].as_str().filter(|about| !about.is_empty()) {
+        let Some(model) = node.model() else {
+            return column;
+        };
+        if let Some(about) = model.about.as_deref().filter(|about| !about.is_empty()) {
             column = column.child(note(about.to_owned(), theme::ink2()));
         }
         if node.is_missing() {
@@ -349,7 +336,7 @@ impl ShotGraph {
                 .child(note(
                     format!(
                         "No model named {} is set up on this computer. A model is a program your own models file names.",
-                        holds["model"].as_str().unwrap_or_default()
+                        model.model
                     ),
                     theme::warn(),
                 ))
@@ -375,24 +362,22 @@ impl ShotGraph {
         column = column.children(self.fields_named(&["seconds", "size", "from"]));
         // The knobs: what the line sets for this model alone, then what the
         // model has said it takes, each as it comes until the line says otherwise.
-        let knobs: Vec<&str> = holds["knobs"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|knob| knob["name"].as_str())
-            .collect();
+        let knobs: Vec<&str> = model.knobs.iter().map(|knob| knob.name.as_str()).collect();
         column = column
             .child(section("Knobs"))
             .children(self.fields_named(&knobs));
         column = column.children(self.fields_named(&[ADD]));
         // A model its entry runs with kerf-comfy has a workflow behind it.
         if node.has_workflow() {
-            let own = holds["workflow"].as_str().filter(|own| !own.is_empty());
+            let own = model.workflow.as_deref().filter(|own| !own.is_empty());
             let says = match own {
                 Some(own) => format!("{own}, this shot's own copy."),
                 None => format!(
                     "{}, as it comes with kerf-comfy.",
-                    value_text(&holds["runner"]["workflow"])
+                    model
+                        .runner
+                        .as_ref()
+                        .map_or("", |runner| runner.workflow.as_str())
                 ),
             };
             let line = node.line.unwrap_or(0);
@@ -416,11 +401,10 @@ impl ShotGraph {
 
     /// A guide's Draws, chosen from a menu with the one it draws ticked.
     fn pass_row(&self, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
-        let pass = node.holds["pass"]
-            .as_str()
-            .filter(|pass| !pass.is_empty())
-            .unwrap_or("picture")
-            .to_owned();
+        let pass = match &node.holds {
+            Holds::Shot(What::Render(render)) if !render.pass.is_empty() => render.pass.clone(),
+            _ => "picture".to_owned(),
+        };
         let shown = PASSES
             .iter()
             .find(|(id, _)| *id == pass)
@@ -503,7 +487,7 @@ impl ShotGraph {
                     .items_center()
                     .gap(px(theme::space::S8))
                     .h(px(24.0))
-                    .child(ui::dot(gives_color(&edge.gives), 6.0))
+                    .child(ui::dot(gives_color(edge.gives), 6.0))
                     .child(
                         ui::line(edge.port.clone(), text::TIMECODE, theme::ink2())
                             .w(px(FIELD_LABEL - 14.0))
@@ -514,7 +498,7 @@ impl ShotGraph {
                             .flex_1()
                             .min_w_0(),
                     )
-                    .when(node.kind == "model" && line > 0, |row| {
+                    .when(node.is(Kind::Model) && line > 0, |row| {
                         row.child(
                             icon_button(
                                 ElementId::Name(format!("let-go-{index}").into()),

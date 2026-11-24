@@ -3,8 +3,13 @@
 use kerf_engine::recipe::model::Models;
 use kerf_engine::recipe::text::{self, Change};
 use kerf_model::Project;
-use serde_json::{json, Value};
 use std::path::Path;
+
+pub use kerf_engine::recipe::graph::{
+    Edge, FileNode, Gives, Graph, JoinNode, Kind, Knob, Made, ModelNode, MovesNode, NamedNode,
+    Node, RenderNode, Runner, RunnerKind, SequenceNode, SignalNode, Sound, TakeSaid, TakesNode,
+    What,
+};
 
 /// The recipe of media `id` as a graph: its nodes and edges, its text, what
 /// would refuse its making (`cannot`) and what is worth knowing first
@@ -16,18 +21,23 @@ pub fn shown(
     directory: &Path,
     id: &str,
     models: &Models,
-) -> Result<Value, String> {
-    let graph = kerf_engine::recipe::graph(project, directory, id, models)
+) -> Result<Graph, String> {
+    let mut shown = kerf_engine::recipe::graph(project, directory, id, models)
         .map_err(|error| error.to_string())?;
-    let mut shown = serde_json::to_value(&graph).map_err(|error| error.to_string())?;
     // Which workflow a model is run with is the person's own models file's to say.
-    for node in shown["nodes"].as_array_mut().into_iter().flatten() {
-        let workflow = node["model"]
-            .as_str()
-            .and_then(|model| models.command(model).ok())
+    for node in &mut shown.nodes {
+        let What::Model(model) = &mut node.what else {
+            continue;
+        };
+        let workflow = models
+            .command(&model.model)
+            .ok()
             .and_then(crate::workflow::runs);
         if let Some(workflow) = workflow {
-            node["runner"] = json!({"kind": "comfy", "workflow": workflow});
+            model.runner = Some(Runner {
+                kind: RunnerKind::Comfy,
+                workflow: workflow.to_owned(),
+            });
         }
     }
     Ok(shown)

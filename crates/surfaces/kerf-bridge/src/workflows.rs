@@ -29,71 +29,54 @@ use crate::wake::Outbox;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
-use kerf_shots::workflow::{self, Set};
+use kerf_shots::workflow::{self, Set, Shown};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// The `workflow` event last said of each step, by its media and its line: what the editor
 /// shows of it.
 #[derive(Clone, Default)]
-pub(crate) struct Said(Arc<Mutex<HashMap<(String, usize), Value>>>);
+pub(crate) struct Said(Arc<Mutex<HashMap<(String, usize), Shown>>>);
 
 /// The step a `workflow` event is of.
-fn step_of(event: &Value) -> (String, usize) {
-    (
-        event["media"].as_str().unwrap_or_default().to_owned(),
-        event["line"].as_u64().unwrap_or_default() as usize,
-    )
+fn step_of(event: &Shown) -> (String, usize) {
+    (event.media.clone(), event.line)
 }
 
 impl Said {
     /// Say `event`, a `workflow` event, and keep it as what the editor shows of its step.
     /// Kept and sent under one lock, so what is kept is what was sent last.
-    pub(crate) fn say(&self, tx: &Outbox, event: Value) {
+    pub(crate) fn say(&self, tx: &Outbox, event: Shown) {
         let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         said.insert(step_of(&event), event.clone());
-        crate::emit(tx, workflow_event(event));
+        crate::emit(tx, Event::Workflow(Box::new(event)));
     }
 
     /// Say what the server takes (`asked`), asked of the workflow as `own` says it, once it
     /// is known. An edit may have said the workflow again meanwhile: it is said of the
     /// workflow as last said, whose text is the newer, and not of the text it was asked of.
     /// Nothing is said when what was last said has it already, or is of another model.
-    pub(crate) fn late(&self, tx: &Outbox, own: Value, asked: Result<Value, String>) {
+    pub(crate) fn late(&self, tx: &Outbox, own: Shown, asked: Result<Value, String>) {
         let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let step = step_of(&own);
         let mut event = match said.get(&step) {
-            Some(last) if last.get("taken").is_some() => return,
-            Some(last) if last["model"] != own["model"] || last["name"] != own["name"] => return,
-            Some(last) => {
-                let mut last = last.clone();
-                if let Some(fields) = last.as_object_mut() {
-                    fields.remove("edited");
-                }
-                last
-            }
+            Some(last) if last.taken => return,
+            Some(last) if last.model != own.model || last.name != own.name => return,
+            Some(last) => Shown {
+                edited: false,
+                ..last.clone()
+            },
             None => own,
         };
         match asked {
             Ok(taken) => workflow::with_taken(&mut event, &taken),
-            Err(why) => event["takenError"] = json!(why),
+            Err(why) => event.taken_error = Some(why),
         }
         said.insert(step, event.clone());
-        crate::emit(tx, workflow_event(event));
+        crate::emit(tx, Event::Workflow(Box::new(event)));
     }
-}
-
-/// The `workflow` event saying `event`, a workflow as `workflow::shown` gives it.
-fn workflow_event(event: Value) -> Event {
-    let mut fields = match event {
-        Value::Object(fields) => fields,
-        _ => Map::new(),
-    };
-    // Its type is the event's own.
-    fields.remove("type");
-    Event::Workflow(fields)
 }
 
 /// A value of a workflow to set: input `input` of node `node`.
@@ -120,7 +103,7 @@ fn event(
     id: &str,
     line: usize,
     models: &Models,
-) -> Result<Value, String> {
+) -> Result<Shown, String> {
     let read = workflow::read(project, &shared.directory, id, line, models)?;
     let mut event = workflow::shown(id, line, &read)?;
     // What each input takes on the server, where that has been asked already.
@@ -166,7 +149,7 @@ pub(crate) fn get(
         });
     match said {
         Ok(event) => {
-            let asked = event.get("taken").is_some();
+            let asked = event.taken;
             shared.workflows.say(tx, event);
             if !asked {
                 ask_taken(shared, client, id, line, tx);
@@ -262,7 +245,7 @@ pub(crate) fn edit(
     };
     match event(&project, shared, &edit.media, edit.line, &models) {
         Ok(mut event) => {
-            event["edited"] = json!(true);
+            event.edited = true;
             shared.workflows.say(tx, event);
         }
         Err(why) => failed(tx, &edit.media, why),
@@ -272,15 +255,18 @@ pub(crate) fn edit(
 
 #[cfg(test)]
 mod tests {
-    use super::Said;
+    use super::{Said, Shown};
     use crate::event::Event;
     use serde_json::{json, Value};
     use std::sync::mpsc::Receiver;
 
-    fn shown(text: &str) -> Value {
-        json!({"type": "workflow", "media": "m1", "line": 2, "model": "flux", "name": "flux",
+    fn shown(text: &str) -> Shown {
+        serde_json::from_value(
+            json!({"media": "m1", "line": 2, "model": "flux", "name": "flux",
                "text": text, "nodes": [{"id": "3", "class": "KSampler",
-               "inputs": [{"name": "steps", "value": 20}]}]})
+               "inputs": [{"name": "steps", "value": 20}]}]}),
+        )
+        .expect("a workflow as it is said")
     }
 
     fn taken() -> Value {
@@ -299,9 +285,13 @@ mod tests {
         let said = Said::default();
         // Opened, and asked what the server takes; then a value is set before it answers.
         said.say(&tx, shown("old"));
-        let mut edited = shown("new");
-        edited["edited"] = json!(true);
-        said.say(&tx, edited);
+        said.say(
+            &tx,
+            Shown {
+                edited: true,
+                ..shown("new")
+            },
+        );
         // The answer read before the edit comes last: on the newer text, not the old.
         said.late(&tx, shown("old"), Ok(taken()));
         let events = all(&rx);

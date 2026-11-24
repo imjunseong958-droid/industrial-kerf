@@ -14,6 +14,7 @@ kerf-track = { path = "../../vfx/kerf-track" }
 # How a workflow reads: the file's format and the workflows that come with
 # kerf-comfy. ComfyUI itself is another program, never linked.
 kerf-workflow = { path = "../../surfaces/kerf-workflow" }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 
 [dev-dependencies]

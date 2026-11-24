@@ -25,6 +25,26 @@ pub use kerf_cloud::{Access as CloudAccess, Account as CloudAccount};
 pub use kerf_collab::git::{Status as GitStatus, User as GitUser};
 pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
 pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
+pub use kerf_shots::takes::ClipReading;
+
+/// A shot's graph, as a `recipe` event lays it out: its nodes, each with what there is to
+/// say of one of its kind, and the edges of what each reads.
+pub mod graph {
+    pub use kerf_shots::graph::{
+        Edge, FileNode, Gives, Graph, JoinNode, Kind, Knob, Made, ModelNode, MovesNode, NamedNode,
+        Node, RenderNode, Runner, RunnerKind, SequenceNode, SignalNode, Sound, TakeSaid, TakesNode,
+        What,
+    };
+}
+
+/// The workflow a model is run with, as a `workflow` event says it: every node and input
+/// of it, and of each blank what fills it.
+pub mod workflow {
+    pub use kerf_shots::workflow::{
+        Blank, Blanks, By, Described, DescribedFrames, DescribedInput, DescribedNode, OriginKind,
+        Shown,
+    };
+}
 pub use kerf_runtime::{
     Author, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness,
     ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus, TimelineView,
@@ -323,14 +343,15 @@ pub enum Event {
     /// How a media is made, as a graph of its steps.
     Recipe(Recipe),
     /// The workflow a `generate` step's model is run with, every node and input of it, as
-    /// kerf-shots' `workflow::shown` gives it: `media`, `line`, `model`, `name`, `text`,
-    /// `origin` (`bundled`, `file` or `own`), `file` (the shot's own copy, else `null`),
-    /// `about`, `frames`, `size`, `nodes`, `blanks` and `fps` (left out when not positive).
+    /// kerf-shots' `workflow::shown` gives it ([`workflow::Shown`]): `media`, `line`,
+    /// `model`, `name`, `text`, `origin` (`bundled`, `file` or `own`), `file` (the shot's
+    /// own copy, else `null`), `about`, `frames`, `size`, `nodes`, `blanks` and `fps` (left
+    /// out when not positive).
     /// A second one comes once the model's program has said what the server takes at each
     /// input: `taken: true` with each input's `choices` or `min`, `max` and `step`, or
     /// `takenError` with why it could not be asked. That one is always of the step's
     /// workflow as last sent. After `workflow_edit` it has `edited: true`.
-    Workflow(Map<String, Value>),
+    Workflow(Box<workflow::Shown>),
     /// The picture a person points on to read a clip from footage: a PNG file, its size,
     /// and the document revision it was drawn from.
     ShotPicture {
@@ -1236,17 +1257,17 @@ pub struct MediaMakePlan {
     pub rolls: u32,
 }
 
-/// How a media is made: the graph kerf-shots' `graph::shown` lays out (`media`, `recipe`,
-/// `document` when its steps are the document's own, `name`, `text`, `nodes` with the
-/// `runner` of a model a workflow runs, `edges`, `error` and `cannot` when there is one,
-/// `notes`), with why the person's models file does not read where it does not. After
-/// `recipe_edit` it has `edited: true`, and `added`, the line of the step added, when one
-/// was.
+/// How a media is made: the graph kerf-shots' `graph::shown` lays out ([`graph::Graph`]:
+/// `media`, `recipe`, `document` when its steps are the document's own, `name`, `text`,
+/// `nodes` with the `runner` of a model a workflow runs, `edges`, `error` and `cannot` when
+/// there is one, `notes`), with why the person's models file does not read where it does
+/// not. After `recipe_edit` it has `edited: true`, and `added`, the line of the step added,
+/// when one was.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Recipe {
     #[serde(flatten)]
-    pub graph: Map<String, Value>,
+    pub graph: graph::Graph,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub models_error: Option<String>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -1258,9 +1279,9 @@ pub struct Recipe {
 /// One take held to its guide: its number, file and whether the media is it; `overlap`,
 /// the mean over the guide's subjects of how much where the take has each and where the
 /// guide asked for it are the same (0..1, to four places); each subject's reading as
-/// kerf-shots' `takes::read` gives it (`{clip, overlap, off, size, frames, shown}`, or
-/// `{clip, overlap: 0, note}` for one the take has nothing of); and the document revision
-/// read.
+/// kerf-shots' `takes::read` gives it ([`ClipReading`]: `{clip, overlap, off, size, frames,
+/// shown}`, or `{clip, overlap: 0, note}` for one the take has nothing of); and the
+/// document revision read.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TakeRead {
@@ -1269,7 +1290,7 @@ pub struct TakeRead {
     pub chosen: bool,
     #[serde(deserialize_with = "number")]
     pub overlap: f64,
-    pub clips: Vec<Value>,
+    pub clips: Vec<ClipReading>,
     pub media: String,
     pub revision: u64,
 }

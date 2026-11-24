@@ -1,6 +1,7 @@
 //! Shot graphs, recipes and takes: how a shot is made.
 
 use crate::support::{command, event};
+use kerf_bridge::event::graph::Gives;
 use kerf_editor::cast;
 use kerf_editor::cast::Entry;
 use kerf_editor::making::{
@@ -9,8 +10,8 @@ use kerf_editor::making::{
     one_line, out_port, output_within, part_id, part_number, placed_over, point_on, port_says,
     ports_for, reading_lines, reads_port, settle, shown_value, signal_keys, signal_line,
     signal_under, take_tip, value_of, wire_nth, zoom_about, Camera, CardState, GraphEdge,
-    GraphNode, GraphStart, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow, ZOOM_LEAST,
-    ZOOM_MOST, ZOOM_READ,
+    GraphNode, GraphStart, Holds, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow,
+    ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
 };
 use kerf_editor::model::Ask;
 use kerf_editor::store::Making;
@@ -163,15 +164,36 @@ fn a_picture_from_outside_is_copied_into_refs_under_a_free_name() {
     assert!(cast::cast_picture_path(project.path(), Path::new("/nowhere/x.png")).is_err());
 }
 
+/// A node as the bridge says one: one of a shot's graph, as its `recipe` lists it (there,
+/// and set up, unless `holds` says otherwise), or with the kind `part` one of a workflow's
+/// own, as its `workflow` lists it.
 fn node(id: &str, kind: &str, gives: &str, line: Option<usize>, holds: Value) -> GraphNode {
+    if kind == "part" {
+        return GraphNode {
+            id: id.into(),
+            title: id.into(),
+            detail: String::new(),
+            gives: Gives::File,
+            line,
+            holds: Holds::Part(serde_json::from_value(holds).unwrap()),
+        };
+    }
+    let mut said = json!({"id": id, "kind": kind, "title": id, "gives": gives,
+        "there": true, "setUp": true});
+    if let Some(line) = line {
+        said["line"] = json!(line);
+    }
+    for (key, value) in holds.as_object().into_iter().flatten() {
+        said[key] = value.clone();
+    }
+    let node: kerf_bridge::event::graph::Node = serde_json::from_value(said).unwrap();
     GraphNode {
-        id: id.into(),
-        kind: kind.into(),
-        title: id.into(),
-        gives: gives.into(),
-        line,
-        holds,
-        ..GraphNode::default()
+        id: node.id,
+        title: node.title,
+        detail: node.detail,
+        gives: node.gives,
+        line: node.line,
+        holds: Holds::Shot(node.what),
     }
 }
 
@@ -181,7 +203,7 @@ fn edge(from: &str, to: &str, port: &str, nth: usize) -> GraphEdge {
         to: to.into(),
         port: port.into(),
         nth,
-        gives: "video".into(),
+        gives: Gives::Video,
     }
 }
 
@@ -210,7 +232,7 @@ fn court() -> Recipe {
                 "model",
                 "image",
                 Some(2),
-                json!({"makes": ["ball.png", "more.png"]}),
+                json!({"makes": "ball.png"}),
             ),
             node(
                 "made:{out}",
@@ -308,7 +330,6 @@ fn a_reading_is_written_on_its_readers_line_as_the_line_names_it() {
     );
     assert_eq!(value_of(of(&recipe, "sequence:court")), "court");
     assert_eq!(value_of(of(&recipe, "made:depth.mp4")), "{depth.mp4}");
-    // A program that makes several: the first of them.
     assert_eq!(value_of(of(&recipe, "made:ball.png")), "{ball.png}");
     assert_eq!(value_of(of(&recipe, "takes")), "");
     // A name a line gives once is replaced; one it may give again is one more.
@@ -592,7 +613,7 @@ fn a_models_workflow_reads_as_a_graph_of_its_nodes() {
             {"class": "Nameless"}
         ]
     });
-    let workflow = Workflow::read(event.as_object().unwrap());
+    let workflow = Workflow::read(&serde_json::from_value(event).unwrap());
     assert_eq!((workflow.line, workflow.model.as_str()), (3, "video"));
     assert!(!workflow.is_own());
     let graph = &workflow.graph;
@@ -615,7 +636,15 @@ fn a_models_workflow_reads_as_a_graph_of_its_nodes() {
         ),
         ("part:1", "part:2", "model")
     );
-    let inputs = |id: &str| graph.node(&part_id(id)).unwrap().holds["inputs"].clone();
+    let inputs = |id: &str| {
+        graph
+            .node(&part_id(id))
+            .unwrap()
+            .part()
+            .unwrap()
+            .inputs
+            .clone()
+    };
     assert_eq!(input_kind(&inputs("1")[0]), InputKind::Blank);
     assert_eq!(input_kind(&inputs("1")[1]), InputKind::Value);
     assert_eq!(input_kind(&inputs("2")[0]), InputKind::Link);

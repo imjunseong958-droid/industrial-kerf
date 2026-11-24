@@ -7,7 +7,7 @@ use super::drag::Drag;
 use super::inspector::note;
 use super::paint::{paint_line, paint_ring, paint_under};
 use super::{MenuKind, ShotGraph};
-use crate::making::GraphNode;
+use crate::making::{GraphNode, Holds};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, radius};
 use editor_ui::ui;
@@ -15,6 +15,7 @@ use gpui::{
     canvas, div, fill, point, prelude::*, px, size, Bounds, Context, CursorStyle, MouseButton,
     MouseDownEvent, Pixels, Point, Window,
 };
+use kerf_bridge::event::graph::What;
 use kerf_bridge::Command;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -194,8 +195,10 @@ impl ShotGraph {
     /// A signal's curve, drawn across to draw it anew, and its moments read
     /// from a sound of its sequence.
     pub(super) fn signal_column(&self, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
-        let holds = &node.holds;
         let mut column = div().flex().flex_col().gap(px(theme::space::S8));
+        let Holds::Shot(What::Signal(signal)) = &node.holds else {
+            return column;
+        };
         if node.is_missing() {
             return column.child(note(node.detail.clone(), theme::neg()));
         }
@@ -203,14 +206,9 @@ impl ShotGraph {
             "A number from 0 to 1 over the shot's time. The prompt says what it is of; this says when, and how much.".into(),
             theme::ink2(),
         ));
-        let values: Vec<f64> = holds["values"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|value| value.as_f64().unwrap_or(0.0))
-            .collect();
-        let frames = holds["frames"].as_u64().unwrap_or(1).max(1) as usize;
-        let clip = holds["clip"].as_str().unwrap_or_default().to_owned();
+        let values = signal.values.clone().unwrap_or_default();
+        let frames = signal.frames.unwrap_or(1).max(1) as usize;
+        let clip = signal.clip.clone();
         let drawn: Option<Vec<(usize, f64)>> = self
             .drawing
             .as_ref()
@@ -263,7 +261,7 @@ impl ShotGraph {
         ));
         // Its moments read from a sound of its sequence: 1 for a few frames
         // from where each sound starts.
-        let sounds = holds["sounds"].as_array().cloned().unwrap_or_default();
+        let sounds = signal.sounds.clone().unwrap_or_default();
         if sounds.is_empty() {
             return column;
         }
@@ -281,11 +279,12 @@ impl ShotGraph {
                 let items = sounds
                     .iter()
                     .map(|sound| {
-                        let of = sound["clip"].as_str().unwrap_or_default().to_owned();
-                        let name = sound["name"]
-                            .as_str()
-                            .filter(|name| !name.is_empty())
-                            .map_or_else(|| of.clone(), str::to_owned);
+                        let of = sound.clip.clone();
+                        let name = if sound.name.is_empty() {
+                            of.clone()
+                        } else {
+                            sound.name.clone()
+                        };
                         let (this, clip) = (this_entity.clone(), clip.clone());
                         ui::MenuItem::new(name).on_choose(move |_, cx| {
                             let command = Command::SignalFromSound {

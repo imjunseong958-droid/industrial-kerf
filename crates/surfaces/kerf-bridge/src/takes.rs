@@ -83,9 +83,8 @@ fn read_each(
                 take: take.number,
                 path: take.stored.clone(),
                 chosen: take.chosen,
-                // A mean that is not a number was written as null; it stays so.
-                overlap: reading["overlap"].as_f64().unwrap_or(f64::NAN),
-                clips: reading["clips"].as_array().cloned().unwrap_or_default(),
+                overlap: reading.overlap,
+                clips: reading.clips.clone(),
                 media: id.to_owned(),
                 revision,
             }),
@@ -98,10 +97,8 @@ fn read_each(
         Event::TakesRead(TakesRead {
             sequence: guide.sequence.clone(),
             clips: guide.clips.clone(),
-            best: done["best"]
-                .as_u64()
-                .and_then(|best| u32::try_from(best).ok()),
-            says: done["says"].as_str().unwrap_or_default().to_owned(),
+            best: done.best,
+            says: done.says,
             media: id.to_owned(),
             revision,
             takes: readings.len(),
