@@ -3941,6 +3941,7 @@ dependencies = [
 name = "kerf-protocol"
 version = "0.1.5"
 dependencies = [
+ "kerf-model",
  "serde",
  "serde_json",
 ]

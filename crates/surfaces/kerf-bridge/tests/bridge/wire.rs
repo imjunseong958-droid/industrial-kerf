@@ -15,6 +15,7 @@ use kerf_bridge::event::{
     ViewParamDef,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
+use kerf_model::{Content, Param, Rgba, Time, Value};
 use proptest::collection::{btree_map, vec};
 use proptest::option;
 use proptest::prelude::*;
@@ -111,6 +112,93 @@ proptest! {
         prop_assert_eq!(&read, &command);
         prop_assert_eq!(serde_json::to_string(&read).unwrap(), written);
     }
+
+    /// The editor draws and inspects a keyed parameter at the playhead from the timeline view
+    /// alone, so what it reads there is what kerfd's model renders: on each key, and between.
+    #[test]
+    fn a_keyed_parameter_reads_at_any_moment_as_the_model_works_it_out(
+        opacity in vec((1i64..20, 0u8..=100, interp()), 1..6),
+        fill in vec((1i64..20, any::<[u8; 3]>(), interp()), 1..6),
+        between in vec(-0.5f64..8.0, 0..12),
+    ) {
+        let spaced = |keys: Vec<(i64, String)>| {
+            let mut frame = 0;
+            keys.into_iter()
+                .map(|(gap, key)| {
+                    let at = format!("{frame}f:{key}");
+                    frame += gap;
+                    at
+                })
+                .collect::<Vec<_>>()
+        };
+        let opacity = spaced(
+            opacity
+                .into_iter()
+                .map(|(gap, level, interp)| (gap, format!("{}:{interp}", f64::from(level) / 100.0)))
+                .collect(),
+        );
+        let fill = spaced(
+            fill.into_iter()
+                .map(|(gap, [r, g, b], interp)| (gap, format!("#{r:02x}{g:02x}{b:02x}:{interp}")))
+                .collect(),
+        );
+        let document = format!(
+            "kerf 1\nproject name=\"Keys\"\nsequence s1 rate=30 size=64x36\n  track V1 video\n    \
+             clip g1 gen=shape@1 at=0f dur=240f\n      set opacity={{{}}} fill={{{}}}\n",
+            opacity.join(" "),
+            fill.join(" "),
+        );
+        let project = kerf_runtime::parse_document(&document).expect("a document");
+        let model = project.clip("g1").expect("its clip");
+        let Content::Generator { params, .. } = &model.content else {
+            panic!("not a generator");
+        };
+        let view = kerf_runtime::proposal_timeline_view(&document, "").expect("its view");
+        let shown = &view.tracks[0].clips[0];
+        for (name, param) in [("opacity", &model.props["opacity"]), ("fill", &params["fill"])] {
+            let Param::Animated(keys) = param else {
+                panic!("{name} is not keyed");
+            };
+            let times = keys
+                .iter()
+                .map(|key| key.at)
+                .chain(between.iter().filter_map(|seconds| Time::from_seconds(*seconds)));
+            for at in times {
+                let read = shown.props[name].value_at(at.seconds());
+                match param.value_at(at) {
+                    Value::Number(number) => {
+                        let read = read.as_f64().expect("a number");
+                        prop_assert!((read - number).abs() < 1e-9, "{name} at {at:?}: {read} for {number}");
+                    }
+                    Value::Color(color) => {
+                        let read = read.as_str().and_then(Rgba::parse).expect("a color");
+                        let apart = [read.r.abs_diff(color.r), read.g.abs_diff(color.g),
+                            read.b.abs_diff(color.b), read.a.abs_diff(color.a)];
+                        // A channel halfway between two may round either way.
+                        prop_assert!(apart.iter().all(|apart| *apart <= 1), "{name} at {at:?}: {read} for {color}");
+                    }
+                    other => panic!("{name} came to {other:?}"),
+                }
+            }
+        }
+    }
+}
+
+/// How a keyframe eases to the next, as a document writes it: by name, or a curve's handles.
+fn interp() -> impl Strategy<Value = String> {
+    prop_oneof![
+        select(vec!["linear", "hold", "ease-in", "ease-out", "ease"]).prop_map(str::to_owned),
+        (0u8..=100, -100i16..=200, 0u8..=100, -100i16..=200).prop_map(|(x1, y1, x2, y2)| {
+            let unit = |value: f64| value / 100.0;
+            format!(
+                "{},{},{},{}",
+                unit(f64::from(x1)),
+                unit(f64::from(y1)),
+                unit(f64::from(x2)),
+                unit(f64::from(y2))
+            )
+        }),
+    ]
 }
 
 /// Seconds, levels and progress: whole ones, which stay floats, and any other finite one.

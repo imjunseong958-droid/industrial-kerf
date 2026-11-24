@@ -7,6 +7,8 @@ publish.workspace = true
 description = "What kerfd and its clients say to each other: requests, answers, states, and the names in them"
 
 [dependencies]
+# A keyframe's interp is the model's own, so a client eases it as kerfd does.
+kerf-model = { path = "../kerf-model" }
 serde = { workspace = true, features = ["derive"] }
 # Times and positions cross as JSON numbers, and read back as they were written.
 serde_json = { workspace = true, features = ["float_roundtrip"] }

@@ -9,8 +9,9 @@ use crate::{
     analysis, emit, error, key, looks, media, paperwork, presets, queue, recipes, takes, tracks,
     workflows, Command, Event, MediaProject, Shared,
 };
-use kerf_mcp::KerfMcpRouter;
+use kerf_mcp::{KerfMcpRouter, PresetInspection, ToolError};
 use kerf_runtime::{RuntimeClient, StateSnapshot};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -248,6 +249,14 @@ struct Answer {
     then: Option<Event>,
     /// The command a refusal of it names; with none, a refusal is a plain error.
     refusal: Option<&'static str>,
+}
+
+/// What kerf-mcp's `edit` says of the preset it staged, as much as the editor is told.
+#[derive(Deserialize)]
+struct Staged {
+    /// The proposal it staged.
+    #[serde(default)]
+    proposal: Option<String>,
 }
 
 impl Worker {
@@ -663,19 +672,12 @@ impl Worker {
         match KerfMcpRouter::new(&self.directory, Some(&self.binary)) {
             Ok(router) => {
                 crate::tools::begin_on_drawers(&router, &self.shared);
-                let mut response = router.call("look", json!({"preset":path}));
-                if response["ok"] == true {
-                    match serde_json::from_value(response["result"].take()) {
-                        Ok(preset) => emit(&self.tx, Event::PresetInspect { path, preset }),
-                        Err(why) => error(&self.tx, format!("cannot read preset: {why}")),
+                match router.call_as::<PresetInspection>("look", json!({"preset":path})) {
+                    Ok(preset) => emit(&self.tx, Event::PresetInspect { path, preset }),
+                    Err(ToolError::Refused(refusal)) => error(&self.tx, refusal.message),
+                    Err(ToolError::Unread(why)) => {
+                        error(&self.tx, format!("cannot read preset: {why}"));
                     }
-                } else {
-                    error(
-                        &self.tx,
-                        response["error"]["message"]
-                            .as_str()
-                            .unwrap_or("cannot read preset"),
-                    );
                 }
             }
             Err(message) => error(&self.tx, message),
@@ -697,25 +699,21 @@ impl Worker {
                 match KerfMcpRouter::new(&self.directory, Some(&self.binary)) {
                     Ok(router) => {
                         crate::tools::begin_on_drawers(&router, &self.shared);
-                        let response = router.call(
+                        match router.call_as::<Staged>(
                             "edit",
                             json!({"preset":path,"bindings":bindings,"texts":texts}),
-                        );
-                        if response["ok"] == true {
-                            emit(
+                        ) {
+                            Ok(staged) => emit(
                                 &self.tx,
                                 Event::PresetApplied {
                                     path,
-                                    proposal: response["result"]["proposal"].clone(),
+                                    proposal: staged.proposal.into(),
                                 },
-                            );
-                        } else {
-                            error(
-                                &self.tx,
-                                response["error"]["message"]
-                                    .as_str()
-                                    .unwrap_or("cannot apply preset"),
-                            );
+                            ),
+                            Err(ToolError::Refused(refusal)) => error(&self.tx, refusal.message),
+                            Err(ToolError::Unread(why)) => {
+                                error(&self.tx, format!("cannot apply preset: {why}"));
+                            }
                         }
                     }
                     Err(message) => error(&self.tx, message),

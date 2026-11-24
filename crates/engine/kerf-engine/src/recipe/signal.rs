@@ -26,10 +26,11 @@
 //! the model makes; Kerf does not know how a model reads one.
 
 use kerf_model::{Content, Project, Value, SIGNAL, SIGNAL_VALUE};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-/// A signal as a model is handed it.
-#[derive(Clone, Debug, PartialEq)]
+/// A signal as a model is handed it, and as a request holds it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Signal {
     /// The clip it is, by its id.
     pub name: String,
@@ -91,20 +92,12 @@ impl Signal {
             .then_some(first)
     }
 
-    /// As a request holds it.
-    pub(crate) fn asked(&self) -> serde_json::Value {
-        serde_json::json!({
-            "name": self.name,
-            "rate": self.rate,
-            "values": self.values,
-        })
-    }
-
-    /// A hash of what a model is handed of it: a take is held to that, and
-    /// not to the rest of the sequence the clip is in.
+    /// A hash of what a model is handed of it, as the request writes it: a take is held to
+    /// that, and not to the rest of the sequence the clip is in.
     pub(crate) fn hash(&self) -> String {
         let mut hasher = Sha256::new();
-        hasher.update(self.asked().to_string());
+        let asked = serde_json::to_value(self).expect("a name and numbers serialize");
+        hasher.update(asked.to_string());
         hex::encode(hasher.finalize())
     }
 }
