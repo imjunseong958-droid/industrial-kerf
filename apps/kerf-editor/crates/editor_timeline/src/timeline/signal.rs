@@ -7,7 +7,7 @@ use super::canvas::Pen;
 use super::drag::Gesture;
 use super::lane_ink;
 use super::TimelineView;
-use editor_state::model;
+use editor_state::model::{self, EditParam};
 use editor_ui::theme;
 use gpui::{fill, px, Context, PathBuilder, Window};
 use serde_json::json;
@@ -166,7 +166,8 @@ impl TimelineView {
         let keys = model::signal_keys(&draw.drawn, SIGNAL_WITHIN);
         let revision = self.session.read(cx).revision();
         let sent = self.session.update(cx, |session, cx| {
-            let op = json!({"op": "set", "clip": draw.clip, "props": {"value": {"keys": keys}}});
+            let op =
+                json!({"op": "set", "clip": draw.clip, "props": {"value": EditParam::Keyed(keys)}});
             let sent = session.edit(vec![op]);
             cx.notify();
             sent

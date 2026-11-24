@@ -8,7 +8,7 @@ use super::clip::{held, same_value, Field, Inspected};
 use super::sections::LABEL;
 use super::values::{humanize, parse_hex, swatch_color};
 use super::{field_frame, InspectorView};
-use editor_state::model::ViewParam;
+use editor_state::model::{EditParam, ViewParam};
 use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::{self, height, radius, space, text};
 use editor_ui::ui;
@@ -229,7 +229,7 @@ impl InspectorView {
         if let Some(entry) = self.texts.get_mut(field) {
             entry.sent = Some(value.clone());
         }
-        self.set_param(&clip.id, field, json!(value), cx);
+        self.set_param(&clip.id, field, EditParam::Value(json!(value)), cx);
     }
 
     fn revert_text(&mut self, field: &Field, cx: &mut Context<Self>) {
@@ -311,7 +311,7 @@ impl InspectorView {
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                     this.palette = None;
                     if !selected {
-                        this.set_param(&clip_id, &key, json!(choice), cx);
+                        this.set_param(&clip_id, &key, EditParam::Value(json!(choice)), cx);
                     }
                     cx.notify();
                 }))

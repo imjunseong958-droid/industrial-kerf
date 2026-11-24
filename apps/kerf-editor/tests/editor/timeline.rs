@@ -2,8 +2,8 @@
 
 use kerf_editor::model::{
     default_targets, proposal_changes, signal_keys, source_targets, toggle_target, ClipShow,
-    GainKey, Interp, Proposal, ProposalBand, ProposalStatus, ProposalVersion, Snapshot,
-    SnapshotShow, Timeline, TimelineShow, TrackKind, TrackShow,
+    EditKey, EditParam, GainKey, Interp, Proposal, ProposalBand, ProposalStatus, ProposalVersion,
+    Snapshot, SnapshotShow, Timeline, TimelineShow, TrackKind, TrackShow,
 };
 use kerf_editor::prefs::TrackHeights;
 use kerf_editor::store::MediaActivity;
@@ -107,25 +107,69 @@ proptest! {
             .collect();
         let keys = signal_keys(&drawn, 0.02);
         prop_assert!(!keys.is_empty() && keys.len() <= drawn.len());
-        let frames: Vec<i64> = keys.iter().map(|key| key["at"].as_i64().unwrap()).collect();
+        let frames: Vec<i64> = keys.iter().map(|key| key.at).collect();
         prop_assert_eq!(frames[0], start);
         prop_assert_eq!(*frames.last().unwrap(), start + values.len() as i64 - 1);
         prop_assert!(frames.windows(2).all(|pair| pair[0] < pair[1]));
         for key in &keys {
-            prop_assert_eq!(key["interp"].as_str(), Some("linear"));
+            prop_assert_eq!(key.interp, Interp::Linear);
         }
         for (frame, value) in &drawn {
             let after = frames.iter().position(|kept| kept >= frame).unwrap();
             let line = if frames[after] == *frame || after == 0 {
-                keys[after]["value"].as_f64().unwrap()
+                keys[after].value.as_f64().unwrap()
             } else {
                 let (a, b) = (&keys[after - 1], &keys[after]);
                 let (fa, fb) = (frames[after - 1] as f64, frames[after] as f64);
-                let (va, vb) = (a["value"].as_f64().unwrap(), b["value"].as_f64().unwrap());
+                let (va, vb) = (a.value.as_f64().unwrap(), b.value.as_f64().unwrap());
                 va + (vb - va) * (*frame as f64 - fa) / (fb - fa)
             };
             prop_assert!((line - value).abs() <= 0.02 + 0.002, "{frame}: {line} vs {value}");
         }
+    }
+
+    /// The editor's build keeps an object's fields in the order they were put in, so it sends
+    /// typed keys as it wrote them by hand before they were typed (`at`, `value`, `interp`),
+    /// and a value it reads from text, its fields in whatever order, writes that text again.
+    #[test]
+    fn keys_go_out_as_the_editor_wrote_them(
+        keys in prop::collection::vec(
+            (any::<i64>(), -60.0f64..12.0, prop::sample::select(Interp::ALL.to_vec())),
+            0..6,
+        ),
+        order in Just(vec!["at", "value", "interp"]).prop_shuffle(),
+    ) {
+        let typed = EditParam::Keyed(
+            keys.iter()
+                .map(|(at, value, interp)| EditKey { at: *at, value: json!(value), interp: *interp })
+                .collect(),
+        );
+        let by_hand: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|(at, value, interp)| json!({"at": at, "value": value, "interp": interp.name()}))
+            .collect();
+        prop_assert_eq!(
+            serde_json::to_string(&typed).unwrap(),
+            serde_json::to_string(&json!({ "keys": by_hand })).unwrap()
+        );
+        let shuffled: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|(at, value, interp)| {
+                let mut key = serde_json::Map::new();
+                for field in &order {
+                    let written = match *field {
+                        "at" => json!(at),
+                        "value" => json!(value),
+                        _ => json!(interp.name()),
+                    };
+                    key.insert((*field).to_owned(), written);
+                }
+                serde_json::Value::Object(key)
+            })
+            .collect();
+        let text = serde_json::to_string(&json!({ "keys": shuffled })).unwrap();
+        let read: EditParam = serde_json::from_str(&text).unwrap();
+        prop_assert_eq!(serde_json::to_string(&read).unwrap(), text);
     }
 
     /// The rubber band's height and the gain it reads are one another's.

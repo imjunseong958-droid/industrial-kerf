@@ -12,6 +12,8 @@
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
+pub use kerf_bridge::{EditKey, EditParam};
+
 pub use kerf_bridge::event::{
     Author, Conversation, ConversationAsk as Ask, ConversationItem as Turn, ConversationSummary,
     Interp, ProjectionStatus, ProposalEntry as Proposal, ProposalFreshness, ProposalStatus,
@@ -764,19 +766,17 @@ pub fn focus_time(text: &str, fps: f64, start: f64) -> Option<f64> {
 /// Keys for a number drawn by hand, a value 0..1 at each frame: the first
 /// frame, the last, and between them only the frames where the line from
 /// the last key kept would pass a frame between by more than `within`.
-/// Each `{at: frame, value, interp: linear}`, values to three places.
-pub fn signal_keys(drawn: &BTreeMap<i64, f64>, within: f64) -> Vec<Value> {
+/// Each linear, its value to three places.
+pub fn signal_keys(drawn: &BTreeMap<i64, f64>, within: f64) -> Vec<EditKey> {
     let frames: Vec<i64> = drawn.keys().copied().collect();
     let Some(&first) = frames.first() else {
         return Vec::new();
     };
     let value = |frame: i64| drawn.get(&frame).copied().unwrap_or(0.0);
-    let key = |frame: i64| {
-        json!({
-            "at": frame,
-            "value": (value(frame) * 1000.0).round() / 1000.0,
-            "interp": "linear",
-        })
+    let key = |frame: i64| EditKey {
+        at: frame,
+        value: json!((value(frame) * 1000.0).round() / 1000.0),
+        interp: Interp::Linear,
     };
     let mut keys = vec![key(first)];
     let mut kept = 0;

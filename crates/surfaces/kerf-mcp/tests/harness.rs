@@ -3777,6 +3777,16 @@ fn what_a_pending_proposal_holds_is_pointed_to() {
         revising.contains(&id) && revising.contains("`extend`"),
         "{revising}"
     );
+    // Nor does an `extend` said as `null` build on it.
+    let unsaid = message(&error(
+        &router,
+        "edit",
+        json!({"script": "set later opacity=0.5", "extend": null}),
+    ));
+    assert!(
+        unsaid.contains(&id) && unsaid.contains("`extend`"),
+        "{unsaid}"
+    );
     // With `extend` the same line goes through.
     let extended = ok(
         &router,

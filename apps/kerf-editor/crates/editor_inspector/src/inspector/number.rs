@@ -6,6 +6,7 @@ use super::catalog::Param;
 use super::clip::{Field, Inspected, Target};
 use super::values::{decimals, format_number, parse_number, round_to, soft_range, unit_suffix};
 use super::{field_frame, InspectorView};
+use editor_state::model::EditParam;
 use editor_ui::theme::{self, height, radius, space, text};
 use gpui::{
     canvas, div, prelude::*, px, relative, AnyElement, Context, CursorStyle, DispatchPhase,
@@ -83,7 +84,7 @@ pub(super) struct Pending {
 
 impl InspectorView {
     fn send_number(&mut self, clip: &str, field: &Field, value: f64, cx: &mut Context<Self>) {
-        self.set_param(clip, field, json!(value), cx);
+        self.set_param(clip, field, EditParam::Value(json!(value)), cx);
         self.pending = Some(Pending {
             field: field.clone(),
             value,

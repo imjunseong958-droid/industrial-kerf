@@ -6,10 +6,6 @@
 //! proposal for the user, which carries the client's name, as `initialize`
 //! gave it, as its author.
 
-// The schema of `look` is one `json!`, which expands a level for each of its options, and
-// has more of them than the 128 levels a crate is given.
-#![recursion_limit = "256"]
-
 mod brand;
 mod camera_file;
 mod cuts;

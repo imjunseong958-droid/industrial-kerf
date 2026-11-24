@@ -4,7 +4,9 @@
 //! as an edit script or as typed operations from the editor, and is
 //! journaled as the script of the operations it ran.
 
-use crate::{EditOp, ErrorCode, GeneratorSpec, MaskOutline, RateSpec, RuntimeError, TrimSide};
+use crate::{
+    EditOp, EditParam, ErrorCode, GeneratorSpec, MaskOutline, RateSpec, RuntimeError, TrimSide,
+};
 use kerf_engine::ProbeInfo;
 use kerf_lang::{
     apply_script_with, bring_forward, parse_document, print_document, print_ops, Breaks, Facts,
@@ -920,10 +922,10 @@ fn mask_mode(mode: &Option<String>) -> Result<Option<MaskMode>, RuntimeError> {
         .transpose()
 }
 
-/// A mask's properties from JSON, as `fx_params` reads an effect's.
+/// A mask's properties, as `fx_params` reads an effect's.
 /// Keyframes count frames of `rate`, the rate of the clip's sequence.
 fn mask_params(
-    params: &BTreeMap<String, Json>,
+    params: &BTreeMap<String, EditParam>,
     rate: Option<Rate>,
 ) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
     params
@@ -1276,7 +1278,7 @@ fn lower_extract(project: &Project, clips: &[String]) -> Result<Op, RuntimeError
 fn lower_set(
     project: &Project,
     clip: &str,
-    props: &BTreeMap<String, Json>,
+    props: &BTreeMap<String, EditParam>,
     name: &Option<String>,
 ) -> Result<Op, RuntimeError> {
     let at = project
@@ -1321,7 +1323,7 @@ fn lower_fx_add(
     project: &Project,
     clip: &str,
     fx: &str,
-    params: &BTreeMap<String, Json>,
+    params: &BTreeMap<String, EditParam>,
     index: Option<usize>,
 ) -> Result<Op, RuntimeError> {
     let def = catalog()
@@ -1349,7 +1351,7 @@ fn lower_fx_set(
     clip: &str,
     index: usize,
     enabled: Option<bool>,
-    params: &BTreeMap<String, Json>,
+    params: &BTreeMap<String, EditParam>,
 ) -> Result<Op, RuntimeError> {
     let effect = project
         .clip(clip)
@@ -1375,7 +1377,7 @@ fn new_mask(
     shape: MaskShape,
     mode: &Option<String>,
     inverted: Option<bool>,
-    params: &BTreeMap<String, Json>,
+    params: &BTreeMap<String, EditParam>,
 ) -> Result<Mask, RuntimeError> {
     Ok(Mask {
         name,
@@ -1672,12 +1674,12 @@ fn lower_set_sequence(
     })
 }
 
-/// An effect's parameters from JSON: a static value or keyframes each (see
-/// `json_param`), or `None` (for `null`) to restore the default.
+/// An effect's parameters: a static value or keyframes each (see
+/// `edit_param`), or `None` (for `null`) to restore the default.
 /// Keyframes count frames of `rate`, the rate of the clip's sequence.
 fn fx_params(
     def: &FxDef,
-    params: &BTreeMap<String, Json>,
+    params: &BTreeMap<String, EditParam>,
     rate: Option<Rate>,
 ) -> Result<Vec<(String, Option<Param>)>, RuntimeError> {
     params
@@ -1701,20 +1703,20 @@ fn fx_params(
 fn param_value(
     name: &str,
     def: &ParamDef,
-    value: &Json,
+    value: &EditParam,
     rate: Option<Rate>,
 ) -> Result<Option<Param>, RuntimeError> {
-    if value.is_null() {
+    if value.is_default() {
         return Ok(None);
     }
-    let keyed = value.get("keys").is_some();
+    let keyed = value.is_keyed();
     if keyed && !def.animatable {
         return Err(invalid(format!("`{name}` cannot be animated")));
     }
     let param = match rate {
-        Some(rate) => json_param(&def.ty, value, rate),
+        Some(rate) => edit_param(&def.ty, value, rate),
         None if keyed => return Err(invalid("keyframes need a clip to count frames on")),
-        None => json_value(&def.ty, value).map(Param::Static),
+        None => static_param(&def.ty, value),
     };
     param.map(Some).ok_or_else(|| {
         invalid(if keyed {
@@ -1759,36 +1761,28 @@ fn sound_keyframes(
 /// clip, and far inside what a time holds.
 const MAX_KEY_FRAMES: i64 = 1 << 30;
 
-/// A parameter from JSON of type `ty`: a static value, or keyframes as
-/// `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}`. `at` counts
+/// A parameter of type `ty` from an [`EditParam`]: a static value, or its
+/// keys, however they are written ([`EditParam::keys`]). A key's `at` counts
 /// whole frames of `rate` (the clip's sequence) from the clip's first frame,
-/// as the model keeps keyframes clip-relative; `interp` is `linear` (the
-/// default), `hold`, `ease`, `ease-in`, `ease-out` or a curve's four numbers
-/// (`0.25,0.1,0.75,0.9`), and says how the value moves toward the next key. Keys are put in time order; two at one frame
-/// are refused when the edit is checked. `None` for anything else.
-pub(crate) fn json_param(ty: &ParamType, value: &Json, rate: Rate) -> Option<Param> {
-    let Some(keys) = value.as_object().and_then(|object| object.get("keys")) else {
-        return json_value(ty, value).map(Param::Static);
-    };
-    if value.as_object().is_some_and(|object| object.len() != 1) {
-        return None;
+/// as the model keeps keyframes clip-relative, up to [`MAX_KEY_FRAMES`]
+/// either way; its `interp` says how the value moves toward the next key.
+/// Keys are put in time order; two at one frame are refused when the edit
+/// is checked. `None` for anything else.
+fn edit_param(ty: &ParamType, value: &EditParam, rate: Rate) -> Option<Param> {
+    if !value.is_keyed() {
+        return static_param(ty, value);
     }
-    let mut keys = keys
-        .as_array()?
+    let mut keys = value
+        .keys()?
         .iter()
         .map(|key| {
-            let key = key.as_object()?;
-            let at = key.get("at").and_then(whole_frames)?;
-            let value = json_value(ty, key.get("value")?)?;
-            let interp = match key.get("interp") {
-                None | Some(Json::Null) => Interp::Linear,
-                Some(Json::String(name)) => Interp::parse(name)?,
-                Some(_) => return None,
-            };
+            if key.at.unsigned_abs() > MAX_KEY_FRAMES.unsigned_abs() {
+                return None;
+            }
             Some(Keyframe {
-                at: rate.time_of(at),
-                value,
-                interp,
+                at: rate.time_of(key.at),
+                value: json_value(ty, &key.value)?,
+                interp: key.interp,
             })
         })
         .collect::<Option<Vec<_>>>()?;
@@ -1799,19 +1793,12 @@ pub(crate) fn json_param(ty: &ParamType, value: &Json, rate: Rate) -> Option<Par
     Some(Param::Animated(keys))
 }
 
-/// A whole number of frames, within [`MAX_KEY_FRAMES`] either way.
-fn whole_frames(value: &Json) -> Option<i64> {
-    let frames = match value.as_i64() {
-        Some(frames) => frames,
-        None => {
-            let frames = value.as_f64()?;
-            if frames.fract() != 0.0 || frames.abs() > MAX_KEY_FRAMES as f64 {
-                return None;
-            }
-            frames as i64
-        }
-    };
-    (frames.abs() <= MAX_KEY_FRAMES).then_some(frames)
+/// One value of type `ty` throughout.
+fn static_param(ty: &ParamType, value: &EditParam) -> Option<Param> {
+    match value {
+        EditParam::Value(value) => json_value(ty, value).map(Param::Static),
+        EditParam::Default | EditParam::Keyed(_) => None,
+    }
 }
 
 fn json_value(ty: &ParamType, value: &Json) -> Option<Value> {

@@ -8,7 +8,8 @@
 //! A [`RuntimeRequest`] asks, in a [`RequestEnvelope`]; a [`RuntimeResponse`] or a
 //! [`RuntimeError`] answers. What a client is shown of the project is a [`StateSnapshot`],
 //! with its [`TimelineView`] and its proposals; what an editor's gesture changes is an
-//! [`EditOp`]. The values kerfd writes as names ([`ErrorCode`], the statuses, a render's
+//! [`EditOp`]. A parameter's value is a [`ViewParam`] as a view shows it, and an
+//! [`EditParam`] as an op sets it. The values kerfd writes as names ([`ErrorCode`], the statuses, a render's
 //! quality and codec, an author's kind) are enums that keep a name this build does not know.
 
 mod author;
@@ -22,9 +23,9 @@ mod status;
 mod view;
 
 pub use author::{Author, AuthorKind};
-pub use edit::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
+pub use edit::{EditKey, EditOp, EditParam, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
 pub use error::{ErrorCode, RuntimeError};
-/// A keyframe's ease ([`ViewKey::interp`]), the model's own.
+/// A keyframe's ease ([`ViewKey::interp`], [`EditKey::interp`]), the model's own.
 pub use kerf_model::Interp;
 pub use named::Unnamed;
 pub use render::{RenderJob, RenderRange, StartRenderOptions, MAX_RENDER_RANGE_SECONDS};

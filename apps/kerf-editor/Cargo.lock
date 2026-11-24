@@ -3932,6 +3932,7 @@ dependencies = [
  "kerf-track",
  "libc",
  "log",
+ "schemars",
  "serde",
  "serde_json",
 ]

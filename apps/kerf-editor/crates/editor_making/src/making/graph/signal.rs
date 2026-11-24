@@ -8,6 +8,7 @@ use super::inspector::note;
 use super::paint::{paint_line, paint_ring, paint_under};
 use super::{MenuKind, ShotGraph};
 use crate::making::{GraphNode, Holds};
+use editor_state::model::{EditKey, EditParam, Interp};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, radius};
 use editor_ui::ui;
@@ -17,7 +18,7 @@ use gpui::{
 };
 use kerf_bridge::event::graph::What;
 use kerf_bridge::Command;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::BTreeMap;
 
 /// A signal's curve, drawn to be drawn on.
@@ -112,9 +113,13 @@ pub fn draw_signal(
 /// key where a straight line from the last key to the next frame would miss
 /// a frame between by more than `within`; and its last frame. Each is
 /// linear, its value to a thousandth.
-pub fn signal_keys(drawn: &BTreeMap<usize, f64>, within: f64) -> Vec<Value> {
+pub fn signal_keys(drawn: &BTreeMap<usize, f64>, within: f64) -> Vec<EditKey> {
     let frames: Vec<(usize, f64)> = drawn.iter().map(|(at, value)| (*at, *value)).collect();
-    let key = |(at, value): (usize, f64)| json!({"at": at, "value": (value * 1000.0).round() / 1000.0, "interp": "linear"});
+    let key = |(at, value): (usize, f64)| EditKey {
+        at: at as i64,
+        value: json!((value * 1000.0).round() / 1000.0),
+        interp: Interp::Linear,
+    };
     let Some(first) = frames.first() else {
         return Vec::new();
     };
@@ -185,7 +190,8 @@ impl ShotGraph {
             return;
         }
         let keys = signal_keys(&drawing.drawn, CURVE_WITHIN);
-        let op = json!({"op": "set", "clip": drawing.clip, "props": {"value": {"keys": keys}}});
+        let op =
+            json!({"op": "set", "clip": drawing.clip, "props": {"value": EditParam::Keyed(keys)}});
         self.session.update(cx, |session, cx| {
             session.edit(vec![op]);
             cx.notify();
