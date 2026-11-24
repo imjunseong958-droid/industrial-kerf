@@ -22,12 +22,11 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     groups:
-      # kerf-text parses a font with skrifa and shapes it with harfrust, handing
-      # the one's FontRef to the other, and both take that type from read-fonts.
-      # So the three move together, or kerf-text does not build: skrifa 0.50 on
-      # its own brought a read-fonts harfrust 0.12 does not take. A group takes a
-      # crate only when no group before it has, so this one comes first, and a
-      # patch of theirs comes here too.
+      # kerf-text parses a font with skrifa and shapes it with harfrust, and both
+      # read it through read-fonts. So the three move together, or the build
+      # carries two copies of read-fonts. A group takes a crate only when no
+      # group before it has, so this one comes first, and a patch of theirs
+      # comes here too.
       workspace-fonts:
         applies-to: version-updates
         patterns: ["skrifa", "harfrust", "read-fonts"]
