@@ -13,8 +13,8 @@
 //! left out, and the rest of it still reads. A parameter's value is a
 //! [`ViewParam`]: a static value, or [`ViewKey`]s when animated. Each key has
 //! its clip-relative `at` in seconds, the same offset as a whole `frame` on
-//! the sequence rate (what a typed op's `{"keys": [...]}` takes back), its
-//! `value` and its `interp`. A value itself stays JSON (a number, a bool, a
+//! the sequence rate (what an [`EditKey`](crate::EditKey)'s `at` takes back),
+//! its `value` and its `interp`. A value itself stays JSON (a number, a bool, a
 //! text, or a color as `#rrggbb[aa]`): which it is, its definition's `type`
 //! says. An expression shows as what it gives at the clip's first frame.
 //! Anything absent is at its default.

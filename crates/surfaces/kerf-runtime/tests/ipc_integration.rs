@@ -4,10 +4,16 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    response_value, EndpointAddress, ErrorCode, ProjectionStatus, RenderCodec, RenderQuality,
-    RuntimeClient, RuntimeError, RuntimeLease, StartRenderOptions, StateSnapshot,
-    MAX_REQUEST_BYTES,
+    response_value, EditKey, EditParam, EndpointAddress, ErrorCode, Interp, ProjectionStatus,
+    RenderCodec, RenderQuality, RuntimeClient, RuntimeError, RuntimeLease, StartRenderOptions,
+    StateSnapshot, MAX_REQUEST_BYTES,
 };
+use proptest::collection::{btree_map, vec};
+use proptest::prelude::*;
+use proptest::sample::select;
+use proptest::test_runner::{Config, TestRunner};
+use serde_json::{json, Value as Json};
+use std::cell::Cell;
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(unix)]
@@ -296,6 +302,209 @@ fn an_operation_kerfd_has_no_name_for_is_told_by_its_name() {
     assert_eq!(client.get_state().unwrap().revision, 0);
     stop_daemon(daemon);
     let _ = fs::remove_dir_all(&directory);
+}
+
+/// How a client wrote a key that kerfd also reads: `at` as a float, a linear key's `interp`
+/// left out or `null`, its `frame` beside it, its fields the other way round, a curve's
+/// numbers written longer.
+#[derive(Clone, Debug)]
+struct Loosely {
+    float_at: bool,
+    linear: Option<Json>,
+    frame_beside: bool,
+    backwards: bool,
+    longer_curve: bool,
+}
+
+fn loosely() -> impl Strategy<Value = Loosely> {
+    (
+        any::<bool>(),
+        select(vec![Some(json!("linear")), None, Some(Json::Null)]),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+    )
+        .prop_map(
+            |(float_at, linear, frame_beside, backwards, longer_curve)| Loosely {
+                float_at,
+                linear,
+                frame_beside,
+                backwards,
+                longer_curve,
+            },
+        )
+}
+
+/// `keys` as `{"keys": [...]}`, each written as `how` says.
+fn written_loosely(keys: &[EditKey], how: &[Loosely]) -> Json {
+    let keys: Vec<Json> = keys
+        .iter()
+        .zip(how)
+        .map(|(key, how)| {
+            let at = if how.float_at {
+                json!(key.at as f64)
+            } else {
+                json!(key.at)
+            };
+            let interp = match key.interp {
+                Interp::Linear => how.linear.clone(),
+                Interp::Bezier(_) if how.longer_curve => {
+                    let name = key.interp.name();
+                    let longer: Vec<String> = name
+                        .split(',')
+                        .map(|number| match number.contains('.') {
+                            true => format!("{number}0"),
+                            false => format!("{number}.0"),
+                        })
+                        .collect();
+                    Some(json!(longer.join(",")))
+                }
+                interp => Some(json!(interp.name())),
+            };
+            let mut fields = vec![
+                ("at", Some(at)),
+                ("value", Some(key.value.clone())),
+                ("interp", interp),
+                ("frame", how.frame_beside.then(|| json!(key.at))),
+            ];
+            if how.backwards {
+                fields.reverse();
+            }
+            Json::Object(
+                fields
+                    .into_iter()
+                    .filter_map(|(name, field)| field.map(|field| (name.to_owned(), field)))
+                    .collect(),
+            )
+        })
+        .collect();
+    json!({ "keys": keys })
+}
+
+/// Keys an older client wrote in the looser ways kerfd has always read make the keyframes
+/// the same keys make written as `EditKey`s write themselves; what it never read is refused,
+/// as it always was.
+#[test]
+fn keys_written_loosely_make_what_typed_keys_make() {
+    let project = Project::new("loose-keys");
+    fs::write(
+        project.0.join("project.kerf"),
+        "kerf 1\nproject name=\"Keys\"\n\
+         media m1 path=\"/media/a.mov\" rate=24 dur=96f video=320x180\n\
+         sequence s1 rate=24 size=320x180 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip typed media=m1 src=0f at=0f dur=96f\n\
+         \x20 track V2 video\n\
+         \x20   clip loose media=m1 src=0f at=0f dur=96f\n\
+         \x20 track V3 video\n\
+         \x20   clip title gen=title@1 at=0f dur=96f\n",
+    )
+    .unwrap();
+    let daemon = start_daemon(&project.0);
+    let client = RuntimeClient::new(&project.0).unwrap();
+    wait_until_ready(&client);
+    let asked = Cell::new(0);
+    let ask = |ops: Json| -> Json {
+        asked.set(asked.get() + 1);
+        let request = json!({
+            "protocolVersion": 1,
+            "id": format!("keys-{}", asked.get()),
+            "operation": "apply_ops",
+            "actor": "ui",
+            "idempotencyKey": format!("keys-{}", asked.get()),
+            "baseRevision": client.get_state().unwrap().revision,
+            "ops": ops,
+        });
+        let mut socket = raw_connection(client.endpoint()).unwrap();
+        socket.write_all(format!("{request}\n").as_bytes()).unwrap();
+        #[cfg(unix)]
+        let _ = socket.shutdown(std::net::Shutdown::Write);
+        let mut response = String::new();
+        socket.read_to_string(&mut response).unwrap();
+        serde_json::from_str(response.trim()).unwrap()
+    };
+    let x_of = |clip: &str| -> Json {
+        let timeline = client.get_state().unwrap().timeline;
+        let clips = timeline["tracks"].as_array().into_iter().flatten();
+        let mut clips = clips.flat_map(|track| track["clips"].as_array().into_iter().flatten());
+        clips.find(|found| found["id"] == clip).unwrap()["props"]["x"].clone()
+    };
+    let interp = prop_oneof![
+        select(Interp::ALL.to_vec()),
+        (0u8..=100, -100i16..=200, 0u8..=100, -100i16..=200).prop_filter_map(
+            "a curve",
+            |(x1, y1, x2, y2)| {
+                let unit = |value: f64| value / 100.0;
+                Interp::parse(&format!(
+                    "{},{},{},{}",
+                    unit(f64::from(x1)),
+                    unit(f64::from(y1)),
+                    unit(f64::from(x2)),
+                    unit(f64::from(y2))
+                ))
+            }
+        ),
+    ];
+    let keys = btree_map(-48i64..144, (-10.0f64..10.0, interp), 1..6).prop_map(|keys| {
+        keys.into_iter()
+            .map(|(at, (value, interp))| EditKey {
+                at,
+                value: json!(value),
+                interp,
+            })
+            .collect::<Vec<_>>()
+    });
+    let mut runner = TestRunner::new(Config::with_cases(32));
+    let outcome = runner.run(&(keys, vec(loosely(), 6)), |(keys, how)| {
+        let loose = written_loosely(&keys, &how);
+        let response = ask(json!([
+            {"op": "set", "clip": "typed", "props": {"x": EditParam::Keyed(keys.clone())}},
+            {"op": "set", "clip": "loose", "props": {"x": loose}},
+        ]));
+        prop_assert_eq!(&response["ok"], &json!(true), "{}", response);
+        let typed = x_of("typed");
+        prop_assert_eq!(typed.as_array().map(Vec::len), Some(keys.len()));
+        prop_assert_eq!(typed, x_of("loose"), "{}", loose);
+        Ok(())
+    });
+    let keyframes = "`x` keyframes are {\"keys\": [{\"at\": <frame>, \"value\": <number>, \
+        \"interp\": linear|hold|ease-in|ease-out|ease}]}, at least one, at whole frames";
+    let key = json!({"at": 0, "value": 0.5, "interp": "linear"});
+    let refused = [
+        (json!({"keys": [{"at": 24.5, "value": 0.5}]}), keyframes),
+        (json!({"keys": [{"at": "1s", "value": 0.5}]}), keyframes),
+        (
+            json!({"keys": [{"at": 1_073_741_825, "value": 0.5}]}),
+            keyframes,
+        ),
+        (json!({"keys": [{"at": i64::MIN, "value": 0.5}]}), keyframes),
+        (json!({"keys": [{"value": 0.5}]}), keyframes),
+        (json!({"keys": [{"at": 0}]}), keyframes),
+        (json!({"keys": [{"at": 0, "value": null}]}), keyframes),
+        (json!({"keys": [{"at": 0, "value": "half"}]}), keyframes),
+        (
+            json!({"keys": [{"at": 0, "value": 0.5, "interp": 3}]}),
+            keyframes,
+        ),
+        (
+            json!({"keys": [{"at": 0, "value": 0.5, "interp": "wobble"}]}),
+            keyframes,
+        ),
+        (json!({"keys": [key, 0]}), keyframes),
+        (json!({"keys": [key], "loop": true}), keyframes),
+        (json!({"keys": key}), keyframes),
+        (json!({"keys": []}), keyframes),
+        (json!("half"), "`x` expects a number"),
+    ];
+    for (x, message) in refused {
+        let response = ask(json!([{"op": "set", "clip": "loose", "props": {"x": x}}]));
+        assert_eq!(response["error"]["code"], "INVALID_EDIT", "{x}: {response}");
+        assert_eq!(response["error"]["message"], message, "{x}");
+    }
+    let still = ask(json!([{"op": "set", "clip": "title", "props": {"weight": {"keys": [key]}}}]));
+    assert_eq!(still["error"]["message"], "`weight` cannot be animated");
+    stop_daemon(daemon);
+    outcome.unwrap();
 }
 
 #[test]

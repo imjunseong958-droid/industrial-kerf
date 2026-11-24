@@ -4,7 +4,9 @@
 //! snapshot's timeline as the bridge sends it, so that they can be held to
 //! the compositor's own numbers.
 
-use editor_state::model::{Clip, Timeline, TimelineShow, TrackKind, ViewParam};
+use editor_state::model::{
+    Clip, EditKey, EditParam, Interp, Timeline, TimelineShow, TrackKind, ViewParam,
+};
 use kerf_bridge::event::{Finding, ViewMask};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -1498,12 +1500,14 @@ pub fn start_path(timeline: &Timeline, id: &str, position: f64) -> Option<Value>
         .is_none_or(|along| along.value().is_some_and(Value::is_null))
     {
         let last = (clip.duration_frames - 1).max(1);
+        let key = |at, value| EditKey {
+            at,
+            value: json!(value),
+            interp: Interp::Linear,
+        };
         set.insert(
             "along".into(),
-            json!({"keys": [
-                {"at": 0, "value": 0.0, "interp": "linear"},
-                {"at": last, "value": 1.0, "interp": "linear"}
-            ]}),
+            json!(EditParam::Keyed(vec![key(0, 0.0), key(last, 1.0)])),
         );
     }
     Some(json!({"op": "set", "clip": id, "props": set}))
