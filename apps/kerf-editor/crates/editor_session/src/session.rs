@@ -365,7 +365,11 @@ impl Global for QuitWait {}
 /// Wait, as the app quits, for the pictures the sessions already let go were still drawing, and
 /// for the GPU one of them began to bring up. A process that exits under a thread at work in
 /// the GPU's libraries now and then dies as it ends, most of all while they load, which takes a
-/// second or two. Past [`QUIT_WAITS`] the editor quits anyway, as it always did.
+/// second or two. A render, a check or a making a session was on is cancelled as its bridge is
+/// let go, and the wait is for it to stop too: a making's program is asked to end, and has
+/// until then to take back what it asked a server for. A tool an agent was running has
+/// nothing to stop it, and is waited for to its end. Past [`QUIT_WAITS`] the editor quits
+/// anyway, as it always did.
 ///
 /// Each session calls this when the app quits, having let its bridge go. A session whose window
 /// was the last to close is gone before then, so the app calls it too. GPUI runs those hooks
@@ -382,7 +386,10 @@ pub fn settle_drawing(cx: &mut App) {
     let left = quit.until.saturating_duration_since(Instant::now());
     if !kerf_bridge::drawing_settled(left) && !quit.said {
         quit.said = true;
-        log::warn!("quitting while a picture is drawn or the GPU brought up");
+        log::warn!(
+            "quitting while a picture is drawn, the GPU brought up, a making's program ending, \
+             or an agent's tool at work"
+        );
     }
 }
 

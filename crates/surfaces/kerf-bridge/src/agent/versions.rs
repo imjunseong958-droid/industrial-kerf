@@ -41,13 +41,18 @@ pub(super) fn run_versions(
     shared: &Arc<Shared>,
 ) {
     let count = request.versions.min(MAX_VERSIONS);
+    // Counted with the agent's own thread, which waits here for them all.
     thread::scope(|scope| {
         for index in 0..count {
-            scope.spawn(move || {
-                run_version(
-                    directory, binary, request, index, count, tx, commands, shared,
-                )
-            });
+            thread::Builder::new()
+                .name("bridge:version".to_owned())
+                .spawn_scoped(scope, move || {
+                    run_version(
+                        directory, binary, request, index, count, tx, commands, shared,
+                    )
+                })
+                // As `Scope::spawn` does when the system has no thread to give.
+                .expect("failed to spawn thread");
         }
     });
 }

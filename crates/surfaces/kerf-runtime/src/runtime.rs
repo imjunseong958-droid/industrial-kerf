@@ -13,9 +13,10 @@ use crate::timeline;
 use crate::{
     validate_actor, Author, ErrorCode, MailboxMessage, PendingProposal, ProjectionStatus,
     RenderJob, RenderRange, RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions,
-    StateSnapshot, SOURCE_VERSION,
+    StateSnapshot,
 };
 use kerf_model::Project;
+use kerf_protocol::SOURCE_VERSION;
 use projection::{collab_error, merge_driver, Undo};
 use proposals::{bound_bases, freshness_at, made_on, proposal_entry};
 use std::collections::HashMap;

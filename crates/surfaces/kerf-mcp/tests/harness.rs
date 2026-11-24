@@ -817,6 +817,185 @@ fn renders_are_waited_for_or_cancelled_before_the_process_exits() {
 }
 
 #[test]
+fn a_host_is_asked_before_anything_begins_and_holds_what_it_gave_until_it_is_over() {
+    use kerf_mcp::permissions::{Mode, Permissions};
+    use kerf_mcp::{Begins, Held};
+    use std::sync::atomic::{AtomicU8, Ordering};
+    use std::sync::{Arc, Mutex};
+    let Some((directory, router)) = router() else {
+        return;
+    };
+
+    /// What the host gave: when it is let go it says how far what it was given for had
+    /// come, and whether it was let go on the thread it was given on or another.
+    struct Given {
+        what: String,
+        on: std::thread::ThreadId,
+        /// How far the render or making it was given for has come.
+        stands: Box<dyn Fn() -> String + Send>,
+        said: Arc<Mutex<Vec<String>>>,
+    }
+    impl Drop for Given {
+        fn drop(&mut self) {
+            let on = if std::thread::current().id() == self.on {
+                "on the call's thread"
+            } else {
+                "on a thread of its own"
+            };
+            let over = format!("over: {} {on}{}", self.what, (self.stands)());
+            self.said.lock().unwrap().push(over);
+        }
+    }
+    const ALL: u8 = 0;
+    const CALLS_ONLY: u8 = 1;
+    const NOTHING: u8 = 2;
+    let lets = Arc::new(AtomicU8::new(ALL));
+    let said = Arc::new(Mutex::new(Vec::<String>::new()));
+    router.draw_through({
+        let (lets, said) = (lets.clone(), said.clone());
+        // Asked of kerfd by a client of the host's own: the gate does not call the router.
+        let runtime = router.runtime().clone();
+        let take_file = directory.path().join("shots/open.takes/001.mp4");
+        move |begins| {
+            let what = match begins {
+                Begins::Call => "a call".to_owned(),
+                Begins::Render(job) => format!("render {job}"),
+                Begins::Making(media) => format!("making {media}"),
+            };
+            let let_begin = match lets.load(Ordering::SeqCst) {
+                ALL => true,
+                CALLS_ONLY => begins == Begins::Call,
+                _ => false,
+            };
+            if !let_begin {
+                said.lock().unwrap().push(format!("refused: {what}"));
+                return Err("the host is closing".to_owned());
+            }
+            said.lock().unwrap().push(format!("begins: {what}"));
+            let stands: Box<dyn Fn() -> String + Send> = match begins {
+                Begins::Call => Box::new(String::new),
+                Begins::Render(job) => {
+                    let (runtime, job) = (runtime.clone(), job.to_owned());
+                    Box::new(move || {
+                        let jobs = runtime.list_renders().unwrap();
+                        let job = jobs.iter().find(|found| found.job_id == job).unwrap();
+                        format!(", {}", job.status)
+                    })
+                }
+                Begins::Making(_) => {
+                    let take_file = take_file.clone();
+                    Box::new(move || {
+                        let made = if take_file.is_file() {
+                            "made"
+                        } else {
+                            "not made"
+                        };
+                        format!(", {made}")
+                    })
+                }
+            };
+            let given: Held = Box::new(Given {
+                what,
+                on: std::thread::current().id(),
+                stands,
+                said: said.clone(),
+            });
+            Ok(given)
+        }
+    });
+    let take = || std::mem::take(&mut *said.lock().unwrap());
+
+    // A call is asked for, and what it was given is let go when it has answered.
+    ok(&router, "look", json!({}));
+    assert_eq!(
+        take(),
+        ["begins: a call", "over: a call on the call's thread"]
+    );
+
+    // A render is asked for as well, and holds what it was given on its own thread until it
+    // has ended, after the call that started it.
+    let render = ok(&router, "render", json!({}));
+    let job = render["job"].as_str().unwrap().to_owned();
+    router.finish_renders(false);
+    let mut heard = take();
+    assert_eq!(
+        heard[..2],
+        ["begins: a call".to_owned(), format!("begins: render {job}")]
+    );
+    heard.sort();
+    assert_eq!(
+        heard[2..],
+        [
+            "over: a call on the call's thread".to_owned(),
+            format!("over: render {job} on a thread of its own, completed"),
+        ]
+    );
+
+    // A making likewise.
+    router.set_permissions(Some(Permissions {
+        mode: Mode::Auto,
+        makes: 1,
+        ..Permissions::default()
+    }));
+    ok(
+        &router,
+        "edit",
+        json!({
+            "script": "media add m9 path=\"shots/open.mp4\" rate=30 dur=4s video=320x180\nstep m9 add render s1 {out} size=160x90",
+        }),
+    );
+    take();
+    let made = ok(&router, "make", json!({"media": "m9", "wait": true}));
+    assert_eq!(made["status"], "made", "{made}");
+    router.finish_makings(false);
+    let mut heard = take();
+    assert_eq!(heard[..2], ["begins: a call", "begins: making m9"]);
+    heard.sort();
+    assert_eq!(
+        heard[2..],
+        [
+            "over: a call on the call's thread",
+            "over: making m9 on a thread of its own, made",
+        ]
+    );
+
+    // A host that lets calls begin and no render: the call is refused as cancelled, in the
+    // host's words, and the job kerfd had made for it is off, with nothing left for a render
+    // to stop on.
+    lets.store(CALLS_ONLY, Ordering::SeqCst);
+    let refused = error(&router, "render", json!({}));
+    assert_eq!(
+        (&refused["code"], &refused["message"]),
+        (&json!("CANCELLED"), &json!("the host is closing"))
+    );
+    let heard = take();
+    assert_eq!(heard[0], "begins: a call");
+    let Some(job) = heard[1].strip_prefix("refused: render ") else {
+        panic!("{heard:?}");
+    };
+    let jobs = router.runtime().list_renders().unwrap();
+    let left = jobs.iter().find(|left| left.job_id == job).unwrap();
+    assert_eq!(left.status.as_str(), "cancelled", "{left:?}");
+    assert_eq!(router.running_renders(), 0);
+    assert!(!kerf_runtime::render_cancel_path(directory.path(), job).exists());
+
+    // A host that lets nothing begin: every call is refused, and nothing is started.
+    lets.store(NOTHING, Ordering::SeqCst);
+    let before = router.runtime().list_renders().unwrap().len();
+    for (tool, arguments) in [
+        ("look", json!({})),
+        ("edit", json!({"script": "marker add at=0f as=late"})),
+        ("render", json!({})),
+        ("make", json!({"media": "m9"})),
+    ] {
+        let refused = error(&router, tool, arguments);
+        assert_eq!(refused["code"], "CANCELLED", "{tool}: {refused}");
+    }
+    assert_eq!(take(), ["refused: a call"; 4]);
+    assert_eq!(router.runtime().list_renders().unwrap().len(), before);
+}
+
+#[test]
 fn look_scans_with_sheets_and_indexes_sound() {
     let Some((_directory, router)) = router() else {
         return;

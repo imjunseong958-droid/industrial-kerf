@@ -75,9 +75,10 @@ struct GateState {
 }
 
 /// What [`Drawers::begin`] gives, counted until it is dropped: a frame being drawn, the
-/// compositor being asked about one, or a whole render, which its owner cancels as it closes
-/// the drawers. [`drawing_settled`] waits for it, so whatever holds one ends soon after the
-/// drawers close.
+/// compositor being asked about one, or a whole piece of work that draws (a render, a check,
+/// a making), which its owner cancels as it closes the drawers. [`drawing_settled`] waits for
+/// it, so whatever holds one is to end soon after the drawers close; work its owner cannot
+/// stop is waited for only as long as whoever waits will.
 #[derive(Debug)]
 #[must_use = "the frame is counted as being drawn only until this is dropped"]
 pub struct OnFrame(Drawers);

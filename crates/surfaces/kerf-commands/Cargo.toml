@@ -8,7 +8,7 @@ description = "The editor's command registry: ids, menus, shortcuts, enabled sta
 
 [dependencies]
 kerf-cloud = { path = "../../surfaces/kerf-cloud" }
-kerf-runtime = { path = "../../surfaces/kerf-runtime" }
+kerf-protocol = { path = "../../foundation/kerf-protocol" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

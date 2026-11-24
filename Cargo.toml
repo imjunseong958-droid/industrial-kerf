@@ -3,6 +3,7 @@ members = [
     # foundation
     "crates/foundation/kerf-model",
     "crates/foundation/kerf-paths",
+    "crates/foundation/kerf-protocol",
     "crates/foundation/kerf-lang",
     "crates/foundation/kerf-geom",
     "crates/foundation/kerf-color",

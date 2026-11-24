@@ -10,7 +10,7 @@
 //! and can stop, and the media becomes the new take once it is made: an
 //! edit undo takes back, and a take kept beside the ones before it.
 
-use super::{KerfMcpRouter, McpCode, McpError};
+use super::{Begins, KerfMcpRouter, McpCode, McpError};
 use crate::harness::operation_key;
 use kerf_engine::recipe::{self, model::Models};
 use kerf_engine::{CancellationToken, EngineError};
@@ -355,6 +355,8 @@ impl KerfMcpRouter {
             }
             return Ok(answer);
         }
+        // The host this runs in lets the making begin, or none is.
+        let drawing = self.begin_drawing(Begins::Making(media))?;
         makings.started += rolls;
         let take = plan.take;
         let id = format!("make-{}", operation_key("job"));
@@ -381,6 +383,8 @@ impl KerfMcpRouter {
             let (router, token, state) = (self.clone(), token.clone(), state.clone());
             let media = media.to_owned();
             thread::spawn(move || {
+                // Held until the making is over.
+                let _drawing = drawing;
                 // The takes made, in order, and why the making after the last was not.
                 let mut all: Vec<recipe::Made> = Vec::new();
                 let mut ended = Ok(());

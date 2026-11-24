@@ -53,7 +53,7 @@ named! {
     /// A kerfd and its clients may be of different builds, so a name stays as it is once
     /// given, and a name this build does not know still reads, as [`ErrorCode::Other`]: one
     /// a kerfd of another build answered with, or one kerfd passes on as git and GitHub said
-    /// it ([`kerf_collab::git::CollabCode`]).
+    /// it (kerf-collab's `CollabCode`).
     pub enum ErrorCode {
         // The request, before anything is asked of the project.
         InvalidJson = "INVALID_JSON",

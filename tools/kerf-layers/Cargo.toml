@@ -3,8 +3,12 @@ name = "kerf-layers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Checks that Kerf's crates depend only on what their folder allows"
+description = "Checks that Kerf's crates depend only on what their folder, and their place in surfaces, allows"
 publish.workspace = true
+
+[dependencies]
+# Read only: nothing here writes a manifest.
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 
 [lints]
 workspace = true

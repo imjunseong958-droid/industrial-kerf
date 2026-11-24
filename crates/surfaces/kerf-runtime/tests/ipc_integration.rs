@@ -509,6 +509,54 @@ fn a_prores_master_renders_through_kerfd_into_the_folder_chosen() {
 }
 
 #[test]
+fn a_render_stopped_by_its_marker_is_cancelled_with_kerfd_whoever_wrote_it() {
+    let project = Project::new("marker");
+    let directory = project.0.clone();
+    fs::create_dir_all(directory.join("media")).unwrap();
+    media_file(&directory.join("media/a.mp4"), 1);
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory)
+        .unwrap()
+        .with_request_timeout(Duration::from_secs(60));
+    wait_until_ready(&client);
+    client
+        .import_media_request("ui", "import", "media/a.mp4", 0)
+        .unwrap();
+    let options = StartRenderOptions::new(RenderQuality::Preview);
+    let stands = |job_id: &str| {
+        let jobs = client.list_renders().unwrap();
+        let job = jobs.iter().find(|job| job.job_id == job_id).unwrap();
+        (job.status.as_str().to_owned(), job.error.clone())
+    };
+    let cancelled = (
+        "cancelled".to_owned(),
+        Some("render job was cancelled".to_owned()),
+    );
+
+    // An editor closing the project a job renders writes the marker itself, and kerfd has
+    // not been asked: the render that stops on it says so to kerfd.
+    let (job, document, output) = client.start_render_with(&options).unwrap();
+    let marker = kerf_runtime::render_cancel_path(&directory, &job.job_id);
+    fs::write(&marker, b"").unwrap();
+    let stopped =
+        kerf_runtime::run_render_job(&client, &job, &document, &output, true, |_| {}).unwrap_err();
+    assert_eq!(stopped.code.as_str(), "CANCELLED", "{}", stopped.message);
+    assert_eq!(stands(&job.job_id), cancelled);
+    assert!(!marker.exists());
+
+    // kerfd asked to cancel has the job cancelled before its render stops, and it stays so.
+    let (job, document, output) = client.start_render_with(&options).unwrap();
+    client.cancel_render(&job.job_id).unwrap();
+    assert_eq!(stands(&job.job_id), cancelled);
+    let stopped =
+        kerf_runtime::run_render_job(&client, &job, &document, &output, true, |_| {}).unwrap_err();
+    assert_eq!(stopped.code.as_str(), "CANCELLED", "{}", stopped.message);
+    assert_eq!(stands(&job.job_id), cancelled);
+    assert!(!kerf_runtime::render_cancel_path(&directory, &job.job_id).exists());
+    stop_daemon(daemon);
+}
+
+#[test]
 fn daemon_exits_once_its_project_directory_is_deleted() {
     let directory = project_directory("orphan");
     fs::create_dir_all(&directory).unwrap();

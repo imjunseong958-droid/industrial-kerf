@@ -80,6 +80,7 @@ pub(super) fn native_agent(
     // The editor's own lease covers it too, but an agent session holds
     // kerfd for as long as it lives wherever it runs.
     let router = KerfMcpRouter::new(directory, Some(binary))?.held();
+    crate::tools::begin_on_drawers(&router, shared);
     // What it makes on its own, where its person lets it, shows as their own making does.
     router.watch_makings(media::agent_makings(shared.clone(), tx.clone()));
     let mut tools = router.agent_tools();

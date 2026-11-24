@@ -215,7 +215,7 @@ impl Runtime {
             self.update_job(
                 id,
                 RenderStatus::Cancelled,
-                Some("render job was cancelled".into()),
+                Some(crate::render::RENDER_CANCELLED.into()),
                 None,
                 None,
             )?;

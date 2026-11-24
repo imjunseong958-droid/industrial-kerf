@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::thread;
 
 /// Copy the file at `path` into the project's `media/` folder on its own
 /// thread, then hand the runtime worker `then(copy)`, which names the copy
@@ -35,7 +34,7 @@ pub(crate) fn copy_then(
     let source = absolute(&shared.directory, Path::new(path));
     let copying = Copying::start(shared);
     let (commands, tx) = (commands.clone(), tx.clone());
-    thread::spawn(move || {
+    shared.workers.spawn("bridge:copy", move || {
         if let Err(error) = probe(&source) {
             drop(copying);
             crate::error(&tx, format!("cannot import: {error}"));
@@ -127,7 +126,17 @@ pub(crate) fn make(
     }
     crate::emit(tx, making(id, plan.take, ""));
     let (shared, commands, tx, id) = (shared.clone(), commands.clone(), tx.clone(), id.to_owned());
-    thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:making", move || {
+        // A making draws in this process (the guide a model follows), so it begins on the
+        // bridge's drawers and holds them until it is over: a bridge let go asks its program
+        // to end, and what is about to exit waits for it to have ended. Held to the end of
+        // the thread, past what it says of how it went.
+        let Some(_drawing) = shared.drawers.begin() else {
+            if let Ok(mut makings) = shared.makings.lock() {
+                makings.remove(&id);
+            }
+            return crate::emit(&tx, Event::MediaMakeCancelled { media: id });
+        };
         // The takes made so far, the last of which the media becomes.
         let mut last_made: Option<kerf_engine::recipe::Made> = None;
         let mut ended = Ok(());
@@ -319,7 +328,12 @@ pub(crate) fn agent_makings(shared: Arc<Shared>, tx: Outbox) -> kerf_mcp::Making
     Arc::new(move |event| match event {
         MakingEvent::Began { media, take, stop } => {
             if let Ok(mut makings) = shared.makings.lock() {
-                makings.entry(media.clone()).or_insert(stop);
+                makings.entry(media.clone()).or_insert(stop.clone());
+            }
+            // Let begin just before the bridge closed, and told of only now: the makings were
+            // stopped in between, without this one among them.
+            if shared.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                stop.cancel();
             }
             crate::emit(&tx, making(&media, take, ""));
         }
@@ -634,6 +648,36 @@ mod tests {
         }
         text.push_str("sequence s1 rate=24 size=64x64 audio=48000\n");
         kerf_runtime::parse_document(&text).unwrap()
+    }
+
+    #[test]
+    fn a_making_an_agent_began_as_the_bridge_closed_is_stopped() {
+        use kerf_mcp::MakingEvent;
+        let folder = tempfile::tempdir().unwrap();
+        let shared = Arc::new(shared(folder.path()));
+        let (tx, _rx) = crate::wake::outbox(8);
+        let told = agent_makings(shared.clone(), tx);
+        let began = |media: &str| {
+            let stop = kerf_engine::CancellationToken::new();
+            told(MakingEvent::Began {
+                media: media.to_owned(),
+                take: 1,
+                stop: stop.clone(),
+            });
+            stop
+        };
+        // Open, a making an agent began goes on, and the bridge has what stops it.
+        let going = began("m1");
+        assert!(!going.is_cancelled());
+        // The bridge is let go, as `Drop for Bridge` does it: the makings it has are stopped.
+        shared
+            .closed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        cancel_makings(&shared);
+        assert!(going.is_cancelled());
+        // One let begin just before, and told of only now, was not among them: it is
+        // stopped as it is told of.
+        assert!(began("m2").is_cancelled());
     }
 
     #[test]

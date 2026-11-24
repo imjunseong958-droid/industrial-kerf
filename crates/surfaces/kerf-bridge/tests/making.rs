@@ -1,6 +1,7 @@
 //! A making from the editor, through its bridge and a real kerfd: what its
-//! steps say reaches the editor as they say it, and a making that is
-//! cancelled asks its step to end and leaves no take.
+//! steps say reaches the editor as they say it, a making that is cancelled
+//! asks its step to end and leaves no take, and one the editor closes its
+//! project on is waited for until its step has ended.
 //!
 //! Needs kerfd built beside this test (`cargo build -p kerf-runtime --bin
 //! kerfd`).
@@ -38,10 +39,16 @@ fn kerfd() -> PathBuf {
     path
 }
 
+/// What the `linger` model writes as the last thing it does, once it has been asked to end.
+fn gone() -> PathBuf {
+    std::env::temp_dir().join(format!("kq-gone-{}", std::process::id()))
+}
+
 /// The models these tests make with, each a program handed the file it writes: one that
-/// says two things, the second twice, and one that waits, as a model's program waits on
-/// its server, and takes its job back when it is asked to end. Written once for this run
-/// of the tests, and the only models file read.
+/// says two things, the second twice, one that waits, as a model's program waits on
+/// its server, and takes its job back when it is asked to end, and one that waits and takes
+/// half a second over ending. Written once for this run of the tests, and the only models
+/// file read.
 fn models() -> &'static Path {
     static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     FILE.get_or_init(|| {
@@ -56,6 +63,11 @@ fn models() -> &'static Path {
                 "sh", "-c",
                 "trap 'echo took the job back >&2; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
                 "wait", "{out}",
+            ]},
+            "linger": {"run": [
+                "sh", "-c",
+                "trap 'sleep 0.5; : > \"$2\"; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
+                "linger", "{out}", gone(),
             ]},
         });
         fs::write(&file, models.to_string()).unwrap();
@@ -259,6 +271,26 @@ fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
     editor.expect("the making to stop", |event| {
         event["type"] == "media_make_cancelled"
     });
+}
+
+#[test]
+fn a_bridge_let_go_is_waited_for_until_its_making_has_ended() {
+    // A step that waits, and once asked to end takes half a second over it.
+    let project = Project::new("linger", &["generate model=linger prompt=\"a word\""]);
+    let _ = fs::remove_file(gone());
+    let mut editor = Editor::open(&project.0);
+    editor.send(json!({"type": "media_make", "media": "m1", "confirmed": true}));
+    editor.making("waiting");
+
+    // The editor closes the project: the making's program is asked to end.
+    drop(editor);
+    // What is about to exit waits for it to have ended, and the wait is over no sooner.
+    assert!(kerf_bridge::drawing_settled(Duration::from_secs(120)));
+    assert!(
+        gone().is_file(),
+        "the wait was over while the making's program was still ending"
+    );
+    let _ = fs::remove_file(gone());
 }
 
 #[test]
