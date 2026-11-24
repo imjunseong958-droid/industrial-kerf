@@ -487,19 +487,52 @@ fn git_run(dir: &Path, args: &[&str], code: CollabCode) -> Result<String> {
     run(command, code)
 }
 
+// DIAGNOSTIC (temporary): how long each step takes, written straight to
+// stderr so a test's output capture does not hold it back.
+#[doc(hidden)]
+pub fn diag_epoch() -> std::time::Instant {
+    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *EPOCH.get_or_init(std::time::Instant::now)
+}
+
+#[doc(hidden)]
+pub fn diag_line(text: &str) {
+    use std::io::Write;
+    let line = format!(
+        "kerf-timing pid={} thread={} +{:.3}s {text}\n",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("?"),
+        diag_epoch().elapsed().as_secs_f64(),
+    );
+    let _ = std::io::stderr().write_all(line.as_bytes());
+}
+
+#[doc(hidden)]
+pub fn diag_timed<T>(label: &str, f: impl FnOnce() -> T) -> T {
+    let start = std::time::Instant::now();
+    let value = f();
+    diag_line(&format!(
+        "{label} took {:.3}s",
+        start.elapsed().as_secs_f64()
+    ));
+    value
+}
+
 /// Which tools are installed, without asking GitHub anything.
 pub fn local_tools() -> Tools {
     let version = |program: &str, args: &[&str]| {
         let mut command = self::program(program);
         command.args(args);
-        succeeds(command)
+        diag_timed(&format!("probe `{program} {}`", args.join(" ")), || {
+            succeeds(command)
+        })
     };
     let gh = version("gh", &["--version"]);
     Tools {
         git: version("git", &["--version"]),
         git_lfs: version("git", &["lfs", "version"]),
         gh,
-        gh_signed_in: gh && gh_signed_in(),
+        gh_signed_in: gh && diag_timed("probe `gh auth token`", gh_signed_in),
         gh_user: None,
     }
 }

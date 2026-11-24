@@ -200,16 +200,26 @@ pub(crate) fn run(
     tx: Outbox,
     shared: Arc<Shared>,
 ) {
-    let mut collab = Collab::new(directory, &binary, runtime, tx, shared);
-    let tools = git::local_tools();
+    git::diag_line(&format!("collab worker starts for {}", directory.display()));
+    let mut collab = git::diag_timed("collab: Collab::new", || {
+        Collab::new(directory, &binary, runtime, tx, shared)
+    });
+    let tools = git::diag_timed("collab: local_tools", git::local_tools);
     collab.gh = tools.gh && tools.gh_signed_in;
-    if git::is_repository(&collab.directory) {
-        collab.ensure_driver();
+    if git::diag_timed("collab: is_repository", || {
+        git::is_repository(&collab.directory)
+    }) {
+        git::diag_timed("collab: ensure_driver", || collab.ensure_driver());
     }
-    collab.emit_status(true);
+    git::diag_timed("collab: first emit_status", || collab.emit_status(true));
     while !collab.shared.closed.load(Ordering::Relaxed) {
         match rx.recv_timeout(TICK) {
-            Ok(command) => collab.handle(command),
+            Ok(command) => {
+                let name = command.kind();
+                git::diag_timed(&format!("collab: command {name}"), || {
+                    collab.handle(command)
+                });
+            }
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }

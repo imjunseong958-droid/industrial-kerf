@@ -74,6 +74,16 @@ fn hermetic(test: &str) -> bool {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // DIAGNOSTIC (temporary): pass the timing lines on whether or not the test passed.
+    {
+        use std::io::Write;
+        let lines: String = said
+            .lines()
+            .filter(|line| line.starts_with("kerf-timing"))
+            .map(|line| format!("[{test}] {line}\n"))
+            .collect();
+        let _ = std::io::stderr().write_all(lines.as_bytes());
+    }
     assert!(
         out.status.success() && said.contains("test result: ok. 1 passed"),
         "{test}, in a process of its own:\n{said}"
@@ -273,13 +283,17 @@ fn two_editors_share_a_project_by_hand_and_live() {
     .unwrap()
     .path;
     let bob_dir = git::clone(&remote.to_string_lossy(), &root.0.join("b")).unwrap();
+    git::diag_line("test: opening alice");
     let mut alice = Editor::open(&alice_dir);
+    git::diag_line("test: alice ready, opening bob");
     let mut bob = Editor::open(&bob_dir);
+    git::diag_line("test: bob ready, asking alice for the status");
 
     alice.send(json!({"type": "collab_status"}));
     let status = alice.expect("the status", Duration::from_secs(10), |event| {
         event["type"] == "collab"
     });
+    git::diag_line("test: alice's status came");
     assert_eq!(status["status"]["repository"], true, "{status}");
     assert_eq!(status["status"]["branch"], "main");
     assert_eq!(status["status"]["live"], false);
@@ -530,4 +544,109 @@ fn the_launcher_starts_a_shared_project_from_a_preset() {
     assert!(inspected.repository);
     assert_eq!(inspected.presets, 1);
     assert_eq!(inspected.name, "From Preset");
+}
+
+// DIAGNOSTIC (temporary): how long the editor waits for its first `collab` status, over
+// several rounds, and how long each tool probe takes with the runner's home and with the
+// tests' own. Only exit codes and times are written, never what a probe prints.
+fn diag_probes(label: &str) {
+    let timed = |program: &str, args: &[&str]| {
+        let start = Instant::now();
+        let code = Command::new(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+            .and_then(|status| status.code());
+        (code, start.elapsed().as_secs_f64())
+    };
+    for _ in 0..4 {
+        for (program, args) in [
+            ("gh", &["--version"][..]),
+            ("git", &["--version"][..]),
+            ("git", &["lfs", "version"][..]),
+            ("gh", &["auth", "token"][..]),
+        ] {
+            let (code, secs) = timed(program, args);
+            git::diag_line(&format!(
+                "diag[{label}] `{program} {}` exit {code:?} in {secs:.3}s",
+                args.join(" ")
+            ));
+        }
+    }
+    let start = Instant::now();
+    let threads: Vec<_> = (0..3)
+        .map(|_| std::thread::spawn(move || timed("gh", &["auth", "token"])))
+        .collect();
+    let each: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+    git::diag_line(&format!(
+        "diag[{label}] three `gh auth token` at once: {each:?}, {:.3}s in all",
+        start.elapsed().as_secs_f64()
+    ));
+    if cfg!(target_os = "macos") {
+        // The lookup gh makes when no account is configured, without -w: exit code and
+        // time only.
+        let (code, secs) = timed(
+            "/usr/bin/security",
+            &["find-generic-password", "-s", "gh:github.com"],
+        );
+        git::diag_line(&format!(
+            "diag[{label}] keychain lookup for gh:github.com exit {code:?} in {secs:.3}s"
+        ));
+        let (code, secs) = timed("/usr/bin/security", &["list-keychains"]);
+        git::diag_line(&format!(
+            "diag[{label}] `security list-keychains` exit {code:?} in {secs:.3}s"
+        ));
+    }
+}
+
+#[test]
+fn diag_collab_status_latency() {
+    if std::env::var_os(HERMETIC).is_none() {
+        diag_probes("runner home");
+    }
+    if !hermetic("diag_collab_status_latency") {
+        return;
+    }
+    diag_probes("tests' home");
+    for round in 0..6 {
+        let root = Root::new("diag");
+        let remote = root.0.join("remote.git");
+        fs::create_dir_all(&remote).unwrap();
+        sh(&remote, &["init", "-q", "--bare", "-b", "main"]);
+        let alice_dir = git::diag_timed(&format!("diag round {round}: scaffold::create"), || {
+            scaffold::create(
+                &NewProject {
+                    name: "Film".into(),
+                    location: root.0.join("a"),
+                    template: Template::Standard,
+                    rate: Some("24".into()),
+                    git: true,
+                    remote: Some(remote.to_string_lossy().into_owned()),
+                    github: None,
+                },
+                Catalog::builtin(),
+            )
+            .unwrap()
+            .path
+        });
+        let bob_dir = git::clone(&remote.to_string_lossy(), &root.0.join("b")).unwrap();
+        let opened = Instant::now();
+        let mut alice = Editor::open(&alice_dir);
+        let early = alice.events.iter().any(|event| event["type"] == "collab");
+        let _bob = Editor::open(&bob_dir);
+        let sent = Instant::now();
+        alice.send(json!({"type": "collab_status"}));
+        let got = alice.wait(Duration::from_secs(60), |event| event["type"] == "collab");
+        git::diag_line(&format!(
+            "diag round {round}: both open in {:.3}s; a status before ready: {early}; \
+             answered: {} after {:.3}s ({:.3}s after alice opened)",
+            (sent - opened).as_secs_f64(),
+            got.is_some(),
+            sent.elapsed().as_secs_f64(),
+            opened.elapsed().as_secs_f64()
+        ));
+    }
 }
