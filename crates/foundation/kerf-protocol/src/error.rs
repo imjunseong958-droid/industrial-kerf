@@ -94,6 +94,9 @@ named! {
         MediaUnreadable = "MEDIA_UNREADABLE",
         MediaNotDownloaded = "MEDIA_NOT_DOWNLOADED",
         MediaDoesNotFit = "MEDIA_DOES_NOT_FIT",
+        /// A media's steps are still in the recipe file it names, where a making does not
+        /// read them: carried into the document, they are made from.
+        StepsNotCarried = "STEPS_NOT_CARRIED",
 
         // Proposals.
         ProposalNotFound = "PROPOSAL_NOT_FOUND",

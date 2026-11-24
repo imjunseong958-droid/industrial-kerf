@@ -3,13 +3,14 @@
 //! [`kerf_collab::media`]), and which media are offline, not downloaded, or
 //! not carried by the project's repository.
 
-use crate::event::{CastToMake, ErrorEvent, Event, MediaMakePlan};
+use crate::event::{CastToMake, ErrorCode, ErrorEvent, Event, MediaMakePlan};
 use crate::wake::Outbox;
 use crate::{emit, Command, Shared};
 use kerf_collab::git::is_lfs_pointer;
 use kerf_collab::media::{absolute, external, relative_to};
 pub(crate) use kerf_collab::media::{copy_into_media, needs_copy};
 use kerf_model::{Catalog, Id, Op, Project};
+use kerf_shots::ShotError;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -76,25 +77,24 @@ pub(crate) fn make(
     let planned = client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
-        .map_err(|error| error.message)
+        .map_err(|error| ShotError::from(error.message))
         .and_then(|project| {
-            let models =
-                kerf_engine::recipe::model::Models::load().map_err(|error| error.to_string())?;
+            let models = kerf_engine::recipe::model::Models::load()?;
             // One making is the recipe as it is written. Several are rolls of it, each with
             // its seeds one on from the last, from the first roll no take of it has had.
             let first = if rolls > 1 {
-                kerf_engine::recipe::next_roll(&project, directory, id)
-                    .map_err(|error| error.to_string())?
+                kerf_engine::recipe::next_roll(&project, directory, id)?
             } else {
                 0
             };
-            let plan = kerf_engine::recipe::plan_rolled(&project, directory, id, &models, first)
-                .map_err(|error| error.to_string())?;
+            let plan = kerf_engine::recipe::plan_rolled(&project, directory, id, &models, first)?;
             Ok((project, models, plan, first))
         });
     let (project, models, plan, first) = match planned {
         Ok(planned) => planned,
-        Err(error) => return make_failed(tx, id, error),
+        // What refuses the plan says which kind of refusal it is, where it is one the
+        // editor does something about.
+        Err(error) => return make_refused(tx, id, &error, crate::recipes::code(&error)),
     };
     if !confirmed {
         return crate::emit(
@@ -383,10 +383,16 @@ fn making(id: &str, take: u32, line: &str) -> Event {
 /// A making of media `id` that did not end with a take: an `error` that names the media,
 /// so that what shows it being made stops.
 fn make_failed(tx: &Outbox, id: &str, why: impl std::fmt::Display) {
+    make_refused(tx, id, why, None);
+}
+
+/// The same, said by its `code` as well where the refusal has one.
+fn make_refused(tx: &Outbox, id: &str, why: impl std::fmt::Display, code: Option<ErrorCode>) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
             message: format!("cannot make {id}: {why}"),
+            code,
             command: Some("media_make".to_owned()),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()

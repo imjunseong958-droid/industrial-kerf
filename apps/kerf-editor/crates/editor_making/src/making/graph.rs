@@ -13,7 +13,7 @@ use gpui::{
     DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, MouseButton,
     MouseDownEvent, Pixels, Point, SharedString, Subscription, Window,
 };
-use kerf_bridge::event::{Recipe as RecipeEvent, TakeRead};
+use kerf_bridge::event::{ErrorCode, Recipe as RecipeEvent, TakeRead};
 use kerf_bridge::{Command, Event, RecipeEdit};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -109,6 +109,9 @@ pub struct ShotGraph {
     workflow_line: usize,
     /// Why the graph could not be read, before any was.
     refused: Option<String>,
+    /// It could not be read because the media's steps are still in a recipe file, which
+    /// the canvas offers to carry into the document.
+    uncarried: bool,
     /// Why the last change was refused.
     said: Option<String>,
     /// The revision the graph was last asked for at.
@@ -202,6 +205,7 @@ impl ShotGraph {
             workflow: None,
             workflow_line: 0,
             refused: None,
+            uncarried: false,
             said: None,
             asked: None,
             shot_key,
@@ -284,6 +288,7 @@ impl ShotGraph {
                             self.said = Some(message);
                         } else {
                             self.refused = Some(message);
+                            self.uncarried = error.code == Some(ErrorCode::StepsNotCarried);
                         }
                     }
                     "takes_read" if ours => self.reading = Holding::Failed(message),
@@ -435,6 +440,7 @@ impl ShotGraph {
         let pending = self.pending_node.take();
         self.recipe = Some(recipe);
         self.refused = None;
+        self.uncarried = false;
         self.want_pictures(window, cx);
         // A curve drawn is the project's now, and drawn as it says.
         if self.drawing.as_ref().is_some_and(|drawing| !drawing.held) {
