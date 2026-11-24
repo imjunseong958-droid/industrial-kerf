@@ -89,7 +89,7 @@ impl KerfMcpRouter {
                     "`camera` is one the mesh's file holds and `from` a file that says where another was: give one".to_owned(),
                 ));
             }
-            (Some(wanted), None) => mesh.file_camera(wanted, &mut result)?,
+            (Some(wanted), None) => mesh.file_camera(&wanted.0, &mut result)?,
             (None, Some(from)) => self.camera_from(&mesh, from, &mut result)?,
         };
         if places.is_empty() {
@@ -370,14 +370,10 @@ impl MeshClip<'_> {
     /// frame of the clip, and its lens.
     fn file_camera(
         &self,
-        wanted: &Value,
+        wanted: &str,
         result: &mut Value,
     ) -> Result<(Vec<CameraPlace>, f64), McpError> {
         let (file, input, rate) = (self.file, self.input, self.sequence.rate);
-        let wanted = match wanted {
-            Value::String(name) => name.clone(),
-            other => other.to_string(),
-        };
         let which = file
             .cameras
             .iter()

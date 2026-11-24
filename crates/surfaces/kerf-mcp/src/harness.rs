@@ -22,7 +22,7 @@ mod track;
 
 pub use project::{models_listed, ListedModel};
 pub use tools::system_prompt;
-pub(crate) use tools::{input, metadata};
+pub(crate) use tools::{input, input_schema, metadata};
 
 use super::{KerfMcpRouter, McpCode, McpError};
 use base64::Engine;
