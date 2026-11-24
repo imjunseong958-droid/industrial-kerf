@@ -11,6 +11,7 @@ use super::shown::{window_to_share, Drag, Shown};
 use super::tools::MaskTool;
 use super::{ensure_keys, RemoveChosen, StageView};
 use editor_session::session::Session;
+use editor_state::model::Timeline;
 use gpui::{
     App, Bounds, Context, CursorStyle, DispatchPhase, Entity, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, WeakEntity, Window,
@@ -478,7 +479,7 @@ impl StageView {
 
     /// A snapshot changed the program: the chosen point goes with its
     /// place, as long as the path still has one there.
-    pub(super) fn follow_chosen_point(&mut self, before: &Value, cx: &mut Context<Self>) {
+    pub(super) fn follow_chosen_point(&mut self, before: &Timeline, cx: &mut Context<Self>) {
         // A drag owns its point until it is let go.
         if self.drag.is_some() {
             return;

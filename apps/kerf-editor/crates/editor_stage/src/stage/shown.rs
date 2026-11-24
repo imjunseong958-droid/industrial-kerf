@@ -313,13 +313,12 @@ impl StageView {
         let clip = session.selection.first()?;
         let placement = overlay::placement(&self.program, clip, state.position)?;
         let (data, _) = overlay::clip_in(&self.program, clip)?;
-        let props = &data["props"];
         let mut shown = Shown {
             clip: clip.clone(),
             placement,
             masks: overlay::masks_of(data),
-            path: props["path"].as_str().and_then(overlay::parse_path),
-            along: overlay::property_at(props, "along", placement.clip_time, 0.0),
+            path: overlay::path_in(data),
+            along: overlay::property_at(&data.props, "along", placement.clip_time, 0.0),
             position: state.position,
             sampled: None,
         };

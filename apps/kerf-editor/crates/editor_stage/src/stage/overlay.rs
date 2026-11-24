@@ -4,8 +4,23 @@
 //! snapshot's timeline as the bridge sends it, so that they can be held to
 //! the compositor's own numbers.
 
-use kerf_bridge::event::Finding;
+use editor_state::model::{Clip, Timeline, TrackKind};
+use kerf_bridge::event::{Finding, ViewMask};
 use serde_json::{json, Map, Value};
+
+/// A clip's properties by name, as the timeline says them: each a value, or its
+/// keyframes.
+pub type Props = Map<String, Value>;
+
+/// The text `name` of a clip's `props` says, when it says one.
+fn text_of<'a>(props: &'a Props, name: &str) -> Option<&'a str> {
+    props.get(name).and_then(Value::as_str)
+}
+
+/// Whether `name` of a clip's `props` is on.
+fn is_on(props: &Props, name: &str) -> bool {
+    props.get(name).and_then(Value::as_bool) == Some(true)
+}
 
 /// A point: across, then down.
 pub type Pt = (f64, f64);
@@ -257,10 +272,10 @@ fn bezier(interp: &str, t: f64) -> Option<f64> {
 
 /// The number `name` of a clip's `props` at `clip_time` seconds into
 /// it: a value, or its keyframes between; `fallback` when it has none.
-pub fn property_at(props: &Value, name: &str, clip_time: f64, fallback: f64) -> f64 {
-    match &props[name] {
-        Value::Number(number) => number.as_f64().unwrap_or(fallback),
-        Value::Array(keys) if !keys.is_empty() => {
+pub fn property_at(props: &Props, name: &str, clip_time: f64, fallback: f64) -> f64 {
+    match props.get(name) {
+        Some(Value::Number(number)) => number.as_f64().unwrap_or(fallback),
+        Some(Value::Array(keys)) if !keys.is_empty() => {
             let at = |index: usize| keys[index]["at"].as_f64().unwrap_or(0.0);
             let value = |index: usize| keys[index]["value"].as_f64().unwrap_or(fallback);
             if clip_time <= at(0) {
@@ -297,7 +312,7 @@ pub struct Geometry {
     pub at: Pt,
 }
 
-pub fn geometry_at(props: &Value, clip_time: f64) -> Geometry {
+pub fn geometry_at(props: &Props, clip_time: f64) -> Geometry {
     let prop = |name: &str, fallback: f64| property_at(props, name, clip_time, fallback);
     Geometry {
         crop: [
@@ -317,14 +332,14 @@ pub fn geometry_at(props: &Value, clip_time: f64) -> Geometry {
 
 /// The same with the clip's motion path added in: the path adds to
 /// where it would be, and `orient` to how it is turned.
-pub fn moved_geometry_at(props: &Value, canvas: Pt, clip_time: f64) -> Geometry {
+pub fn moved_geometry_at(props: &Props, canvas: Pt, clip_time: f64) -> Geometry {
     let mut geometry = geometry_at(props, clip_time);
-    if let Some(points) = props["path"].as_str().and_then(parse_path) {
+    if let Some(points) = text_of(props, "path").and_then(parse_path) {
         let on =
             MotionPath::new(points, aspect(canvas)).at(property_at(props, "along", clip_time, 0.0));
         geometry.at.0 += on.x;
         geometry.at.1 += on.y;
-        if props["orient"].as_bool() == Some(true) {
+        if is_on(props, "orient") {
             geometry.rotation += on.heading;
         }
     }
@@ -374,7 +389,7 @@ pub fn placed(g: &Geometry, picture: Pt, fit: bool, canvas: Pt) -> Affine {
 /// How a parent has moved its children at its clip time: from where it
 /// would sit with no position, scale or rotation of its own, to where it
 /// is (kerf-compose's `parent_motion`).
-pub fn parent_motion(props: &Value, picture: Pt, fit: bool, canvas: Pt, clip_time: f64) -> Affine {
+pub fn parent_motion(props: &Props, picture: Pt, fit: bool, canvas: Pt, clip_time: f64) -> Affine {
     let now = moved_geometry_at(props, canvas, clip_time);
     let rest = Geometry {
         crop: now.crop,
@@ -393,20 +408,18 @@ pub fn parent_motion(props: &Value, picture: Pt, fit: bool, canvas: Pt, clip_tim
 
 /// The canvas a timeline is drawn on, in pixels: its sequence's size,
 /// else its largest media's, else 1920 × 1080.
-pub fn canvas_of(timeline: &Value) -> Pt {
-    let size = |value: &Value| {
-        let (width, height) = (value["width"].as_f64()?, value["height"].as_f64()?);
-        (width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0)
-            .then_some((width.round().max(2.0), height.round().max(2.0)))
+pub fn canvas_of(timeline: &Timeline) -> Pt {
+    let size = |width: Option<u32>, height: Option<u32>| {
+        let (width, height) = (f64::from(width?), f64::from(height?));
+        (width > 0.0 && height > 0.0).then_some((width.max(2.0), height.max(2.0)))
     };
-    if let Some(size) = size(timeline) {
+    if let Some(size) = size(timeline.width, timeline.height) {
         return size;
     }
-    timeline["sources"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(size)
+    timeline
+        .sources
+        .iter()
+        .filter_map(|source| size(source.width, source.height))
         .fold(None, |best: Option<Pt>, size| match best {
             Some(best) if best.0 * best.1 >= size.0 * size.1 => Some(best),
             _ => Some(size),
@@ -415,42 +428,37 @@ pub fn canvas_of(timeline: &Value) -> Pt {
 }
 
 /// The clip `id` of `timeline`, and the kind of track it is on.
-pub fn clip_in<'a>(timeline: &'a Value, id: &str) -> Option<(&'a Value, &'a str)> {
-    timeline["tracks"].as_array()?.iter().find_map(|track| {
-        let clip = track["clips"]
-            .as_array()?
-            .iter()
-            .find(|clip| clip["id"].as_str() == Some(id))?;
-        Some((clip, track["type"].as_str().unwrap_or_default()))
-    })
+pub fn clip_in<'a>(timeline: &'a Timeline, id: &str) -> Option<(&'a Clip, TrackKind)> {
+    timeline.clip(id).map(|(track, clip)| (clip, track.kind))
 }
 
 /// The size of the picture a clip on a `track` track draws, and whether
 /// it is fitted to the canvas; none for what draws no picture.
-pub fn picture_of(timeline: &Value, clip: &Value, track: &str, canvas: Pt) -> Option<(Pt, bool)> {
-    let kind = clip["kind"].as_str().unwrap_or_default();
-    if track != "video" || kind == "caption" {
+pub fn picture_of(
+    timeline: &Timeline,
+    clip: &Clip,
+    track: TrackKind,
+    canvas: Pt,
+) -> Option<(Pt, bool)> {
+    let kind = clip.kind.as_str();
+    if track != TrackKind::Video || kind == "caption" {
         return None;
     }
     if kind != "media" {
         // Generators fill the canvas; a nested sequence is fitted to it.
         return Some((canvas, kind == "sequence"));
     }
-    let media = clip["sourceId"].as_str()?;
-    let source = timeline["sources"]
-        .as_array()?
-        .iter()
-        .find(|source| source["id"].as_str() == Some(media))?;
-    let (width, height) = (source["width"].as_f64()?, source["height"].as_f64()?);
+    let source = timeline.source(clip.source_id.as_deref()?)?;
+    let (width, height) = (f64::from(source.width?), f64::from(source.height?));
     (width > 0.0 && height > 0.0).then_some(((width, height), true))
 }
 
 /// Where a flat clip's parents have moved it, in canvas pixels, at
 /// `position` seconds into the program.
-pub fn parents_motion(timeline: &Value, clip: &Value, canvas: Pt, position: f64) -> Affine {
+pub fn parents_motion(timeline: &Timeline, clip: &Clip, canvas: Pt, position: f64) -> Affine {
     let mut moved = Affine::IDENTITY;
     let mut seen: Vec<String> = Vec::new();
-    let mut parent = clip["parent"].as_str().map(str::to_owned);
+    let mut parent = clip.parent.clone();
     while let Some(id) = parent.filter(|id| !id.is_empty() && !seen.contains(id)) {
         let Some((rig, track)) = clip_in(timeline, &id) else {
             break;
@@ -458,16 +466,15 @@ pub fn parents_motion(timeline: &Value, clip: &Value, canvas: Pt, position: f64)
         let Some((picture, fit)) = picture_of(timeline, rig, track, canvas) else {
             break;
         };
-        let start = rig["timelineStart"].as_f64().unwrap_or(0.0);
         moved = moved.then(parent_motion(
-            &rig["props"],
+            &rig.props,
             picture,
             fit,
             canvas,
-            position - start,
+            position - rig.timeline_start,
         ));
         seen.push(id);
-        parent = rig["parent"].as_str().map(str::to_owned);
+        parent = rig.parent.clone();
     }
     moved
 }
@@ -531,13 +538,12 @@ impl Scene {
 
 /// The clip `id` of `timeline` and what it is placed with at `position`
 /// seconds into the program; none for a clip that draws no picture.
-fn scene_of<'a>(timeline: &'a Value, id: &str, position: f64) -> Option<(&'a Value, Scene)> {
+fn scene_of<'a>(timeline: &'a Timeline, id: &str, position: f64) -> Option<(&'a Clip, Scene)> {
     let (clip, track) = clip_in(timeline, id)?;
     let canvas = canvas_of(timeline);
     let (picture, fit) = picture_of(timeline, clip, track, canvas)?;
-    let start = clip["timelineStart"].as_f64().unwrap_or(0.0);
-    let duration = clip["duration"].as_f64().unwrap_or(0.0).max(0.0);
-    let clip_time = (position - start).clamp(0.0, duration);
+    let start = clip.timeline_start;
+    let clip_time = (position - start).clamp(0.0, clip.duration.max(0.0));
     let parents = parents_motion(timeline, clip, canvas, start + clip_time);
     Some((
         clip,
@@ -555,7 +561,7 @@ fn scene_of<'a>(timeline: &'a Value, id: &str, position: f64) -> Option<(&'a Val
 /// Where the clip `id` of `timeline` is at `position` seconds into the
 /// program, flat or in depth as the camera sees it; none for a clip
 /// that draws no picture, and one of which nothing can be seen.
-pub fn placement(timeline: &Value, id: &str, position: f64) -> Option<Placement> {
+pub fn placement(timeline: &Timeline, id: &str, position: f64) -> Option<Placement> {
     let (clip, scene) = scene_of(timeline, id, position)?;
     let picture = picture_placement(timeline, clip, &scene);
     let path = path_placement(timeline, clip, &scene);
@@ -613,15 +619,15 @@ fn turned(a: World, pitch: f64, yaw: f64) -> World {
 }
 
 /// Whether a clip is placed in depth (`three_d`).
-fn in_depth(clip: &Value) -> bool {
-    clip["props"]["three_d"].as_bool() == Some(true)
+fn in_depth(clip: &Clip) -> bool {
+    is_on(&clip.props, "three_d")
 }
 
 /// Whether a parent's place in depth is its children's (kerf-compose's
 /// `Rig::in_depth`): a null's, and that of a clip in depth, which a mesh
 /// is without saying so.
-fn leads_in_depth(clip: &Value) -> bool {
-    matches!(clip["fx"].as_str(), Some("null" | "mesh")) || in_depth(clip)
+fn leads_in_depth(clip: &Clip) -> bool {
+    matches!(clip.fx.as_deref(), Some("null" | "mesh")) || in_depth(clip)
 }
 
 /// A clip's own numbers in depth at `clip_time`: how far back, in canvas
@@ -632,7 +638,7 @@ struct Depth {
     yaw: f64,
 }
 
-fn depth_at(props: &Value, canvas: Pt, clip_time: f64) -> Depth {
+fn depth_at(props: &Props, canvas: Pt, clip_time: f64) -> Depth {
     Depth {
         z: property_at(props, "z", clip_time, 0.0) * canvas.1.max(1.0),
         pitch: property_at(props, "rotate_x", clip_time, 0.0),
@@ -681,11 +687,11 @@ impl Carried {
 
 /// Fractions of a clip's picture to canvas pixels, flat: the
 /// compositor's geometry with its parents'.
-fn flat_placement(clip: &Value, scene: &Scene) -> Affine {
+fn flat_placement(clip: &Clip, scene: &Scene) -> Affine {
     let (picture, canvas) = (scene.picture, scene.canvas);
     Affine::scale(picture.0.max(1.0), picture.1.max(1.0))
         .then(placed(
-            &moved_geometry_at(&clip["props"], canvas, scene.clip_time),
+            &moved_geometry_at(&clip.props, canvas, scene.clip_time),
             picture,
             scene.fit,
             canvas,
@@ -697,10 +703,10 @@ fn flat_placement(clip: &Value, scene: &Scene) -> Affine {
 /// `timeline`, the one it names first (kerf-compose's `Scene::at`):
 /// each somewhere in depth turns it about its own middle, where that
 /// is on the canvas, and moves it back.
-fn carried_by(timeline: &Value, clip: &Value, canvas: Pt, at: f64) -> Carried {
+fn carried_by(timeline: &Timeline, clip: &Clip, canvas: Pt, at: f64) -> Carried {
     let mut carried = Carried::STILL;
     let mut seen: Vec<String> = Vec::new();
-    let mut parent = clip["parent"].as_str().map(str::to_owned);
+    let mut parent = clip.parent.clone();
     while let Some(id) = parent.filter(|id| !id.is_empty() && !seen.contains(id)) {
         seen.push(id.clone());
         let Some((rig, track)) = clip_in(timeline, &id) else {
@@ -709,12 +715,12 @@ fn carried_by(timeline: &Value, clip: &Value, canvas: Pt, at: f64) -> Carried {
         let Some((picture, fit)) = picture_of(timeline, rig, track, canvas) else {
             break;
         };
-        parent = rig["parent"].as_str().map(str::to_owned);
+        parent = rig.parent.clone();
         if !leads_in_depth(rig) {
             continue;
         }
-        let start = rig["timelineStart"].as_f64().unwrap_or(0.0);
-        let depth = depth_at(&rig["props"], canvas, at - start);
+        let start = rig.timeline_start;
+        let depth = depth_at(&rig.props, canvas, at - start);
         if depth.z == 0.0 && depth.pitch == 0.0 && depth.yaw == 0.0 {
             continue;
         }
@@ -779,29 +785,25 @@ impl Camera {
 
 /// `timeline`'s topmost camera showing at `at` seconds, or the resting
 /// one, which sees the plane z = 0 as the flat picture.
-fn camera_at(timeline: &Value, canvas: Pt, at: f64) -> Camera {
+fn camera_at(timeline: &Timeline, canvas: Pt, at: f64) -> Camera {
     // Times come as seconds in doubles, a hair off the frames they name.
     const SAME_MOMENT: f64 = 1e-9;
-    let mut shown: Option<&Value> = None;
-    for track in timeline["tracks"].as_array().into_iter().flatten() {
-        if track["enabled"].as_bool() == Some(false) {
-            continue;
-        }
-        for clip in track["clips"].as_array().into_iter().flatten() {
-            if clip["fx"].as_str() != Some("camera") || clip["enabled"].as_bool() == Some(false) {
+    let mut shown: Option<&Clip> = None;
+    for track in timeline.tracks.iter().filter(|track| track.enabled) {
+        for clip in &track.clips {
+            if clip.fx.as_deref() != Some("camera") || !clip.enabled {
                 continue;
             }
-            let start = clip["timelineStart"].as_f64().unwrap_or(0.0);
-            let duration = clip["duration"].as_f64().unwrap_or(0.0);
+            let (start, duration) = (clip.timeline_start, clip.duration);
             if start - SAME_MOMENT <= at && at < start + duration - SAME_MOMENT {
                 shown = Some(clip);
             }
         }
     }
-    let empty = Value::Null;
-    let camera_clip = shown.unwrap_or(&empty);
-    let props = &camera_clip["props"];
-    let clip_time = at - camera_clip["timelineStart"].as_f64().unwrap_or(0.0);
+    // With no camera showing, the resting one: every number at what it is when unsaid.
+    let resting = Props::new();
+    let props = shown.map_or(&resting, |clip| &clip.props);
+    let clip_time = at - shown.map_or(0.0, |clip| clip.timeline_start);
     let read = |name: &str, otherwise: f64| property_at(props, name, clip_time, otherwise);
     let (width, height) = (canvas.0.max(1.0), canvas.1.max(1.0));
     let distance = |fov: f64| height / 2.0 / (fov.clamp(1.0, 170.0).to_radians() / 2.0).tan();
@@ -831,9 +833,11 @@ fn camera_at(timeline: &Value, canvas: Pt, at: f64) -> Camera {
         times(level_down, roll.cos()),
         times(level_right, roll.sin()),
     );
-    if camera_clip["parent"].as_str().is_none_or(str::is_empty) {
+    let Some(camera_clip) =
+        shown.filter(|clip| clip.parent.as_deref().is_some_and(|id| !id.is_empty()))
+    else {
         return camera;
-    }
+    };
     // A camera with a parent is where the parent takes it, looking as
     // the parent turns it (kerf-compose's `Rigged`): across the canvas
     // as a clip is moved, and then in depth.
@@ -855,13 +859,13 @@ fn camera_at(timeline: &Value, canvas: Pt, at: f64) -> Camera {
 /// as the camera sees it (kerf-compose's `Plane::of`: lifted to its `z`
 /// and turned about its middle, then where its parents in depth take
 /// it). [`Projective::UNSEEN`] when none of its corners is in sight.
-fn picture_placement(timeline: &Value, clip: &Value, scene: &Scene) -> Projective {
+fn picture_placement(timeline: &Timeline, clip: &Clip, scene: &Scene) -> Projective {
     let flat = flat_placement(clip, scene);
     if !in_depth(clip) {
         return flat.into();
     }
     let canvas = scene.canvas;
-    let depth = depth_at(&clip["props"], canvas, scene.clip_time);
+    let depth = depth_at(&clip.props, canvas, scene.clip_time);
     let middle = flat.apply((0.5, 0.5));
     let across = turned([flat.a, flat.b, 0.0], depth.pitch, depth.yaw);
     let below = turned([flat.c, flat.d, 0.0], depth.pitch, depth.yaw);
@@ -904,9 +908,9 @@ fn anchor_of(g: &Geometry) -> Pt {
 /// the path is on the plane at the clip's `z`, where the camera sees it;
 /// [`Projective::UNSEEN`] for a clip that faces along its path
 /// (`orient`) from an anchor off its middle, which no one map shows.
-fn path_placement(timeline: &Value, clip: &Value, scene: &Scene) -> Projective {
+fn path_placement(timeline: &Timeline, clip: &Clip, scene: &Scene) -> Projective {
     let (canvas, picture) = (scene.canvas, scene.picture);
-    let g = geometry_at(&clip["props"], scene.clip_time);
+    let g = geometry_at(&clip.props, scene.clip_time);
     let [l, r, t, b] = g.crop;
     let width = picture.0.max(1.0) * (1.0 - l - r).max(1e-6);
     let height = picture.1.max(1.0) * (1.0 - t - b).max(1e-6);
@@ -927,12 +931,12 @@ fn path_placement(timeline: &Value, clip: &Value, scene: &Scene) -> Projective {
     let flat = flat_placement(clip, scene);
     let (middle, anchor) = (flat.apply((0.5, 0.5)), flat.apply(anchor_of(&g)));
     let to_middle = [middle.0 - anchor.0, middle.1 - anchor.1, 0.0];
-    let depth = depth_at(&clip["props"], canvas, scene.clip_time);
+    let depth = depth_at(&clip.props, canvas, scene.clip_time);
     let swung = add(
         turned(times(to_middle, -1.0), depth.pitch, depth.yaw),
         to_middle,
     );
-    if dot(swung, swung) > 1e-12 && clip["props"]["orient"].as_bool() == Some(true) {
+    if dot(swung, swung) > 1e-12 && is_on(&clip.props, "orient") {
         return Projective::UNSEEN;
     }
     let plane = add([-cw / 2.0, -ch / 2.0, depth.z], swung);
@@ -966,16 +970,16 @@ pub struct Sampled {
 
 /// `clip` with its path's points `points` (as `path=` would say them
 /// exactly) and, if given, `along`.
-fn with_path(clip: &Value, points: &[Pt], along: Option<f64>) -> Value {
+fn with_path(clip: &Clip, points: &[Pt], along: Option<f64>) -> Clip {
     let mut moved = clip.clone();
     let text = points
         .iter()
         .map(|(x, y)| format!("{x},{y}"))
         .collect::<Vec<_>>()
         .join(" ");
-    moved["props"]["path"] = json!(text);
+    moved.props.insert("path".into(), json!(text));
     if let Some(along) = along {
-        moved["props"]["along"] = json!(along);
+        moved.props.insert("along".into(), json!(along));
     }
     moved
 }
@@ -993,15 +997,15 @@ fn share_of(placement: Projective, anchor: Pt, canvas: Pt) -> Option<Pt> {
 /// Where the anchor of `clip`, with its path's points `points`, is when
 /// at its point `index`.
 fn anchor_at_point(
-    timeline: &Value,
-    clip: &Value,
+    timeline: &Timeline,
+    clip: &Clip,
     scene: &Scene,
     points: &[Pt],
     index: usize,
 ) -> Option<Pt> {
     let along = MotionPath::new(points.to_vec(), aspect(scene.canvas)).along_of(index);
     let moved = with_path(clip, points, Some(along));
-    let anchor = anchor_of(&geometry_at(&clip["props"], scene.clip_time));
+    let anchor = anchor_of(&geometry_at(&clip.props, scene.clip_time));
     share_of(
         picture_placement(timeline, &moved, scene),
         anchor,
@@ -1013,14 +1017,14 @@ fn anchor_at_point(
 /// one map shows: in depth, facing along a path it has, from an anchor
 /// off its middle.
 fn sampled_scene<'a>(
-    timeline: &'a Value,
+    timeline: &'a Timeline,
     id: &str,
     position: f64,
-) -> Option<(&'a Value, Scene, Vec<Pt>)> {
+) -> Option<(&'a Clip, Scene, Vec<Pt>)> {
     let (clip, scene) = scene_of(timeline, id, position)?;
-    let props = &clip["props"];
-    let points = props["path"].as_str().and_then(parse_path)?;
-    let facing = in_depth(clip) && props["orient"].as_bool() == Some(true);
+    let props = &clip.props;
+    let points = text_of(props, "path").and_then(parse_path)?;
+    let facing = in_depth(clip) && is_on(props, "orient");
     (facing && !path_placement(timeline, clip, &scene).shows()).then_some((clip, scene, points))
 }
 
@@ -1029,7 +1033,7 @@ fn sampled_scene<'a>(
 /// `points` say in place of the document's (a point being dragged).
 /// None for any other clip, and for one whose path is all out of sight.
 pub fn sampled(
-    timeline: &Value,
+    timeline: &Timeline,
     id: &str,
     position: f64,
     points: Option<&[Pt]>,
@@ -1037,7 +1041,7 @@ pub fn sampled(
     let (clip, scene, written) = sampled_scene(timeline, id, position)?;
     let points = points.map_or(written, <[Pt]>::to_vec);
     let moved = with_path(clip, &points, None);
-    let anchor = anchor_of(&geometry_at(&clip["props"], scene.clip_time));
+    let anchor = anchor_of(&geometry_at(&clip.props, scene.clip_time));
     let places: Vec<Option<Pt>> = (0..=SAMPLED_STEPS)
         .map(|step| {
             let there = with_path(clip, &points, Some(step as f64 / SAMPLED_STEPS as f64));
@@ -1051,7 +1055,7 @@ pub fn sampled(
     if places.iter().all(Option::is_none) {
         return None;
     }
-    let along = property_at(&moved["props"], "along", scene.clip_time, 0.0);
+    let along = property_at(&moved.props, "along", scene.clip_time, 0.0);
     let now = places[(along.clamp(0.0, 1.0) * SAMPLED_STEPS as f64).round() as usize];
     let handles = (0..points.len())
         .map(|index| anchor_at_point(timeline, clip, &scene, &points, index))
@@ -1068,7 +1072,7 @@ pub fn sampled(
 /// solving from the clip's own placement there; none when no point
 /// puts it there, as past a horizon.
 pub fn sampled_point_for(
-    timeline: &Value,
+    timeline: &Timeline,
     id: &str,
     position: f64,
     points: &[Pt],
@@ -1134,15 +1138,6 @@ pub enum Outline {
 /// Points an ellipse is drawn and hit with.
 const ELLIPSE_STEPS: usize = 72;
 
-fn four(value: &Value) -> Option<[f64; 4]> {
-    let values = value.as_array()?;
-    let mut out = [0.0; 4];
-    for (index, slot) in out.iter_mut().enumerate() {
-        *slot = values.get(index)?.as_f64()?;
-    }
-    Some(out)
-}
-
 /// Fractions are kept to four places, under half a pixel of a 4K
 /// picture, so the document stays readable.
 fn fraction(value: f64) -> f64 {
@@ -1156,21 +1151,22 @@ fn fraction(value: f64) -> f64 {
 
 impl Outline {
     /// A mask's outline as the snapshot carries it.
-    pub fn of(mask: &Value) -> Option<Self> {
-        if let Some(rect) = four(&mask["rect"]) {
+    pub fn of(mask: &ViewMask) -> Option<Self> {
+        let outline = &mask.outline;
+        if let Some(rect) = outline.rect {
             return Some(Self::Rect(rect));
         }
-        if let Some(ellipse) = four(&mask["ellipse"]) {
+        if let Some(ellipse) = outline.ellipse {
             return Some(Self::Ellipse(ellipse));
         }
-        let points = mask["points"]
-            .as_array()?
-            .iter()
-            .map(|point| Some((point[0].as_f64()?, point[1].as_f64()?)))
-            .collect::<Option<Vec<_>>>()?;
         Some(Self::Points {
-            points,
-            closed: mask["closed"].as_bool().unwrap_or(true),
+            points: outline
+                .points
+                .as_ref()?
+                .iter()
+                .map(|[x, y]| (*x, *y))
+                .collect(),
+            closed: outline.closed.unwrap_or(true),
         })
     }
 
@@ -1282,19 +1278,25 @@ impl Mask {
 }
 
 /// A clip's masks, in the order they combine.
-pub fn masks_of(clip: &Value) -> Vec<Mask> {
-    clip["masks"]
-        .as_array()
-        .into_iter()
-        .flatten()
+pub fn masks_of(clip: &Clip) -> Vec<Mask> {
+    named(clip)
         .filter_map(|mask| {
             Some(Mask {
-                name: mask["name"].as_str()?.to_owned(),
-                mode: mask["mode"].as_str().unwrap_or("add").to_owned(),
+                name: mask.name.clone(),
+                // One that says no mode adds.
+                mode: match mask.mode.as_str() {
+                    "" => "add".to_owned(),
+                    mode => mode.to_owned(),
+                },
                 outline: Outline::of(mask)?,
             })
         })
         .collect()
+}
+
+/// A clip's masks that have a name, which is what they are set and removed by.
+fn named(clip: &Clip) -> impl Iterator<Item = &ViewMask> {
+    clip.masks.iter().filter(|mask| !mask.name.is_empty())
 }
 
 /// The edit that gives the mask `name` of `clip` the outline `outline`.
@@ -1307,13 +1309,8 @@ pub fn mask_set(clip: &str, name: &str, outline: &Outline) -> Value {
 }
 
 /// The names of a clip's masks, whatever their outlines.
-pub fn mask_names(clip: &Value) -> Vec<String> {
-    clip["masks"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|mask| mask["name"].as_str().map(str::to_owned))
-        .collect()
+pub fn mask_names(clip: &Clip) -> Vec<String> {
+    named(clip).map(|mask| mask.name.clone()).collect()
 }
 
 /// The name a new mask takes: the first of `k1`, `k2`, … not `taken`.
@@ -1523,9 +1520,14 @@ pub fn path_holds((x, y): Pt) -> bool {
 const PATH_SAME: f64 = 0.0002;
 
 /// The motion path of the clip `id`, if it has one.
-pub fn path_of(timeline: &Value, id: &str) -> Option<Vec<Pt>> {
-    let (clip, _) = clip_in(timeline, id)?;
-    clip["props"]["path"].as_str().and_then(parse_path)
+pub fn path_of(timeline: &Timeline, id: &str) -> Option<Vec<Pt>> {
+    path_in(clip_in(timeline, id)?.0)
+}
+
+/// A clip's motion path as it is written; none for a clip without one, and for one that
+/// does not read.
+pub fn path_in(clip: &Clip) -> Option<Vec<Pt>> {
+    text_of(&clip.props, "path").and_then(parse_path)
 }
 
 /// Where the point at `index` of `before` is in `after`: the one at its
@@ -1543,14 +1545,11 @@ pub fn follow_point(before: &[Pt], index: usize, after: &[Pt]) -> Option<usize> 
 /// canvas towards its middle, with `along` keyed from 0 to 1 over the
 /// clip unless it says already how far along it is. None for a clip
 /// that draws no picture, or has a path already.
-pub fn start_path(timeline: &Value, id: &str, position: f64) -> Option<Value> {
+pub fn start_path(timeline: &Timeline, id: &str, position: f64) -> Option<Value> {
     let placement = placement(timeline, id, position)?;
     let (clip, _) = clip_in(timeline, id)?;
-    let props = &clip["props"];
-    if props["path"]
-        .as_str()
-        .is_some_and(|path| !path.trim().is_empty())
-    {
+    let props = &clip.props;
+    if text_of(props, "path").is_some_and(|path| !path.trim().is_empty()) {
         return None;
     }
     let (from, _) = placement.path.apply((0.0, 0.0));
@@ -1561,7 +1560,7 @@ pub fn start_path(timeline: &Value, id: &str, position: f64) -> Option<Value> {
         json!(path_text(&[(0.0, 0.0), (toward, 0.0)])),
     );
     if props.get("along").is_none_or(Value::is_null) {
-        let last = (clip["durationFrames"].as_i64().unwrap_or(1) - 1).max(1);
+        let last = (clip.duration_frames - 1).max(1);
         set.insert(
             "along".into(),
             json!({"keys": [
