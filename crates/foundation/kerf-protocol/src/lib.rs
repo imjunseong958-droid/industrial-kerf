@@ -9,7 +9,7 @@
 //! [`RuntimeError`] answers. What a client is shown of the project is a [`StateSnapshot`],
 //! with its [`TimelineView`] and its proposals; what an editor's gesture changes is an
 //! [`EditOp`]. The values kerfd writes as names ([`ErrorCode`], the statuses, a render's
-//! quality and codec) are enums that keep a name this build does not know.
+//! quality and codec, an author's kind) are enums that keep a name this build does not know.
 
 mod author;
 mod edit;

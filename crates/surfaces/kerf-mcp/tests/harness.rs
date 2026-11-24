@@ -2,7 +2,6 @@
 //! footage.
 
 use kerf_mcp::{KerfMcpRouter, McpServer};
-use kerf_runtime::AuthorKind;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2882,7 +2881,7 @@ fn an_mcp_clients_proposals_are_by_the_client_and_keep_their_versions() {
         .iter()
         .find(|entry| entry.proposal_id == revised_id)
         .expect("the revised proposal is open");
-    assert_eq!(claude.author.kind, AuthorKind::Mcp);
+    assert_eq!(claude.author.kind.as_str(), "mcp");
     assert_eq!(claude.author.name, "Claude Code");
     assert_eq!(claude.author.id.as_deref(), Some("claude-code"));
     assert_eq!(claude.version, 2);
@@ -2891,12 +2890,17 @@ fn an_mcp_clients_proposals_are_by_the_client_and_keep_their_versions() {
     let by = |id: &str| {
         open.iter()
             .find(|entry| entry.proposal_id == id)
-            .map(|entry| (entry.author.kind.clone(), entry.author.name.clone()))
+            .map(|entry| {
+                (
+                    entry.author.kind.as_str().to_owned(),
+                    entry.author.name.clone(),
+                )
+            })
     };
-    assert_eq!(by(&beside_id), Some((AuthorKind::Kerf, "Kerf".into())));
+    assert_eq!(by(&beside_id), Some(("kerf".into(), "Kerf".into())));
     assert_eq!(
         by(third["proposal"].as_str().unwrap()),
-        Some((AuthorKind::Mcp, "Cursor".into()))
+        Some(("mcp".into(), "Cursor".into()))
     );
 
     // Extending the proposal Kerf made, though another is newer.
