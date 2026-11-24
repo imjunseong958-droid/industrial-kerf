@@ -194,7 +194,7 @@ pub(super) fn summary(report: &SyncReport) -> String {
     if report.pushed {
         parts.push("pushed".to_owned());
     }
-    if let Some(remote) = &report.remote {
+    if let Some(remote) = report.remote() {
         parts.push(format!("published to {remote}"));
     }
     if parts.is_empty() {

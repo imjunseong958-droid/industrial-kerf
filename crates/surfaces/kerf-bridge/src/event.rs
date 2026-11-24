@@ -16,6 +16,7 @@
 //! [`PreviewStatus::Other`]) is never sent.
 
 use crate::ShotOf;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -1368,41 +1369,62 @@ pub enum CollabSync {
 }
 
 /// What a finished collaboration command did. `committed`, `incoming`, `fastForward`,
-/// `pushed`, `conflicts`, `renamed` and `summary` are always said; the rest as the command
-/// had them.
+/// `pushed`, `conflicts`, `renamed` and `summary` are always said; `branch` when the command
+/// switched to one, and left out otherwise; the rest as the command had them.
+///
+/// Each field reads on its own: part of a report is kerfd's, merged in, and a field said
+/// otherwise than this build reads it reads as its default without taking the rest with it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SyncReport {
     /// The commit made of the edits here first; `null` when there were none.
+    #[serde(deserialize_with = "as_said")]
     pub committed: Option<String>,
     /// The commits it brought in.
+    #[serde(deserialize_with = "as_said")]
     pub incoming: Vec<SyncCommit>,
+    #[serde(deserialize_with = "as_said")]
     pub fast_forward: bool,
+    #[serde(deserialize_with = "as_said")]
     pub pushed: bool,
     /// What collided, and whose version the merged project keeps.
+    #[serde(deserialize_with = "as_said")]
     pub conflicts: Vec<SyncConflict>,
-    /// The clips renumbered: each from, to.
+    /// What both sides added under one id, so that the other side's was given a new one
+    /// (media, a sequence, a track, a marker, a clip, a transition): each from, to.
+    #[serde(deserialize_with = "pairs")]
     pub renamed: Vec<(String, String)>,
     /// What it did, a line each, where the command says so itself.
+    #[serde(deserialize_with = "texts")]
     pub summary: Vec<String>,
     /// The branch switched to.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none", deserialize_with = "as_said")]
     pub branch: Option<String>,
-    /// The remote published to.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote: Option<String>,
     /// What else the command had to say, as it said it: kerfd's `previous` and
-    /// `projectChanged` (or `replayed`), and whether Git LFS files were `downloaded`.
+    /// `projectChanged` (or `replayed`), whether Git LFS files were `downloaded`, and the
+    /// `remote` published to (read it with [`SyncReport::remote`]).
     #[serde(flatten)]
     pub rest: Map<String, Value>,
+}
+
+impl SyncReport {
+    /// The remote a publish pushed to. It stays in [`rest`](Self::rest) because a publish
+    /// that could not read the remote's address says `"remote": null`, which a field left
+    /// out when `None` would write as no `remote` at all.
+    pub fn remote(&self) -> Option<&str> {
+        self.rest.get("remote").and_then(Value::as_str)
+    }
 }
 
 /// One commit a sync brought in.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncCommit {
+    #[serde(deserialize_with = "as_said")]
     pub commit: String,
+    #[serde(deserialize_with = "as_said")]
     pub author: String,
+    #[serde(deserialize_with = "as_said")]
     pub subject: String,
 }
 
@@ -1410,18 +1432,21 @@ pub struct SyncCommit {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SyncConflict {
-    /// Where, as a path of ids (`s1/V1/c3`); empty for the project as a whole.
+    /// Where, as a path of ids (`media m2`, `s1/V1/c3`), or `project` for the project as a
+    /// whole; never empty as kerfd says it.
+    #[serde(deserialize_with = "as_said")]
     pub path: String,
     /// What collided, in plain words.
+    #[serde(deserialize_with = "as_said")]
     pub what: String,
     pub kept: Kept,
 }
 
 /// Whose version of what collided the merged project keeps: `ours` or `theirs`, as git's
-/// merge says the sides. Anything that is not `theirs` reads as this side's, as the editor
-/// has always taken it.
+/// merge says the sides. Anything that is not `theirs`, a string or not, reads as this
+/// side's, as the editor has always taken it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase", from = "String")]
+#[serde(rename_all = "lowercase", from = "Value")]
 pub enum Kept {
     /// This side's.
     #[default]
@@ -1430,10 +1455,10 @@ pub enum Kept {
     Theirs,
 }
 
-impl From<String> for Kept {
-    fn from(said: String) -> Self {
+impl From<Value> for Kept {
+    fn from(said: Value) -> Self {
         match said.as_str() {
-            "theirs" => Self::Theirs,
+            Some("theirs") => Self::Theirs,
             _ => Self::Ours,
         }
     }
@@ -1510,6 +1535,28 @@ fn texts<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::E
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// A field as said, or its default when what was said is not of its type.
+fn as_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).unwrap_or_default())
+}
+
+/// Pairs of texts, `[[from, to]]`: a side a pair does not say as text reads as empty.
+fn pairs<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<(String, String)>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    let side = |pair: &Value, index: usize| pair[index].as_str().unwrap_or_default().to_owned();
+    Ok(value
+        .as_array()
+        .map(|pairs| {
+            pairs
+                .iter()
+                .map(|pair| (side(pair, 0), side(pair, 1)))
                 .collect()
         })
         .unwrap_or_default())

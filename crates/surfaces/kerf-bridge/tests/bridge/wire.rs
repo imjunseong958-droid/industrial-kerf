@@ -23,10 +23,11 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text. The three after those are
+/// unread, so that the types they now are write the same text. The four after those are
 /// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
-/// way before their report was a type: one that brought a commit in, a new branch, and a
-/// commit with nothing to commit; the commits' ids are made up.
+/// way before their report was a type: one that brought a commit in, a new branch, a commit
+/// with nothing to commit, and a first sync that committed and pushed with nothing to merge,
+/// so no commit to go back to (`"previous": null`); the commits' ids are made up.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -610,27 +611,34 @@ fn sync_report() -> impl Strategy<Value = SyncReport> {
             .prop_map(|(path, what, kept)| SyncConflict { path, what, kept }),
         0..3,
     );
-    // What kerfd adds under names of its own.
-    let rest = (option::of(any::<bool>()), option::of(text())).prop_map(|(changed, previous)| {
-        let mut rest = serde_json::Map::new();
-        if let Some(changed) = changed {
-            rest.insert("projectChanged".to_owned(), json!(changed));
-        }
-        if let Some(previous) = previous {
-            rest.insert("previous".to_owned(), json!(previous));
-        }
-        rest
-    });
+    // What the command adds under names of its own, each said or not, and when said a
+    // text or `null`: kerfd's `projectChanged` and `previous`, and the `remote` a publish
+    // pushed to.
+    let said = || option::of(option::of(text()));
+    let rest =
+        (option::of(any::<bool>()), said(), said()).prop_map(|(changed, previous, remote)| {
+            let mut rest = serde_json::Map::new();
+            if let Some(changed) = changed {
+                rest.insert("projectChanged".to_owned(), json!(changed));
+            }
+            if let Some(previous) = previous {
+                rest.insert("previous".to_owned(), json!(previous));
+            }
+            if let Some(remote) = remote {
+                rest.insert("remote".to_owned(), json!(remote));
+            }
+            rest
+        });
     (
         (option::of(text()), commits, any::<bool>(), any::<bool>()),
         (conflicts, vec((text(), text()), 0..3), vec(text(), 0..3)),
-        (option::of(text()), option::of(text()), rest),
+        (option::of(text()), rest),
     )
         .prop_map(
             |(
                 (committed, incoming, fast_forward, pushed),
                 (conflicts, renamed, summary),
-                (branch, remote, rest),
+                (branch, rest),
             )| SyncReport {
                 committed,
                 incoming,
@@ -640,7 +648,6 @@ fn sync_report() -> impl Strategy<Value = SyncReport> {
                 renamed,
                 summary,
                 branch,
-                remote,
                 rest,
             },
         )

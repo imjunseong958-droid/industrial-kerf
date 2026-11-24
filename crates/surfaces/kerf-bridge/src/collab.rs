@@ -370,8 +370,9 @@ impl Collab {
     }
 
     fn done(&self, report: Value) {
-        // The report is always `empty_report`'s, with kerfd's merged in. One that did not
-        // read would be this code's own mistake, and says a sync that did nothing.
+        // The report is always `empty_report`'s, with kerfd's merged in. It reads field by
+        // field: one kerfd says otherwise than this build reads it is that field's default,
+        // and the rest still say what the sync did.
         let report = serde_json::from_value(report).unwrap_or_default();
         emit(&self.tx, Event::CollabSync(CollabSync::Done { report }));
     }

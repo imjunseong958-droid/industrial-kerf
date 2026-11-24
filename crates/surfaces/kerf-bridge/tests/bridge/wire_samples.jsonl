@@ -28,3 +28,4 @@
 {"report":{"committed":null,"conflicts":[],"downloaded":false,"fastForward":true,"incoming":[{"author":"Test","commit":"3f9c2ab","subject":"Added marker bobs"}],"previous":"7d1e5b0c9a4f3e2d1c0b9a8f7e6d5c4b3a291807","projectChanged":true,"pushed":false,"renamed":[],"summary":["Added marker bobs"]},"stage":"done","type":"collab_sync"}
 {"report":{"branch":"alice/color","committed":null,"conflicts":[],"downloaded":false,"fastForward":false,"incoming":[],"previous":"main","projectChanged":false,"pushed":false,"renamed":[],"summary":[]},"stage":"done","type":"collab_sync"}
 {"report":{"committed":null,"conflicts":[],"fastForward":false,"incoming":[],"pushed":false,"renamed":[],"summary":["Nothing to commit"]},"stage":"done","type":"collab_sync"}
+{"report":{"committed":"8c41d07","conflicts":[],"downloaded":false,"fastForward":false,"incoming":[],"previous":null,"projectChanged":false,"pushed":true,"renamed":[],"summary":[]},"stage":"done","type":"collab_sync"}
