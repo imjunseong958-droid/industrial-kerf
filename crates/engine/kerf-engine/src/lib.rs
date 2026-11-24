@@ -10,6 +10,7 @@ pub mod media;
 pub mod process;
 pub mod recipe;
 pub mod render;
+mod said;
 
 pub use analysis::loudness::{measure_file, measure_program, Loudness};
 pub use analysis::qc::{picture_qc, PictureCheck, PictureQc, QcRange};
