@@ -187,7 +187,7 @@ fn ask_taken(
         let Ok(event) = workflow::shown(&id, line, &read) else {
             return;
         };
-        said.late(&tx, event, asked);
+        said.late(&tx, event, asked.map_err(String::from));
     });
 }
 
@@ -239,7 +239,7 @@ pub(crate) fn edit(
         },
         Ok(false) => project,
         Err(why) => {
-            failed(tx, &edit.media, why);
+            failed(tx, &edit.media, why.into());
             project
         }
     };

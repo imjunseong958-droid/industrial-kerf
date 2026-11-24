@@ -1,5 +1,6 @@
 //! The steps that make a media as a graph, with what runs each of its models.
 
+use crate::ShotError;
 use kerf_engine::recipe::model::Models;
 use kerf_engine::recipe::text::{self, Change};
 use kerf_model::Project;
@@ -21,9 +22,9 @@ pub fn shown(
     directory: &Path,
     id: &str,
     models: &Models,
-) -> Result<Graph, String> {
-    let mut shown = kerf_engine::recipe::graph(project, directory, id, models)
-        .map_err(|error| error.to_string())?;
+) -> Result<Graph, ShotError> {
+    let mut shown =
+        kerf_engine::recipe::graph(project, directory, id, models).map_err(ShotError::from)?;
     // Which workflow a model is run with is the person's own models file's to say.
     for node in &mut shown.nodes {
         let What::Model(model) = &mut node.what else {
@@ -56,7 +57,7 @@ pub struct Word<'a> {
 
 /// `recipe` with `word` set or taken off, and nothing else of it changed
 /// ([`text::changed`]): refused as a making would refuse what it makes.
-pub fn changed(recipe: &str, word: Word) -> Result<String, String> {
+pub fn changed(recipe: &str, word: Word) -> Result<String, ShotError> {
     let change = match word.value {
         Some(value) => Change::Set {
             key: word.key,
@@ -68,18 +69,18 @@ pub fn changed(recipe: &str, word: Word) -> Result<String, String> {
             nth: word.nth,
         },
     };
-    text::changed(recipe, word.line, change).map_err(|error| error.to_string())
+    text::changed(recipe, word.line, change).map_err(ShotError::from)
 }
 
 /// `recipe` with the step `line` added as a line of its own after line `after`
 /// ([`text::added`]), and without its step on line `line` ([`text::removed`]):
 /// each refused where what it makes does not read as a recipe.
-pub fn added(recipe: &str, after: usize, line: &str) -> Result<String, String> {
-    text::added(recipe, after, line).map_err(|error| error.to_string())
+pub fn added(recipe: &str, after: usize, line: &str) -> Result<String, ShotError> {
+    text::added(recipe, after, line).map_err(ShotError::from)
 }
 
-pub fn removed(recipe: &str, line: usize) -> Result<String, String> {
-    text::removed(recipe, line).map_err(|error| error.to_string())
+pub fn removed(recipe: &str, line: usize) -> Result<String, ShotError> {
+    text::removed(recipe, line).map_err(ShotError::from)
 }
 
 /// A step to add to `recipe`, of a kind a person picks in the editor, and the line to add
@@ -99,9 +100,9 @@ pub fn step(
     models: &Models,
     recipe: &str,
     kind: &str,
-) -> Result<(usize, String), String> {
+) -> Result<(usize, String), ShotError> {
     use kerf_engine::recipe::{Recipe, Step};
-    let read = Recipe::parse(recipe).map_err(|error| error.to_string())?;
+    let read = Recipe::parse(recipe).map_err(ShotError::from)?;
     let lines = text::step_lines(recipe);
     let made = read.makes();
     // A name no step has: `guide.mp4`, then `guide2.mp4`.
@@ -166,7 +167,7 @@ pub fn step(
                 })
                 .collect();
             if parts.len() < 2 {
-                return Err("a join sets two or more pictures in motion that models made end to end, and the steps make fewer: add the parts first, each a model with `out={name.mp4}`".to_owned());
+                return Err("a join sets two or more pictures in motion that models made end to end, and the steps make fewer: add the parts first, each a model with `out={name.mp4}`".into());
             }
             let named: Vec<String> = parts.iter().map(|part| format!("{{{part}}}")).collect();
             Ok((
@@ -174,24 +175,22 @@ pub fn step(
                 format!("join {} {{{}}}", named.join(" "), fresh("joined", "mp4")),
             ))
         }
-        other => Err(format!(
-            "`{other}` is not a step to add: a guide, a model, or a join"
-        )),
+        other => Err(format!("`{other}` is not a step to add: a guide, a model, or a join").into()),
     }
 }
 
 /// The steps that make media `id`, as text ([`kerf_engine::recipe::steps_text`]): a line
 /// that says what the text is, then a line a step. A media nothing makes is refused, and
 /// so is one whose steps are still in a recipe's file, with how they are carried.
-pub fn written(project: &Project, id: &str) -> Result<String, String> {
-    kerf_engine::recipe::written(project, id).map_err(|error| error.to_string())
+pub fn written(project: &Project, id: &str) -> Result<String, ShotError> {
+    kerf_engine::recipe::written(project, id).map_err(ShotError::from)
 }
 
 /// The step lines a script gets to have media `id`, whose steps the document holds,
 /// made by `now` in place of `was` ([`kerf_engine::recipe::step_lines`]): what a change
 /// made to their text comes to as the edit that makes it.
-pub fn step_lines(id: &str, was: &str, now: &str) -> Result<Vec<String>, String> {
-    kerf_engine::recipe::step_lines(id, was, now).map_err(|error| error.to_string())
+pub fn step_lines(id: &str, was: &str, now: &str) -> Result<Vec<String>, ShotError> {
+    kerf_engine::recipe::step_lines(id, was, now).map_err(ShotError::from)
 }
 
 /// The line of `now`, from 1, that `was` has not got: where a step was added.

@@ -6,6 +6,7 @@
 //! An agent reads them with `look` (`signal`) and a person asks for them in
 //! the signal's card of a shot's graph, from the one reading here.
 
+use crate::ShotError;
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_model::{Content, Project, Rate, Time};
 use std::path::Path;
@@ -85,8 +86,12 @@ pub fn from_sound(
     of: &str,
     clip: &str,
     hold: Option<i64>,
-) -> Result<FromSound, String> {
-    let located = |id: &str| project.locate(id).ok_or_else(|| project.no_clip(id));
+) -> Result<FromSound, ShotError> {
+    let located = |id: &str| {
+        project
+            .locate(id)
+            .ok_or_else(|| ShotError::NoClip(project.no_clip(id)))
+    };
     let (of_at, clip_at) = (located(of)?, located(clip)?);
     let (sound, signal) = (project.clip_at(of_at), project.clip_at(clip_at));
     if !matches!(&signal.content, Content::Generator { fx, .. } if fx.as_str() == kerf_model::SIGNAL)
@@ -94,12 +99,14 @@ pub fn from_sound(
         return Err(format!(
             "`{clip}` is not a signal: a signal is a `gen={}@1` clip",
             kerf_model::SIGNAL
-        ));
+        )
+        .into());
     }
     if of_at.sequence != clip_at.sequence {
         return Err(format!(
             "`{of}` and `{clip}` are in different sequences: a signal's time is its own sequence's"
-        ));
+        )
+        .into());
     }
     let media = match &sound.content {
         Content::Media { media, .. } => project.media(media.as_str()),
@@ -110,7 +117,7 @@ pub fn from_sound(
     })?;
     let hold = hold.unwrap_or(HOLD);
     if !(1..=240).contains(&hold) {
-        return Err(format!("`hold` is frames, from 1 to 240, not {hold}"));
+        return Err(format!("`hold` is frames, from 1 to 240, not {hold}").into());
     }
     // A path the project's folder is the start of, as a document writes one.
     let file = if Path::new(&media.path).is_absolute() {
@@ -123,7 +130,7 @@ pub fn from_sound(
         &DerivativeCache::new(directory),
         &kerf_engine::CancellationToken::new(),
     )
-    .map_err(|error| error.to_string())?;
+    .map_err(ShotError::from)?;
     // The onsets the clip plays, where on the sequence it plays them.
     let heard: Vec<Time> = index
         .onsets
@@ -136,7 +143,8 @@ pub fn from_sound(
         return Err(format!(
             "`{of}` plays no sound onsets of `{}`: nothing to place a signal on",
             media.id
-        ));
+        )
+        .into());
     }
     let rate = project.sequences[clip_at.sequence].rate;
     let (keys, placed) = pulses(&heard, (signal.start, signal.duration), rate, hold);
@@ -144,7 +152,7 @@ pub fn from_sound(
         return Err(format!(
             "none of the {} onsets `{of}` plays fall in `{clip}`: have the signal clip run where the sound does",
             heard.len()
-        ));
+        ).into());
     }
     Ok(FromSound {
         keys,

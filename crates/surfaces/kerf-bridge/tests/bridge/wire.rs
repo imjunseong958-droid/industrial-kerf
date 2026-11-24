@@ -8,9 +8,9 @@ use kerf_bridge::event::workflow::{
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
     ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
-    InspectedMade, InspectedSlot, LoudnessEvent, MeterReading, PresetInspection, PresetLook,
+    InspectedMade, InspectedSlot, Kept, LoudnessEvent, MeterReading, PresetInspection, PresetLook,
     Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus,
-    SlotClip, SlotFit, TakeRead, ToolState,
+    SlotClip, SlotFit, SyncCommit, SyncConflict, SyncReport, TakeRead, ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -24,9 +24,13 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text. The one after those is what
-/// a preset file holds (`preset_inspect`), with a slot that a made media reads and texts,
-/// written the same way before it was a type; its folder is made neutral.
+/// unread, so that the types they now are write the same text. The four after those are
+/// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
+/// way before their report was a type: one that brought a commit in, a new branch, a commit
+/// with nothing to commit, and a first sync that committed and pushed with nothing to merge,
+/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The one
+/// after those is what a preset file holds (`preset_inspect`), with a slot that a made media
+/// reads and texts, written the same way before it was a type; its folder is made neutral.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -391,7 +395,7 @@ fn meter() -> impl Strategy<Value = Event> {
         })
 }
 
-/// A refusal's code: one of kerfd's own, or any other name (a newer kerfd's).
+/// A refusal's code: one of the names this build has, or any other (a newer kerfd's).
 fn code() -> impl Strategy<Value = ErrorCode> {
     prop_oneof![
         select(vec![
@@ -674,8 +678,65 @@ fn collab_sync() -> impl Strategy<Value = Event> {
             CollabSync::Downloading,
         ]),
         text().prop_map(|message| CollabSync::Failed { message }),
+        sync_report().prop_map(|report| CollabSync::Done { report }),
     ]
     .prop_map(Event::CollabSync)
+}
+
+fn sync_report() -> impl Strategy<Value = SyncReport> {
+    let commits = vec(
+        (text(), text(), text()).prop_map(|(commit, author, subject)| SyncCommit {
+            commit,
+            author,
+            subject,
+        }),
+        0..3,
+    );
+    let conflicts = vec(
+        (text(), text(), select(vec![Kept::Ours, Kept::Theirs]))
+            .prop_map(|(path, what, kept)| SyncConflict { path, what, kept }),
+        0..3,
+    );
+    // What the command adds under names of its own, each said or not, and when said a
+    // text or `null`: kerfd's `projectChanged` and `previous`, and the `remote` a publish
+    // pushed to.
+    let said = || option::of(option::of(text()));
+    let rest =
+        (option::of(any::<bool>()), said(), said()).prop_map(|(changed, previous, remote)| {
+            let mut rest = serde_json::Map::new();
+            if let Some(changed) = changed {
+                rest.insert("projectChanged".to_owned(), json!(changed));
+            }
+            if let Some(previous) = previous {
+                rest.insert("previous".to_owned(), json!(previous));
+            }
+            if let Some(remote) = remote {
+                rest.insert("remote".to_owned(), json!(remote));
+            }
+            rest
+        });
+    (
+        (option::of(text()), commits, any::<bool>(), any::<bool>()),
+        (conflicts, vec((text(), text()), 0..3), vec(text(), 0..3)),
+        (option::of(text()), rest),
+    )
+        .prop_map(
+            |(
+                (committed, incoming, fast_forward, pushed),
+                (conflicts, renamed, summary),
+                (branch, rest),
+            )| SyncReport {
+                committed,
+                incoming,
+                fast_forward,
+                pushed,
+                conflicts,
+                renamed,
+                summary,
+                branch,
+                rest,
+            },
+        )
 }
 
 fn command() -> impl Strategy<Value = Command> {
