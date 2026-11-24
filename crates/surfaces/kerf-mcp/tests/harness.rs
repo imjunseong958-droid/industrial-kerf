@@ -3720,6 +3720,18 @@ fn what_a_pending_proposal_holds_is_pointed_to() {
         json!({"script": "overwrite media=m2 at=0f dur=30f on=V1"}),
     ));
     assert!(media.contains(&id) && media.contains("`extend`"), "{media}");
+    // Named as a position's anchor, and in an operation the language passes on as it is.
+    for script in [
+        "overwrite gen=solid at=later.end dur=30f on=V1",
+        "overwrite gen=solid at=later@0f dur=30f on=V1",
+        "delete later",
+    ] {
+        let named = message(&error(&router, "edit", json!({"script": script})));
+        assert!(
+            named.contains(&id) && named.contains("`extend`"),
+            "{script}: {named}"
+        );
+    }
     // Looking at it without saying so.
     let looked = message(&error(&router, "look", json!({"media": "m2"})));
     assert!(

@@ -188,6 +188,9 @@ struct McpError {
     code: McpCode,
     message: String,
     details: Option<Value>,
+    /// What a refused script named that is not there, as the language and the model said it
+    /// ([`kerf_model::Missing`]): for the harness to act on, and not sent.
+    missing: Vec<kerf_model::Missing>,
 }
 
 impl McpError {
@@ -196,6 +199,7 @@ impl McpError {
             code,
             message: message.into(),
             details: None,
+            missing: Vec::new(),
         }
     }
 
