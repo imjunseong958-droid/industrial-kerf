@@ -469,6 +469,11 @@ cargo deny check
 cargo deny --manifest-path apps/kerf-editor/Cargo.toml --workspace check
 ```
 
+Dependabot (`.github/dependabot.yml`) proposes newer crates for both workspaces, and
+newer actions for the workflows, in weekly pull requests that CI checks like any other.
+Like `cargo update -p`, such a pull request can move crates in `Cargo.lock` that it
+does not name, so read the lock file's diff, not only the list of updates.
+
 The release gate also includes a manual window check: open a project, edit
 it, restart it, enter Korean text, play/seek media, verify captions/mute, and
 accept or reject an agent proposal.
