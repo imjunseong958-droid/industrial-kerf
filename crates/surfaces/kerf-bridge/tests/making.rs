@@ -407,6 +407,12 @@ fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
         event["type"] == "error" && event["command"] == "recipe"
     });
     assert_eq!(unchanged["code"], "STEPS_NOT_CARRIED", "{unchanged}");
+    // And the workflow of one of them, which is read from those steps.
+    editor.send(json!({"type": "workflow_get", "media": "m1", "line": 1}));
+    let unopened = editor.expect("an error", |event| {
+        event["type"] == "error" && event["command"] == "workflow"
+    });
+    assert_eq!(unopened["code"], "STEPS_NOT_CARRIED", "{unopened}");
     // A refusal that is not that one does not say it is.
     editor.send(json!({"type": "recipe_get", "media": "nowhere"}));
     let missing = editor.expect("an error", |event| {
