@@ -1533,7 +1533,7 @@ mod tests {
     #[cfg(feature = "native-audio")]
     #[test]
     fn a_device_that_goes_quiet_stops_keeping_the_time_until_it_asks_steadily_again() {
-        use super::{AudioWorker, DEVICE_QUIET_AFTER, DEVICE_STEADY_FOR};
+        use super::{AudioCommand, AudioWorker, DEVICE_QUIET_AFTER, DEVICE_STEADY_FOR};
         use crate::PlaybackTimeline;
         use std::sync::mpsc;
 
@@ -1543,7 +1543,7 @@ mod tests {
         clock.device_heard_from();
         clock.set_device_clock(48_000);
         clock.play_at(1.0);
-        let (_commands, receiver) = mpsc::sync_channel(4);
+        let (commands, receiver) = mpsc::sync_channel(4);
         let timeline =
             PlaybackTimeline::from_project(&kerf_model::Project::default()).expect("timeline");
         let mut worker = AudioWorker::new(
@@ -1594,8 +1594,17 @@ mod tests {
         pass(&mut worker, &clock, Duration::from_millis(60), true);
         assert!(clock.now() > resumed, "its frames advance the clock again");
 
-        // And goes quiet once more.
-        pass(&mut worker, &clock, DEVICE_QUIET_AFTER + TICK, false);
+        // And goes quiet once more, which the worker's own loop sees: it goes
+        // round once for the first command and stops at the second.
+        clock.advance(DEVICE_QUIET_AFTER + TICK);
+        assert_eq!(clock.source(), ClockSource::AudioDevice);
+        commands
+            .send(AudioCommand::SetVolume(1.0))
+            .expect("worker's queue");
+        commands
+            .send(AudioCommand::Shutdown)
+            .expect("worker's queue");
+        worker.run();
         assert_eq!(clock.source(), ClockSource::MonotonicFallback);
     }
 
