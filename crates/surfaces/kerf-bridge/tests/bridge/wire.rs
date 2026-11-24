@@ -25,7 +25,9 @@ use serde_json::json;
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
 /// unread, so that the types they now are write the same text. The `state`'s timeline
 /// carries the catalog's definitions as kerfd writes them (`properties`, `maskProperties`,
-/// `generators`), which were JSON passed on unread too and are `ViewParamDef`s now.
+/// `generators`), which were JSON passed on unread too and are `ViewParamDef`s now. The
+/// last is a `state` with a proposal open, its timeline and the proposal's (which the
+/// bridge makes itself) as the bridge wrote them while those definitions were JSON.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -51,6 +53,32 @@ fn an_event_this_build_does_not_know_reads_as_one_to_ignore() {
             "{newer}"
         );
     }
+}
+
+#[test]
+fn a_definition_this_build_cannot_read_is_left_out_and_the_timeline_still_reads() {
+    let number =
+        json!({"name": "x", "type": "number", "default": 0.0, "animatable": true, "doc": ""});
+    // Choices with labels, as a newer kerfd might write them.
+    let newer = json!({"name": "mode", "type": "enum", "default": "a", "animatable": false,
+        "doc": "", "options": [{"value": "a", "label": "A"}]});
+    let event = json!({"type": "state", "snapshot": {"timeline": {
+        "tracks": [{"id": "V1", "type": "video"}],
+        "properties": {"video": [number, newer]},
+        "maskProperties": [newer, number],
+        "generators": {"title": [newer], "solid": [number], "light": {"x": number}},
+    }}});
+    let Event::State { snapshot } = serde_json::from_value(event).unwrap() else {
+        panic!("not a state");
+    };
+    let timeline = snapshot.timeline;
+    let names = |defs: &[ViewParamDef]| defs.iter().map(|def| def.name.clone()).collect::<Vec<_>>();
+    assert_eq!(timeline.tracks.len(), 1);
+    assert_eq!(names(&timeline.properties["video"]), ["x"]);
+    assert_eq!(names(&timeline.mask_properties), ["x"]);
+    assert_eq!(names(&timeline.generators["solid"]), ["x"]);
+    assert!(timeline.generators["title"].is_empty());
+    assert!(timeline.generators["light"].is_empty());
 }
 
 proptest! {

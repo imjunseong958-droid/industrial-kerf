@@ -44,8 +44,9 @@ impl Param {
             name: def.name,
             kind,
             default: def.default,
-            min: def.min,
-            max: def.max,
+            // A limit that is not a finite number is none, as it was in JSON.
+            min: def.min.filter(|min| min.is_finite()),
+            max: def.max.filter(|max| max.is_finite()),
             unit: def.unit,
             options: def.options.unwrap_or_default(),
             doc: def.doc,

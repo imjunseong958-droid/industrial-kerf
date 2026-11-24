@@ -8,15 +8,16 @@
 //!
 //! Every type reads leniently: a key that is absent reads as its default.
 //! A parameter's definition is a [`ViewParamDef`], and the effects,
-//! transitions and generators of the catalog are [`ViewFxDef`]s; parameter
-//! values stay JSON. Each is a static value (a number, a bool, a
+//! transitions and generators of the catalog are [`ViewFxDef`]s; a
+//! timeline's definitions that do not read as one (a newer kerfd's) are
+//! left out, and the rest of it still reads. Parameter values stay JSON. Each is a static value (a number, a bool, a
 //! text, or a color as `#rrggbb[aa]`), or a keyframe list when animated:
 //! each key with its clip-relative `at` in seconds, the same offset as a
 //! whole `frame` on the sequence rate (what a typed op's `{"keys": [...]}`
 //! takes back), its `value` and its `interp`. An expression shows as what it
 //! gives at the clip's first frame. Anything absent is at its default.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
@@ -35,12 +36,15 @@ pub struct TimelineView {
     pub sequences: Vec<ViewSequence>,
     /// The catalog's intrinsic clip property definitions, by track type
     /// (`video`, `audio`).
+    #[serde(deserialize_with = "defs_by_name")]
     pub properties: BTreeMap<String, Vec<ViewParamDef>>,
     /// The definitions of the properties a mask sets.
+    #[serde(deserialize_with = "defs")]
     pub mask_properties: Vec<ViewParamDef>,
     /// The modes a mask can combine by.
     pub mask_modes: Vec<String>,
     /// Each generator's parameter definitions, by its fx id.
+    #[serde(deserialize_with = "defs_by_name")]
     pub generators: BTreeMap<String, Vec<ViewParamDef>>,
     pub tracks: Vec<ViewTrack>,
     pub markers: Vec<ViewMarker>,
@@ -470,7 +474,8 @@ pub struct ViewFxDef {
     pub kind: String,
     /// Where it is listed, such as `Color Correction`.
     pub category: String,
-    /// What it is called: its doc up to the first `: `.
+    /// What it is called: its doc up to the first `: `, or without one, its
+    /// doc less the periods it ends with.
     pub name: String,
     pub doc: String,
     /// What draws it: `graph`, `raster`, `kerf`, or `look`.
@@ -512,6 +517,37 @@ pub struct ViewMarker {
     pub color: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// Definitions, those that do not read as a [`ViewParamDef`] left out: a
+/// newer kerfd's definition this build cannot read costs that definition,
+/// not the timeline. Anything but a list is none.
+fn defs<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<ViewParamDef>, D::Error> {
+    Ok(readable_defs(Value::deserialize(deserializer)?))
+}
+
+/// Lists of definitions by name, each read as [`defs`] reads one. Anything
+/// but an object is none.
+fn defs_by_name<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<BTreeMap<String, Vec<ViewParamDef>>, D::Error> {
+    let Value::Object(lists) = Value::deserialize(deserializer)? else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(lists
+        .into_iter()
+        .map(|(name, list)| (name, readable_defs(list)))
+        .collect())
+}
+
+fn readable_defs(list: Value) -> Vec<ViewParamDef> {
+    let Value::Array(items) = list else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value(item).ok())
+        .collect()
 }
 
 fn is_zero(count: &usize) -> bool {
