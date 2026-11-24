@@ -33,6 +33,7 @@ pub use state::{
 };
 pub use status::{ProjectionStatus, ProposalStatus, RenderCodec, RenderQuality, RenderStatus};
 pub use view::{
-    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
+    ViewTransition,
 };

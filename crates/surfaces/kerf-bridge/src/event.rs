@@ -25,7 +25,10 @@ use std::path::PathBuf;
 pub use kerf_cloud::{Access as CloudAccess, Account as CloudAccount};
 pub use kerf_collab::git::{Status as GitStatus, User as GitUser};
 pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
-pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
+pub use kerf_mcp::{
+    Finding, InspectedMade, InspectedSlot, PresetInspection, PresetLook, Rect, Row, Severity,
+    SlotClip, SlotFit, Summary as CheckSummary,
+};
 pub use kerf_shots::takes::ClipReading;
 
 /// A shot's graph, as a `recipe` event lays it out: its nodes, each with what there is to
@@ -48,8 +51,9 @@ pub mod workflow {
 pub use kerf_runtime::{
     Author, AuthorKind, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry,
     ProposalFreshness, ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus,
-    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
+    ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -272,7 +276,7 @@ pub enum Event {
         #[serde(default)]
         path: String,
         #[serde(default)]
-        preset: Value,
+        preset: PresetInspection,
     },
     /// The preset at `path` staged as a proposal, as kerf-mcp's `edit` says it; the state
     /// follows.
@@ -556,7 +560,8 @@ pub enum ConnectionStatus {
 pub struct ErrorEvent {
     pub message: String,
     /// Which refusal it is, where it has a code: kerfd's (`INVALID_RENDER_OUTPUT`,
-    /// `REVISION_CONFLICT`, ...), or the bridge's own for a making (`STEPS_NOT_CARRIED`).
+    /// `REVISION_CONFLICT`, ...), or the bridge's own for steps still in a recipe file
+    /// (`STEPS_NOT_CARRIED`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<ErrorCode>,
     /// The command refused, by its `type` (`export`, `media_make`, `look_save`, ...), or

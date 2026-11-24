@@ -663,15 +663,12 @@ impl Worker {
         match KerfMcpRouter::new(&self.directory, Some(&self.binary)) {
             Ok(router) => {
                 crate::tools::begin_on_drawers(&router, &self.shared);
-                let response = router.call("look", json!({"preset":path}));
+                let mut response = router.call("look", json!({"preset":path}));
                 if response["ok"] == true {
-                    emit(
-                        &self.tx,
-                        Event::PresetInspect {
-                            path,
-                            preset: response["result"].clone(),
-                        },
-                    );
+                    match serde_json::from_value(response["result"].take()) {
+                        Ok(preset) => emit(&self.tx, Event::PresetInspect { path, preset }),
+                        Err(why) => error(&self.tx, format!("cannot read preset: {why}")),
+                    }
                 } else {
                     error(
                         &self.tx,

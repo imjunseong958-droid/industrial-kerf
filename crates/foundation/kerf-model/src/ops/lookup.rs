@@ -4,6 +4,7 @@
 
 use super::{fail, Editor, Outcome};
 use crate::catalog::{Domain, FxKind};
+use crate::diag::MissingKind;
 use crate::id::Id;
 use crate::model::{Clip, ClipAt, Content, Effect, Params, Sequence};
 use crate::time::{format_timecode, Time};
@@ -44,9 +45,10 @@ impl Editor<'_> {
     }
 
     pub(super) fn locate(&self, clip: &Id) -> Outcome<ClipAt> {
-        self.project
-            .locate(clip.as_str())
-            .ok_or_else(|| fail("ref.missing", self.project.no_clip(clip.as_str())))
+        self.project.locate(clip.as_str()).ok_or_else(|| {
+            fail("ref.missing", self.project.no_clip(clip.as_str()))
+                .missing(MissingKind::Clip, clip.as_str())
+        })
     }
 
     /// Locate a clip known to exist: one the operation read from the project and has not removed.

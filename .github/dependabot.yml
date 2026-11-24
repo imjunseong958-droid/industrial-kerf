@@ -1,0 +1,79 @@
+# What Dependabot proposes, and how often: once a week (on Mondays, at a time of
+# its own choosing), and never more than three open pull requests for each entry
+# below. That is version updates. Security updates are turned on in the
+# repository's settings, not here, and come apart from these: Dependabot answers
+# each alert as it is raised, under a limit of its own, and no group below
+# applies to them.
+version: 2
+updates:
+  # Each workspace keeps its own Cargo.lock, so each has its own entry (the
+  # editor's manifest says why it is a workspace of its own).
+  #
+  # GitHub's docs say Dependabot reads every version as major.minor.patch, which
+  # makes going from 0.13 to 0.14 "minor", where Cargo counts it as breaking, as
+  # it counts 1.x to 2.0. Most crates Kerf names are 0.x, so only patch releases,
+  # which Cargo counts as compatible either way, are grouped: one pull request a
+  # week for each workspace. Every other release comes alone, to be taken or
+  # closed on its own.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      workspace-compatible:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [patch]
+
+  - package-ecosystem: cargo
+    directory: /apps/kerf-editor
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      editor-compatible:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [patch]
+    # The editor takes image, the objc2 crates, raw-window-handle and x11rb at
+    # the versions gpui brings, so gpui chooses them: a release of theirs that
+    # Cargo counts as breaking would come in as a second copy beside gpui's, not
+    # in its place. gpui's own breaking release moves them and the editor's code
+    # along with it, a change a person makes. So of these only compatible releases
+    # are proposed (GitHub's docs apply an ignore rule to security updates too).
+    # Whatever is held back here, CI's deny job still fails on an advisory
+    # against it.
+    # The rest of gpui's tree needs no rule: version updates propose only the
+    # crates a manifest names, and a security update moves a crate only as far
+    # as what depends on it allows, or says on the alert why it cannot.
+    ignore:
+      - dependency-name: gpui
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: image
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: objc2
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: objc2-foundation
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: objc2-app-kit
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: raw-window-handle
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: x11rb
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+
+  # The actions the workflows use, and those the composite actions under
+  # .github/actions use: "/" alone reads only .github/workflows (and an
+  # action.yml at the top). The workflows name each action by its major version
+  # (`@v4`), a tag its publisher moves with every compatible release, so what
+  # comes is a new major version: one pull request for each action, changing it
+  # wherever it is used.
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        group-by: dependency-name

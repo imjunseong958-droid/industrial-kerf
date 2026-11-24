@@ -3,6 +3,7 @@
 //! a worker thread while the GUI polls them.
 
 use crate::collab::{git_text, program_path};
+use crate::event::{PresetMade, PresetSlot};
 use crate::{key, media, presets};
 use kerf_collab::git;
 use kerf_collab::git::Tools as GitTools;
@@ -13,7 +14,7 @@ use kerf_lang::Clock;
 use kerf_model::{AudioInfo, Catalog, Id, Media, Rate, Time};
 use kerf_runtime::RuntimeClient;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
@@ -142,31 +143,61 @@ pub(crate) fn iso8601(time: SystemTime) -> String {
 
 // ---- preset files ----------------------------------------------------------------
 
-/// `{path, files?}` -> the preset's slots and texts, and for each file how
-/// an import would read it and which slots it can fill.
-pub(crate) fn inspect_preset(request: &Value) -> Value {
-    let Some(path) = request["path"].as_str() else {
-        return json!({"error": "path is required"});
-    };
-    let preset = match presets::read(Path::new(path)) {
-        Ok((_, preset)) => preset,
-        Err(error) => return json!({"error": error}),
-    };
+/// The preset file at `path`: its slots and texts, and for each of `files`
+/// how an import would read it and which slots it can fill.
+pub(crate) fn inspect_preset(path: &Path, files: &[PathBuf]) -> Result<PresetCheck, String> {
+    let (_, preset) = presets::read(path)?;
     let (slots, texts) = presets::summary(&preset);
-    let files: Vec<Value> = request["files"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(|file| match probe(Path::new(file)) {
-            Ok(media) => json!({"path": file, "seconds": media.duration.seconds(),
-                "video": media.video.is_some(), "audio": media.audio.is_some(),
-                "fits": fits(&preset, &media)}),
-            Err(error) => json!({"path": file, "fits": [], "error": error}),
+    let files = files
+        .iter()
+        .map(|file| match probe(file) {
+            Ok(media) => CheckedFile {
+                path: file.clone(),
+                seconds: media.duration.seconds(),
+                video: media.video.is_some(),
+                audio: media.audio.is_some(),
+                fits: fits(&preset, &media),
+                error: None,
+            },
+            Err(error) => CheckedFile {
+                path: file.clone(),
+                error: Some(error),
+                ..CheckedFile::default()
+            },
         })
         .collect();
-    json!({"name": preset.pattern.name, "slots": slots, "texts": texts, "files": files,
-        "made": presets::made(&preset)})
+    Ok(PresetCheck {
+        made: presets::made(&preset),
+        name: preset.pattern.name,
+        slots,
+        texts,
+        files,
+    })
+}
+
+/// What [`preset_inspect`](crate::preset_inspect) read of a preset file: its name, its
+/// media slots, its text slots (each clip's text, by clip id), the files it was asked about
+/// in the order asked, and the media it makes from steps.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PresetCheck {
+    pub name: String,
+    pub slots: Vec<PresetSlot>,
+    pub texts: BTreeMap<String, String>,
+    pub files: Vec<CheckedFile>,
+    pub made: Vec<PresetMade>,
+}
+
+/// A file [`preset_inspect`](crate::preset_inspect) was asked about: its length and streams
+/// as an import would read them, and the slots it has the streams and length to fill; or,
+/// for one that cannot be used, why (and no slots).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CheckedFile {
+    pub path: PathBuf,
+    pub seconds: f64,
+    pub video: bool,
+    pub audio: bool,
+    pub fits: Vec<String>,
+    pub error: Option<String>,
 }
 
 /// The slots of `preset` that `media` has the streams and length to fill.

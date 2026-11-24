@@ -4,8 +4,10 @@ use crate::{
     Author, EditOp, ErrorCode, RenderCodec, RenderJob, RenderQuality, RenderStatus, RuntimeError,
     StateSnapshot,
 };
+use serde::de::{self, value::MapDeserializer};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::fmt;
 use std::path::PathBuf;
 
 /// Versioned operations accepted by the runtime mailbox.  JSON/IPC payloads
@@ -261,6 +263,83 @@ impl RequestEnvelope {
         }
         Ok(())
     }
+
+    /// A request read from the JSON of its line. One whose envelope reads and whose
+    /// `operation` is none this kerfd has, as a newer client may ask, is refused as
+    /// `UNKNOWN_OPERATION`, told by that name alone before the rest is read; anything else
+    /// that does not read is `INVALID_REQUEST`. Either is said in serde's words.
+    pub fn from_value(value: Value) -> Result<Self, RuntimeError> {
+        let (protocol_version, id, operation) = Self::outside(value)
+            .map_err(|message| RuntimeError::new(ErrorCode::InvalidRequest, message))?;
+        let code = match operation.get("operation").and_then(Value::as_str) {
+            Some(name) if !RuntimeRequest::is_operation(name) => ErrorCode::UnknownOperation,
+            _ => ErrorCode::InvalidRequest,
+        };
+        let request = serde_json::from_value(Value::Object(operation))
+            .map_err(|error| RuntimeError::new(code, error.to_string()))?;
+        Ok(Self {
+            protocol_version,
+            id,
+            request,
+        })
+    }
+
+    /// The protocol version and the id of a request's JSON, and the rest of it, which is the
+    /// operation asked for; or what is wrong with the first two.
+    fn outside(mut value: Value) -> Result<(u64, String, Map<String, Value>), &'static str> {
+        let object = value.as_object_mut().ok_or("request must be an object")?;
+        let protocol_version = object
+            .remove("protocolVersion")
+            .and_then(|value| value.as_u64())
+            .ok_or("protocolVersion must be an integer")?;
+        let id = object
+            .remove("id")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .ok_or("id must be a string")?;
+        Ok((protocol_version, id, std::mem::take(object)))
+    }
+}
+
+impl RuntimeRequest {
+    /// Whether `name` is the `operation` of a request this build has. Serde is asked for a
+    /// request with that name and nothing else, and says that it has no such operation through
+    /// [`de::Error::unknown_variant`] rather than in words; what else that request lacks is no
+    /// matter here.
+    pub fn is_operation(name: &str) -> bool {
+        let named = MapDeserializer::<_, Named>::new(std::iter::once(("operation", name)));
+        !matches!(Self::deserialize(named), Err(Named::Unknown))
+    }
+}
+
+/// What serde made of a request asked for by its operation's name alone
+/// ([`RuntimeRequest::is_operation`]).
+#[derive(Debug)]
+enum Named {
+    /// No operation has that name.
+    Unknown,
+    /// Anything else: one does, and the request lacks the rest.
+    Other,
+}
+
+impl fmt::Display for Named {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Unknown => "no operation has that name",
+            Self::Other => "an operation has that name",
+        })
+    }
+}
+
+impl std::error::Error for Named {}
+
+impl de::Error for Named {
+    fn custom<T: fmt::Display>(_: T) -> Self {
+        Self::Other
+    }
+
+    fn unknown_variant(_: &str, _: &'static [&'static str]) -> Self {
+        Self::Unknown
+    }
 }
 
 impl<'de> Deserialize<'de> for RequestEnvelope {
@@ -268,20 +347,10 @@ impl<'de> Deserialize<'de> for RequestEnvelope {
     where
         D: serde::Deserializer<'de>,
     {
-        let mut value = Value::deserialize(deserializer)?;
-        let object = value
-            .as_object_mut()
-            .ok_or_else(|| serde::de::Error::custom("request must be an object"))?;
-        let protocol_version = object
-            .remove("protocolVersion")
-            .and_then(|value| value.as_u64())
-            .ok_or_else(|| serde::de::Error::custom("protocolVersion must be an integer"))?;
-        let id = object
-            .remove("id")
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .ok_or_else(|| serde::de::Error::custom("id must be a string"))?;
-        let request = serde_json::from_value(Value::Object(std::mem::take(object)))
-            .map_err(serde::de::Error::custom)?;
+        let (protocol_version, id, operation) =
+            Self::outside(Value::deserialize(deserializer)?).map_err(de::Error::custom)?;
+        let request =
+            serde_json::from_value(Value::Object(operation)).map_err(de::Error::custom)?;
         Ok(Self {
             protocol_version,
             id,

@@ -1,7 +1,8 @@
 //! The launcher: new projects, presets, recent projects.
 
 use crate::support::{event, EXISTS};
-use kerf_bridge::GitTools;
+use kerf_bridge::event::{InspectedSlot, PresetMade, PresetSlot, SlotClip};
+use kerf_bridge::{CheckedFile, GitTools, PresetCheck};
 use kerf_editor::folders::needs_start;
 use kerf_editor::launcher::{
     clone_problem, details_problem, git_address, github_account, launcher_escape, tools_hint,
@@ -14,7 +15,7 @@ use kerf_editor::presets::{
 };
 use kerf_editor::workspace::folder_media;
 use proptest::prelude::*;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------- the launcher
@@ -93,67 +94,94 @@ proptest! {
     }
 }
 
+/// A media a preset makes, as the bridge reads it from the file.
+fn made(id: &str, steps: &[&str], of: Option<&str>, clips: usize) -> PresetMade {
+    PresetMade {
+        id: id.into(),
+        of: of.map(str::to_owned),
+        steps: steps.iter().map(|step| (*step).to_owned()).collect(),
+        clips,
+    }
+}
+
+/// A media slot, as the bridge reads it from the file.
+fn slot(id: &str, seconds: f64, video: bool, audio: bool, clips: usize) -> PresetSlot {
+    PresetSlot {
+        id: id.into(),
+        seconds,
+        video,
+        audio,
+        clips,
+    }
+}
+
 #[test]
 fn what_a_made_media_is_reads_from_its_steps() {
-    let made = |steps: Value, of: Value| json!({"id": "m", "steps": steps, "of": of});
-    assert_eq!(
-        made_kind(&made(json!([]), Value::Null)),
-        "made from its steps"
-    );
-    assert_eq!(made_kind(&made(json!([]), json!("slot1"))), "made of slot1");
+    let made = |steps: &[&str], of: Option<&str>| made("m", steps, of, 0);
+    assert_eq!(made_kind(&made(&[], None)), "made from its steps");
+    assert_eq!(made_kind(&made(&[], Some("slot1"))), "made of slot1");
     assert_eq!(
         made_kind(&made(
-            json!(["step m add generate model=upscaler"]),
-            json!("slot1")
+            &["step m add generate model=upscaler"],
+            Some("slot1")
         )),
         "an upscaler of slot1"
     );
     assert_eq!(
         made_kind(&made(
-            json!(["render guide", "step m add generate model=flux seed=4"]),
-            Value::Null
+            &["render guide", "step m add generate model=flux seed=4"],
+            None
         )),
         "a flux from a guide sequence"
     );
     assert_eq!(
-        made_kind(&made(
-            json!(["step m add generate model=flux"]),
-            Value::Null
-        )),
+        made_kind(&made(&["step m add generate model=flux"], None)),
         "a flux"
     );
     // `model=` inside another word is not a model.
     assert_eq!(
-        made_kind(&made(
-            json!(["step m add generate submodel=flux"]),
-            Value::Null
-        )),
+        made_kind(&made(&["step m add generate submodel=flux"], None)),
         "made from its steps"
     );
     assert_eq!(
-        made_line(&json!({"steps": [], "of": "slot2", "clips": 2})),
+        made_line(&self::made("", &[], Some("slot2"), 2)),
         "Made of slot2 · 2 clips"
     );
 }
 
 #[test]
 fn a_slot_is_read_by_the_media_whose_steps_name_it() {
-    let preset = json!({"made": [
-        {"id": "sky", "steps": ["step sky add generate model=flux image=slot:slot1"]},
-        {"id": "sea", "steps": ["step sea add grade from=slot:slot10, gain=2"]},
-        {"id": "sun", "steps": ["step sun add blend a=slot:slot1}"]},
-    ]});
+    let preset = [
+        made(
+            "sky",
+            &["step sky add generate model=flux image=slot:slot1"],
+            None,
+            0,
+        ),
+        made(
+            "sea",
+            &["step sea add grade from=slot:slot10, gain=2"],
+            None,
+            0,
+        ),
+        made("sun", &["step sun add blend a=slot:slot1}"], None, 0),
+    ];
     assert_eq!(
-        slot_read_by(&preset, &json!({"id": "slot1"})),
+        slot_read_by(&preset, &slot("slot1", 0.0, false, false, 0)),
         ["sky", "sun"],
         "slot:slot10 is another slot"
     );
-    assert_eq!(slot_read_by(&preset, &json!({"id": "slot10"})), ["sea"]);
-    // The bridge's own answer wins where it gives one.
     assert_eq!(
-        slot_read_by(&preset, &json!({"id": "slot1", "readBy": ["only"]})),
-        ["only"]
+        slot_read_by(&preset, &slot("slot10", 0.0, false, false, 0)),
+        ["sea"]
     );
+    // The bridge's own answer wins where it gives one.
+    let said = InspectedSlot {
+        id: "slot1".into(),
+        read_by: vec!["only".into()],
+        ..InspectedSlot::default()
+    };
+    assert_eq!(slot_read_by(&preset, &said), ["only"]);
     assert_eq!(read_by_line(&[]), "");
     assert_eq!(read_by_line(&["sky".into()]), "sky is made of this");
     assert_eq!(
@@ -165,17 +193,27 @@ fn a_slot_is_read_by_the_media_whose_steps_name_it() {
 #[test]
 fn a_slot_says_what_it_needs_and_where_it_plays() {
     assert_eq!(
-        needs_line(&json!({"seconds": 2.0, "video": true, "audio": true, "clips": 3})),
+        needs_line(&slot("slot1", 2.0, true, true, 3)),
         "Needs 2.00 s · picture and sound · 3 clips"
     );
     assert_eq!(
-        needs_line(&json!({"seconds": 4.5, "audio": true, "clips": [{"id": "a"}]})),
+        needs_line(&slot("slot2", 4.5, false, true, 1)),
         "Needs 4.50 s · sound · 1 clip"
     );
-    let slot = json!({"clips": [
-        {"track": "V1", "at": "00:00:01:00", "sequence": "main", "name": "Open"},
-        {"track": "A2", "at": "00:00:04:00", "sequence": "titles"},
-    ]});
+    let place = |track: &str, at: &str, sequence: &str, name: Option<&str>| SlotClip {
+        track: track.into(),
+        at: at.into(),
+        sequence: sequence.into(),
+        name: name.map(str::to_owned),
+        ..SlotClip::default()
+    };
+    let slot = InspectedSlot {
+        clips: vec![
+            place("V1", "00:00:01:00", "main", Some("Open")),
+            place("A2", "00:00:04:00", "titles", None),
+        ],
+        ..InspectedSlot::default()
+    };
     assert_eq!(
         uses_line(&slot, "main"),
         "V1 00:00:01:00 “Open” · titles › A2 00:00:04:00"
@@ -184,13 +222,27 @@ fn a_slot_says_what_it_needs_and_where_it_plays() {
 
 #[test]
 fn a_chosen_file_fits_a_slot_or_says_why_not() {
-    let picture = json!({"id": "slot1", "seconds": 4.0, "video": true});
-    let sound = json!({"id": "slot3", "seconds": 4.0, "audio": true});
+    let picture = slot("slot1", 4.0, true, false, 0);
+    let sound = slot("slot3", 4.0, false, true, 0);
     let files = vec![PathBuf::from("/m/a.mov"), PathBuf::from("/m/b.wav")];
-    let answer = json!({"files": [
-        {"path": "/m/a.mov", "seconds": 6.0, "video": true, "audio": false, "fits": ["slot1"]},
-        {"path": "/m/b.wav", "seconds": 3.0, "video": false, "audio": true, "fits": []},
-    ]});
+    let checked = |files: Vec<CheckedFile>| {
+        Ok(PresetCheck {
+            files,
+            ..PresetCheck::default()
+        })
+    };
+    let probed = |path: &str, seconds: f64, video: bool, audio: bool, fits: &[&str]| CheckedFile {
+        path: path.into(),
+        seconds,
+        video,
+        audio,
+        fits: fits.iter().map(|fit| (*fit).to_owned()).collect(),
+        error: None,
+    };
+    let answer = checked(vec![
+        probed("/m/a.mov", 6.0, true, false, &["slot1"]),
+        probed("/m/b.wav", 3.0, false, true, &[]),
+    ]);
     let fit = file_fit(&answer, &files, &picture, Path::new("/m/a.mov"));
     assert!(fit.fits);
     assert_eq!(fit.words, "✓ a.mov · 6.00 s");
@@ -208,24 +260,22 @@ fn a_chosen_file_fits_a_slot_or_says_why_not() {
         "✕ b.wav is shorter than 4.00 s"
     );
     // A probe's error says its first line; a file the answer leaves out is unread.
-    let failed = json!({"files": [{"path": "/m/a.mov", "fits": [], "error": "ffmpeg failed\nargs: -v quiet"}]});
+    let failed = checked(vec![CheckedFile {
+        path: "/m/a.mov".into(),
+        error: Some("ffmpeg failed\nargs: -v quiet".into()),
+        ..CheckedFile::default()
+    }]);
     assert_eq!(
         file_fit(&failed, &files, &picture, Path::new("/m/a.mov")).words,
         "✕ a.mov: ffmpeg failed"
     );
     assert_eq!(
-        file_fit(
-            &json!({"files": []}),
-            &files,
-            &picture,
-            Path::new("/m/a.mov")
-        )
-        .words,
+        file_fit(&checked(vec![]), &files, &picture, Path::new("/m/a.mov")).words,
         "✕ Kerf could not read a.mov"
     );
     assert_eq!(
         file_fit(
-            &json!({"error": "no such preset\nmore"}),
+            &Err("no such preset\nmore".into()),
             &files,
             &picture,
             Path::new("/m/a.mov")

@@ -1,16 +1,18 @@
 //! Building the timeline view ([`TimelineView`]) editor snapshots carry, and
-//! the catalog of effects in the same terms: parameter definitions and values
-//! as JSON.
+//! the catalog of effects in the same terms: parameter definitions as
+//! [`ViewParamDef`]s, and values as JSON.
 
 use crate::{
-    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
+    ViewTransition,
 };
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Media, Param, ParamDef,
     ParamType, Params, Project, Rate, Sequence, Time, Track, TrackKind, Value,
 };
 use serde_json::{json, Map, Value as Json};
+use std::collections::BTreeMap;
 
 /// The view as the JSON a snapshot carries.
 pub(crate) fn to_json(view: &TimelineView) -> Json {
@@ -44,18 +46,18 @@ pub(crate) fn timeline_view(project: &Project) -> TimelineView {
         name: project.name.clone(),
         sources: project.media.iter().map(source_view).collect(),
         sequences: project.sequences.iter().map(sequence_view).collect(),
-        properties: properties(),
+        properties: clip_properties(),
         mask_properties: Catalog::builtin()
             .mask_props()
             .iter()
-            .map(param_def_json)
+            .map(param_def_view)
             .collect(),
         mask_modes: MaskMode::ALL.map(|mode| mode.name().to_owned()).into(),
         generators: Catalog::builtin()
             .all()
             .filter(|def| def.kind == FxKind::Generator)
             .map(|def| {
-                let params = def.params.iter().map(param_def_json).collect();
+                let params = def.params.iter().map(param_def_view).collect();
                 (def.id.to_string(), params)
             })
             .collect(),
@@ -129,18 +131,14 @@ fn sequence_view(sequence: &Sequence) -> ViewSequence {
     }
 }
 
-/// The properties a clip has by its track's type, `{video: [...], audio: [...]}`, as a timeline's
+/// The properties a clip has by its track's type, `video` and `audio`, as a timeline's
 /// `properties` carries them.
-pub fn properties_json() -> Json {
-    properties().into()
-}
-
-fn properties() -> Map<String, Json> {
+pub fn clip_properties() -> BTreeMap<String, Vec<ViewParamDef>> {
     [Domain::Video, Domain::Audio]
         .into_iter()
         .map(|domain| {
             let defs = Catalog::builtin().props(domain).iter();
-            (domain.name().to_owned(), defs.map(param_def_json).collect())
+            (domain.name().to_owned(), defs.map(param_def_view).collect())
         })
         .collect()
 }
@@ -380,58 +378,45 @@ fn params_json(params: &Params, rate: Rate) -> Map<String, Json> {
 /// generators (titles and other pictures a clip makes on its own, `kind`
 /// `generator`), each with its display name, when to use it, what renders
 /// it, its parameter definitions and its `domain` (`video` or `audio`).
-pub fn fx_catalog_all_json() -> Json {
-    Json::Array(
-        Catalog::builtin()
-            .all()
-            .map(|fx| {
-                let mut entry = fx_entry_json(fx);
-                entry["domain"] = json!(fx.domain.name());
-                entry
-            })
-            .collect(),
-    )
+pub fn fx_catalog_all() -> Vec<ViewFxDef> {
+    Catalog::builtin().all().map(fx_def_view).collect()
 }
 
-fn fx_entry_json(fx: &kerf_model::FxDef) -> Json {
+fn fx_def_view(fx: &kerf_model::FxDef) -> ViewFxDef {
     let name = fx
         .doc
         .split_once(": ")
         .map_or_else(|| fx.doc.trim_end_matches('.'), |(name, _)| name);
-    json!({
-        "id": fx.id.as_str(),
-        "kind": fx.kind.name(),
-        "category": fx.category,
-        "name": name,
-        "doc": fx.doc,
-        "engine": fx.engine.name(),
-        "params": fx.params.iter().map(param_def_json).collect::<Vec<_>>(),
-    })
+    ViewFxDef {
+        id: fx.id.as_str().to_owned(),
+        kind: fx.kind.name().to_owned(),
+        category: fx.category.clone(),
+        name: name.to_owned(),
+        doc: fx.doc.clone(),
+        engine: fx.engine.name().to_owned(),
+        params: fx.params.iter().map(param_def_view).collect(),
+        domain: fx.domain.name().to_owned(),
+    }
 }
 
-fn param_def_json(def: &ParamDef) -> Json {
-    let mut value = json!({
-        "name": def.name,
-        "type": def.ty.name(),
-        "default": value_json(&def.default),
-        "animatable": def.animatable,
-        "doc": def.doc,
-    });
-    if let Some(min) = def.min {
-        value["min"] = json!(min);
+fn param_def_view(def: &ParamDef) -> ViewParamDef {
+    let (options, extensions) = match &def.ty {
+        ParamType::Enum(options) => (Some(options.clone()), None),
+        ParamType::File(extensions) => (None, Some(extensions.clone())),
+        _ => (None, None),
+    };
+    ViewParamDef {
+        name: def.name.clone(),
+        kind: def.ty.name().to_owned(),
+        default: value_json(&def.default),
+        animatable: def.animatable,
+        doc: def.doc.clone(),
+        min: def.min,
+        max: def.max,
+        unit: def.unit.clone(),
+        options,
+        extensions,
     }
-    if let Some(max) = def.max {
-        value["max"] = json!(max);
-    }
-    if let Some(unit) = &def.unit {
-        value["unit"] = json!(unit);
-    }
-    match &def.ty {
-        ParamType::Enum(options) => value["options"] = json!(options),
-        ParamType::File(extensions) => value["extensions"] = json!(extensions),
-        _ => {}
-    }
-    value
 }
 
 fn param_json(param: &Param, rate: Rate) -> Json {

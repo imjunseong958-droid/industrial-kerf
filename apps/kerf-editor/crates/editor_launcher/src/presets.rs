@@ -7,8 +7,8 @@
 //! person names ([`export_preset`]); Save Current as Preset keeps it in the
 //! project's `presets/` ([`save_preset`], [`SavePreset`]). The launcher's
 //! From Preset page starts a new project from one, in the same words for
-//! what a slot needs and what fills it (the functions below that take
-//! JSON: they read the bridge's answers as they come).
+//! what a slot needs and what fills it (the functions below that take a
+//! [`Slot`] or a [`Made`], which either reading of a preset gives).
 
 use crate::launcher::field;
 use editor_session::session::{BridgeEvent, Session};
@@ -24,7 +24,8 @@ use gpui::{
     FocusHandle, Focusable, FontWeight, KeyBinding, PathPromptOptions, SharedString, Subscription,
     Window,
 };
-use kerf_bridge::{Command, Event};
+use kerf_bridge::event::{InspectedMade, InspectedSlot, PresetInspection, PresetMade, PresetSlot};
+use kerf_bridge::{Command, Event, PresetCheck};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -35,6 +36,67 @@ pub const EXTENSION: &str = "kerfpreset";
 pub const EXPORT_NAME: &str = "editing.kerfpreset";
 
 // ---------------------------------------------------------------- words
+
+/// A media slot of a preset, as either reading of it says it: the bridge's
+/// of the file alone ([`PresetSlot`], the launcher's), or kerf-mcp's over a
+/// project ([`InspectedSlot`], Import Editing Preset's), which says which
+/// made media read it.
+pub trait Slot {
+    fn id(&self) -> &str;
+    /// The made media that read it, where the reading says so.
+    fn read_by(&self) -> Option<&[String]>;
+}
+
+impl Slot for PresetSlot {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn read_by(&self) -> Option<&[String]> {
+        None
+    }
+}
+
+impl Slot for InspectedSlot {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn read_by(&self) -> Option<&[String]> {
+        Some(&self.read_by)
+    }
+}
+
+/// A media a preset makes from its steps, as either reading says it
+/// ([`PresetMade`], [`InspectedMade`]).
+pub trait Made {
+    fn id(&self) -> &str;
+    /// The slot it is of frame for frame, where it is one's.
+    fn of(&self) -> Option<&str>;
+    fn steps(&self) -> &[String];
+}
+
+impl Made for PresetMade {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn of(&self) -> Option<&str> {
+        self.of.as_deref()
+    }
+    fn steps(&self) -> &[String] {
+        &self.steps
+    }
+}
+
+impl Made for InspectedMade {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn of(&self) -> Option<&str> {
+        self.of.as_deref()
+    }
+    fn steps(&self) -> &[String] {
+        &self.steps
+    }
+}
 
 /// Whether `path` is a preset file by its name.
 pub fn is_preset_file(path: &Path) -> bool {
@@ -63,10 +125,10 @@ pub fn export_path(path: &Path) -> Result<PathBuf, String> {
 /// What a media the preset makes is, from its steps: "a flux of slot1",
 /// "an upscaler from a guide sequence", "made of slot1", "made from its
 /// steps".
-pub fn made_kind(made: &Value) -> String {
+pub fn made_kind(made: &impl Made) -> String {
     let mut model = None;
     let mut drawn = false;
-    for step in strings(&made["steps"]) {
+    for step in made.steps() {
         if step.starts_with("render ") {
             drawn = true;
         }
@@ -74,7 +136,7 @@ pub fn made_kind(made: &Value) -> String {
             model = Some(found.to_owned());
         }
     }
-    let of = made["of"].as_str().filter(|of| !of.is_empty());
+    let of = made.of().filter(|of| !of.is_empty());
     let Some(model) = model else {
         return match of {
             Some(of) => format!("made of {of}"),
@@ -119,25 +181,19 @@ fn model_word(line: &str) -> Option<&str> {
 }
 
 /// The media the preset makes of `slot`'s footage: the slot's own
-/// `readBy` where the bridge says it, else the made media whose steps name
+/// `readBy` where the bridge says it, else those of `made` whose steps name
 /// `slot:<id>`.
-pub fn slot_read_by(preset: &Value, slot: &Value) -> Vec<String> {
-    if let Some(ids) = slot["readBy"].as_array() {
-        return ids
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect();
+pub fn slot_read_by(made: &[impl Made], slot: &impl Slot) -> Vec<String> {
+    if let Some(ids) = slot.read_by() {
+        return ids.to_vec();
     }
-    let Some(id) = slot["id"].as_str().filter(|id| !id.is_empty()) else {
+    let id = slot.id();
+    if id.is_empty() {
         return Vec::new();
-    };
-    preset["made"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|made| strings(&made["steps"]).any(|step| reads_slot(step, id)))
-        .filter_map(|made| made["id"].as_str().map(str::to_owned))
+    }
+    made.iter()
+        .filter(|made| made.steps().iter().any(|step| reads_slot(step, id)))
+        .map(|made| made.id().to_owned())
         .collect()
 }
 
@@ -167,13 +223,6 @@ pub fn read_by_line(made: &[String]) -> String {
     }
 }
 
-/// How many clips `clips` counts: a number, or a list of them.
-fn clip_count(clips: &Value) -> usize {
-    clips
-        .as_array()
-        .map_or_else(|| clips.as_u64().unwrap_or(0) as usize, Vec::len)
-}
-
 fn clips_words(count: usize) -> Option<String> {
     match count {
         0 => None,
@@ -183,49 +232,41 @@ fn clips_words(count: usize) -> Option<String> {
 }
 
 /// What a slot needs: "Needs 2.00 s · picture and sound · 3 clips".
-pub fn needs_line(slot: &Value) -> String {
-    let mut needs = vec![format!("{:.2} s", slot["seconds"].as_f64().unwrap_or(0.0))];
-    let video = slot["video"].as_bool().unwrap_or(false);
-    let audio = slot["audio"].as_bool().unwrap_or(false);
-    match (video, audio) {
+pub fn needs_line(slot: &PresetSlot) -> String {
+    let mut needs = vec![format!("{:.2} s", slot.seconds)];
+    match (slot.video, slot.audio) {
         (true, true) => needs.push("picture and sound".into()),
         (true, false) => needs.push("picture".into()),
         (false, true) => needs.push("sound".into()),
         (false, false) => {}
     }
-    needs.extend(clips_words(clip_count(&slot["clips"])));
+    needs.extend(clips_words(slot.clips));
     format!("Needs {}", needs.join(" · "))
 }
 
 /// What a made media is and plays: "A flux of slot1 · 2 clips".
-pub fn made_line(made: &Value) -> String {
+pub fn made_line(made: &PresetMade) -> String {
     let mut kind = made_kind(made);
     if let Some(first) = kind.get(..1) {
         kind = first.to_uppercase() + &kind[1..];
     }
     let mut about = vec![kind];
-    about.extend(clips_words(clip_count(&made["clips"])));
+    about.extend(clips_words(made.clips));
     about.join(" · ")
 }
 
 /// Where a slot plays in the preset: "V1 00:00:01:00 “Open”", each place
 /// in another sequence than `root` after its sequence's id.
-pub fn uses_line(slot: &Value, root: &str) -> String {
-    slot["clips"]
-        .as_array()
-        .into_iter()
-        .flatten()
+pub fn uses_line(slot: &InspectedSlot, root: &str) -> String {
+    slot.clips
+        .iter()
         .map(|clip| {
-            let mut used = format!(
-                "{} {}",
-                clip["track"].as_str().unwrap_or_default(),
-                clip["at"].as_str().unwrap_or_default()
-            );
-            let sequence = clip["sequence"].as_str().unwrap_or_default();
+            let mut used = format!("{} {}", clip.track, clip.at);
+            let sequence = &clip.sequence;
             if !sequence.is_empty() && sequence != root {
                 used = format!("{sequence} › {used}");
             }
-            if let Some(name) = clip["name"].as_str().filter(|name| !name.is_empty()) {
+            if let Some(name) = clip.name.as_deref().filter(|name| !name.is_empty()) {
                 used.push_str(&format!(" “{name}”"));
             }
             used
@@ -267,7 +308,12 @@ impl Fit {
 
 /// How `file`, chosen for `slot`, fills it, from what `preset_inspect`
 /// answered of the files `files` (in the order asked).
-pub fn file_fit(answer: &Value, files: &[PathBuf], slot: &Value, file: &Path) -> Fit {
+pub fn file_fit(
+    answer: &Result<PresetCheck, String>,
+    files: &[PathBuf],
+    slot: &PresetSlot,
+    file: &Path,
+) -> Fit {
     let name = file
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -279,41 +325,39 @@ pub fn file_fit(answer: &Value, files: &[PathBuf], slot: &Value, file: &Path) ->
     };
     // An error's first line says it; the rest is the tool's own output.
     let first_line = |error: &str| error.lines().next().unwrap_or_default().trim().to_owned();
-    if let Some(error) = answer["error"].as_str() {
-        return refused(format!(
-            "✕ {name} could not be checked: {}",
-            first_line(error)
-        ));
-    }
-    let probed = answer["files"].as_array().map(Vec::as_slice).unwrap_or(&[]);
-    let entry = probed
-        .iter()
-        .find(|entry| entry["path"].as_str().map(Path::new) == Some(file))
-        .or_else(|| {
-            files
-                .iter()
-                .position(|known| known == file)
-                .and_then(|index| probed.get(index))
-        });
+    let probed = match answer {
+        Ok(check) => &check.files,
+        Err(error) => {
+            return refused(format!(
+                "✕ {name} could not be checked: {}",
+                first_line(error)
+            ))
+        }
+    };
+    let entry = probed.iter().find(|entry| entry.path == file).or_else(|| {
+        files
+            .iter()
+            .position(|known| known == file)
+            .and_then(|index| probed.get(index))
+    });
     let Some(entry) = entry else {
         return refused(format!("✕ Kerf could not read {name}"));
     };
-    if let Some(error) = entry["error"].as_str() {
+    if let Some(error) = &entry.error {
         return refused(format!("✕ {name}: {}", first_line(error)));
     }
-    let id = slot["id"].as_str().unwrap_or_default();
-    let seconds = entry["seconds"].as_f64().unwrap_or(0.0);
-    let need = slot["seconds"].as_f64().unwrap_or(0.0);
-    if strings(&entry["fits"]).any(|fits| fits == id) {
+    let seconds = entry.seconds;
+    let need = slot.seconds;
+    if entry.fits.contains(&slot.id) {
         return Fit {
             fits: true,
             words: format!("✓ {name} · {seconds:.2} s"),
             spare: (seconds - need).max(0.0),
         };
     }
-    let why = if slot["video"] == true && entry["video"] != true {
+    let why = if slot.video && !entry.video {
         "has no picture".to_owned()
-    } else if slot["audio"] == true && entry["audio"] != true {
+    } else if slot.audio && !entry.audio {
         "has no sound".to_owned()
     } else {
         format!("is shorter than {need:.2} s")
@@ -385,14 +429,6 @@ pub fn presets_in(projects: &[PathBuf]) -> Vec<PresetChoice> {
         }));
     }
     found
-}
-
-fn strings(value: &Value) -> impl Iterator<Item = &str> {
-    value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
 }
 
 /// What the bridge's `event` says of an import it refused, as the note
@@ -668,7 +704,7 @@ pub struct ApplyPreset {
     focus: FocusHandle,
     path: PathBuf,
     /// What the bridge read of it; None until it answers.
-    preset: Option<Value>,
+    preset: Option<PresetInspection>,
     /// Why it could not be read, or applied.
     problem: Option<SharedString>,
     slots: Vec<SlotChoice>,
@@ -797,7 +833,7 @@ impl ApplyPreset {
         }
     }
 
-    fn load(&mut self, preset: Value, cx: &mut Context<Self>) {
+    fn load(&mut self, preset: PresetInspection, cx: &mut Context<Self>) {
         let session = self.session.read(cx);
         let revision = session.revision();
         let sources: Vec<String> = session
@@ -806,24 +842,18 @@ impl ApplyPreset {
             .iter()
             .map(|source| source.id.clone())
             .collect();
-        let root = preset["sequence"].as_str().unwrap_or_default().to_owned();
+        let root = &preset.sequence;
         let mut slots = Vec::new();
         let mut fields = Vec::new();
         let mut imported = false;
-        for slot in preset["slots"].as_array().into_iter().flatten() {
-            let id = slot["id"].as_str().unwrap_or_default().to_owned();
-            let fits: Vec<(String, i64)> = slot["fits"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|fit| {
-                    let media = fit["media"].as_str()?;
-                    // Only media the project shows can be named here.
-                    sources
-                        .iter()
-                        .any(|known| known == media)
-                        .then(|| (media.to_owned(), fit["latestFrame"].as_i64().unwrap_or(0)))
-                })
+        for slot in &preset.slots {
+            let id = slot.id.clone();
+            let fits: Vec<(String, i64)> = slot
+                .fits
+                .iter()
+                // Only media the project shows can be named here.
+                .filter(|fit| sources.contains(&fit.media))
+                .map(|fit| (fit.media.clone(), fit.latest_frame))
                 .collect();
             // What was chosen before stays chosen while it still fits.
             let kept = self.slots.iter().position(|known| known.id == id);
@@ -864,9 +894,9 @@ impl ApplyPreset {
                 }
             }
             slots.push(SlotChoice {
-                seconds: slot["seconds"].as_f64().unwrap_or(0.0),
-                uses: uses_line(slot, &root),
-                read_by: read_by_line(&slot_read_by(&preset, slot)),
+                seconds: slot.seconds,
+                uses: uses_line(slot, root),
+                read_by: read_by_line(&slot_read_by(&preset.made, slot)),
                 id,
                 fits,
                 chosen,
@@ -879,12 +909,11 @@ impl ApplyPreset {
         }
         self.slots = slots;
         if self.texts.is_empty() {
-            self.texts = preset["textSlots"]
-                .as_object()
-                .into_iter()
-                .flatten()
+            self.texts = preset
+                .text_slots
+                .iter()
                 .map(|(clip, original)| {
-                    let original = original.as_str().unwrap_or_default().to_owned();
+                    let original = original.clone();
                     let words = original.clone();
                     let input = cx.new(|cx| {
                         let mut input = TextInput::new(cx, "Text");
@@ -1189,8 +1218,7 @@ impl Render for ApplyPreset {
         let name = self
             .preset
             .as_ref()
-            .and_then(|preset| preset["name"].as_str())
-            .map(str::to_owned)
+            .map(|preset| preset.name.clone())
             .unwrap_or_else(|| {
                 self.path
                     .file_stem()
@@ -1212,11 +1240,7 @@ impl Render for ApplyPreset {
                 .map(|(index, slot)| self.slot_row(index, slot, window, cx))
                 .collect();
             body = body.children(rows);
-            let made: Vec<Value> = self
-                .preset
-                .as_ref()
-                .and_then(|preset| preset["made"].as_array().cloned())
-                .unwrap_or_default();
+            let made: &[InspectedMade] = self.preset.as_ref().map_or(&[], |preset| &preset.made);
             if !made.is_empty() {
                 body = body.child(
                     div()
@@ -1236,8 +1260,8 @@ impl Render for ApplyPreset {
                                 .flex_col()
                                 .gap(px(theme::space::S4))
                                 .children(made.iter().enumerate().map(|(index, entry)| {
-                                    let id = entry["id"].as_str().unwrap_or_default();
-                                    let steps: Vec<&str> = strings(&entry["steps"]).collect();
+                                    let id = &entry.id;
+                                    let steps = &entry.steps;
                                     ui::tip_on(
                                         ui::label(
                                             format!("{id}, {}", made_kind(entry)),
@@ -1279,9 +1303,8 @@ impl Render for ApplyPreset {
         let code = self
             .preset
             .as_ref()
-            .and_then(|preset| preset["document"].as_str())
-            .unwrap_or_default()
-            .to_owned();
+            .map(|preset| preset.document.clone())
+            .unwrap_or_default();
         let details = div()
             .flex()
             .flex_col()

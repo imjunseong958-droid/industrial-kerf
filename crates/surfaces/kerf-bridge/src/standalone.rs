@@ -2,9 +2,11 @@
 //! kerfd runs, Kerf's tools served over MCP, crash reports, the system keychain, the
 //! project launcher, the command registry and the catalog.
 
-use crate::tasks::ProjectInfo;
+use crate::event::{ViewFxDef, ViewParamDef};
+use crate::tasks::{PresetCheck, ProjectInfo};
 use crate::{secrets, tasks, updates, SERVE_MCP};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 // ---- about ---------------------------------------------------------------------
@@ -132,12 +134,10 @@ pub fn project_inspect(path: &Path) -> ProjectInfo {
     tasks::inspect_project(path)
 }
 
-/// A preset file's slots, and how files would fill them: `{path, files?: [path]}` -> `{name,
-/// slots: [{id, seconds, video, audio, clips}], texts: {clipId: text}, files: [{path,
-/// seconds, video, audio, fits: [slotId], error?}]}` or `{error}`. It probes the files with
-/// ffprobe, so it may take a moment.
-pub fn preset_inspect(request: &Value) -> Value {
-    tasks::inspect_preset(request)
+/// The preset file at `path`, its slots and texts, and how each of `files` would fill them;
+/// or why it cannot be read. It probes the files with ffprobe, so it may take a moment.
+pub fn preset_inspect(path: &Path, files: &[PathBuf]) -> Result<PresetCheck, String> {
+    tasks::inspect_preset(path, files)
 }
 
 // ---- command registry ----------------------------------------------------------
@@ -171,15 +171,14 @@ pub fn commands_run(invocation: &Value) -> Value {
     }
 }
 
-/// Everything the catalog offers, as a JSON array of `{id, kind, domain, category, name,
-/// doc, engine, params}`: picture effects and transitions, generators (`kind: "generator"`,
-/// such as titles and solids) and sound effects (`domain: "audio"`).
-pub fn fx_catalog_all() -> Value {
-    kerf_runtime::fx_catalog_all_json()
+/// Everything the catalog offers: picture effects and transitions, generators (`kind`
+/// `generator`, such as titles and solids) and sound effects (`domain` `audio`).
+pub fn fx_catalog_all() -> Vec<ViewFxDef> {
+    kerf_runtime::fx_catalog_all()
 }
 
 /// The properties a clip has by its track's type, which [`fx_catalog_all`] does not list:
-/// `{video: [...], audio: [...]}`, as a timeline's `properties` carries them.
-pub fn clip_properties() -> Value {
-    kerf_runtime::properties_json()
+/// `video` and `audio`, as a timeline's `properties` carries them.
+pub fn clip_properties() -> BTreeMap<String, Vec<ViewParamDef>> {
+    kerf_runtime::clip_properties()
 }

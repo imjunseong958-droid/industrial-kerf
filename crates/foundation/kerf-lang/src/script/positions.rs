@@ -2,8 +2,8 @@
 //! seconds, or an anchor with an optional amount, such as `end`, a clip's
 //! start or end, a marker, or where a clip plays a position of its media.
 
-use crate::text::Clock;
-use kerf_model::{Clip, Content, Project, Sequence, Time};
+use crate::text::{Clock, Unread};
+use kerf_model::{Clip, Content, MissingKind, Project, Sequence, Time};
 
 /// Positions on one sequence. Besides timecode, frames, and seconds, a
 /// position may be `end`, the end of the sequence; `<clip>.start` or
@@ -27,7 +27,7 @@ impl<'a> Positions<'a> {
         }
     }
 
-    pub(super) fn position(&self, text: &str) -> Result<Time, String> {
+    pub(super) fn position(&self, text: &str) -> Result<Time, Unread> {
         let (base, rest) = if let Some((clip, source)) = text.split_once('@') {
             // Source positions carry no sign, so one starts the amount.
             let split = source
@@ -52,14 +52,14 @@ impl<'a> Positions<'a> {
         {
             (self.sequence.duration(), rest)
         } else {
-            return self.clock.position(text);
+            return Ok(self.clock.position(text)?);
         };
         match rest {
             "" => Ok(base),
             amount if amount.starts_with(['+', '-']) => Ok(base + self.clock.delta(amount)?),
-            _ => Err(format!(
-                "`{text}`: after an anchor comes an amount such as +12f or -0.5s"
-            )),
+            _ => Err(
+                format!("`{text}`: after an anchor comes an amount such as +12f or -0.5s").into(),
+            ),
         }
     }
 
@@ -82,14 +82,18 @@ impl<'a> Positions<'a> {
     }
 
     /// The start or end of a clip or marker of this sequence.
-    fn edge(&self, id: &str, end: bool) -> Result<Time, String> {
+    fn edge(&self, id: &str, end: bool) -> Result<Time, Unread> {
         if let Some(clip) = self.sequence.tracks.iter().find_map(|track| track.clip(id)) {
             return Ok(if end { clip.end() } else { clip.start });
         }
         let marker = self.sequence.marker(id).ok_or_else(|| {
-            format!(
-                "no clip or marker `{id}` in sequence `{}`",
-                self.sequence.id
+            Unread::missing(
+                format!(
+                    "no clip or marker `{id}` in sequence `{}`",
+                    self.sequence.id
+                ),
+                MissingKind::ClipOrMarker,
+                id,
             )
         })?;
         Ok(if end {
@@ -101,13 +105,19 @@ impl<'a> Positions<'a> {
 
     /// Where the clip `id` of this sequence plays `source`, a position on
     /// its media or nested sequence, on the nearest frame.
-    fn played(&self, id: &str, source: &str) -> Result<Time, String> {
+    fn played(&self, id: &str, source: &str) -> Result<Time, Unread> {
         let clip = self
             .sequence
             .tracks
             .iter()
             .find_map(|track| track.clip(id))
-            .ok_or_else(|| format!("no clip `{id}` in sequence `{}`", self.sequence.id))?;
+            .ok_or_else(|| {
+                Unread::missing(
+                    format!("no clip `{id}` in sequence `{}`", self.sequence.id),
+                    MissingKind::Clip,
+                    id,
+                )
+            })?;
         let (clock, (low, high)) = source_clock(self.project, clip)?
             .zip(clip.source_range())
             .ok_or_else(|| format!("clip `{id}` plays no media; use {id}.start or {id}.end"))?;
@@ -117,7 +127,8 @@ impl<'a> Positions<'a> {
                 "clip `{id}` plays {} to {}, not `{source}`",
                 clock.print_position(low),
                 clock.print_position(high),
-            ));
+            )
+            .into());
         }
         let played = clip
             .played_at(at)
@@ -128,7 +139,8 @@ impl<'a> Positions<'a> {
 
 /// Where `text` is on `sequence` of `project`, read as a script reads a
 /// position: timecode, frames or seconds, or an anchor with an optional
-/// amount, such as `end`, `c3.end-1f`, `beat1+2f` or `c3@14:24:05:02`.
+/// amount, such as `end`, `c3.end-1f`, `beat1+2f` or `c3@14:24:05:02`; or what is said of
+/// why not.
 pub fn sequence_position(
     project: &Project,
     sequence: &Sequence,
@@ -140,6 +152,7 @@ pub fn sequence_position(
         sequence,
     }
     .position(text)
+    .map_err(|unread| unread.message)
 }
 
 /// The clock of what `clip` plays: its media's or its nested sequence's;
