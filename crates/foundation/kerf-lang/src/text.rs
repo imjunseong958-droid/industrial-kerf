@@ -3,8 +3,8 @@
 use crate::lex::{Arg, Atom, Line};
 use kerf_model::time::{format_timecode, parse_timecode, parse_timecode_frames};
 use kerf_model::{
-    Diagnostic, Id, Interp, Keyframe, Media, Param, ParamDef, ParamType, RampKey, Rate, Ratio,
-    Rgba, Sequence, Speed, Time, Value,
+    Diagnostic, Id, Interp, Keyframe, Media, Missing, MissingKind, Param, ParamDef, ParamType,
+    RampKey, Rate, Ratio, Rgba, Sequence, Speed, Time, Value,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -378,6 +378,35 @@ pub fn parse_param(atom: &Atom, def: &ParamDef, rate: Rate) -> Result<Param, Str
     }
 }
 
+/// Why a value was not read: what is said of it, and what it names that is not there where
+/// that is why ([`Missing`]), which [`Fields::take_with`] keeps on the diagnostic it makes.
+pub struct Unread {
+    pub message: String,
+    pub missing: Option<Missing>,
+}
+
+impl Unread {
+    /// `message`, which says that `id`, a `kind` of thing, is not there.
+    pub fn missing(message: String, kind: MissingKind, id: &str) -> Self {
+        Self {
+            message,
+            missing: Some(Missing {
+                kind,
+                id: id.to_owned(),
+            }),
+        }
+    }
+}
+
+impl From<String> for Unread {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            missing: None,
+        }
+    }
+}
+
 /// The arguments of one line, consumed by name. Leftover pairs are errors
 /// unless the caller takes them with `rest`.
 pub struct Fields<'a> {
@@ -507,18 +536,22 @@ impl<'a> Fields<'a> {
     }
 
     /// Parse a taken value with `parse`, reporting failures at the value.
-    pub fn take_with<T>(
+    pub fn take_with<T, E: Into<Unread>>(
         &mut self,
         key: &'a str,
-        parse: impl FnOnce(&str) -> Result<T, String>,
+        parse: impl FnOnce(&str) -> Result<T, E>,
     ) -> Result<Option<T>, Diagnostic> {
         match self.take(key) {
             None => Ok(None),
             Some(arg) => {
                 let text = self.text(arg)?;
-                parse(text)
-                    .map(Some)
-                    .map_err(|message| self.error(arg, message))
+                parse(text).map(Some).map_err(|unread| {
+                    let Unread { message, missing } = unread.into();
+                    Diagnostic {
+                        missing: missing.map(Box::new),
+                        ..self.error(arg, message)
+                    }
+                })
             }
         }
     }

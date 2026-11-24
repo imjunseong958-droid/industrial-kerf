@@ -235,6 +235,69 @@ fn real_daemon_rejects_an_oversized_request_before_reducer_execution() {
     let _ = fs::remove_dir_all(&directory);
 }
 
+/// An operation kerfd has no name for, as a newer client asks an older kerfd, is told by its
+/// name: `UNKNOWN_OPERATION`, which a client acts on. An operation it has, asked with
+/// something in it that it has no name for, is only an invalid request, as is one whose
+/// envelope does not read, whatever operation it asks.
+#[test]
+fn an_operation_kerfd_has_no_name_for_is_told_by_its_name() {
+    let directory = project_directory("unknown-operation");
+    fs::create_dir_all(&directory).unwrap();
+    let daemon = start_daemon(&directory);
+    let client = RuntimeClient::new(&directory).unwrap();
+    wait_until_ready(&client);
+    let ask = |request: serde_json::Value| -> serde_json::Value {
+        let mut socket = raw_connection(client.endpoint()).unwrap();
+        socket.write_all(format!("{request}\n").as_bytes()).unwrap();
+        #[cfg(unix)]
+        let _ = socket.shutdown(std::net::Shutdown::Write);
+        let mut response = String::new();
+        socket.read_to_string(&mut response).unwrap();
+        serde_json::from_str(response.trim()).unwrap()
+    };
+    let newer = ask(serde_json::json!({
+        "protocolVersion": 1,
+        "id": "newer",
+        "operation": "summon_render_farm",
+        "baseRevision": 0,
+    }));
+    assert_eq!(newer["error"]["code"], "UNKNOWN_OPERATION", "{newer}");
+    assert!(
+        newer["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.starts_with("unknown variant `summon_render_farm`")),
+        "{newer}"
+    );
+    let unnamed_edit = ask(serde_json::json!({
+        "protocolVersion": 1,
+        "id": "unnamed-edit",
+        "operation": "apply_ops",
+        "actor": "ui",
+        "idempotencyKey": "unnamed-edit",
+        "baseRevision": 0,
+        "ops": [{"op": "teleport"}],
+    }));
+    assert_eq!(
+        unnamed_edit["error"]["code"], "INVALID_REQUEST",
+        "{unnamed_edit}"
+    );
+    assert!(
+        unnamed_edit["error"]["message"]
+            .as_str()
+            .is_some_and(|said| said.starts_with("unknown variant `teleport`")),
+        "{unnamed_edit}"
+    );
+    let no_id = ask(serde_json::json!({
+        "protocolVersion": 1,
+        "operation": "summon_render_farm",
+    }));
+    assert_eq!(no_id["error"]["code"], "INVALID_REQUEST", "{no_id}");
+    assert_eq!(no_id["error"]["message"], "id must be a string", "{no_id}");
+    assert_eq!(client.get_state().unwrap().revision, 0);
+    stop_daemon(daemon);
+    let _ = fs::remove_dir_all(&directory);
+}
+
 #[test]
 fn a_project_round_trips_through_kerfd_on_the_kernel() {
     let directory = project_directory("kernel");
