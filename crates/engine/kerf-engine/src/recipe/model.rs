@@ -150,6 +150,7 @@ pub(crate) struct Request<'a> {
     seed: Option<u64>,
     signals: &'a [Signal],
     moves: &'a [Moves],
+    /// Under [`WORKFLOW`], the name a step hands a model a graph of its own by.
     workflow: Option<String>,
     more: &'a BTreeMap<String, String>,
     out: String,
@@ -158,8 +159,12 @@ pub(crate) struct Request<'a> {
     from: Option<f64>,
 }
 
-/// Names and their files as an object, made in the order they are said: a name said twice
-/// is there once, with the file it was last given.
+// serde names a field by a literal: `workflow` is held to the name kerf-model gives it.
+const _: () = assert!(matches!(WORKFLOW.as_bytes(), b"workflow"));
+
+/// Names and their files as an object's entries, in the order they are said. As
+/// [`Request::file`] writes them, into a JSON object, a name said twice is there once, with
+/// the file it was last given.
 fn in_order<S: serde::Serializer>(
     guides: &[(String, String)],
     serializer: S,
