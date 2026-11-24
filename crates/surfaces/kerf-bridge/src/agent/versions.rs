@@ -119,9 +119,7 @@ fn run_version(
     let mut stopped = false;
     let result = (|| {
         let mut session = new_agent(shared, directory, binary, &request.settings, tx)?;
-        if let Ok(mut aborts) = shared.version_aborts.lock() {
-            aborts.push(session.abort_handle());
-        }
+        shared.agent.version_runs(session.abort_handle());
         session.run_with_events(
             &version_prompt(&request.text, index, count),
             |event| match event {

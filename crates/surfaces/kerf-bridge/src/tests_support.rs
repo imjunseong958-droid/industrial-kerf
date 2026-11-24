@@ -3,35 +3,24 @@
 
 use crate::Shared;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// The state the bridge's workers share, for the project in `directory`.
 pub(crate) fn shared(directory: &Path) -> Shared {
     Shared {
-        directory: directory.to_owned(),
-        media_status: Mutex::new(Default::default()),
-        copies: AtomicUsize::new(0),
-        revision: AtomicU64::new(0),
         closed: AtomicBool::new(false),
-        agent_busy: AtomicBool::new(false),
-        version_aborts: std::sync::Mutex::new(Vec::new()),
-        preview_busy: AtomicBool::new(false),
-        abort: Mutex::new(None),
-        frame: Mutex::new(None),
-        seek: Mutex::new(None),
-        project: Mutex::new(None),
+        revision: AtomicU64::new(0),
+        directory: directory.to_owned(),
         model: Mutex::new(None),
-        previews: AtomicU64::new(0),
-        preview_cancel: Mutex::new(None),
-        preview_turns: Default::default(),
-        stale_previews: Mutex::new(Vec::new()),
-        shown_preview: Mutex::new(None),
-        check_busy: AtomicBool::new(false),
-        check_cancel: Mutex::new(None),
+        agent: Default::default(),
+        viewer: Default::default(),
+        preview: Default::default(),
+        effect_previews: AtomicU64::new(0),
+        media: Default::default(),
+        check: Default::default(),
         makings: Default::default(),
-        others_makings: Default::default(),
         renders: Default::default(),
         tool_renders: Default::default(),
         workers: crate::Workers::new(),

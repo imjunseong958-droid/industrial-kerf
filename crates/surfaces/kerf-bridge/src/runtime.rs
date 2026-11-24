@@ -62,7 +62,7 @@ fn publish_snapshot(
                 if let Ok(mut model) = shared.model.lock() {
                     *model = Some(project.clone());
                 }
-                if let Ok(mut slot) = shared.project.lock() {
+                if let Ok(mut slot) = shared.viewer.project.lock() {
                     shared.revision.fetch_add(1, Ordering::SeqCst);
                     install_project(shared, &mut slot, MediaProject::Native(project));
                 }
@@ -292,7 +292,7 @@ impl Worker {
     fn command(&mut self, command: Command) {
         // A preview's place among those sent, which a stop goes by.
         let preview_turn =
-            matches!(command, Command::Preview { .. }).then(|| self.shared.preview_turns.take());
+            matches!(command, Command::Preview { .. }).then(|| self.shared.preview.turns.take());
         if matches!(command, Command::Reconnect) {
             self.reconnect();
             return;

@@ -18,7 +18,7 @@ use native::native_agent;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use versions::run_versions;
 
 /// The agent behind a chat: Kerf's own loop on a model API, with the router
@@ -139,9 +139,7 @@ pub(crate) fn agent_worker(
         );
         if request.versions > 0 {
             run_versions(&directory, &binary, &request, &tx, &commands, &shared);
-            if let Ok(mut aborts) = shared.version_aborts.lock() {
-                aborts.clear();
-            }
+            shared.agent.versions_are_over();
             emit(
                 &tx,
                 Event::AgentState {
@@ -149,7 +147,7 @@ pub(crate) fn agent_worker(
                     message: None,
                 },
             );
-            shared.agent_busy.store(false, Ordering::SeqCst);
+            shared.agent.end();
             emit(&tx, Event::AgentBusy { busy: false });
             // The runtime worker is gone only as the bridge closes, with nothing to refresh.
             let _ = commands.send(Command::Refresh);
@@ -281,10 +279,8 @@ pub(crate) fn agent_worker(
                 error(&tx, format!("Kerf's reply was not kept: {err}"));
             }
         }
-        if let Ok(mut abort) = shared.abort.lock() {
-            *abort = None;
-        }
-        shared.agent_busy.store(false, Ordering::SeqCst);
+        shared.agent.turn_is_over();
+        shared.agent.end();
         emit(&tx, Event::AgentBusy { busy: false });
         // The runtime worker is gone only as the bridge closes, with nothing to refresh.
         let _ = commands.send(Command::Refresh);
@@ -294,6 +290,88 @@ pub(crate) fn agent_worker(
 /// How a turn on a session gone on from what was kept fails, so that it is
 /// tried once more on a fresh one.
 const RESTORED_FAILED: &str = "\u{0}restored: ";
+
+/// Kerf's agent, as its thread and the bridge's callers share it: whether a request (a
+/// turn, or a request's versions) has it, and what stops each.
+#[derive(Default)]
+pub(crate) struct Turns {
+    busy: AtomicBool,
+    /// What stops the turn running.
+    abort: Mutex<Option<Arc<AtomicBool>>>,
+    /// What stops each agent making a version of a request, while they run.
+    versions: Mutex<Vec<Arc<AtomicBool>>>,
+}
+
+impl Turns {
+    /// Take the agent for a request. False when one has it already.
+    pub(crate) fn begin(&self) -> bool {
+        !self.busy.swap(true, Ordering::SeqCst)
+    }
+
+    /// The request is over, or never reached the agent's thread.
+    pub(crate) fn end(&self) {
+        self.busy.store(false, Ordering::SeqCst);
+    }
+
+    /// The turn's agent has started: `abort` stops it.
+    fn turn_runs(&self, abort: Arc<AtomicBool>) {
+        if let Ok(mut running) = self.abort.lock() {
+            *running = Some(abort);
+        }
+    }
+
+    fn turn_is_over(&self) {
+        if let Ok(mut running) = self.abort.lock() {
+            *running = None;
+        }
+    }
+
+    /// One more agent is making a version: `abort` stops it.
+    fn version_runs(&self, abort: Arc<AtomicBool>) {
+        if let Ok(mut running) = self.versions.lock() {
+            running.push(abort);
+        }
+    }
+
+    fn versions_are_over(&self) {
+        if let Ok(mut running) = self.versions.lock() {
+            running.clear();
+        }
+    }
+
+    /// Stop what is running, for the person who asked: without waiting for the turn's
+    /// handle, and false when it could not be had this moment, so they may ask again.
+    pub(crate) fn try_stop(&self) -> bool {
+        self.stop_versions();
+        match self.abort.try_lock() {
+            Ok(abort) => {
+                if let Some(abort) = &*abort {
+                    abort.store(true, Ordering::SeqCst);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Stop what is running, as the bridge is let go.
+    pub(crate) fn stop(&self) {
+        if let Ok(abort) = self.abort.lock()
+            && let Some(abort) = &*abort
+        {
+            abort.store(true, Ordering::SeqCst);
+        }
+        self.stop_versions();
+    }
+
+    fn stop_versions(&self) {
+        if let Ok(aborts) = self.versions.lock() {
+            for abort in aborts.iter() {
+                abort.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+}
 
 /// What a turn's events go to: the editor, the conversation that keeps the
 /// turn, and the tool calls under way, by id.
@@ -460,9 +538,7 @@ fn run_turn(
         _ => request.text.clone(),
     };
     agent.set_permissions(request.permissions);
-    if let Ok(mut abort) = shared.abort.lock() {
-        *abort = Some(agent.abort_handle());
-    }
+    shared.agent.turn_runs(agent.abort_handle());
     let unit = agent.context_unit();
     agent.run_with_events(&text, |event| events.hear(event, unit))?;
     emit(

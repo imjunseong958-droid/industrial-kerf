@@ -148,73 +148,107 @@ pub struct SectionStats {
     pub whole: u64,
 }
 
-static KEPT: AtomicU64 = AtomicU64::new(0);
-static KEPT_FRAMES: AtomicU64 = AtomicU64::new(0);
-static ENCODED: AtomicU64 = AtomicU64::new(0);
-static ENCODED_FRAMES: AtomicU64 = AtomicU64::new(0);
-static SOUND_KEPT: AtomicU64 = AtomicU64::new(0);
-static SOUND_MIXED: AtomicU64 = AtomicU64::new(0);
-static SOUND_CLIPS_KEPT: AtomicU64 = AtomicU64::new(0);
-static SOUND_CLIPS_DECODED: AtomicU64 = AtomicU64::new(0);
-static SOUND_PIECES_KEPT: AtomicU64 = AtomicU64::new(0);
-static SOUND_PIECES_ENCODED: AtomicU64 = AtomicU64::new(0);
-static SOUND_WHOLE: AtomicU64 = AtomicU64::new(0);
-static SOUND_UNJOINED: AtomicU64 = AtomicU64::new(0);
-static WHOLE: AtomicU64 = AtomicU64::new(0);
+/// [`SectionStats`] as it is counted: one count for each of its numbers.
+struct Counts {
+    kept: AtomicU64,
+    kept_frames: AtomicU64,
+    encoded: AtomicU64,
+    encoded_frames: AtomicU64,
+    sound_kept: AtomicU64,
+    sound_mixed: AtomicU64,
+    sound_clips_kept: AtomicU64,
+    sound_clips_decoded: AtomicU64,
+    sound_pieces_kept: AtomicU64,
+    sound_pieces_encoded: AtomicU64,
+    sound_whole: AtomicU64,
+    sound_unjoined: AtomicU64,
+    whole: AtomicU64,
+}
+
+/// What renders in this process have done, whichever of them did it: a render has nothing
+/// of its own to count in, and what reads these (the benchmark, the tests) asks before and
+/// after one.
+static COUNTS: Counts = Counts {
+    kept: AtomicU64::new(0),
+    kept_frames: AtomicU64::new(0),
+    encoded: AtomicU64::new(0),
+    encoded_frames: AtomicU64::new(0),
+    sound_kept: AtomicU64::new(0),
+    sound_mixed: AtomicU64::new(0),
+    sound_clips_kept: AtomicU64::new(0),
+    sound_clips_decoded: AtomicU64::new(0),
+    sound_pieces_kept: AtomicU64::new(0),
+    sound_pieces_encoded: AtomicU64::new(0),
+    sound_whole: AtomicU64::new(0),
+    sound_unjoined: AtomicU64::new(0),
+    whole: AtomicU64::new(0),
+};
+
+fn add(count: &AtomicU64, more: usize) {
+    count.fetch_add(more as u64, Ordering::Relaxed);
+}
 
 /// What renders in this process have done with their stretches.
 pub fn section_stats() -> SectionStats {
+    let read = |count: &AtomicU64| count.load(Ordering::Relaxed);
     SectionStats {
-        kept: KEPT.load(Ordering::Relaxed),
-        kept_frames: KEPT_FRAMES.load(Ordering::Relaxed),
-        encoded: ENCODED.load(Ordering::Relaxed),
-        encoded_frames: ENCODED_FRAMES.load(Ordering::Relaxed),
-        sound_kept: SOUND_KEPT.load(Ordering::Relaxed),
-        sound_mixed: SOUND_MIXED.load(Ordering::Relaxed),
-        sound_clips_kept: SOUND_CLIPS_KEPT.load(Ordering::Relaxed),
-        sound_clips_decoded: SOUND_CLIPS_DECODED.load(Ordering::Relaxed),
-        sound_pieces_kept: SOUND_PIECES_KEPT.load(Ordering::Relaxed),
-        sound_pieces_encoded: SOUND_PIECES_ENCODED.load(Ordering::Relaxed),
-        sound_whole: SOUND_WHOLE.load(Ordering::Relaxed),
-        sound_unjoined: SOUND_UNJOINED.load(Ordering::Relaxed),
-        whole: WHOLE.load(Ordering::Relaxed),
+        kept: read(&COUNTS.kept),
+        kept_frames: read(&COUNTS.kept_frames),
+        encoded: read(&COUNTS.encoded),
+        encoded_frames: read(&COUNTS.encoded_frames),
+        sound_kept: read(&COUNTS.sound_kept),
+        sound_mixed: read(&COUNTS.sound_mixed),
+        sound_clips_kept: read(&COUNTS.sound_clips_kept),
+        sound_clips_decoded: read(&COUNTS.sound_clips_decoded),
+        sound_pieces_kept: read(&COUNTS.sound_pieces_kept),
+        sound_pieces_encoded: read(&COUNTS.sound_pieces_encoded),
+        sound_whole: read(&COUNTS.sound_whole),
+        sound_unjoined: read(&COUNTS.sound_unjoined),
+        whole: read(&COUNTS.whole),
     }
 }
 
 pub(crate) fn count_sound(kept: bool) {
-    if kept { &SOUND_KEPT } else { &SOUND_MIXED }.fetch_add(1, Ordering::Relaxed);
+    add(
+        if kept {
+            &COUNTS.sound_kept
+        } else {
+            &COUNTS.sound_mixed
+        },
+        1,
+    );
 }
 
 pub(crate) fn count_sound_clips(kept: usize, decoded: usize) {
-    SOUND_CLIPS_KEPT.fetch_add(kept as u64, Ordering::Relaxed);
-    SOUND_CLIPS_DECODED.fetch_add(decoded as u64, Ordering::Relaxed);
+    add(&COUNTS.sound_clips_kept, kept);
+    add(&COUNTS.sound_clips_decoded, decoded);
 }
 
 pub(crate) fn count_sound_pieces(kept: usize, encoded: usize) {
-    SOUND_PIECES_KEPT.fetch_add(kept as u64, Ordering::Relaxed);
-    SOUND_PIECES_ENCODED.fetch_add(encoded as u64, Ordering::Relaxed);
+    add(&COUNTS.sound_pieces_kept, kept);
+    add(&COUNTS.sound_pieces_encoded, encoded);
 }
 
 pub(crate) fn count_sound_whole() {
-    SOUND_WHOLE.fetch_add(1, Ordering::Relaxed);
+    add(&COUNTS.sound_whole, 1);
 }
 
 pub(crate) fn count_sound_unjoined() {
-    SOUND_UNJOINED.fetch_add(1, Ordering::Relaxed);
+    add(&COUNTS.sound_unjoined, 1);
 }
 
 pub(crate) fn count_kept(frames: usize) {
-    KEPT.fetch_add(1, Ordering::Relaxed);
-    KEPT_FRAMES.fetch_add(frames as u64, Ordering::Relaxed);
+    add(&COUNTS.kept, 1);
+    add(&COUNTS.kept_frames, frames);
 }
 
 pub(crate) fn count_encoded(frames: usize) {
-    ENCODED.fetch_add(1, Ordering::Relaxed);
-    ENCODED_FRAMES.fetch_add(frames as u64, Ordering::Relaxed);
+    add(&COUNTS.encoded, 1);
+    add(&COUNTS.encoded_frames, frames);
 }
 
 pub(crate) fn count_whole() {
-    WHOLE.fetch_add(1, Ordering::Relaxed);
+    add(&COUNTS.whole, 1);
 }
 
 /// The folder stretches are kept in: the user's cache folder, or

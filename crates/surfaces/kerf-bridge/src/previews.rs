@@ -477,7 +477,7 @@ pub(crate) fn run(
     let mut picture: Option<Option<Picture>> = None;
     for entry in &request.effects {
         if shared.closed.load(Ordering::SeqCst)
-            || shared.previews.load(Ordering::SeqCst) != generation
+            || shared.effect_previews.load(Ordering::SeqCst) != generation
         {
             return Ok(());
         }
@@ -541,7 +541,7 @@ mod tests {
     fn a_newer_request_stops_an_older_one() {
         let shared = crate::tests_support::shared(&std::env::temp_dir());
         *shared.model.lock().unwrap() = Some(kerf_model::Project::default());
-        shared.previews.store(2, Ordering::SeqCst);
+        shared.effect_previews.store(2, Ordering::SeqCst);
         let (tx, rx) = crate::wake::outbox(8);
         let request = Request {
             clip: String::new(),

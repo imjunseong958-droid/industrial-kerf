@@ -9,14 +9,22 @@ use crate::{emit, Shared};
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_mcp::{CheckReport, QcLimits, FULL_ROWS};
 use kerf_runtime::{RuntimeClient, RuntimeError};
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The QC check, one at a time: whether one is running, and what cancels it, so closing
+/// the bridge stops it.
+#[derive(Default)]
+pub(crate) struct Running {
+    busy: AtomicBool,
+    cancel: Mutex<Option<CancellationToken>>,
+}
 
 /// Run the check on its own thread, one at a time: `check {status:
 /// "running", progress}` as it goes, then `done` or `failed`. Closing the
 /// bridge cancels it.
 pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
-    if shared.check_busy.swap(true, Ordering::SeqCst) {
+    if shared.check.busy.swap(true, Ordering::SeqCst) {
         // Said from a thread of its own: the caller's empties the event queue.
         shared.workers.spawn("bridge:refused", move || {
             emit(
@@ -31,7 +39,7 @@ pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
         return;
     }
     let cancel = CancellationToken::new();
-    if let Ok(mut running) = shared.check_cancel.lock() {
+    if let Ok(mut running) = shared.check.cancel.lock() {
         *running = Some(cancel.clone());
     }
     shared.workers.clone().spawn("bridge:check", move || {
@@ -42,11 +50,11 @@ pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
             Ok(event) => event,
             Err(error) => failed(sequence.as_deref(), &error.message),
         };
-        if let Ok(mut running) = shared.check_cancel.lock() {
+        if let Ok(mut running) = shared.check.cancel.lock() {
             *running = None;
         }
         emit(&tx, event);
-        shared.check_busy.store(false, Ordering::SeqCst);
+        shared.check.busy.store(false, Ordering::SeqCst);
     });
 }
 
@@ -55,7 +63,7 @@ const CANCELLED: &str = "The check was cancelled";
 
 /// Stop the check running, if any; it ends `failed`.
 pub(crate) fn cancel(shared: &Shared) {
-    if let Ok(running) = shared.check_cancel.lock()
+    if let Ok(running) = shared.check.cancel.lock()
         && let Some(cancel) = &*running
     {
         cancel.cancel();

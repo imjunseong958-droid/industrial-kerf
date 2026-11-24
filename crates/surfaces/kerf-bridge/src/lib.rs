@@ -145,10 +145,9 @@ use agent::{agent_worker, permission_mode, Agent};
 use event::{CloudAccess, ErrorEvent};
 use kerf_mcp::permissions::Mode;
 use kerf_model::Project;
-use kerf_playback::PlaybackFrame;
 use runtime::runtime_worker;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use viewer::media_worker;
@@ -169,51 +168,30 @@ struct PendingSeek {
     exact: bool,
 }
 
+/// What a bridge's workers share. What only one kind of work touches is that work's own,
+/// in a group its module keeps; what is left here is the bridge's as a whole.
 struct Shared {
     closed: AtomicBool,
     revision: AtomicU64,
-    agent_busy: AtomicBool,
-    /// A viewer preview is rendering; exports go through `renders`.
-    preview_busy: AtomicBool,
-    abort: Mutex<Option<Arc<AtomicBool>>>,
-    /// The agents making versions of a request, while they run.
-    version_aborts: Mutex<Vec<Arc<AtomicBool>>>,
-    frame: Mutex<Option<PlaybackFrame>>,
-    seek: Mutex<Option<PendingSeek>>,
-    project: Mutex<Option<MediaProject>>,
-    /// The project as edited, its media paths resolved.
-    model: Mutex<Option<Project>>,
-    /// The latest effect preview request; older ones stop.
-    previews: AtomicU64,
     /// The project directory, which relative media paths are resolved
     /// against.
     directory: PathBuf,
-    /// The media status last emitted.
-    media_status: Mutex<media::MediaStatus>,
-    /// Copies into `media/` still running; live sync waits for them.
-    copies: AtomicUsize,
-    /// The cancel marker of the preview render running, so closing the
-    /// bridge stops it.
-    preview_cancel: Mutex<Option<PathBuf>>,
-    /// The order previews and their stops were sent in, which says which
-    /// previews `preview_stop` and `preview_exit` asked to stop.
-    preview_turns: preview_turns::PreviewTurns,
-    /// Preview renders nothing shows any more whose files could not be
-    /// removed yet: on Windows a playback worker still shutting down keeps
-    /// its file open. The media worker tries them again.
-    stale_previews: Mutex<Vec<PathBuf>>,
-    /// The preview file the media worker plays, so closing the bridge can
-    /// remove it even when the process exits before that worker stops.
-    shown_preview: Mutex<Option<PathBuf>>,
-    /// A QC check is running.
-    check_busy: AtomicBool,
-    /// Cancels the QC check running, so closing the bridge stops it.
-    check_cancel: Mutex<Option<kerf_engine::CancellationToken>>,
-    /// The makings running, by the media each makes: what cancels it.
-    makings: Mutex<std::collections::BTreeMap<String, kerf_engine::CancellationToken>>,
-    /// The makings another program runs on this project that are shown, by the media each
-    /// makes: the take and the line last shown of it.
-    others_makings: Mutex<std::collections::BTreeMap<String, (u32, String)>>,
+    /// The project as edited, its media paths resolved.
+    model: Mutex<Option<Project>>,
+    /// Kerf's agent: whether a turn runs, and what stops it.
+    agent: agent::Turns,
+    /// What the viewer plays, shows and was asked to seek to.
+    viewer: viewer::Showing,
+    /// The viewer's preview renders.
+    preview: viewer::preview::Previews,
+    /// The latest effect preview request; older ones stop.
+    effect_previews: AtomicU64,
+    /// The media files, as last seen, and the copies of them under way.
+    media: media::Files,
+    /// The QC check.
+    check: qc::Running,
+    /// The makings running.
+    makings: media::Makings,
     /// The render queue the export thread works through.
     renders: queue::Queue,
     /// The renders Kerf's own tools started in this process and are still on.
@@ -393,28 +371,17 @@ impl Bridge {
         let (conversations, conversations_rx) = mpsc::sync_channel(64);
         let (emit, events) = wake::outbox(256);
         let shared = Arc::new(Shared {
-            directory: directory.clone(),
-            media_status: Mutex::new(media::MediaStatus::default()),
-            copies: AtomicUsize::new(0),
-            revision: AtomicU64::new(0),
             closed: AtomicBool::new(false),
-            agent_busy: AtomicBool::new(false),
-            preview_busy: AtomicBool::new(false),
-            abort: Mutex::new(None),
-            version_aborts: Mutex::new(Vec::new()),
-            frame: Mutex::new(None),
-            seek: Mutex::new(None),
-            project: Mutex::new(None),
+            revision: AtomicU64::new(0),
+            directory: directory.clone(),
             model: Mutex::new(None),
-            previews: AtomicU64::new(0),
-            preview_cancel: Mutex::new(None),
-            preview_turns: Default::default(),
-            stale_previews: Mutex::new(Vec::new()),
-            shown_preview: Mutex::new(None),
-            check_busy: AtomicBool::new(false),
-            check_cancel: Mutex::new(None),
-            makings: Mutex::new(std::collections::BTreeMap::new()),
-            others_makings: Mutex::new(std::collections::BTreeMap::new()),
+            agent: Default::default(),
+            viewer: Default::default(),
+            preview: Default::default(),
+            effect_previews: AtomicU64::new(0),
+            media: Default::default(),
+            check: Default::default(),
+            makings: Default::default(),
             renders: queue::Queue::default(),
             tool_renders: Default::default(),
             workers: Workers::new(),
@@ -501,7 +468,7 @@ impl Bridge {
                 }
                 // The worker holds this only to take the seek out, and a seek
                 // refused for that moment would be lost.
-                match self.shared.seek.lock() {
+                match self.shared.viewer.seek.lock() {
                     Ok(mut slot) => {
                         *slot = Some(PendingSeek {
                             position,
@@ -515,24 +482,9 @@ impl Bridge {
             Command::Play | Command::Pause | Command::Volume { .. } | Command::Solo { .. } => {
                 self.media.try_send(command).is_ok()
             }
-            Command::Abort => {
-                if let Ok(aborts) = self.shared.version_aborts.lock() {
-                    for abort in aborts.iter() {
-                        abort.store(true, Ordering::SeqCst);
-                    }
-                }
-                match self.shared.abort.try_lock() {
-                    Ok(abort) => {
-                        if let Some(abort) = &*abort {
-                            abort.store(true, Ordering::SeqCst);
-                        }
-                        true
-                    }
-                    _ => false,
-                }
-            }
+            Command::Abort => self.shared.agent.try_stop(),
             Command::EffectPreviews(request) => {
-                let generation = self.shared.previews.fetch_add(1, Ordering::SeqCst) + 1;
+                let generation = self.shared.effect_previews.fetch_add(1, Ordering::SeqCst) + 1;
                 let shared = self.shared.clone();
                 let tx = self.events_tx.clone();
                 self.shared.workers.spawn("bridge:effects", move || {
@@ -593,7 +545,8 @@ impl Bridge {
             Command::Preview { .. } => {
                 let commands = &self.commands;
                 self.shared
-                    .preview_turns
+                    .preview
+                    .turns
                     .send(|| commands.try_send(command).is_ok())
             }
             Command::PreviewStop => {
@@ -628,7 +581,7 @@ impl Bridge {
                 permissions,
                 settings,
             } => {
-                if text.trim().is_empty() || self.shared.agent_busy.swap(true, Ordering::SeqCst) {
+                if text.trim().is_empty() || !self.shared.agent.begin() {
                     return false;
                 }
                 let turn = Some((text.clone(), conversation, at));
@@ -647,7 +600,7 @@ impl Bridge {
                     })
                     .is_err()
                 {
-                    self.shared.agent_busy.store(false, Ordering::SeqCst);
+                    self.shared.agent.end();
                     false
                 } else {
                     true
@@ -658,10 +611,7 @@ impl Bridge {
                 count,
                 settings,
             } => {
-                if text.trim().is_empty()
-                    || count == 0
-                    || self.shared.agent_busy.swap(true, Ordering::SeqCst)
-                {
+                if text.trim().is_empty() || count == 0 || !self.shared.agent.begin() {
                     return false;
                 }
                 if self
@@ -675,7 +625,7 @@ impl Bridge {
                     })
                     .is_err()
                 {
-                    self.shared.agent_busy.store(false, Ordering::SeqCst);
+                    self.shared.agent.end();
                     false
                 } else {
                     true
@@ -705,6 +655,7 @@ impl Bridge {
     pub fn frame(&mut self) -> Option<Frame> {
         let frame = self
             .shared
+            .viewer
             .frame
             .try_lock()
             .ok()
@@ -767,16 +718,7 @@ impl Drop for Bridge {
         self.shared.renders.close(&self.shared.directory);
         tools::stop_renders(&self.shared);
         self.shared.analysis.close();
-        if let Ok(abort) = self.shared.abort.lock()
-            && let Some(abort) = &*abort
-        {
-            abort.store(true, Ordering::SeqCst);
-        };
-        if let Ok(aborts) = self.shared.version_aborts.lock() {
-            for abort in aborts.iter() {
-                abort.store(true, Ordering::SeqCst);
-            }
-        };
+        self.shared.agent.stop();
     }
 }
 
