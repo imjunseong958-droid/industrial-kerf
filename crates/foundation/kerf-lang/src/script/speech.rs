@@ -9,7 +9,7 @@ use crate::facts::{airs, Place, Snap, Speech};
 use crate::lex::{lex, Arg, Atom, Line};
 use crate::sound::Heard;
 use crate::text::{quote, Clock, Fields};
-use kerf_model::{Clip, Content, Media, Rate, Time};
+use kerf_model::{Clip, Content, Diagnostic, Media, Rate, Time};
 use std::rc::Rc;
 
 impl Script<'_> {
@@ -417,7 +417,10 @@ impl Script<'_> {
         }
         self.sequence = chosen;
         match failed {
-            Some(error) => Err(line.error(1, error.message)),
+            Some(error) => Err(Diagnostic {
+                missing: error.missing,
+                ..line.error(1, error.message)
+            }),
             None => Ok(ops),
         }
     }

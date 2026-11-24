@@ -24,6 +24,27 @@ pub struct Diagnostic {
     pub message: String,
     pub entity: Option<Id>,
     pub span: Option<Span>,
+    /// What the message says is not there, for a caller that does something about it rather
+    /// than read the words. Said by the refusals of a clip, a media, or a position's anchor
+    /// that a line or an operation names; other refusals of something missing do not say it.
+    /// Boxed: a diagnostic is what a refused operation returns, and stays small for that.
+    pub missing: Option<Box<Missing>>,
+}
+
+/// Something a [`Diagnostic`] says is not there: its kind, and the id it was named by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Missing {
+    pub kind: MissingKind,
+    pub id: String,
+}
+
+/// The kind of thing a [`Missing`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingKind {
+    Clip,
+    Media,
+    /// A position's anchor, `<id>.start` or `<id>.end`, which may name a clip or a marker.
+    ClipOrMarker,
 }
 
 impl Diagnostic {
@@ -34,6 +55,7 @@ impl Diagnostic {
             message: message.into(),
             entity: None,
             span: None,
+            missing: None,
         }
     }
 
@@ -51,6 +73,15 @@ impl Diagnostic {
 
     pub fn at(mut self, line: usize, column: usize) -> Self {
         self.span = Some(Span { line, column });
+        self
+    }
+
+    /// That `id`, a `kind` of thing, is what is not there.
+    pub fn missing(mut self, kind: MissingKind, id: impl Into<String>) -> Self {
+        self.missing = Some(Box::new(Missing {
+            kind,
+            id: id.into(),
+        }));
         self
     }
 

@@ -74,10 +74,10 @@
 //!   each file into `media/`, imports them with kerfd and applies the preset with those
 //!   bindings as the project's first edit.
 //! - `{type: "clone", url, location}`.
-//! - `{type: "tools"}` -> `{git, gitLfs, gh, ghUser}`.
+//! - `{type: "tools"}`, which finds what there is to share a project with.
 //!
-//! The status is `{status: "running", message?}`, `{status: "done", path?, remote?,
-//! warnings?, ...}` or `{status: "failed", error}`.
+//! Its [`TaskStatus`] is running (with what it is doing, where it says), done (the project
+//! made or cloned, or the tools found: a [`TaskDone`]), or failed, and why.
 
 // No unsafe code in the library; the workspace's `deny` would let an item allow it, this does not.
 #![forbid(unsafe_code)]
@@ -89,6 +89,7 @@ mod cloud_session;
 mod collab;
 mod command;
 mod conversations;
+mod error;
 pub mod event;
 mod looks;
 mod media;
@@ -122,6 +123,8 @@ pub use command::{AgentSettings, ChatProvider, Command};
 pub use conversations::Request as ConversationsRequest;
 pub use event::{Event, Snapshot};
 pub use kerf_agent::{Focus, FocusScope, OpenAiApiMode};
+pub use kerf_collab::git::Tools as GitTools;
+pub use kerf_collab::scaffold::Created as CreatedProject;
 pub use kerf_collab::scaffold::GitHubRepository;
 pub use kerf_playback::drawing_settled;
 pub use kerf_runtime::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
@@ -135,7 +138,7 @@ pub use standalone::{
     crash_reports, ffmpeg_bin, fx_catalog_all, keychain_off, preset_inspect, project_inspect,
     secret, serve_mcp, update_check, About, CrashReport, CrashReports, REPOSITORY,
 };
-pub use tasks::Task;
+pub use tasks::{CheckedFile, PresetCheck, ProjectInfo, Task, TaskDone, TaskStatus};
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};
 pub use updates::UpdateCheck;
 pub use wake::Wake;

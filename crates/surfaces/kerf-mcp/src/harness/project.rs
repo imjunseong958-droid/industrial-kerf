@@ -191,13 +191,13 @@ impl KerfMcpRouter {
                     "media": id,
                     "why": why.reason(),
                 });
-                let plan = models
-                    .as_ref()
-                    .map_err(ToString::to_string)
-                    .and_then(|models| {
-                        kerf_engine::recipe::plan(project, &self.dir, id, models)
-                            .map_err(|error| error.to_string())
-                    });
+                // What refuses it, as an agent is told it; a models file that does not read is
+                // what does.
+                let plan = match &models {
+                    Ok(models) => kerf_engine::recipe::plan(project, &self.dir, id, models)
+                        .map_err(|cannot| cannot_said(cannot, Some(models))),
+                    Err(error) => Err(error.to_string()),
+                };
                 let found = stands(media);
                 if !found.is_empty() {
                     entry["notes"] = json!(found);
@@ -213,7 +213,7 @@ impl KerfMcpRouter {
                         ));
                     }
                     Err(cannot) => {
-                        entry["cannot"] = json!(cannot_said(cannot, models.as_ref().ok()));
+                        entry["cannot"] = json!(cannot);
                         entry["make"] = json!(format!(
                             "it cannot be made as it is: mend what `cannot` says first; then, {first}make it with `make`"
                         ));

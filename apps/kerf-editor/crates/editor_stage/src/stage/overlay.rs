@@ -4,7 +4,7 @@
 //! snapshot's timeline as the bridge sends it, so that they can be held to
 //! the compositor's own numbers.
 
-use editor_state::model::{Clip, Timeline, TrackKind};
+use editor_state::model::{Clip, Timeline, TimelineShow, TrackKind};
 use kerf_bridge::event::{Finding, ViewMask};
 use serde_json::{json, Map, Value};
 
@@ -406,25 +406,10 @@ pub fn parent_motion(props: &Props, picture: Pt, fit: bool, canvas: Pt, clip_tim
     }
 }
 
-/// The canvas a timeline is drawn on, in pixels: its sequence's size,
-/// else its largest media's, else 1920 × 1080.
+/// The canvas a timeline is drawn on, in pixels ([`TimelineShow::canvas`]).
 pub fn canvas_of(timeline: &Timeline) -> Pt {
-    let size = |width: Option<u32>, height: Option<u32>| {
-        let (width, height) = (f64::from(width?), f64::from(height?));
-        (width > 0.0 && height > 0.0).then_some((width.max(2.0), height.max(2.0)))
-    };
-    if let Some(size) = size(timeline.width, timeline.height) {
-        return size;
-    }
-    timeline
-        .sources
-        .iter()
-        .filter_map(|source| size(source.width, source.height))
-        .fold(None, |best: Option<Pt>, size| match best {
-            Some(best) if best.0 * best.1 >= size.0 * size.1 => Some(best),
-            _ => Some(size),
-        })
-        .unwrap_or((1920.0, 1080.0))
+    let (width, height) = timeline.canvas();
+    (f64::from(width), f64::from(height))
 }
 
 /// The clip `id` of `timeline`, and the kind of track it is on.

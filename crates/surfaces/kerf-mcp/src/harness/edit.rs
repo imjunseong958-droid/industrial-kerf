@@ -8,7 +8,7 @@ use super::tools::{input, EditInput};
 use super::{catalog, diagnostics, not_pending, operation_key, parse};
 use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_lang::{apply_script, apply_script_with, print_document, PrintOptions};
-use kerf_model::Project;
+use kerf_model::{MissingKind, Project};
 use kerf_runtime::{Author, AuthorKind, CachedFacts, ErrorCode, ProposalEntry, StateSnapshot};
 use serde_json::{json, Value};
 
@@ -19,13 +19,14 @@ impl KerfMcpRouter {
         self.run_edit(arguments).map_err(|mut error| {
             // What is not in the project may be in a proposal not built on.
             if !building_on && error.code == McpCode::ScriptRefused {
-                let hint = ["no clip `", "unknown media `", "no clip or marker `"]
-                    .iter()
-                    .find_map(|before| {
-                        let (_, rest) = error.message.split_once(before)?;
-                        rest.split_once('`').map(|(name, _)| name.to_owned())
-                    })
-                    .map(|name| self.in_pending(&name, "extend"));
+                let hint = [
+                    MissingKind::Clip,
+                    MissingKind::Media,
+                    MissingKind::ClipOrMarker,
+                ]
+                .iter()
+                .find_map(|kind| error.missing.iter().find(|missing| missing.kind == *kind))
+                .map(|missing| self.in_pending(&missing.id, "extend"));
                 if let Some(hint) = hint {
                     error.message.push_str(&hint);
                 }
@@ -586,9 +587,15 @@ fn with_shot_lines(workflows: &[WorkflowKept], steps: &[String], source_script: 
     format!("{shown}{}{steps}", with_newline(source_script))
 }
 
-/// A script refusal, with each line numbered as the agent wrote it.
+/// A script refusal, with each line numbered as the agent wrote it, and what it named that is
+/// not there.
 fn refused(errors: Vec<kerf_model::Diagnostic>) -> McpError {
-    McpError::new(McpCode::ScriptRefused, diagnostics(&errors))
+    let mut refused = McpError::new(McpCode::ScriptRefused, diagnostics(&errors));
+    refused.missing = errors
+        .into_iter()
+        .filter_map(|error| error.missing.map(|missing| *missing))
+        .collect();
+    refused
 }
 
 /// `errors` of a script run after `lines` lines of other script, with

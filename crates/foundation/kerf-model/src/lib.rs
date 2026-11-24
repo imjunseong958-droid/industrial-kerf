@@ -20,7 +20,7 @@ pub mod validate;
 pub mod value;
 
 pub use catalog::{Area, Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamType};
-pub use diag::{Diagnostic, Severity, Span};
+pub use diag::{Diagnostic, Missing, MissingKind, Severity, Span};
 pub use features::parse_features;
 pub use id::{Id, IdGen, InvalidId};
 pub use kerf_color::ColorSpace;

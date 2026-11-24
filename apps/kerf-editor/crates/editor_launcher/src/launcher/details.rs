@@ -12,7 +12,7 @@ use editor_ui::motion;
 use editor_ui::theme::{self, height, radius, text};
 use editor_ui::ui;
 use gpui::{div, prelude::*, px, AnimationExt, AnyElement, App, Context, ElementId, Window};
-use serde_json::Value;
+use kerf_bridge::{GitTools, TaskDone, TaskStatus};
 
 /// The frame rates a new project can have, as documents write them.
 pub(super) const RATES: [(&str, &str); 6] = [
@@ -24,17 +24,16 @@ pub(super) const RATES: [(&str, &str); 6] = [
     ("60", "60"),
 ];
 
-/// What the Sharing rows say of the tools the bridge found (`{git,
-/// gitLfs, gh, ghUser}`), before they are found (None), or why they could
-/// not be (`error`).
-pub fn tools_hint(tools: Option<&Value>, error: Option<&str>) -> String {
+/// What the Sharing rows say of the tools the bridge found, before they are
+/// found (None), or why they could not be (`error`).
+pub fn tools_hint(tools: Option<&GitTools>, error: Option<&str>) -> String {
     if let Some(error) = error {
         return format!("Kerf could not look for Git and the GitHub CLI: {error}");
     }
     let Some(tools) = tools else {
         return "Looking for Git and the GitHub CLI…".into();
     };
-    if tools["git"] != true {
+    if !tools.git {
         return if cfg!(target_os = "macos") {
             "Install Git to share projects (xcode-select --install).".into()
         } else {
@@ -43,7 +42,7 @@ pub fn tools_hint(tools: Option<&Value>, error: Option<&str>) -> String {
     }
     let mut hints = vec![match github_account(tools) {
         Some(user) => format!("Signed in to GitHub as @{user}."),
-        None if tools["gh"] == true => {
+        None if tools.gh => {
             "Sign in with `gh auth login` to create a GitHub repository here.".to_owned()
         }
         None if cfg!(target_os = "macos") => {
@@ -52,17 +51,18 @@ pub fn tools_hint(tools: Option<&Value>, error: Option<&str>) -> String {
         }
         None => "Install the GitHub CLI (gh) to create a GitHub repository here.".to_owned(),
     }];
-    if tools["gitLfs"] != true {
+    if !tools.git_lfs {
         hints.push("Git LFS is not installed: media of 100 MB or more cannot be shared.".into());
     }
     hints.join(" ")
 }
 
 /// The GitHub account the GitHub CLI is signed in to, if it is.
-pub fn github_account(tools: &Value) -> Option<&str> {
-    tools["ghUser"]
-        .as_str()
-        .filter(|user| tools["gh"] == true && !user.is_empty())
+pub fn github_account(tools: &GitTools) -> Option<&str> {
+    tools
+        .gh_user
+        .as_deref()
+        .filter(|user| tools.gh && !user.is_empty())
 }
 
 /// One of the Sharing switches: the stop the keys reach it at, its id, how
@@ -77,33 +77,29 @@ struct Switch {
 }
 
 impl LauncherView {
-    /// What the bridge found to share with (`{git, gitLfs, gh, ghUser}`),
-    /// or why it could not look; a switch with nothing to share with goes
-    /// off.
-    pub(super) fn found_tools(&mut self, status: Value, cx: &mut Context<Self>) {
-        if status["status"] == "done" {
-            if status["git"] != true {
-                self.git = false;
+    /// What the bridge found to share with, or why it could not look; a
+    /// switch with nothing to share with goes off.
+    pub(super) fn found_tools(&mut self, status: TaskStatus, cx: &mut Context<Self>) {
+        match status {
+            TaskStatus::Done(TaskDone::Tools(tools)) => {
+                if !tools.git {
+                    self.git = false;
+                }
+                if github_account(&tools).is_none() {
+                    self.github = false;
+                }
+                self.tools = Some(tools);
             }
-            if github_account(&status).is_none() {
-                self.github = false;
-            }
-            self.tools = Some(status);
-        } else {
             // Sharing still works when Git is there; the task says if not.
-            self.tools_error = Some(
-                status["error"]
-                    .as_str()
-                    .unwrap_or("the task stopped")
-                    .to_owned(),
-            );
+            TaskStatus::Failed { error } => self.tools_error = Some(error),
+            _ => self.tools_error = Some("the task stopped".to_owned()),
         }
         cx.notify();
     }
 
     /// Git is there, or not known yet not to be.
     pub(super) fn git_found(&self) -> bool {
-        self.tools.as_ref().is_none_or(|tools| tools["git"] == true)
+        self.tools.as_ref().is_none_or(|tools| tools.git)
     }
 
     /// Share with Git, or not; off, nothing is published either.

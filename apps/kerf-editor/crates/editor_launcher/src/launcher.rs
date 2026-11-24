@@ -49,11 +49,12 @@ use gpui::{
     FontWeight, MouseButton, PathPromptOptions, PromptButton, PromptLevel, SharedString,
     Subscription, Task, Window,
 };
+use kerf_bridge::{GitTools, TaskStatus};
 use keys::{bind_keys, Stop};
 use plan::{default_location, folder_of, untitled};
 use preset::PresetPage;
 use recent::Recent;
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -122,8 +123,8 @@ pub struct LauncherView {
     details: bool,
     git: bool,
     github: bool,
-    /// What the bridge found to share with: `{git, gitLfs, gh, ghUser}`.
-    tools: Option<Value>,
+    /// What the bridge found to share with.
+    tools: Option<GitTools>,
     tools_error: Option<String>,
     preset: PresetPage,
     recent: Vec<Recent>,
@@ -235,7 +236,7 @@ impl LauncherView {
         let looking = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(TASK_POLL).await;
             let status = tools.status();
-            if status["status"] == "running" {
+            if matches!(status, TaskStatus::Running { .. }) {
                 continue;
             }
             let _ = this.update(cx, |this, cx| this.found_tools(status, cx));
