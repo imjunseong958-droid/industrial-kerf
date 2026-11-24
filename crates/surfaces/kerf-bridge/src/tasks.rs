@@ -44,8 +44,15 @@ pub struct ProjectInfo {
     pub presets: usize,
 }
 
-/// What the launcher shows of the folder at `directory`.
+/// What the launcher shows of the folder at `directory`; nothing of an empty path, which
+/// names no folder (and would otherwise read as the process's own).
 pub(crate) fn inspect_project(directory: &Path) -> ProjectInfo {
+    if directory.as_os_str().to_string_lossy().trim().is_empty() {
+        return ProjectInfo {
+            path: directory.to_path_buf(),
+            ..ProjectInfo::default()
+        };
+    }
     let document = directory.join(git::PROJECT_FILE);
     let exists = directory.is_dir();
     let folder = directory
@@ -264,7 +271,8 @@ pub enum TaskStatus {
 #[derive(Clone, Debug)]
 pub enum TaskDone {
     /// `create` and `clone`: the project's folder, the remote it was published to, and what
-    /// to tell the person (a clone says neither).
+    /// to tell the person (a clone says neither), as a
+    /// [`CreatedProject`](crate::CreatedProject).
     Project(Created),
     /// `tools`: what there is to share a project with.
     Tools(GitTools),
