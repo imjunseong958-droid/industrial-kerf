@@ -4,13 +4,13 @@
 //! Network and staging (which hashes new media) happen here, never inside
 //! kerfd. Live sync runs on the same worker between commands.
 
-use crate::event::{CollabStatus, CollabSync, Event};
+use crate::event::{CollabStatus, CollabSync, Event, SyncReport};
 use crate::wake::Outbox;
 use crate::{emit, key, media, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
 use kerf_runtime::{ErrorCode, RuntimeClient, RuntimeError, StateSnapshot};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -50,16 +50,11 @@ fn text(error: CollabError) -> String {
     error.message
 }
 
-/// What every sync report holds, before the steps that ran fill it in.
-fn empty_report() -> Value {
-    json!({"committed": null, "incoming": [], "fastForward": false, "pushed": false,
-        "conflicts": [], "renamed": [], "summary": []})
-}
-
-fn merge_into(report: &mut Value, from: Value) {
-    if let (Some(report), Value::Object(from)) = (report.as_object_mut(), from) {
-        report.extend(from);
-    }
+/// What kerfd says a merge or a switch did, as the report it begins: kerf-collab's report is
+/// JSON in kerfd's answer, read here once. Each field reads on its own ([`SyncReport`] says
+/// how), and what kerfd has to say beyond them is kept as it said it.
+fn kerfds_report(said: Value) -> SyncReport {
+    serde_json::from_value(said).unwrap_or_default()
 }
 
 /// The commits on this branch that its remote's main branch lacks, oldest
@@ -280,7 +275,7 @@ impl Collab {
                 // The next failure is reported afresh, so the last one is
                 // cleared rather than left on the editor's sync chip.
                 if self.failure.take().is_some() {
-                    self.done(empty_report());
+                    self.done(SyncReport::default());
                 }
                 self.next_cycle = Instant::now();
                 self.emit_status(true);
@@ -372,7 +367,7 @@ impl Collab {
                 // A quiet cycle after a failure still tells the editor that
                 // syncing works again.
                 let recovered = self.failure.take().is_some();
-                if let Some(report) = report.or_else(|| recovered.then(empty_report)) {
+                if let Some(report) = report.or_else(|| recovered.then(SyncReport::default)) {
                     self.done(report);
                 }
             }
@@ -388,7 +383,7 @@ impl Collab {
 
     /// Run an operation someone asked for, reporting how it went every
     /// time.
-    fn manual(&mut self, operation: impl FnOnce(&mut Self) -> Result<Option<Value>, String>) {
+    fn manual(&mut self, operation: impl FnOnce(&mut Self) -> Result<Option<SyncReport>, String>) {
         self.emit_busy();
         match operation(self) {
             Ok(Some(report)) => {
@@ -410,11 +405,7 @@ impl Collab {
         }
     }
 
-    fn done(&self, report: Value) {
-        // The report is always `empty_report`'s, with kerfd's merged in. It reads field by
-        // field: one kerfd says otherwise than this build reads it is that field's default,
-        // and the rest still say what the sync did.
-        let report = serde_json::from_value(report).unwrap_or_default();
+    fn done(&self, report: SyncReport) {
         emit(&self.tx, Event::CollabSync(CollabSync::Done { report }));
     }
 
@@ -473,12 +464,12 @@ impl Collab {
     /// merges), push, and download Git LFS media. A live cycle (`manual`
     /// false) does only the steps there is work for, says nothing when
     /// there was none, and returns `None` then.
-    fn sync(&mut self, manual: bool, message: Option<&str>) -> Result<Option<Value>, String> {
+    fn sync(&mut self, manual: bool, message: Option<&str>) -> Result<Option<SyncReport>, String> {
         self.require_repository()?;
         let dir = self.directory.clone();
         let status = git::status(&dir).map_err(text)?;
         let mut shown = manual;
-        let mut report = empty_report();
+        let mut report = SyncReport::default();
         // Staging hashes new media, the slow part of a commit; doing it here
         // leaves kerfd only a quick commit.
         let mut changed = false;
@@ -506,7 +497,7 @@ impl Collab {
                 .collab_integrate(actor, &key(), message)
                 .map_err(|error| self.lost(error))?;
             self.synced = Some(snapshot.revision);
-            merge_into(&mut report, merged);
+            report = kerfds_report(merged);
             state = Some(snapshot);
         }
         let mut pushed = false;
@@ -515,12 +506,10 @@ impl Collab {
             shown = true;
             pushed = git::push(&dir).map_err(text)?.pushed;
         }
-        report["pushed"] = json!(pushed);
-        let incoming = report["incoming"]
-            .as_array()
-            .is_some_and(|commits| !commits.is_empty());
+        report.pushed = pushed;
+        let incoming = !report.incoming.is_empty();
         let downloaded = self.download(manual || incoming)?;
-        report["downloaded"] = json!(downloaded);
+        report.say_downloaded(downloaded);
         if manual || state.is_some() || downloaded {
             self.refresh(state.as_ref(), downloaded);
         }
@@ -589,7 +578,7 @@ impl Collab {
         }
     }
 
-    fn commit(&mut self, message: &str) -> Result<Option<Value>, String> {
+    fn commit(&mut self, message: &str) -> Result<Option<SyncReport>, String> {
         self.require_repository()?;
         self.stage(CollabSync::Committing);
         let message = match message.trim() {
@@ -597,15 +586,15 @@ impl Collab {
             message => message.to_owned(),
         };
         let committed = git::commit(&self.directory, &message).map_err(text)?;
-        let mut report = empty_report();
+        let mut report = SyncReport::default();
         if committed.is_none() {
-            report["summary"] = json!(["Nothing to commit"]);
+            report.summary = vec!["Nothing to commit".to_owned()];
         }
-        report["committed"] = json!(committed);
+        report.committed = committed;
         Ok(Some(report))
     }
 
-    fn branch(&mut self, name: &str, create: bool) -> Result<Option<Value>, String> {
+    fn branch(&mut self, name: &str, create: bool) -> Result<Option<SyncReport>, String> {
         self.require_repository()?;
         self.stage(CollabSync::Committing);
         git::stage(&self.directory).map_err(text)?;
@@ -614,17 +603,20 @@ impl Collab {
             .collab_switch("ui", &key(), name.trim(), create, None)
             .map_err(|error| self.lost(error))?;
         self.synced = Some(state.revision);
-        let mut report = empty_report();
-        merge_into(&mut report, switched);
+        let mut report = kerfds_report(switched);
         // A switch leaves Git LFS files as pointers so it never waits on
         // the network.
         let downloaded = self.download(true)?;
-        report["downloaded"] = json!(downloaded);
+        report.say_downloaded(downloaded);
         self.refresh(Some(&state), downloaded);
         Ok(Some(report))
     }
 
-    fn pull_request(&mut self, title: &str, body: Option<&str>) -> Result<Option<Value>, String> {
+    fn pull_request(
+        &mut self,
+        title: &str,
+        body: Option<&str>,
+    ) -> Result<Option<SyncReport>, String> {
         self.require_repository()?;
         let dir = self.directory.clone();
         let status = git::status(&dir).map_err(text)?;
@@ -633,15 +625,15 @@ impl Collab {
                 "The project has no remote to open a pull request on; publish it first".into(),
             );
         }
-        let mut report = empty_report();
+        let mut report = SyncReport::default();
         if status.changed {
             self.stage(CollabSync::Committing);
             let message = self.describe_changes();
-            report["committed"] = json!(git::commit(&dir, &message).map_err(text)?);
+            report.committed = git::commit(&dir, &message).map_err(text)?;
         }
         // The pull request needs the branch on the remote.
         self.stage(CollabSync::Pushing);
-        report["pushed"] = json!(git::push(&dir).map_err(text)?.pushed);
+        report.pushed = git::push(&dir).map_err(text)?.pushed;
         let body = match body.map(str::trim).filter(|body| !body.is_empty()) {
             Some(body) => body.to_owned(),
             None => branch_subjects(&dir),
@@ -665,7 +657,7 @@ impl Collab {
         &mut self,
         remote: Option<&str>,
         github: Option<&GitHubRepository>,
-    ) -> Result<Option<Value>, String> {
+    ) -> Result<Option<SyncReport>, String> {
         let dir = self.directory.clone();
         let tools = git::local_tools();
         if !tools.git {
@@ -702,8 +694,10 @@ impl Collab {
         } else {
             self.describe_changes()
         };
-        let mut report = empty_report();
-        report["committed"] = json!(git::commit(&dir, &message).map_err(text)?);
+        let mut report = SyncReport {
+            committed: git::commit(&dir, &message).map_err(text)?,
+            ..SyncReport::default()
+        };
         if let Some(github) = github {
             self.stage(CollabSync::Pushing);
             let slug = match github.name.as_deref().map(str::trim) {
@@ -711,8 +705,8 @@ impl Collab {
                 _ => scaffold::repository_slug(&name),
             };
             let url = git::create_github_repository(&dir, &slug, github.private).map_err(text)?;
-            report["remote"] = json!(url);
-            report["pushed"] = json!(true);
+            report.say_remote(Some(url));
+            report.pushed = true;
         } else {
             if let Some(remote) = remote {
                 git::set_remote(&dir, remote).map_err(text)?;
@@ -722,23 +716,25 @@ impl Collab {
                 return Ok(Some(report));
             };
             self.stage(CollabSync::Pushing);
-            report["pushed"] = json!(git::push(&dir).map_err(text)?.pushed);
-            report["remote"] = json!(git_text(&dir, &["remote", "get-url", &remote_name]));
+            report.pushed = git::push(&dir).map_err(text)?.pushed;
+            report.say_remote(git_text(&dir, &["remote", "get-url", &remote_name]));
         }
         Ok(Some(report))
     }
 
     /// Copy media from outside the project into `media/` and relink it,
     /// with one edit.
-    fn consolidate(&mut self) -> Result<Option<Value>, String> {
+    fn consolidate(&mut self) -> Result<Option<SyncReport>, String> {
         let client = self.client()?;
         let (_, document) = client
             .get_document(false)
             .map_err(|error| self.lost(error))?;
         let project = kerf_runtime::parse_document(&document).map_err(|error| error.message)?;
         let result = media::consolidate(&project, &self.directory, media::probe);
-        let mut report = empty_report();
-        report["summary"] = json!(result.summary());
+        let report = SyncReport {
+            summary: result.summary(),
+            ..SyncReport::default()
+        };
         if !result.relinks.is_empty() {
             let script = result.script(&project);
             let state = self.apply(&client, &script)?;

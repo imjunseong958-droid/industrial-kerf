@@ -9,7 +9,7 @@ use super::drag::Gesture;
 use super::lane_ink;
 use super::lanes::ClipBox;
 use super::TimelineView;
-use editor_state::model::{ClipShow, GainKey};
+use editor_state::model::{ClipShow, GainKey, Interp};
 use gpui::{px, Context, PathBuilder, Window};
 use serde_json::{json, Value};
 
@@ -91,7 +91,7 @@ impl BandDrag {
             .keys
             .iter()
             .zip(&self.values)
-            .map(|(key, value)| json!({"at": key.frame, "value": value, "interp": key.interp}))
+            .map(|(key, value)| json!({"at": key.frame, "value": value, "interp": key.interp.name()}))
             .collect();
         json!({ "keys": keys })
     }
@@ -112,13 +112,12 @@ pub(super) struct GainShown {
 /// else the snapshot's keys and their values; and whether they are keys.
 pub(super) fn gain_drawn(
     clip: &ClipBox,
-    fps: f64,
     over: Option<&GainShown>,
 ) -> (Vec<GainKey>, Vec<f64>, bool) {
     match over.filter(|over| over.clip == clip.id) {
         Some(over) => (over.keys.clone(), over.values.clone(), over.keyed),
         None => {
-            let (keys, keyed) = clip.clip.gain_keys(fps);
+            let (keys, keyed) = clip.clip.gain_keys();
             let values = keys.iter().map(|key| key.value).collect();
             (keys, values, keyed)
         }
@@ -151,7 +150,7 @@ pub fn add_gain_key(
                 at: frame as f64 / fps,
                 frame,
                 value: level,
-                interp: "linear".into(),
+                interp: Interp::Linear,
             },
         );
     }
@@ -248,7 +247,7 @@ impl TimelineView {
         let clip = &self.lanes.rows[row].clips[index];
         let (x0, top, across, tall) = self.clip_rect(row, index);
         let over = self.gain_over();
-        let (keys, values, keyed) = gain_drawn(clip, self.lanes.fps, over.as_ref());
+        let (keys, values, keyed) = gain_drawn(clip, over.as_ref());
         band_line(&keys, &values, keyed, x0, across, top, tall, self.view.pps)
     }
 

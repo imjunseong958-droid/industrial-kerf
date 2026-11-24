@@ -14,11 +14,11 @@ use std::collections::{BTreeMap, HashMap};
 
 pub use kerf_bridge::event::{
     Author, Conversation, ConversationAsk as Ask, ConversationItem as Turn, ConversationSummary,
-    ProjectionStatus, ProposalEntry as Proposal, ProposalFreshness, ProposalStatus,
+    Interp, ProjectionStatus, ProposalEntry as Proposal, ProposalFreshness, ProposalStatus,
     ProposalVersion, QueuedRender as RenderJob, RenderCodec, RenderQuality, RenderStatus, Snapshot,
-    TimelineView as Timeline, ViewClip as Clip, ViewEffect, ViewMarker as Marker,
-    ViewSequence as SequenceInfo, ViewSource as Source, ViewTake as Take, ViewTrack as Track,
-    ViewTrackKind as TrackKind, ViewTransition as Transition,
+    TimelineView as Timeline, ViewClip as Clip, ViewEffect, ViewKey, ViewMarker as Marker,
+    ViewParam, ViewSequence as SequenceInfo, ViewSource as Source, ViewTake as Take,
+    ViewTrack as Track, ViewTrackKind as TrackKind, ViewTransition as Transition,
 };
 
 /// How the editor reads and shows a timeline.
@@ -192,18 +192,16 @@ pub trait ClipShow {
     /// else its id.
     fn label(&self) -> &str;
 
-    /// Property `key` as the view carries it (`gain` in dB, `opacity`…);
-    /// null when it has none.
+    /// Property `key`'s one value (`gain` in dB, `opacity`…); null when it
+    /// has none or has keyframes.
     fn prop(&self, key: &str) -> &Value;
 
     /// Its gain in dB (`props.gain`), 0 when it has none.
     fn gain_db(&self) -> f64;
 
     /// Its gain as keys, in time order, and whether they are keys: a
-    /// keyed gain's own (`props.gain` an array of `{at, frame, value,
-    /// interp}`, `at` in seconds from the clip's start, `frame` counted
-    /// from its first frame), else one key at its start holding its level.
-    fn gain_keys(&self, fps: f64) -> (Vec<GainKey>, bool);
+    /// keyed gain's own, else one key at its start holding its level.
+    fn gain_keys(&self) -> (Vec<GainKey>, bool);
 
     /// What its name bar says after its name: for a generated picture, its
     /// text when that is not its name, its blend when not normal and its
@@ -225,48 +223,38 @@ impl ClipShow for Clip {
     }
 
     fn prop(&self, key: &str) -> &Value {
-        self.props.get(key).unwrap_or(&Value::Null)
+        self.props
+            .get(key)
+            .and_then(ViewParam::value)
+            .unwrap_or(&Value::Null)
     }
 
     fn gain_db(&self) -> f64 {
         self.prop("gain").as_f64().unwrap_or(0.0)
     }
 
-    fn gain_keys(&self, fps: f64) -> (Vec<GainKey>, bool) {
-        let fps = if fps.is_finite() && fps > 0.0 {
-            fps
-        } else {
-            30.0
-        };
-        let gain = self.prop("gain");
-        let mut keys: Vec<GainKey> = gain
-            .as_array()
-            .map(|keys| {
-                keys.iter()
-                    .filter(|key| key.is_object())
-                    .map(|key| {
-                        let frame = key["frame"].as_f64().map(|frame| frame.round() as i64);
-                        let at = key["at"]
-                            .as_f64()
-                            .unwrap_or_else(|| frame.unwrap_or(0) as f64 / fps);
-                        GainKey {
-                            at,
-                            frame: frame.unwrap_or_else(|| (at * fps).round() as i64),
-                            value: key["value"].as_f64().unwrap_or(0.0),
-                            interp: key["interp"].as_str().unwrap_or("linear").to_owned(),
-                        }
-                    })
-                    .collect()
+    fn gain_keys(&self) -> (Vec<GainKey>, bool) {
+        let mut keys: Vec<GainKey> = self
+            .props
+            .get("gain")
+            .map(ViewParam::keys)
+            .unwrap_or_default()
+            .iter()
+            .map(|key| GainKey {
+                at: key.at,
+                frame: key.frame,
+                value: key.value.as_f64().unwrap_or(0.0),
+                interp: key.interp,
             })
-            .unwrap_or_default();
+            .collect();
         keys.sort_by_key(|key| key.frame);
         if keys.is_empty() {
             return (
                 vec![GainKey {
                     at: 0.0,
                     frame: 0,
-                    value: gain.as_f64().unwrap_or(0.0),
-                    interp: "linear".into(),
+                    value: self.gain_db(),
+                    interp: Interp::Linear,
                 }],
                 false,
             );
@@ -321,7 +309,7 @@ pub struct GainKey {
     pub at: f64,
     pub frame: i64,
     pub value: f64,
-    pub interp: String,
+    pub interp: Interp,
 }
 
 /// How the editor names a media and places it.
