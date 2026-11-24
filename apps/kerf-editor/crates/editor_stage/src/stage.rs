@@ -50,6 +50,7 @@ pub use transport::{transport_reasons, transport_tip, TRANSPORT};
 
 use activity::{Hue, Said};
 use editor_session::session::{BridgeEvent, Session};
+use editor_state::model::Timeline;
 use editor_state::store::Change;
 use editor_ui::motion::{self, Tween};
 use editor_ui::theme;
@@ -213,9 +214,9 @@ pub struct StageView {
     last_hue: Hue,
     edge: Tween,
     edge_since: Instant,
-    /// The program's timeline as the last snapshot sent it, whole, as its
-    /// JSON: the overlays read it so (props, parent, masks, effects).
-    program: Rc<Value>,
+    /// The program's timeline as the last snapshot sent it, whole: the
+    /// overlays read it (props, parent, masks, effects).
+    program: Rc<Timeline>,
     /// The overlays as last drawn, kept as the picture's canvas is laid
     /// out: what a press and the pointer hit.
     shown: Rc<RefCell<Option<Rc<Shown>>>>,
@@ -343,7 +344,7 @@ impl StageView {
             last_hue: Hue::Kerf,
             edge: Tween::at(0.0),
             edge_since: Instant::now(),
-            program: Rc::new(Value::Null),
+            program: Rc::new(Timeline::default()),
             shown: Rc::new(RefCell::new(None)),
             skim: None,
             kept: None,
@@ -388,10 +389,8 @@ impl StageView {
     fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
         match event {
             Event::State { snapshot } => {
-                let before = std::mem::replace(
-                    &mut self.program,
-                    Rc::new(serde_json::to_value(&snapshot.timeline).unwrap_or_default()),
-                );
+                let before =
+                    std::mem::replace(&mut self.program, Rc::new(snapshot.timeline.clone()));
                 self.follow_chosen_point(&before, cx);
                 self.book = Rc::new(editor_state::book::ProposalBook::read(snapshot));
                 self.follow_cut(cx);

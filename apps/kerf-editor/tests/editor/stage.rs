@@ -16,7 +16,7 @@ use kerf_editor::stage::overlay::{
     canvas_of, dragged, drawn, follow_point, mask_add, mask_names, mask_set, masks_of,
     new_mask_name, overlap_at, parent_motion, parse_path, path_holds, path_of, path_text,
     placement, property_at, sampled, sampled_point_for, start_path, with_point_on, Affine,
-    MotionPath, Outline, Overlap, Projective, Pt, DRAW_LEAST, SAMPLED_STEPS,
+    MotionPath, Outline, Overlap, Projective, Props, Pt, DRAW_LEAST, SAMPLED_STEPS,
 };
 use kerf_editor::stage::{
     base64_decode, hud, kerf_cutting, placed_clips, poster_source, preview_chip_words,
@@ -95,6 +95,28 @@ fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {
     );
 }
 
+/// A timeline as kerfd sends one, from the JSON a test writes it in. kerfd says of every
+/// track and clip whether it is on; one a test leaves unsaid is on.
+fn program(mut timeline: Value) -> Timeline {
+    fn on(entry: &mut Value) {
+        if entry.get("enabled").is_none() {
+            entry["enabled"] = json!(true);
+        }
+    }
+    for track in timeline["tracks"].as_array_mut().into_iter().flatten() {
+        on(track);
+        for clip in track["clips"].as_array_mut().into_iter().flatten() {
+            on(clip);
+        }
+    }
+    serde_json::from_value(timeline).expect("a timeline that reads")
+}
+
+/// A clip's props as a timeline holds them, from the JSON a test writes them in.
+fn props_of(props: &Value) -> Props {
+    props.as_object().cloned().expect("props by name")
+}
+
 /// kerf-compose's `a_parents_motion_is_where_the_table_says`: each row is a
 /// parent's numbers, its picture's size, whether it is fitted, the canvas, and
 /// a point that its motion takes somewhere.
@@ -160,7 +182,7 @@ fn a_parents_motion_is_where_the_compositor_puts_it() {
         ),
     ];
     for (props, picture, fit, canvas, from, to) in table {
-        let at = parent_motion(&props, picture, fit, canvas, 0.0).apply(from);
+        let at = parent_motion(&props_of(&props), picture, fit, canvas, 0.0).apply(from);
         close(at.0, to.0, 1e-6, &props.to_string());
         close(at.1, to.1, 1e-6, &props.to_string());
     }
@@ -230,14 +252,14 @@ fn a_point_added_on_the_curve_lands_between_its_neighbours() {
 
 #[test]
 fn keyframes_ease_between_their_values() {
-    let props = json!({
+    let props = props_of(&json!({
         "scale": 2,
         "x": [
             {"at": 1.0, "value": 0.0, "interp": "linear"},
             {"at": 3.0, "value": 1.0, "interp": "hold"},
             {"at": 4.0, "value": 0.5}
         ]
-    });
+    }));
     assert_eq!(property_at(&props, "scale", 5.0, 1.0), 2.0);
     assert_eq!(property_at(&props, "missing", 5.0, 0.25), 0.25);
     assert_eq!(property_at(&props, "x", 0.0, 9.0), 0.0);
@@ -247,8 +269,8 @@ fn keyframes_ease_between_their_values() {
     assert_eq!(property_at(&props, "x", 9.0, 9.0), 0.5);
 }
 
-fn timeline() -> serde_json::Value {
-    json!({
+fn timeline() -> Timeline {
+    program(json!({
         "width": 1920, "height": 1080,
         "sources": [{"id": "m", "width": 1280, "height": 720}],
         "tracks": [
@@ -274,7 +296,7 @@ fn timeline() -> serde_json::Value {
                 {"id": "c", "kind": "caption", "timelineStart": 0.0, "duration": 4.0}
             ]}
         ]
-    })
+    }))
 }
 
 #[test]
@@ -345,7 +367,7 @@ fn a_motion_path_starts_from_the_clip_towards_the_middle_of_the_canvas() {
 #[test]
 fn masks_read_with_their_outlines_and_edit_by_their_handles() {
     let timeline = timeline();
-    let clip = &timeline["tracks"][0]["clips"][0];
+    let clip = &timeline.tracks[0].clips[0];
     let masks = masks_of(clip);
     let names: Vec<_> = masks.iter().map(|mask| mask.name.as_str()).collect();
     assert_eq!(names, ["k1", "ring", "cut"]);
@@ -507,10 +529,10 @@ fn the_chosen_point_goes_with_its_place() {
 
 #[test]
 fn a_clips_path_is_read_from_the_program() {
-    let timeline = json!({"tracks": [{"type": "video", "clips": [
+    let timeline = program(json!({"tracks": [{"type": "video", "clips": [
         {"id": "one", "props": {"path": "0.1,0.2 0.3,0.4"}},
         {"id": "two", "props": {}},
-    ]}]});
+    ]}]}));
     assert_eq!(
         path_of(&timeline, "one"),
         Some(vec![(0.1, 0.2), (0.3, 0.4)])
@@ -588,11 +610,11 @@ fn a_new_mask_takes_the_first_name_the_clip_does_not_use() {
     assert_eq!(new_mask_name(&taken(&["k2", "ring"])), "k1");
     assert_eq!(new_mask_name(&taken(&["k1", "k3"])), "k2");
     // Names come from every mask, whatever its outline.
-    let clip = json!({"masks": [
+    let clip = clip(json!({"masks": [
         {"name": "k1", "rect": [0, 0, 1, 1]},
         {"name": "moving", "keys": []},
         {"rect": [0, 0, 1, 1]},
-    ]});
+    ]}));
     assert_eq!(mask_names(&clip), ["k1", "moving"]);
 }
 
@@ -700,7 +722,7 @@ proptest! {
         let op = mask_add("one", &name, &outline);
         prop_assert_eq!(&op["op"], &json!("mask-add"));
         prop_assert_eq!(&op["clip"], &json!("one"));
-        let shown = masks_of(&json!({"masks": [op]}));
+        let shown = masks_of(&clip(json!({"masks": [op]})));
         prop_assert_eq!(shown.len(), 1);
         prop_assert_eq!(&shown[0].name, &name);
         let expected = match outline {
@@ -939,7 +961,7 @@ fn apart(a: Pt, b: Pt) -> f64 {
 /// picture: a media fitted to the canvas when `fit`, else a generator the
 /// canvas's size), a camera with `camera` and a null `n1` with `rig`, which
 /// `c1` names as its parent when it has numbers.
-fn scene(camera: Value, rig: Value, props: Value, size: Pt, fit: bool, canvas: Pt) -> Value {
+fn scene(camera: Value, rig: Value, props: Value, size: Pt, fit: bool, canvas: Pt) -> Timeline {
     let mut clip = if fit {
         json!({"id": "c1", "kind": "media", "sourceId": "m"})
     } else {
@@ -952,15 +974,20 @@ fn scene(camera: Value, rig: Value, props: Value, size: Pt, fit: bool, canvas: P
     if rig.as_object().is_some_and(|rig| !rig.is_empty()) {
         clip["parent"] = json!("n1");
     }
-    json!({
-        "width": canvas.0, "height": canvas.1,
-        "sources": [{"id": "m", "width": size.0, "height": size.1}],
+    // A view says sizes in whole pixels, which the table's are.
+    let pixels = |size: f64| {
+        assert_eq!(size.fract(), 0.0, "a size in whole pixels");
+        size as u32
+    };
+    program(json!({
+        "width": pixels(canvas.0), "height": pixels(canvas.1),
+        "sources": [{"id": "m", "width": pixels(size.0), "height": pixels(size.1)}],
         "tracks": [{"id": "V1", "type": "video", "clips": [
             {"id": "cam", "kind": "generator", "fx": "camera", "timelineStart": 0.0, "duration": 2.0, "props": camera},
             {"id": "n1", "kind": "generator", "fx": "null", "timelineStart": 0.0, "duration": 2.0, "props": rig},
             clip
         ]}]
-    })
+    }))
 }
 
 /// One row of [`table`]: a camera, a parent, a clip, its picture's size and
@@ -1387,7 +1414,7 @@ fn a_camera_is_the_topmost_showing() {
     let width = |cameras: Value, at: f64| {
         let mut tracks = cameras.as_array().cloned().unwrap_or_default();
         tracks.push(json!({"id": "V9", "type": "video", "clips": [clip.clone()]}));
-        let timeline = json!({"width": 1920, "height": 1080, "tracks": tracks});
+        let timeline = program(json!({"width": 1920, "height": 1080, "tracks": tracks}));
         let map = placement(&timeline, "c1", at).expect("placed").picture;
         map.apply((1.0, 0.5)).0 - map.apply((0.0, 0.5)).0
     };
@@ -1416,13 +1443,15 @@ fn a_camera_goes_with_its_parent_as_a_clip_does() {
         if follows {
             camera["parent"] = json!("rig");
         }
-        let timeline = json!({"width": 1920, "height": 1080, "tracks": [{"id": "V1", "type": "video", "clips": [
-            camera,
-            // The null is itself on a null that does nothing, so the chain is walked.
-            {"id": "rig", "kind": "generator", "fx": "null", "timelineStart": 0.0, "duration": 2.0, "parent": "still", "props": rig},
-            {"id": "still", "kind": "generator", "fx": "null", "timelineStart": 0.0, "duration": 2.0, "props": {}},
-            {"id": "c1", "kind": "generator", "fx": "solid", "timelineStart": 0.0, "duration": 2.0, "parent": "rig", "props": props}
-        ]}]});
+        let timeline = program(
+            json!({"width": 1920, "height": 1080, "tracks": [{"id": "V1", "type": "video", "clips": [
+                camera,
+                // The null is itself on a null that does nothing, so the chain is walked.
+                {"id": "rig", "kind": "generator", "fx": "null", "timelineStart": 0.0, "duration": 2.0, "parent": "still", "props": rig},
+                {"id": "still", "kind": "generator", "fx": "null", "timelineStart": 0.0, "duration": 2.0, "props": {}},
+                {"id": "c1", "kind": "generator", "fx": "solid", "timelineStart": 0.0, "duration": 2.0, "parent": "rig", "props": props}
+            ]}]}),
+        );
         placement(&timeline, "c1", 0.0).map_or(Projective::UNSEEN, |placed| placed.picture)
     };
     let rows = [
@@ -1466,7 +1495,7 @@ fn a_camera_goes_with_its_parent_as_a_clip_does() {
 
 const FACING: &str = "0,0 0.2,0.3 0.5,-0.1";
 
-fn facing(props: Value) -> Value {
+fn facing(props: Value) -> Timeline {
     scene(
         json!({}),
         json!({}),
