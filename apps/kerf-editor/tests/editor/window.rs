@@ -1808,7 +1808,7 @@ proptest! {
         };
         let now = then + later;
         let date = |seconds: i64| {
-            jiff::Timestamp::from_second(seconds).unwrap().to_zoned(zone.clone()).date()
+            jiff::Timestamp::from_second(seconds).unwrap().to_zoned_datetime(zone.clone()).date()
         };
         let epoch = jiff::civil::date(1970, 1, 1);
         // The day each falls on is the calendar's own...
