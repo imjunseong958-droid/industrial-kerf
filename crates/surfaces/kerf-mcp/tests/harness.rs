@@ -3721,6 +3721,18 @@ fn what_a_pending_proposal_holds_is_pointed_to() {
         frame.contains(&id) && frame.contains("`proposal`"),
         "{frame}"
     );
+    // At how its media is made and at its takes, and reading a signal from its clip.
+    for asked in [
+        json!({"graph": "m2"}),
+        json!({"takes": "m2"}),
+        json!({"signal": {"of": "later", "clip": "later"}}),
+    ] {
+        let shot = message(&error(&router, "look", asked.clone()));
+        assert!(
+            shot.contains(&id) && shot.contains("`proposal`"),
+            "{asked}: {shot}"
+        );
+    }
     // `revise` starts again from the project, which is not what it looks like from here.
     let revising = message(&error(
         &router,

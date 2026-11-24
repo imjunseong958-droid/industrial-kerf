@@ -24,8 +24,11 @@
 //!
 //! Nothing here runs a step or asks a server.
 
+mod error;
 pub mod graph;
 pub mod signals;
 pub mod takes;
 pub mod tracks;
 pub mod workflow;
+
+pub use error::ShotError;

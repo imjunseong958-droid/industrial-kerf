@@ -1501,7 +1501,12 @@ fn a_pull_request_is_titled_from_its_branch_and_said_with_its_url() {
 
 #[test]
 fn what_a_sync_brought_is_said_and_left_in_activity() {
-    let report = json!({
+    // A report as the bridge sends one, from the JSON it is written in.
+    let read = |written: serde_json::Value| -> kerf_bridge::event::SyncReport {
+        serde_json::from_value(written).expect("a report that reads")
+    };
+    let quiet = read(json!({"incoming": [], "conflicts": [], "pushed": false}));
+    let report = read(json!({
         "incoming": [{"author": "jun", "subject": "Trimmed c3"}, {"author": "mi", "subject": "Title"}],
         "conflicts": [
             {"path": "project.kerf", "what": "c3's out point", "kept": "yours"},
@@ -1509,7 +1514,7 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
         ],
         "renamed": [["c4", "c7"]],
         "pushed": true,
-    });
+    }));
     assert_eq!(
         sync_lines(&report),
         [
@@ -1524,7 +1529,6 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
         sync_said(&report, false).as_deref(),
         Some("Synced: 2 commits in, pushed, 1 change kept yours, 1 change kept theirs")
     );
-    let quiet = json!({"incoming": [], "conflicts": [], "pushed": false});
     assert_eq!(
         sync_said(&quiet, false),
         None,
@@ -1533,6 +1537,36 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
     assert_eq!(
         sync_said(&quiet, true).as_deref(),
         Some("Synced: up to date")
+    );
+    // Fields said otherwise than the bridge reads them each read as their default, and the
+    // rest of the report is still said, as the tray said it when it read the report by key.
+    let askew = read(json!({
+        "committed": true,
+        "incoming": [{"author": "jun", "subject": "Trimmed c3"}],
+        "conflicts": [{"path": "project", "what": "c3's out point", "kept": null}],
+        "renamed": [["c4"]],
+        "pushed": null,
+    }));
+    assert_eq!(
+        sync_lines(&askew),
+        [
+            "jun · Trimmed c3",
+            "Kept yours · project: c3's out point",
+            "Renumbered · c4 → ",
+        ]
+    );
+    assert_eq!(
+        sync_said(&askew, false).as_deref(),
+        Some("Synced: 1 commit in, 1 change kept yours")
+    );
+    // A list reads item by item: an item said askew is still counted.
+    let gapped = read(json!({
+        "incoming": [{"author": "jun", "subject": "Trimmed c3"}, null],
+        "conflicts": [null],
+    }));
+    assert_eq!(
+        sync_said(&gapped, false).as_deref(),
+        Some("Synced: 2 commits in, 1 change kept yours")
     );
 }
 
