@@ -14,13 +14,22 @@ updates:
   # it counts 1.x to 2.0. Most crates Kerf names are 0.x, so only patch releases,
   # which Cargo counts as compatible either way, are grouped: one pull request a
   # week for each workspace. Every other release comes alone, to be taken or
-  # closed on its own.
+  # closed on its own, but for the font crates, which come as one (below).
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
     groups:
+      # kerf-text parses a font with skrifa and shapes it with harfrust, handing
+      # the one's FontRef to the other, and both take that type from read-fonts.
+      # So the three move together, or kerf-text does not build: skrifa 0.50 on
+      # its own brought a read-fonts harfrust 0.12 does not take. A group takes a
+      # crate only when no group before it has, so this one comes first, and a
+      # patch of theirs comes here too.
+      workspace-fonts:
+        applies-to: version-updates
+        patterns: ["skrifa", "harfrust", "read-fonts"]
       workspace-compatible:
         applies-to: version-updates
         patterns: ["*"]
@@ -32,6 +41,11 @@ updates:
       interval: weekly
     open-pull-requests-limit: 3
     groups:
+      # The editor builds kerf-text too, by path, so its lock moves the three
+      # together for the same reason.
+      editor-fonts:
+        applies-to: version-updates
+        patterns: ["skrifa", "harfrust", "read-fonts"]
       editor-compatible:
         applies-to: version-updates
         patterns: ["*"]
@@ -62,6 +76,14 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: x11rb
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # libc is named by Kerf crates the editor builds by path (kerf-engine,
+      # kerf-mcp, kerf-runtime), and gpui 0.2.2's tree holds it back: gpui
+      # takes xattr 0.2.3 through zed-async-tar, and xattr 0.2.3 names
+      # libc::ENOATTR, which libc took off Linux in 0.2.191, so a newer libc
+      # stops the editor building on Linux. Patches included, then, until a
+      # gpui release moves past that xattr.
+      - dependency-name: libc
+        update-types: ["version-update:semver-patch", "version-update:semver-minor", "version-update:semver-major"]
 
   # The actions the workflows use, and those the composite actions under
   # .github/actions use: "/" alone reads only .github/workflows (and an
