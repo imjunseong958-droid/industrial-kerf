@@ -3,6 +3,7 @@
 use crate::support::{bounds, rect, window};
 use gpui::{point, px, size, Action, Bounds, MenuItem, WindowBounds};
 use jiff::tz::TimeZone;
+use kerf_bridge::{CrashReport, CrashReports};
 use kerf_editor::app::{
     crash_notice_text, parse_window_size, path_with_tool_folders, titlebar, window_buttons_at,
     window_place, x11_rgba, X11Pixels,
@@ -875,11 +876,20 @@ fn macos_path_gains_homebrews_and_local_tools_once() {
 
 #[test]
 fn a_crash_is_told_of_once() {
-    let listed = json!({"folder": "/c", "reports": [
-        {"component": "kerfd", "atMs": 3000.0, "message": "index out of bounds\nat …"},
-        {"component": "editor", "atMs": 2000.0, "message": ""},
-        {"component": "kerf", "atMs": 1000.0, "message": ""},
-    ]});
+    let report = |component: &str, at_ms, message: &str| CrashReport {
+        path: format!("/c/{component}-{at_ms}-1.txt").into(),
+        component: component.into(),
+        at_ms,
+        message: message.into(),
+    };
+    let listed = CrashReports {
+        folder: Some("/c".into()),
+        reports: vec![
+            report("kerfd", 3000, "index out of bounds\nat …"),
+            report("editor", 2000, ""),
+            report("kerf", 1000, ""),
+        ],
+    };
     let mut prefs = Prefs {
         crashes_seen_ms: 1000,
         ..Prefs::default()

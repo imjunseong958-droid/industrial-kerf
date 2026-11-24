@@ -4,22 +4,29 @@
 //! 0.x releases are pre-releases, which GitHub's "latest release" leaves out, so the newest is
 //! found among the recent ones. `KERF_UPDATE_CHECK=off` asks nothing, as the tests run.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Duration;
 
 /// Kerf's releases, newest first.
 const RELEASES: &str =
     "https://api.github.com/repos/imjunseong958-droid/industrial-kerf/releases?per_page=20";
 
-/// `{current, latest?, newer, url?}`, or `{error}` when GitHub could not be asked.
-pub(crate) fn check() -> Value {
+/// What GitHub says of Kerf's releases against this one (`current`): the newest release's
+/// version and page where there is one, and whether it is newer.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UpdateCheck {
+    pub current: String,
+    pub latest: Option<String>,
+    pub newer: bool,
+    pub url: Option<String>,
+}
+
+/// What GitHub says of the releases, or why it could not be asked.
+pub(crate) fn check() -> Result<UpdateCheck, String> {
     if std::env::var_os("KERF_UPDATE_CHECK").is_some_and(|value| value == "off" || value == "0") {
-        return json!({"error": "the update check is off (KERF_UPDATE_CHECK=off)"});
+        return Err("the update check is off (KERF_UPDATE_CHECK=off)".into());
     }
-    match fetch() {
-        Ok(releases) => newest(&releases, env!("CARGO_PKG_VERSION")),
-        Err(error) => json!({"error": error}),
-    }
+    fetch().map(|releases| newest(&releases, env!("CARGO_PKG_VERSION")))
 }
 
 fn fetch() -> Result<Value, String> {
@@ -63,7 +70,7 @@ fn version(text: &str) -> Option<(u64, u64, u64)> {
 }
 
 /// The newest published release in `releases` (GitHub's list), against `current`.
-pub(crate) fn newest(releases: &Value, current: &str) -> Value {
+pub(crate) fn newest(releases: &Value, current: &str) -> UpdateCheck {
     let found = releases
         .as_array()
         .into_iter()
@@ -79,14 +86,17 @@ pub(crate) fn newest(releases: &Value, current: &str) -> Value {
         })
         .max_by_key(|(version, _, _)| *version);
     let Some((latest, tag, url)) = found else {
-        return json!({"current": current, "newer": false});
+        return UpdateCheck {
+            current: current.to_owned(),
+            ..UpdateCheck::default()
+        };
     };
-    json!({
-        "current": current,
-        "latest": tag.trim_start_matches('v'),
-        "newer": version(current).is_some_and(|current| latest > current),
-        "url": url,
-    })
+    UpdateCheck {
+        current: current.to_owned(),
+        latest: Some(tag.trim_start_matches('v').to_owned()),
+        newer: version(current).is_some_and(|current| latest > current),
+        url: Some(url.to_owned()),
+    }
 }
 
 #[cfg(test)]

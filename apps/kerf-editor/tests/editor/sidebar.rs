@@ -1,5 +1,6 @@
 //! The sidebar: the project's conversations, their folders and search.
 
+use kerf_bridge::event::{CloudAccess, CloudAccount, CloudStatus};
 use kerf_editor::commands::catalog;
 use kerf_editor::model::{Conversation, Proposal, ProposalStatus, Speaker, SummaryShow, Turn};
 use kerf_editor::prefs::Provider;
@@ -45,18 +46,27 @@ proptest! {
 
 #[test]
 fn the_account_says_who_chat_runs_on() {
-    let signed_in = json!({"type": "cloud", "access": "ready",
-        "account": {"email": "ed@kerf.dev", "plan": "Pro", "ai": true, "credits": 41}});
+    let cloud = |access, plan: &str| CloudStatus {
+        access,
+        account: (access != CloudAccess::SignedOut).then(|| CloudAccount {
+            email: "ed@kerf.dev".into(),
+            plan: plan.into(),
+            ai: true,
+            credits: Some(41),
+        }),
+        message: None,
+    };
+    let signed_in = cloud(CloudAccess::Ready, "Pro");
     assert_eq!(
         account_line(Provider::Anthropic, Some(&signed_in), false, ""),
         ("ed@kerf.dev".into(), "Pro plan".into())
     );
-    let no_plan = json!({"access": "ready", "account": {"email": "ed@kerf.dev", "plan": ""}});
+    let no_plan = cloud(CloudAccess::Ready, "");
     assert_eq!(
         account_line(Provider::Cloud, Some(&no_plan), true, "").1,
         "Kerf account"
     );
-    let signed_out = json!({"access": "signedOut"});
+    let signed_out = cloud(CloudAccess::SignedOut, "");
     assert_eq!(
         account_line(Provider::Cloud, Some(&signed_out), true, ""),
         ("Kerf".into(), "Not signed in".into())

@@ -24,6 +24,7 @@ use std::path::PathBuf;
 pub use kerf_cloud::{Access as CloudAccess, Account as CloudAccount};
 pub use kerf_collab::git::{Status as GitStatus, User as GitUser};
 pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
+pub use kerf_mcp::harness::ListedModel;
 pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
 pub use kerf_shots::takes::ClipReading;
 
@@ -148,7 +149,7 @@ pub enum Event {
         #[serde(default)]
         exists: bool,
         #[serde(default)]
-        models: Vec<Value>,
+        models: Vec<ListedModel>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
     },
@@ -250,13 +251,7 @@ pub enum Event {
         version: u32,
     },
     /// The Kerf Cloud account: at startup, and for each cloud command.
-    Cloud {
-        access: CloudAccess,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        account: Option<CloudAccount>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        message: Option<String>,
-    },
+    Cloud(CloudStatus),
 
     // ------------------------------------------------------------ presets
     /// The program as a `.kerfpreset` document for the editor to write at `path`.
@@ -1223,6 +1218,20 @@ pub struct LookEntry {
     pub author: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated: Option<String>,
+}
+
+// ---------------------------------------------------------------- cloud
+
+/// Where the person's Kerf Cloud account stands: whether hosted requests can be made now (and
+/// if not, why), the account signed in to where there is one, and what the service or the
+/// sign-in said, where it said something.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CloudStatus {
+    pub access: CloudAccess,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<CloudAccount>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 // ---------------------------------------------------------------- media

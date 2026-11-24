@@ -6,10 +6,11 @@ use kerf_bridge::event::workflow::{
     Blank, By, Described, DescribedInput, DescribedNode, OriginKind, Shown,
 };
 use kerf_bridge::event::{
-    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
-    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
-    LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, TakeRead, ToolState,
+    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CloudAccess,
+    CloudAccount, CloudStatus, CollabSync, ConnectionStatus, ConversationSummary, ErrorCode,
+    ErrorEvent, Export, ExportStatus, ListedModel, LoudnessEvent, MeterReading, Preview,
+    PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus, TakeRead,
+    ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -23,7 +24,9 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text.
+/// unread, so that the types they now are write the same text. The two after those were
+/// written the same way: the person's models as `look` lists them (one with what its file
+/// says under names of its own), and a signed-in Kerf account out of requests.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -125,7 +128,88 @@ fn event() -> impl Strategy<Value = Event> {
         collab_sync(),
         take_read(),
         workflow(),
+        cloud(),
+        models(),
     ]
+}
+
+/// Where the Kerf Cloud account stands, with an account and a message or without.
+fn cloud() -> impl Strategy<Value = Event> {
+    let account = (text(), text(), any::<bool>(), option::of(any::<u64>())).prop_map(
+        |(email, plan, ai, credits)| CloudAccount {
+            email,
+            plan,
+            ai,
+            credits,
+        },
+    );
+    (
+        select(vec![
+            CloudAccess::Ready,
+            CloudAccess::Unavailable,
+            CloudAccess::SignedOut,
+            CloudAccess::Unreachable,
+            CloudAccess::NotIncluded,
+            CloudAccess::OutOfCredits,
+        ]),
+        option::of(account),
+        some_text(),
+    )
+        .prop_map(|(access, account, message)| {
+            Event::Cloud(CloudStatus {
+                access,
+                account,
+                message,
+            })
+        })
+}
+
+/// Values under names of `names`, as a models file says them.
+fn said(
+    names: Vec<&'static str>,
+) -> impl Strategy<Value = serde_json::Map<String, serde_json::Value>> {
+    btree_map(
+        select(names),
+        text().prop_map(serde_json::Value::from),
+        0..3,
+    )
+    .prop_map(|said| {
+        said.into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect()
+    })
+}
+
+/// The person's models as `look` lists them, with what their file says of each under names
+/// of its own (none of them one the listing names itself).
+fn models() -> impl Strategy<Value = Event> {
+    let model = (
+        (text(), some_text(), some_text()),
+        (option::of(number()), option::of(number())),
+        (option::of(vec(text(), 0..3)), said(vec!["steps", "cfg"])),
+        (said(vec!["style", "seed", "license"]), some_text()),
+    )
+        .prop_map(
+            |((name, about, size), (rate, seconds), (reads, more), (other, guide))| ListedModel {
+                name,
+                about,
+                size,
+                rate,
+                seconds,
+                reads,
+                more,
+                other,
+                guide,
+            },
+        );
+    (text(), any::<bool>(), vec(model, 0..3), some_text()).prop_map(
+        |(file, exists, models, error)| Event::Models {
+            file,
+            exists,
+            models,
+            error,
+        },
+    )
 }
 
 /// One input of a workflow's node: a link, with what it takes where a server has said, or
