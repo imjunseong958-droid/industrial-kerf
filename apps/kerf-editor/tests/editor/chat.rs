@@ -2,7 +2,7 @@
 
 use crate::support::{apply, clip, event, preview, snapshot, texts, timeline_value};
 use kerf_bridge::event::{Check, CheckSummary};
-use kerf_bridge::Event;
+use kerf_bridge::{Event, Focus, FocusScope};
 use kerf_editor::ask::{place, scope_choices, scope_words, GAP, HEIGHT, WIDTH};
 use kerf_editor::changes::{clip_changes, signed_frames};
 use kerf_editor::chat::{
@@ -558,16 +558,16 @@ fn the_ask_popover_asks_about_the_clip_or_the_whole_sequence() {
     let clip = ask_focus(&timeline, Some("c1"), AskScope::Clip, 0.0);
     assert_eq!(
         clip,
-        json!({"scope": "clip", "clip": "c1", "fromFrame": 100, "toFrame": 150})
+        focus(json!({"scope": "clip", "clip": "c1", "fromFrame": 100, "toFrame": 150}))
     );
     let around = ask_focus(&timeline, Some("c1"), AskScope::Sequence, 0.0);
-    assert_eq!(around["scope"], "sequence");
-    assert_eq!(around["clip"], "c1");
+    assert_eq!(around.scope, FocusScope::Sequence);
+    assert_eq!(around.clip.as_deref(), Some("c1"));
     // With no clip chosen, the sequence at the playhead, whatever the scope.
     let at = ask_focus(&timeline, None, AskScope::Clip, 2.0);
     assert_eq!(
         at,
-        json!({"scope": "sequence", "fromFrame": 50, "toFrame": 50})
+        focus(json!({"scope": "sequence", "fromFrame": 50, "toFrame": 50}))
     );
     assert_eq!(
         ask_label(&timeline, Some("c1"), AskScope::Clip, 0.0),
@@ -939,9 +939,14 @@ fn under_reduce_motion_a_finished_cut_stands_as_it_ends_at_once() {
     );
 }
 
+/// A request's focus, as it is written.
+fn focus(written: Value) -> Focus {
+    serde_json::from_value(written).expect("a focus")
+}
+
 fn focused(clip: &str, label: &str, stamp: f64) -> Focused {
     Focused {
-        focus: json!({"scope": "clip", "clip": clip, "fromFrame": 0, "toFrame": 24}),
+        focus: focus(json!({"scope": "clip", "clip": clip, "fromFrame": 0, "toFrame": 24})),
         label: label.to_owned(),
         stamp: Some(stamp),
     }
