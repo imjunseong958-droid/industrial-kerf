@@ -17,9 +17,11 @@
 //! the frames a closed bridge was still drawing, and the GPU a frame had begun to bring up.
 //! A process that exits under a thread at work in the GPU's libraries now and then dies as
 //! it ends. The frames are its playback's, its effect previews', its scope signal's, its
-//! shot pictures' and its renders' (the viewer's preview and the render queue's jobs): a
-//! closed bridge begins none of them, and a render it was on is cancelled, so the wait is
-//! for the frames under way.
+//! shot pictures', its take readings', its renders' (the viewer's preview and the render
+//! queue's jobs), its QC check's and its makings': a closed bridge begins none of them, and
+//! a render, a check or a making it was on is cancelled, so the wait is for the frames
+//! under way and for what was cancelled to stop. The tools its agent runs in this process
+//! draw too, and nothing waits for theirs yet.
 //!
 //! # Commands and events
 //!
@@ -213,10 +215,10 @@ struct Shared {
     /// The workflow last said of each step a graph has open.
     workflows: workflows::Said,
     /// What lets the bridge draw a frame with the compositor in this process, for its
-    /// playback, an effect preview, the scope signal, a shot picture or follow, and a
-    /// render. Closed with the bridge, so that [`drawing_settled`] can wait for the ones
-    /// under way before the process exits. Its QC check, its take readings, its makings
-    /// and its agent's tools draw too and do not ask it yet: nothing waits for theirs.
+    /// playback, an effect preview, the scope signal, a shot picture or follow, a take
+    /// reading, a render, a QC check and a making. Closed with the bridge, so that
+    /// [`drawing_settled`] can wait for the ones under way before the process exits. Its
+    /// agent's tools draw too and do not ask it yet: nothing waits for theirs.
     drawers: kerf_playback::Drawers,
 }
 
@@ -720,7 +722,8 @@ impl Drop for Bridge {
     fn drop(&mut self) {
         self.shared.closed.store(true, Ordering::SeqCst);
         // Nothing that draws through them begins a frame from here on; [`drawing_settled`]
-        // waits for those that had, and for the renders cancelled below to stop.
+        // waits for those that had, and for the renders, the check and the makings
+        // cancelled below to stop.
         self.shared.drawers.close();
         // Nobody would see a preview still rendering, or the one playing. The
         // process may exit before the media worker stops, so the files go now;

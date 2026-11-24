@@ -50,6 +50,9 @@ pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
     });
 }
 
+/// What a check that was stopped says of itself.
+const CANCELLED: &str = "The check was cancelled";
+
 /// Stop the check running, if any; it ends `failed`.
 pub(crate) fn cancel(shared: &Shared) {
     if let Ok(running) = shared.check_cancel.lock()
@@ -92,11 +95,31 @@ fn run(
         return Ok(failed(sequence, &format!("no sequence `{id}`")));
     }
     kerf_runtime::resolve_media_paths(&mut project, &shared.directory);
+    Ok(measure(&project, shared, tx, sequence, cancel))
+}
+
+/// Check `project`, its media paths resolved, and return how it went: `done`, or `failed`
+/// for a check that was cancelled or could not be made.
+///
+/// The picture it measures is drawn in this process, so it begins on the bridge's drawers
+/// (`Shared::drawers`) and holds them until it is over: a bridge let go cancels it, and what
+/// is about to exit waits for it to stop. One that gets here once the bridge is let go
+/// measures nothing.
+fn measure(
+    project: &kerf_model::Project,
+    shared: &Shared,
+    tx: &Outbox,
+    sequence: Option<&str>,
+    cancel: &CancellationToken,
+) -> Event {
+    let Some(_drawing) = shared.drawers.begin() else {
+        return failed(sequence, CANCELLED);
+    };
     // Progress goes out in whole percents, so a long check sends at most
     // a hundred of them.
     let mut sent = 0;
     let report = kerf_mcp::check_full_with(
-        &project,
+        project,
         sequence,
         &shared.directory,
         &QcLimits::default(),
@@ -109,12 +132,11 @@ fn run(
             }
         },
     );
-    let report = match report {
-        Ok(report) => report,
-        Err(EngineError::Cancelled) => return Ok(failed(sequence, "The check was cancelled")),
-        Err(error) => return Ok(failed(sequence, &error.to_string())),
-    };
-    Ok(done(&report, sequence))
+    match report {
+        Ok(report) => done(&report, sequence),
+        Err(EngineError::Cancelled) => failed(sequence, CANCELLED),
+        Err(error) => failed(sequence, &error.to_string()),
+    }
 }
 
 /// The `done` event: the report for `sequence` (findings on other
@@ -146,4 +168,40 @@ pub(crate) fn done(report: &CheckReport, sequence: Option<&str>) -> Event {
         summary: shown.summary,
         sequence: sequence.map(str::to_owned),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_closed_bridge_measures_nothing() {
+        // A solid, which needs no media to draw or to hear.
+        let project = kerf_runtime::parse_document(
+            "kerf 1\nproject name=\"Check\"\n\
+             sequence s1 rate=24 size=64x36 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip c1 gen=solid@1 at=0f dur=24f\n",
+        )
+        .expect("the document");
+        let shared = crate::tests_support::shared(&std::env::temp_dir());
+        // Room for all a check says of how far it is: nothing takes them here.
+        let (tx, _rx) = crate::wake::outbox(256);
+        let ended = || {
+            let event = measure(
+                &project,
+                &shared,
+                &tx,
+                Some("s1"),
+                &CancellationToken::new(),
+            );
+            let event = serde_json::to_value(event).expect("an event writes as JSON");
+            (event["status"].clone(), event["message"].clone())
+        };
+        // Open, the programme is measured to its end.
+        assert_eq!(ended(), ("done".into(), serde_json::Value::Null));
+        // Its drawers closed, as the bridge closes them when it is let go, none of it is.
+        shared.drawers.close();
+        assert_eq!(ended(), ("failed".into(), "The check was cancelled".into()));
+    }
 }
