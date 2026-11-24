@@ -3,20 +3,29 @@
 //! a sound; and what an edit's `workflowSet` and `restoreTake` write of its steps.
 
 use super::tools::{EditInput, HeldInput, PlacedInput, SignalInput, StepInput, WorkflowSetInput};
-use super::{cannot_said, program, resolve_project_source_path};
+use super::{no_model_said, program, resolve_project_source_path};
 use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Project;
+use kerf_shots::ShotError;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+/// A refusal as an agent is told it: a model that is not set up as [`no_model_said`] says it;
+/// any other keeps its kind.
+fn said_to_an_agent(why: ShotError, models: &kerf_engine::recipe::model::Models) -> ShotError {
+    match why {
+        ShotError::NoModel { name, .. } => ShotError::Other(no_model_said(&name, models)),
+        kind => kind,
+    }
+}
+
 impl KerfMcpRouter {
     /// What cannot be read of a shot, with where its media is when a proposal holds it.
-    fn no_shot(&self, media: &str, why: String) -> McpError {
-        let hint = if why.starts_with("no media `") {
-            self.in_pending(media, "proposal")
-        } else {
-            String::new()
+    fn no_shot(&self, media: &str, why: ShotError) -> McpError {
+        let hint = match &why {
+            ShotError::NoMedia(_) => self.in_pending(media, "proposal"),
+            _ => String::new(),
         };
         McpError::new(McpCode::InvalidArguments, format!("{why}{hint}"))
     }
@@ -32,11 +41,10 @@ impl KerfMcpRouter {
             .map_err(|why| self.no_shot(media, why))?;
         // An agent reads it as JSON, with what is said here for an agent alone.
         let mut shown = json!(graph);
-        if let Some(cannot) = shown["cannot"].as_str().map(str::to_owned) {
-            shown["cannot"] = json!(cannot_said(
-                cannot,
-                models_error.is_none().then_some(&models)
-            ));
+        if let Some(model) = graph.model_not_set_up.as_deref()
+            && models_error.is_none()
+        {
+            shown["cannot"] = json!(no_model_said(model, &models));
         }
         if let Some(error) = models_error {
             shown["modelsError"] = json!(error);
@@ -83,13 +91,14 @@ impl KerfMcpRouter {
         project: &Project,
         step: &StepInput,
     ) -> Result<Value, McpError> {
-        let invalid = |why: String| self.no_shot(&step.media, why);
-        let models = kerf_engine::recipe::model::Models::load()
-            .map_err(|error| invalid(format!("the person's models file does not read: {error}")))?;
+        let invalid = |why: ShotError| self.no_shot(&step.media, why);
+        let models = kerf_engine::recipe::model::Models::load().map_err(|error| {
+            invalid(format!("the person's models file does not read: {error}").into())
+        })?;
         // A step is named by its number, which is a line on in the text of its steps.
         let read =
             kerf_shots::workflow::read(project, &self.dir, &step.media, step.line + 1, &models)
-                .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
+                .map_err(|why| invalid(said_to_an_agent(why, &models)))?;
         let mut workflow =
             kerf_shots::workflow::shown(&step.media, step.line, &read).map_err(invalid)?;
         // What each input takes on the server the model is run on, as its program says:
@@ -121,7 +130,7 @@ impl KerfMcpRouter {
     /// `look` with `takes`: each take of a shot held to its guide by where its subjects are,
     /// the reading the editor's graph shows beside each take (`kerf_shots::takes`).
     pub(super) fn shot_takes(&self, project: &Project, media: &str) -> Result<Value, McpError> {
-        let invalid = |why: String| self.no_shot(media, why);
+        let invalid = |why: ShotError| self.no_shot(media, why);
         let guide = kerf_shots::takes::guide(project, media).map_err(invalid)?;
         let takes = kerf_shots::takes::takes(project, &self.dir, media).map_err(invalid)?;
         let mut resolved = project.clone();
@@ -226,7 +235,7 @@ impl KerfMcpRouter {
                     &models,
                     texts[media].1.clone(),
                 )
-                .map_err(|why| invalid(cannot_said(why, Some(&models))))?;
+                .map_err(|why| invalid(said_to_an_agent(why, &models).to_string()))?;
                 let values: Vec<kerf_shots::workflow::Set> = sets
                     .iter()
                     .map(|set| match &set.link {
@@ -238,13 +247,13 @@ impl KerfMcpRouter {
                     .collect();
                 // Held to what the server takes there, where a `look` has asked.
                 let asked = kerf_shots::workflow::taken_before(&models, &read);
-                let now =
-                    kerf_shots::workflow::with(&read, &values, asked.as_ref()).map_err(invalid)?;
+                let now = kerf_shots::workflow::with(&read, &values, asked.as_ref())
+                    .map_err(|why| invalid(why.to_string()))?;
                 let taken: Vec<PathBuf> = kept.iter().map(|kept| kept.copy.file.clone()).collect();
                 let copy = kerf_shots::workflow::copied(
                     project, &self.dir, media, line, &read, &now, &taken,
                 )
-                .map_err(invalid)?;
+                .map_err(|why| invalid(why.to_string()))?;
                 if let Some(held) = texts.get_mut(media) {
                     held.1.clone_from(&copy.recipe);
                 }
@@ -292,10 +301,9 @@ impl KerfMcpRouter {
         let read =
             kerf_shots::signals::from_sound(project, &self.dir, &input.of, &input.clip, input.hold)
                 .map_err(|why| {
-                    let hint = if why.starts_with("no clip") {
-                        self.any_pending("proposal")
-                    } else {
-                        String::new()
+                    let hint = match &why {
+                        ShotError::NoClip(_) => self.any_pending("proposal"),
+                        _ => String::new(),
                     };
                     McpError::new(McpCode::InvalidArguments, format!("{why}{hint}"))
                 })?;

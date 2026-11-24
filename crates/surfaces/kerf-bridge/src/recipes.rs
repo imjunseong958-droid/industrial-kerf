@@ -11,11 +11,15 @@
 //! Nothing here runs a step. A making is `media_make`, which shows what
 //! would run and asks first.
 
+use crate::error::BridgeError;
 use crate::event::{ErrorEvent, Event, Recipe};
 use crate::wake::Outbox;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
+use kerf_engine::EngineError;
 use kerf_model::Project;
+use kerf_runtime::RuntimeError;
+use kerf_shots::ShotError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -68,7 +72,7 @@ pub(crate) fn event(
     id: &str,
     models: &Models,
     models_error: Option<String>,
-) -> Result<Recipe, String> {
+) -> Result<Recipe, ShotError> {
     let graph = kerf_shots::graph::shown(project, directory, id, models)?;
     Ok(Recipe {
         graph,
@@ -94,21 +98,20 @@ fn change(
     directory: &Path,
     edit: &Edit,
     models: &Models,
-) -> Result<Changed, String> {
+) -> Result<Changed, ShotError> {
     let there = kerf_shots::graph::written(project, &edit.media)?;
     // What the editor read is what the document has: steps changed since are left alone.
     if there != edit.was {
         return Err(format!(
             "the steps of `{}` were changed since they were read; they are left as that left them",
             edit.media
-        ));
+        )
+        .into());
     }
     if let Some(take) = edit.restore {
         let restored = kerf_shots::takes::restored(project, directory, &edit.media, take)?;
         if restored.text == edit.was && restored.files.is_empty() {
-            return Err(format!(
-                "the steps are as take {take} was made from them already"
-            ));
+            return Err(format!("the steps are as take {take} was made from them already").into());
         }
         for (file, _, held) in &restored.files {
             kerf_shots::workflow::write(file, held)?;
@@ -146,22 +149,23 @@ fn change(
 }
 
 /// Have kerfd run `lines`, an edit of the person's own: one revision, which undo takes back.
-pub(crate) fn apply(client: &kerf_runtime::RuntimeClient, lines: &[String]) -> Result<(), String> {
+pub(crate) fn apply(
+    client: &kerf_runtime::RuntimeClient,
+    lines: &[String],
+) -> Result<(), RuntimeError> {
     if lines.is_empty() {
         return Ok(());
     }
-    let revision = client.get_state().map_err(|error| error.message)?.revision;
+    let revision = client.get_state()?.revision;
     client
         .apply_script_request("ui", &crate::key(), &lines.join("\n"), revision)
         .map(|_| ())
-        .map_err(|error| error.message)
 }
 
 /// The `media_carry_plan` event of media `id`, whose steps are in the recipe file it names:
 /// what carrying them into the document would write. Nothing is changed.
-fn carry_plan(project: &Project, directory: &Path, id: &str) -> Result<Event, String> {
-    let carry =
-        kerf_engine::recipe::carry(project, directory, id).map_err(|error| error.to_string())?;
+fn carry_plan(project: &Project, directory: &Path, id: &str) -> Result<Event, EngineError> {
+    let carry = kerf_engine::recipe::carry(project, directory, id)?;
     Ok(Event::MediaCarryPlan {
         media: id.to_owned(),
         recipe: carry.recipe,
@@ -178,9 +182,8 @@ fn carried(
     directory: &Path,
     id: &str,
     recipe: &str,
-) -> Result<Event, String> {
-    let held = kerf_engine::recipe::takes::mark_carried(before, after, directory, id)
-        .map_err(|error| error.to_string())?;
+) -> Result<Event, EngineError> {
+    let held = kerf_engine::recipe::takes::mark_carried(before, after, directory, id)?;
     Ok(Event::MediaCarried {
         media: id.to_owned(),
         recipe: recipe.to_owned(),
@@ -202,22 +205,24 @@ pub(crate) fn carry(
     tx: &Outbox,
 ) {
     let directory = shared.directory.as_path();
-    let answered = project(client).and_then(|before| {
-        if !confirmed {
-            return carry_plan(&before, directory, id);
-        }
-        let carry = kerf_engine::recipe::carry(&before, directory, id)
-            .map_err(|error| error.to_string())?;
-        apply(client, &carry.script)?;
-        let after = project(client)?;
-        carried(&before, &after, directory, id, &carry.recipe)
-    });
+    let answered = project(client)
+        .map_err(BridgeError::from)
+        .and_then(|before| {
+            if !confirmed {
+                return Ok(carry_plan(&before, directory, id)?);
+            }
+            let carry = kerf_engine::recipe::carry(&before, directory, id)?;
+            apply(client, &carry.script)?;
+            let after = project(client)?;
+            Ok(carried(&before, &after, directory, id, &carry.recipe)?)
+        });
     match answered {
         Ok(event) => crate::emit(tx, event),
         Err(why) => crate::emit(
             tx,
             Event::Error(ErrorEvent {
                 message: format!("cannot carry {id}: {why}"),
+                code: why.code(),
                 command: Some("media_carry".to_owned()),
                 media: Some(id.to_owned()),
                 ..ErrorEvent::default()
@@ -227,20 +232,21 @@ pub(crate) fn carry(
 }
 
 /// The project as kerfd has it.
-fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, String> {
+fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, RuntimeError> {
     client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
-        .map_err(|error| error.message)
 }
 
 /// What cannot be shown or changed of media `id`'s recipe: an `error` that
 /// names the media, so that what shows its graph can say so there.
-fn failed(tx: &Outbox, id: &str, why: String) {
+fn failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
+    let why = why.into();
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
-            message: why,
+            message: why.to_string(),
+            code: why.code(),
             command: Some("recipe".to_owned()),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
@@ -252,8 +258,16 @@ fn failed(tx: &Outbox, id: &str, why: String) {
 pub(crate) fn get(shared: &Shared, client: &kerf_runtime::RuntimeClient, id: &str, tx: &Outbox) {
     let (models, models_error) = models();
     match project(client)
-        .and_then(|project| event(&project, &shared.directory, id, &models, models_error))
-    {
+        .map_err(BridgeError::from)
+        .and_then(|project| {
+            Ok(event(
+                &project,
+                &shared.directory,
+                id,
+                &models,
+                models_error,
+            )?)
+        }) {
         Ok(event) => crate::emit(tx, Event::Recipe(event)),
         Err(why) => failed(tx, id, why),
     }
@@ -276,7 +290,8 @@ pub(crate) fn edit(
     // Steps the document holds change by an edit, which kerfd applies: the graph shown
     // after is of the project as that left it.
     let changed = change(&project, &shared.directory, edit, &models)
-        .and_then(|changed| apply(client, &changed.script).map(|()| changed));
+        .map_err(BridgeError::from)
+        .and_then(|changed| Ok(apply(client, &changed.script).map(|()| changed)?));
     let project = match &changed {
         Ok(changed) if !changed.script.is_empty() => match self::project(client) {
             Ok(project) => project,
@@ -331,7 +346,7 @@ mod tests {
         let folder = tempfile::tempdir().unwrap();
         let dir = folder.path();
         let project = uncarried(dir, "kerf-recipe 1\nrun vork render --out {guide.mp4}\ngenerate model=dawn guide={guide.mp4}\n");
-        let refused = carry_plan(&project, dir, "m1").unwrap_err();
+        let refused = carry_plan(&project, dir, "m1").unwrap_err().to_string();
         let engine = kerf_engine::recipe::carry(&project, dir, "m1")
             .unwrap_err()
             .to_string();

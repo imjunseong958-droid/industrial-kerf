@@ -8,7 +8,7 @@ use crate::model::{
     TimelineShow, TurnShow,
 };
 use kerf_bridge::event::{
-    self, AgentUpdate, ConnectionStatus, Event, Export, ExportStatus, ToolState,
+    self, AgentUpdate, ConnectionStatus, Event, Export, ExportStatus, PresetInspection, ToolState,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -462,7 +462,7 @@ pub struct EditorState {
     pub preset_exists: Option<String>,
     /// The preset file last read (`preset_inspect`): its path, and what it
     /// holds.
-    pub inspected_preset: Option<(String, Value)>,
+    pub inspected_preset: Option<(String, PresetInspection)>,
     /// The last `media_status`.
     pub media_status: MediaStatus,
     /// What `media_info` said of each media (`pixFmt`, `codec`…), merged

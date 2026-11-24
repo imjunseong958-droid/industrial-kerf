@@ -2,29 +2,43 @@
 //! kerfd runs, Kerf's tools served over MCP, crash reports, the system keychain, the
 //! project launcher, the command registry and the catalog.
 
+use crate::event::{ViewFxDef, ViewParamDef};
+use crate::tasks::{PresetCheck, ProjectInfo};
+use crate::updates::UpdateCheck;
 use crate::{secrets, tasks, updates, SERVE_MCP};
+pub use kerf_runtime::crash::Report as CrashReport;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 // ---- about ---------------------------------------------------------------------
 
 /// Where Kerf's source and releases are.
 pub const REPOSITORY: &str = "https://github.com/imjunseong958-droid/industrial-kerf";
 
-/// `{name, version, license, repository}`: what Help > About Kerf shows.
-pub fn about() -> Value {
-    json!({
-        "name": "Industrial Kerf",
-        "version": env!("CARGO_PKG_VERSION"),
-        "license": env!("CARGO_PKG_LICENSE"),
-        "repository": REPOSITORY,
-    })
+/// What Help > About Kerf shows: Kerf's name, version and license, and where its source is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct About {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub license: &'static str,
+    pub repository: &'static str,
 }
 
-/// Whether a newer Kerf is released on GitHub: `{current, latest?, newer, url?}` or `{error}`
+/// What Help > About Kerf shows.
+pub fn about() -> About {
+    About {
+        name: "Industrial Kerf",
+        version: env!("CARGO_PKG_VERSION"),
+        license: env!("CARGO_PKG_LICENSE"),
+        repository: REPOSITORY,
+    }
+}
+
+/// Whether a newer Kerf is released on GitHub, or why GitHub could not be asked
 /// (`KERF_UPDATE_CHECK=off` asks nothing). It asks the network and may block for up to
 /// 10 s, so call it off the UI thread.
-pub fn update_check() -> Value {
+pub fn update_check() -> Result<UpdateCheck, String> {
     updates::check()
 }
 
@@ -84,29 +98,25 @@ pub fn crash_install() {
     kerf_runtime::crash::install("editor");
 }
 
-/// The crash folder's reports: `{folder, reports: [{path, component (editor|kerfd|kerf),
-/// atMs, message}]}`, newest first; `folder` is null when there is nowhere to keep them.
-pub fn crash_reports() -> Value {
-    crash_reports_json(kerf_runtime::crash::folder())
+/// The crash folder, where there is one to keep reports in, and its reports.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CrashReports {
+    /// None when there is nowhere to keep them.
+    pub folder: Option<PathBuf>,
+    /// Newest first.
+    pub reports: Vec<CrashReport>,
 }
 
-fn crash_reports_json(folder: Option<PathBuf>) -> Value {
-    let reports: Vec<Value> = folder
-        .as_deref()
-        .map(kerf_runtime::crash::reports)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|report| {
-            json!({
-                "path": report.path,
-                "component": report.component,
-                // Milliseconds fit an f64 exactly until the year 287,396.
-                "atMs": report.at_ms as f64,
-                "message": report.message,
-            })
-        })
-        .collect();
-    json!({"folder": folder, "reports": reports})
+/// The crash folder's reports, newest first.
+pub fn crash_reports() -> CrashReports {
+    let folder = kerf_runtime::crash::folder();
+    CrashReports {
+        reports: folder
+            .as_deref()
+            .map(kerf_runtime::crash::reports)
+            .unwrap_or_default(),
+        folder,
+    }
 }
 
 /// The system keychain: `{op: get|set|delete, name, value?}` -> `{ok: true, value?}` (`value`
@@ -125,19 +135,16 @@ pub fn keychain_off() {
 
 // ---- project launcher ------------------------------------------------------------
 
-/// What the launcher shows of a project folder, before any bridge exists; synchronous and
-/// local: `{path}` -> `{path, exists, project (has project.kerf), name, repository, branch,
-/// remote, modified (ISO 8601 of project.kerf), presets (how many)}`.
-pub fn project_inspect(request: &Value) -> Value {
-    tasks::inspect_project(request)
+/// What the launcher shows of the project folder at `path`, before any bridge exists;
+/// synchronous and local.
+pub fn project_inspect(path: &Path) -> ProjectInfo {
+    tasks::inspect_project(path)
 }
 
-/// A preset file's slots, and how files would fill them: `{path, files?: [path]}` -> `{name,
-/// slots: [{id, seconds, video, audio, clips}], texts: {clipId: text}, files: [{path,
-/// seconds, video, audio, fits: [slotId], error?}]}` or `{error}`. It probes the files with
-/// ffprobe, so it may take a moment.
-pub fn preset_inspect(request: &Value) -> Value {
-    tasks::inspect_preset(request)
+/// The preset file at `path`, its slots and texts, and how each of `files` would fill them;
+/// or why it cannot be read. It probes the files with ffprobe, so it may take a moment.
+pub fn preset_inspect(path: &Path, files: &[PathBuf]) -> Result<PresetCheck, String> {
+    tasks::inspect_preset(path, files)
 }
 
 // ---- command registry ----------------------------------------------------------
@@ -171,15 +178,14 @@ pub fn commands_run(invocation: &Value) -> Value {
     }
 }
 
-/// Everything the catalog offers, as a JSON array of `{id, kind, domain, category, name,
-/// doc, engine, params}`: picture effects and transitions, generators (`kind: "generator"`,
-/// such as titles and solids) and sound effects (`domain: "audio"`).
-pub fn fx_catalog_all() -> Value {
-    kerf_runtime::fx_catalog_all_json()
+/// Everything the catalog offers: picture effects and transitions, generators (`kind`
+/// `generator`, such as titles and solids) and sound effects (`domain` `audio`).
+pub fn fx_catalog_all() -> Vec<ViewFxDef> {
+    kerf_runtime::fx_catalog_all()
 }
 
 /// The properties a clip has by its track's type, which [`fx_catalog_all`] does not list:
-/// `{video: [...], audio: [...]}`, as a timeline's `properties` carries them.
-pub fn clip_properties() -> Value {
-    kerf_runtime::properties_json()
+/// `video` and `audio`, as a timeline's `properties` carries them.
+pub fn clip_properties() -> BTreeMap<String, Vec<ViewParamDef>> {
+    kerf_runtime::clip_properties()
 }

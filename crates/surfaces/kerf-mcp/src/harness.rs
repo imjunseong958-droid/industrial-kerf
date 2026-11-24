@@ -20,7 +20,7 @@ mod shots;
 mod tools;
 mod track;
 
-pub use project::models_listed;
+pub use project::{models_listed, ListedModel};
 pub use tools::system_prompt;
 pub(crate) use tools::{input, metadata};
 
@@ -395,26 +395,32 @@ fn not_pending(id: &str) -> McpError {
     )
 }
 
-/// What would refuse a making, as an agent is told it: where a person's own models file is, is
-/// theirs to be told and not an agent's, which is told which models there are.
+/// What would refuse a making, as an agent is told it: a model that is not set up as
+/// [`no_model_said`] says it, where `models` are the ones read; anything else as it is said.
 pub(crate) fn cannot_said(
-    cannot: String,
+    cannot: kerf_engine::EngineError,
     models: Option<&kerf_engine::recipe::model::Models>,
 ) -> String {
-    match (cannot.split_once(" is set up: "), models) {
-        (Some((model, _)), Some(models)) if cannot.starts_with("no model `") => {
-            let have: Vec<&str> = models.names().collect();
-            format!(
-                "{model} is set up: {}; a person sets one up in their own models file",
-                if have.is_empty() {
-                    "none is".to_owned()
-                } else {
-                    format!("the models set up are {}", have.join(", "))
-                }
-            )
+    match (&cannot, models) {
+        (kerf_engine::EngineError::NoModel { name, .. }, Some(models)) => {
+            no_model_said(name, models)
         }
-        _ => cannot,
+        _ => cannot.to_string(),
     }
+}
+
+/// That no model `model` is set up, as an agent is told it: where a person's own models file
+/// is, is theirs to be told and not an agent's, which is told which models there are.
+pub(crate) fn no_model_said(model: &str, models: &kerf_engine::recipe::model::Models) -> String {
+    let have: Vec<&str> = models.names().collect();
+    format!(
+        "no model `{model}` is set up: {}; a person sets one up in their own models file",
+        if have.is_empty() {
+            "none is".to_owned()
+        } else {
+            format!("the models set up are {}", have.join(", "))
+        }
+    )
 }
 
 pub(crate) fn operation_key(kind: &str) -> String {

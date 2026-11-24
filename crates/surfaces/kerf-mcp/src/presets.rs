@@ -8,7 +8,7 @@ use kerf_lang::preset::{self, Preset};
 use kerf_lang::Clock;
 use kerf_model::look::Look;
 use kerf_model::{Catalog, Content, Id, Project, Time};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -110,39 +110,55 @@ impl KerfMcpRouter {
     /// The pattern, its text slots, each media slot with the clips that use
     /// it, the made media whose steps read it, and the project's imported
     /// media that can fill it, and the media the preset makes (`made`).
-    pub(super) fn inspect_preset(&self, project: &Project, file: &str) -> Result<Value, McpError> {
+    pub(super) fn inspect_preset(
+        &self,
+        project: &Project,
+        file: &str,
+    ) -> Result<PresetInspection, McpError> {
         let (document, preset) = self.read_preset(file)?;
         let pattern = &preset.pattern;
-        let slots: Vec<_> = preset::slots(pattern)
-            .map(|slot| {
+        let slots = preset::slots(pattern)
+            .map(|slot| InspectedSlot {
+                id: slot.id.as_str().to_owned(),
+                video: slot.video.is_some(),
+                audio: slot.audio.is_some(),
+                minimum_duration: Clock::of_media(slot).print_duration(slot.duration),
+                seconds: slot.duration.seconds(),
+                clips: slot_clips(pattern, &slot.id),
+                read_by: read_by(pattern, &slot.path),
                 // Judged from imported metadata; applying re-probes the files.
-                let fits: Vec<_> = project
+                fits: project
                     .media
                     .iter()
                     .filter_map(|media| {
                         let latest = preset::latest_start(slot, media)?;
-                        Some(json!({"media": media.id.as_str(),
-                            "latestFrame": media.rate.frames_floor(latest)}))
+                        Some(SlotFit {
+                            media: media.id.as_str().to_owned(),
+                            latest_frame: media.rate.frames_floor(latest),
+                        })
                     })
-                    .collect();
-                json!({"id": slot.id.as_str(), "video": slot.video.is_some(), "audio": slot.audio.is_some(),
-                    "minimumDuration": Clock::of_media(slot).print_duration(slot.duration),
-                    "seconds": slot.duration.seconds(), "clips": slot_clips(pattern, &slot.id),
-                    "readBy": read_by(pattern, &slot.path),
-                    "fits": fits})
+                    .collect(),
             })
             .collect();
-        let looks: Vec<_> = preset
+        let looks = preset
             .looks
             .iter()
-            .map(|look| json!({"id": look.id.as_str(), "version": look.version, "name": look.name}))
+            .map(|look| PresetLook {
+                id: look.id.as_str().to_owned(),
+                version: look.version,
+                name: look.name.clone(),
+            })
             .collect();
-        Ok(
-            json!({"preset": file, "name": pattern.name, "document": document,
-            "sequence": pattern.sequences[0].id.as_str(),
-            "slots": slots, "made": made_media(pattern),
-            "textSlots": preset::text_slots(pattern), "looks": looks}),
-        )
+        Ok(PresetInspection {
+            preset: file.to_owned(),
+            name: pattern.name.clone(),
+            document,
+            sequence: pattern.sequences[0].id.as_str().to_owned(),
+            slots,
+            made: made_media(pattern),
+            text_slots: preset::text_slots(pattern),
+            looks,
+        })
     }
 
     pub(super) fn save_preset(
@@ -354,7 +370,7 @@ fn write_looks(directory: &Path, looks: &[Look]) -> Result<(), McpError> {
 }
 
 /// The media the preset makes whose steps read the file at `path`.
-fn read_by<'a>(pattern: &'a Project, path: &str) -> Vec<&'a str> {
+fn read_by(pattern: &Project, path: &str) -> Vec<String> {
     preset::made(pattern)
         .filter(|media| {
             media
@@ -363,38 +379,121 @@ fn read_by<'a>(pattern: &'a Project, path: &str) -> Vec<&'a str> {
                 .flat_map(|step| step.names())
                 .any(|(named, name)| named == kerf_model::making::Named::File && name == path)
         })
-        .map(|media| media.id.as_str())
+        .map(|media| media.id.as_str().to_owned())
         .collect()
 }
 
 /// The media the preset makes, apart from its slots: they take no binding.
 /// Each with its steps as the document writes them, the slot it is of frame
 /// for frame where it is (`of`), and the clips that play it.
-fn made_media(pattern: &Project) -> Vec<Value> {
+fn made_media(pattern: &Project) -> Vec<InspectedMade> {
     preset::made(pattern)
-        .map(|media| {
-            let steps: Vec<String> = media.steps.iter().map(kerf_lang::print_step).collect();
-            json!({"id": media.id.as_str(), "path": media.path,
-                "of": preset::footage_of(media).map(|slot| slot.to_string()),
-                "steps": steps, "clips": slot_clips(pattern, &media.id)})
+        .map(|media| InspectedMade {
+            id: media.id.as_str().to_owned(),
+            path: media.path.clone(),
+            of: preset::footage_of(media).map(|slot| slot.to_string()),
+            steps: media.steps.iter().map(kerf_lang::print_step).collect(),
+            clips: slot_clips(pattern, &media.id),
         })
         .collect()
 }
 
 /// Where a slot appears in the pattern, so a person can tell slots apart.
-fn slot_clips(pattern: &Project, slot: &Id) -> Vec<Value> {
+fn slot_clips(pattern: &Project, slot: &Id) -> Vec<SlotClip> {
     let mut clips = Vec::new();
     for sequence in &pattern.sequences {
         let clock = Clock::of_sequence(sequence);
         for track in &sequence.tracks {
             for clip in &track.clips {
                 if matches!(&clip.content, Content::Media { media, .. } if media == slot) {
-                    clips.push(json!({"id": clip.id.as_str(), "name": clip.name,
-                        "sequence": sequence.id.as_str(), "track": track.id.as_str(),
-                        "at": clock.print_position(clip.start)}));
+                    clips.push(SlotClip {
+                        id: clip.id.as_str().to_owned(),
+                        name: clip.name.clone(),
+                        sequence: sequence.id.as_str().to_owned(),
+                        track: track.id.as_str().to_owned(),
+                        at: clock.print_position(clip.start),
+                    });
                 }
             }
         }
     }
     clips
+}
+
+/// What a preset file holds, as `look` at a `preset` says it: the file as
+/// asked, the pattern's name, the document itself and the id of its first
+/// sequence; its media slots, the media it makes from steps (`made`), its
+/// text slots (each clip's text, by clip id) and the looks it carries.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct PresetInspection {
+    pub preset: String,
+    pub name: String,
+    pub document: String,
+    pub sequence: String,
+    pub slots: Vec<InspectedSlot>,
+    pub made: Vec<InspectedMade>,
+    pub text_slots: BTreeMap<String, String>,
+    pub looks: Vec<PresetLook>,
+}
+
+/// A media slot of a preset: which streams it needs and how long (as a
+/// duration at its media's rate, and in seconds), the clips of the pattern
+/// that play it, the made media whose steps read its file, and the project's
+/// imported media that can fill it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct InspectedSlot {
+    pub id: String,
+    pub video: bool,
+    pub audio: bool,
+    pub minimum_duration: String,
+    pub seconds: f64,
+    pub clips: Vec<SlotClip>,
+    pub read_by: Vec<String>,
+    pub fits: Vec<SlotFit>,
+}
+
+/// A clip of a preset's pattern that plays a slot or a made media: its name
+/// where it has one, and where it is (its sequence, its track, and when, as
+/// a timecode of the sequence).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SlotClip {
+    pub id: String,
+    pub name: Option<String>,
+    pub sequence: String,
+    pub track: String,
+    pub at: String,
+}
+
+/// Media of the project that can fill a slot, and the latest frame of it the
+/// slot can start from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SlotFit {
+    pub media: String,
+    pub latest_frame: i64,
+}
+
+/// A media a preset makes from the steps under its line: its file, the slot
+/// it is of frame for frame where it is one's (else `null`), its steps as the
+/// document writes them, and the clips that play it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InspectedMade {
+    pub id: String,
+    pub path: String,
+    pub of: Option<String>,
+    pub steps: Vec<String>,
+    pub clips: Vec<SlotClip>,
+}
+
+/// A look a preset carries.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PresetLook {
+    pub id: String,
+    pub version: u32,
+    pub name: String,
 }

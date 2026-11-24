@@ -12,7 +12,7 @@ use crate::presets::{self, Fit};
 use editor_ui::theme::{self, height, radius, text};
 use editor_ui::ui;
 use gpui::{div, prelude::*, px, AnyElement, Context, ElementId, SharedString, Window};
-use serde_json::Value;
+use kerf_bridge::event::PresetMade;
 
 /// A preset's row in the list of those found.
 const PRESET_ROW: f32 = 44.0;
@@ -35,27 +35,30 @@ impl LauncherView {
             );
             return rows;
         };
-        if let Some(error) = preset["error"].as_str() {
-            rows.push(
-                ui::label(
-                    format!("{} could not be read: {error}", folder_of(path)),
-                    text::CONTROL,
-                    theme::neg(),
-                )
-                .into_any_element(),
-            );
-            return rows;
-        }
-        let made = preset["made"].as_array().cloned().unwrap_or_default();
-        rows.push(self.preset_title(&made));
+        let preset = match preset {
+            Ok(preset) => preset,
+            Err(error) => {
+                rows.push(
+                    ui::label(
+                        format!("{} could not be read: {error}", folder_of(path)),
+                        text::CONTROL,
+                        theme::neg(),
+                    )
+                    .into_any_element(),
+                );
+                return rows;
+            }
+        };
+        let made = &preset.made;
+        rows.push(self.preset_title(made));
         rows.extend(
             page.slots
                 .iter()
                 .enumerate()
-                .map(|(index, slot)| self.slot_row(index, slot, preset, window, cx)),
+                .map(|(index, slot)| self.slot_row(index, slot, made, window, cx)),
         );
         if !made.is_empty() {
-            rows.extend(Self::made_rows(&made));
+            rows.extend(Self::made_rows(made));
         }
         if !page.texts.is_empty() {
             rows.extend(self.text_rows(window, cx));
@@ -164,7 +167,7 @@ impl LauncherView {
 
     /// The preset chosen: its name, how many media slots it has, and how
     /// many media it makes itself (`made`).
-    fn preset_title(&self, made: &[Value]) -> AnyElement {
+    fn preset_title(&self, made: &[PresetMade]) -> AnyElement {
         let page = &self.preset;
         let mut title = format!(
             "{} · {} media slot{}",
@@ -180,19 +183,20 @@ impl LauncherView {
             .into_any_element()
     }
 
-    /// A media slot of `preset` (`index` among them): what it needs and who
-    /// reads it, how the file chosen fits it, where in the file it starts
-    /// (asked only while the file has length to spare), and Choose File….
+    /// A media slot of the preset (`index` among them): what it needs and
+    /// which of what it makes (`made`) reads it, how the file chosen fits
+    /// it, where in the file it starts (asked only while the file has
+    /// length to spare), and Choose File….
     fn slot_row(
         &self,
         index: usize,
         slot: &SlotFile,
-        preset: &Value,
+        made: &[PresetMade],
         window: &Window,
         cx: &Context<Self>,
     ) -> AnyElement {
         let idle = self.busy.is_none();
-        let read_by = presets::read_by_line(&presets::slot_read_by(preset, &slot.slot));
+        let read_by = presets::read_by_line(&presets::slot_read_by(made, &slot.slot));
         let (status, ink): (SharedString, _) = match (&slot.file, &slot.fit) {
             (None, _) => ("No file chosen".into(), theme::ink3()),
             (Some(_), None) => ("Checking…".into(), theme::ink3()),
@@ -295,7 +299,7 @@ impl LauncherView {
 
     /// What the preset makes itself (`made`), which needs no file: each with
     /// its steps in its tip, made after applying.
-    fn made_rows(made: &[Value]) -> Vec<AnyElement> {
+    fn made_rows(made: &[PresetMade]) -> Vec<AnyElement> {
         let mut rows = Vec::new();
         rows.push(
             ui::label(
@@ -307,13 +311,7 @@ impl LauncherView {
             .into_any_element(),
         );
         rows.extend(made.iter().enumerate().map(|(index, entry)| {
-            let steps: Vec<&str> = entry["steps"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .collect();
-            let steps = steps.join("\n");
+            let steps = entry.steps.join("\n");
             div()
                 .id(ElementId::named_usize("launcher-made", index))
                 .flex()
@@ -333,11 +331,7 @@ impl LauncherView {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .child(ui::line(
-                            entry["id"].as_str().unwrap_or_default().to_owned(),
-                            text::BODY_NAME,
-                            theme::ink(),
-                        ))
+                        .child(ui::line(entry.id.clone(), text::BODY_NAME, theme::ink()))
                         .child(ui::line(
                             presets::made_line(entry),
                             text::META,

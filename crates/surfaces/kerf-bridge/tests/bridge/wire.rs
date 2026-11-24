@@ -6,10 +6,13 @@ use kerf_bridge::event::workflow::{
     Blank, By, Described, DescribedInput, DescribedNode, OriginKind, Shown,
 };
 use kerf_bridge::event::{
-    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
-    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
-    LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, TakeRead, ToolState,
+    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CloudAccess,
+    CloudAccount, CloudStatus, CollabSync, ConnectionStatus, ConversationSummary, ErrorCode,
+    ErrorEvent, Export, ExportStatus, InspectedMade, InspectedSlot, Kept, ListedModel,
+    LoudnessEvent, MeterReading, PresetInspection, PresetLook, Preview, PreviewStatus,
+    QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus, SlotClip, SlotFit,
+    Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead, TimelineView, ToolState,
+    ViewParamDef,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -23,7 +26,20 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text.
+/// unread, so that the types they now are write the same text. The four after those are
+/// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
+/// way before their report was a type: one that brought a commit in, a new branch, a commit
+/// with nothing to commit, and a first sync that committed and pushed with nothing to merge,
+/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The two
+/// after those were written the same way: the person's models as `look` lists them (one with
+/// what its file says under names of its own), and a signed-in Kerf account out of requests.
+/// The one after those is what a preset file holds (`preset_inspect`), with a slot that a
+/// made media reads and texts, written the same way before it was a type; its folder is made
+/// neutral. The recorded `state`'s timeline carries the catalog's definitions as kerfd writes
+/// them (`properties`, `maskProperties`, `generators`), which were JSON passed on unread too
+/// and are `ViewParamDef`s now. The last is a `state` with a proposal open, its timeline and
+/// the proposal's (which the bridge makes itself) as the bridge wrote them while those
+/// definitions were JSON.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -49,6 +65,32 @@ fn an_event_this_build_does_not_know_reads_as_one_to_ignore() {
             "{newer}"
         );
     }
+}
+
+#[test]
+fn a_definition_this_build_cannot_read_is_left_out_and_the_timeline_still_reads() {
+    let number =
+        json!({"name": "x", "type": "number", "default": 0.0, "animatable": true, "doc": ""});
+    // Choices with labels, as a newer kerfd might write them.
+    let newer = json!({"name": "mode", "type": "enum", "default": "a", "animatable": false,
+        "doc": "", "options": [{"value": "a", "label": "A"}]});
+    let event = json!({"type": "state", "snapshot": {"timeline": {
+        "tracks": [{"id": "V1", "type": "video"}],
+        "properties": {"video": [number, newer]},
+        "maskProperties": [newer, number],
+        "generators": {"title": [newer], "solid": [number], "light": {"x": number}},
+    }}});
+    let Event::State { snapshot } = serde_json::from_value(event).unwrap() else {
+        panic!("not a state");
+    };
+    let timeline = snapshot.timeline;
+    let names = |defs: &[ViewParamDef]| defs.iter().map(|def| def.name.clone()).collect::<Vec<_>>();
+    assert_eq!(timeline.tracks.len(), 1);
+    assert_eq!(names(&timeline.properties["video"]), ["x"]);
+    assert_eq!(names(&timeline.mask_properties), ["x"]);
+    assert_eq!(names(&timeline.generators["solid"]), ["x"]);
+    assert!(timeline.generators["title"].is_empty());
+    assert!(timeline.generators["light"].is_empty());
 }
 
 proptest! {
@@ -125,7 +167,232 @@ fn event() -> impl Strategy<Value = Event> {
         collab_sync(),
         take_read(),
         workflow(),
+        preset_inspect(),
+        state(),
+        cloud(),
+        models(),
     ]
+}
+
+/// A parameter's definition: a type this build may not know, a default of each kind a
+/// parameter value is, and each limit, the unit, the choices and the extensions there or
+/// left out (a list of none being there).
+fn param_def() -> impl Strategy<Value = ViewParamDef> {
+    let default = prop_oneof![
+        number().prop_map(serde_json::Value::from),
+        any::<bool>().prop_map(serde_json::Value::from),
+        text().prop_map(serde_json::Value::from),
+    ];
+    let names = || option::of(vec(text(), 0..3));
+    (
+        (text(), text(), default, any::<bool>(), text()),
+        (
+            option::of(number()),
+            option::of(number()),
+            some_text(),
+            names(),
+            names(),
+        ),
+    )
+        .prop_map(
+            |((name, kind, default, animatable, doc), (min, max, unit, options, extensions))| {
+                ViewParamDef {
+                    name,
+                    kind,
+                    default,
+                    animatable,
+                    doc,
+                    min,
+                    max,
+                    unit,
+                    options,
+                    extensions,
+                }
+            },
+        )
+}
+
+/// A clip of a preset's pattern that plays a slot.
+fn slot_clip() -> impl Strategy<Value = SlotClip> {
+    (text(), some_text(), text(), text(), text()).prop_map(|(id, name, sequence, track, at)| {
+        SlotClip {
+            id,
+            name,
+            sequence,
+            track,
+            at,
+        }
+    })
+}
+
+/// What a preset file holds, as kerf-mcp's `look` says it: its slots with the clips that
+/// play them, the media it makes, its texts and its looks.
+fn preset_inspect() -> impl Strategy<Value = Event> {
+    let fit = (text(), any::<i64>()).prop_map(|(media, latest_frame)| SlotFit {
+        media,
+        latest_frame,
+    });
+    let slot = (
+        (text(), any::<bool>(), any::<bool>(), text(), number()),
+        (vec(slot_clip(), 0..3), vec(text(), 0..3), vec(fit, 0..3)),
+    )
+        .prop_map(
+            |((id, video, audio, minimum_duration, seconds), (clips, read_by, fits))| {
+                InspectedSlot {
+                    id,
+                    video,
+                    audio,
+                    minimum_duration,
+                    seconds,
+                    clips,
+                    read_by,
+                    fits,
+                }
+            },
+        );
+    let made = (
+        text(),
+        text(),
+        some_text(),
+        vec(text(), 0..3),
+        vec(slot_clip(), 0..3),
+    )
+        .prop_map(|(id, path, of, steps, clips)| InspectedMade {
+            id,
+            path,
+            of,
+            steps,
+            clips,
+        });
+    let look = (text(), any::<u32>(), text()).prop_map(|(id, version, name)| PresetLook {
+        id,
+        version,
+        name,
+    });
+    (
+        text(),
+        (text(), text(), text(), text()),
+        (vec(slot, 0..3), vec(made, 0..3)),
+        (btree_map(text(), text(), 0..3), vec(look, 0..3)),
+    )
+        .prop_map(
+            |(path, (preset, name, document, sequence), (slots, made), (text_slots, looks))| {
+                Event::PresetInspect {
+                    path,
+                    preset: PresetInspection {
+                        preset,
+                        name,
+                        document,
+                        sequence,
+                        slots,
+                        made,
+                        text_slots,
+                        looks,
+                    },
+                }
+            },
+        )
+}
+
+/// A snapshot whose timeline carries the catalog's definitions: the clip properties and the
+/// generators' parameters by name, and the mask properties.
+fn state() -> impl Strategy<Value = Event> {
+    let defs = || vec(param_def(), 0..3);
+    (
+        btree_map(text(), defs(), 0..3),
+        defs(),
+        btree_map(text(), defs(), 0..3),
+    )
+        .prop_map(|(properties, mask_properties, generators)| Event::State {
+            snapshot: Box::new(Snapshot {
+                timeline: TimelineView {
+                    properties,
+                    mask_properties,
+                    generators,
+                    ..TimelineView::default()
+                },
+                ..Snapshot::default()
+            }),
+        })
+}
+
+/// Where the Kerf Cloud account stands, with an account and a message or without.
+fn cloud() -> impl Strategy<Value = Event> {
+    let account = (text(), text(), any::<bool>(), option::of(any::<u64>())).prop_map(
+        |(email, plan, ai, credits)| CloudAccount {
+            email,
+            plan,
+            ai,
+            credits,
+        },
+    );
+    (
+        select(vec![
+            CloudAccess::Ready,
+            CloudAccess::Unavailable,
+            CloudAccess::SignedOut,
+            CloudAccess::Unreachable,
+            CloudAccess::NotIncluded,
+            CloudAccess::OutOfCredits,
+        ]),
+        option::of(account),
+        some_text(),
+    )
+        .prop_map(|(access, account, message)| {
+            Event::Cloud(CloudStatus {
+                access,
+                account,
+                message,
+            })
+        })
+}
+
+/// Values under names of `names`, as a models file says them.
+fn said(
+    names: Vec<&'static str>,
+) -> impl Strategy<Value = serde_json::Map<String, serde_json::Value>> {
+    btree_map(
+        select(names),
+        text().prop_map(serde_json::Value::from),
+        0..3,
+    )
+    .prop_map(|said| {
+        said.into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect()
+    })
+}
+
+/// The person's models as `look` lists them, with what their file says of each under names
+/// of its own (none of them one the listing names itself).
+fn models() -> impl Strategy<Value = Event> {
+    let model = (
+        (text(), some_text(), some_text()),
+        (option::of(number()), option::of(number())),
+        (option::of(vec(text(), 0..3)), said(vec!["steps", "cfg"])),
+        (said(vec!["style", "seed", "license"]), some_text()),
+    )
+        .prop_map(
+            |((name, about, size), (rate, seconds), (reads, more), (other, guide))| ListedModel {
+                name,
+                about,
+                size,
+                rate,
+                seconds,
+                reads,
+                more,
+                other,
+                guide,
+            },
+        );
+    (text(), any::<bool>(), vec(model, 0..3), some_text()).prop_map(
+        |(file, exists, models, error)| Event::Models {
+            file,
+            exists,
+            models,
+            error,
+        },
+    )
 }
 
 /// One input of a workflow's node: a link, with what it takes where a server has said, or
@@ -305,7 +572,7 @@ fn meter() -> impl Strategy<Value = Event> {
         })
 }
 
-/// A refusal's code: one of kerfd's own, or any other name (a newer kerfd's).
+/// A refusal's code: one of the names this build has, or any other (a newer kerfd's).
 fn code() -> impl Strategy<Value = ErrorCode> {
     prop_oneof![
         select(vec![
@@ -588,8 +855,65 @@ fn collab_sync() -> impl Strategy<Value = Event> {
             CollabSync::Downloading,
         ]),
         text().prop_map(|message| CollabSync::Failed { message }),
+        sync_report().prop_map(|report| CollabSync::Done { report }),
     ]
     .prop_map(Event::CollabSync)
+}
+
+fn sync_report() -> impl Strategy<Value = SyncReport> {
+    let commits = vec(
+        (text(), text(), text()).prop_map(|(commit, author, subject)| SyncCommit {
+            commit,
+            author,
+            subject,
+        }),
+        0..3,
+    );
+    let conflicts = vec(
+        (text(), text(), select(vec![Kept::Ours, Kept::Theirs]))
+            .prop_map(|(path, what, kept)| SyncConflict { path, what, kept }),
+        0..3,
+    );
+    // What the command adds under names of its own, each said or not, and when said a
+    // text or `null`: kerfd's `projectChanged` and `previous`, and the `remote` a publish
+    // pushed to.
+    let said = || option::of(option::of(text()));
+    let rest =
+        (option::of(any::<bool>()), said(), said()).prop_map(|(changed, previous, remote)| {
+            let mut rest = serde_json::Map::new();
+            if let Some(changed) = changed {
+                rest.insert("projectChanged".to_owned(), json!(changed));
+            }
+            if let Some(previous) = previous {
+                rest.insert("previous".to_owned(), json!(previous));
+            }
+            if let Some(remote) = remote {
+                rest.insert("remote".to_owned(), json!(remote));
+            }
+            rest
+        });
+    (
+        (option::of(text()), commits, any::<bool>(), any::<bool>()),
+        (conflicts, vec((text(), text()), 0..3), vec(text(), 0..3)),
+        (option::of(text()), rest),
+    )
+        .prop_map(
+            |(
+                (committed, incoming, fast_forward, pushed),
+                (conflicts, renamed, summary),
+                (branch, rest),
+            )| SyncReport {
+                committed,
+                incoming,
+                fast_forward,
+                pushed,
+                conflicts,
+                renamed,
+                summary,
+                branch,
+                rest,
+            },
+        )
 }
 
 fn command() -> impl Strategy<Value = Command> {

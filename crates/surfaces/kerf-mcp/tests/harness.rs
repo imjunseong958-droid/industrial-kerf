@@ -3547,11 +3547,21 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
     // The same when it looks. A model that is not set up, without where the person keeps
     // their models:
     step("generate model=dawn prompt=\"a boat\"");
+    let said = "no model `dawn` is set up: none is; a person sets one up in their own models file";
     let looked = ok(&router, "look", json!({}));
-    assert_eq!(
-        looked["toMake"][0]["cannot"],
-        "no model `dawn` is set up: none is; a person sets one up in their own models file"
+    assert_eq!(looked["toMake"][0]["cannot"], said);
+    // So it is where the graph of how it is made says it, where the workflow its model is run
+    // with is asked for, and where it is asked to be made.
+    let graph = ok(&router, "look", json!({"graph": "m9"}));
+    assert_eq!(graph["cannot"], said, "{graph}");
+    let workflow = error(
+        &router,
+        "look",
+        json!({"workflow": {"media": "m9", "line": 1}}),
     );
+    assert_eq!(message(&workflow), said, "{workflow}");
+    let make = error(&router, "make", json!({"media": "m9"}));
+    assert_eq!(message(&make), said, "{make}");
     // Mended, it can be made, and a person is asked to.
     step("render s1 {out}");
     let looked = ok(&router, "look", json!({}));
@@ -3710,6 +3720,18 @@ fn what_a_pending_proposal_holds_is_pointed_to() {
         json!({"script": "overwrite media=m2 at=0f dur=30f on=V1"}),
     ));
     assert!(media.contains(&id) && media.contains("`extend`"), "{media}");
+    // Named as a position's anchor, and in an operation the language passes on as it is.
+    for script in [
+        "overwrite gen=solid at=later.end dur=30f on=V1",
+        "overwrite gen=solid at=later@0f dur=30f on=V1",
+        "delete later",
+    ] {
+        let named = message(&error(&router, "edit", json!({"script": script})));
+        assert!(
+            named.contains(&id) && named.contains("`extend`"),
+            "{script}: {named}"
+        );
+    }
     // Looking at it without saying so.
     let looked = message(&error(&router, "look", json!({"media": "m2"})));
     assert!(
@@ -3721,6 +3743,18 @@ fn what_a_pending_proposal_holds_is_pointed_to() {
         frame.contains(&id) && frame.contains("`proposal`"),
         "{frame}"
     );
+    // At how its media is made and at its takes, and reading a signal from its clip.
+    for asked in [
+        json!({"graph": "m2"}),
+        json!({"takes": "m2"}),
+        json!({"signal": {"of": "later", "clip": "later"}}),
+    ] {
+        let shot = message(&error(&router, "look", asked.clone()));
+        assert!(
+            shot.contains(&id) && shot.contains("`proposal`"),
+            "{asked}: {shot}"
+        );
+    }
     // `revise` starts again from the project, which is not what it looks like from here.
     let revising = message(&error(
         &router,

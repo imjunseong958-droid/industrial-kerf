@@ -441,9 +441,8 @@ impl Workspace {
             "file.newProject" => self.new_project(window, cx),
             "help.about" => self.show_settings(Some(Page::About), window, cx),
             // Where crash reports are kept, in the system's file manager.
-            "help.crashReports" => match kerf_bridge::crash_reports()["folder"].as_str() {
+            "help.crashReports" => match kerf_bridge::crash_reports().folder {
                 Some(folder) => {
-                    let folder = PathBuf::from(folder);
                     if let Err(error) = std::fs::create_dir_all(&folder) {
                         log::warn!(
                             "{}: the crash folder could not be made: {error}",

@@ -140,7 +140,7 @@ pub(crate) fn follow(
             let drawing = || shared.drawers.begin();
             let read = match (of, points.as_slice()) {
                 (Of::Moves, [point]) => kerf_shots::tracks::moves(&project, &clip, *point, drawing),
-                (Of::Moves, _) => Err("a clip follows one point".to_owned()),
+                (Of::Moves, _) => Err("a clip follows one point".into()),
                 (Of::Matte, inside) => {
                     kerf_shots::tracks::matte(&project, &clip, inside, &outside, drawing)
                 }

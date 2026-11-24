@@ -11,9 +11,11 @@ use editor_state::store::{Change, EditorState};
 use editor_ui::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, RenderImage, Task, Window};
 use kerf_bridge::event::{
-    AgentUpdate, CloudAccess, CloudAccount, Export, ExportStatus, PreviewStatus, RenderQuality,
+    AgentUpdate, CloudAccess, CloudStatus, Export, ExportStatus, PreviewStatus, RenderQuality,
 };
-use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
+use kerf_bridge::{
+    AgentSettings, ChatProvider, Command, ConversationsRequest, Event, Focus, FocusScope,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::{self, Future};
@@ -1842,7 +1844,7 @@ impl Session {
         let at = self.state.position;
         let focus = ask_focus(timeline, clip.as_deref(), scope, at);
         let label = ask_label(timeline, clip.as_deref(), scope, at);
-        let from = focus["fromFrame"].as_f64().unwrap_or(0.0) / timeline.rate();
+        let from = focus.from_frame as f64 / timeline.rate();
         self.ask_with(text, focus, &label, Some(from))
     }
 
@@ -1874,21 +1876,16 @@ impl Session {
 
     /// Sends an agent turn about `focus`, stamped `stamp`; the work row says
     /// `label` until Kerf says what it is doing.
-    fn ask_with(&mut self, text: &str, focus: Value, label: &str, stamp: Option<f64>) -> bool {
+    fn ask_with(&mut self, text: &str, focus: Focus, label: &str, stamp: Option<f64>) -> bool {
         let text = text.trim();
         if text.is_empty() || self.state.work.busy() {
             return false;
         }
         // What another window chose since, as the person last left it.
         self.prefs.refresh();
-        // The focus as written ([`ask_focus`]); one that does not read as a
-        // focus is refused, as the bridge refused it.
-        let Ok(read) = serde_json::from_value::<Option<kerf_bridge::Focus>>(focus.clone()) else {
-            return self.may_send("agent") && self.refused();
-        };
         let command = Command::Agent {
             text: text.to_owned(),
-            focus: read,
+            focus: Some(focus.clone()),
             conversation: self.conversation.clone(),
             at: stamp.filter(|at| at.is_finite()),
             permissions: Some(self.prefs.permissions.wire().to_owned()),
@@ -2157,14 +2154,18 @@ impl Session {
     /// kept and none in the environment, Kerf's account standing (`cloud`,
     /// the last `cloud` event's `access`, `unavailable` until one is
     /// heard). None when it can.
-    pub fn ai_access(&self, cloud: Option<&Cloud>) -> Option<String> {
+    pub fn ai_access(&self, cloud: Option<&CloudStatus>) -> Option<String> {
         match self.prefs.provider {
             Provider::ClaudeCode => None,
             Provider::Cloud => {
                 let access = cloud.map_or(CloudAccess::Unavailable, |cloud| cloud.access);
-                // By its name on the wire (`signedOut`), as the registry takes it.
-                (access != CloudAccess::Ready)
-                    .then(|| json!(access).as_str().unwrap_or_default().to_owned())
+                if access == CloudAccess::Ready {
+                    return None;
+                }
+                // The registry takes it by its own word (`signedOut`).
+                serde_json::to_value(access)
+                    .ok()
+                    .and_then(|word| word.as_str().map(str::to_owned))
             }
             provider => self.api_key(provider).is_none().then(|| "noKey".into()),
         }
@@ -2173,7 +2174,7 @@ impl Session {
     /// Each registry command's id with why it is unavailable now, or null
     /// when it is (`kerf_bridge::commands_states`). `cloud` is the last
     /// `cloud` event heard, for Ask's reason.
-    pub fn command_states(&self, cloud: Option<&Cloud>) -> Value {
+    pub fn command_states(&self, cloud: Option<&CloudStatus>) -> Value {
         let mut context = self.command_context();
         if let Some(access) = self.ai_access(cloud) {
             context["aiAccess"] = json!(access);
@@ -2383,10 +2384,11 @@ pub enum AskScope {
 }
 
 impl AskScope {
-    pub fn wire(self) -> &'static str {
+    /// The scope of a request's focus.
+    pub fn focus_scope(self) -> FocusScope {
         match self {
-            AskScope::Clip => "clip",
-            AskScope::Sequence => "sequence",
+            AskScope::Clip => FocusScope::Clip,
+            AskScope::Sequence => FocusScope::Sequence,
         }
     }
 }
@@ -2394,17 +2396,22 @@ impl AskScope {
 /// A request's `focus`: with `clip` (one on `timeline`), its span, as the
 /// clip (`Clip`) or the sequence around it (`Sequence`); without, the
 /// sequence at `playhead`, which `Clip` cannot be.
-pub fn ask_focus(timeline: &Timeline, clip: Option<&str>, scope: AskScope, playhead: f64) -> Value {
+pub fn ask_focus(timeline: &Timeline, clip: Option<&str>, scope: AskScope, playhead: f64) -> Focus {
     if let Some((_, clip)) = clip.and_then(|id| timeline.clip(id)) {
-        return json!({
-            "scope": scope.wire(),
-            "clip": clip.id,
-            "fromFrame": clip.start_frame,
-            "toFrame": clip.end_frame(),
-        });
+        return Focus {
+            scope: scope.focus_scope(),
+            clip: Some(clip.id.clone()),
+            from_frame: clip.start_frame,
+            to_frame: clip.end_frame(),
+        };
     }
     let frame = timeline.frame_at(playhead.max(0.0));
-    json!({"scope": "sequence", "fromFrame": frame, "toFrame": frame})
+    Focus {
+        scope: FocusScope::Sequence,
+        clip: None,
+        from_frame: frame,
+        to_frame: frame,
+    }
 }
 
 /// What the work row says a request is about until Kerf says what it is
@@ -2430,7 +2437,7 @@ pub fn ask_label(
 /// stamped with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focused {
-    pub focus: Value,
+    pub focus: Focus,
     pub label: String,
     pub stamp: Option<f64>,
 }
@@ -2859,47 +2866,20 @@ pub fn started_kerfd(cx: &App) -> Option<PathBuf> {
     cx.try_global::<StartedKerfd>().map(|kerfd| kerfd.0.clone())
 }
 
-/// The person's Kerf account, as the last `cloud` event any window heard
-/// says it: whether Kerf can be asked, the account signed in to, and what
-/// went wrong when something did.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Cloud {
-    pub access: CloudAccess,
-    pub account: Option<CloudAccount>,
-    pub message: Option<String>,
-}
+/// The last `cloud` event any window heard: the person's Kerf account.
+struct Cloud(CloudStatus);
 
 impl Global for Cloud {}
 
-impl Cloud {
-    /// What a `cloud` event says of the account; None for another event.
-    pub fn of(event: &Event) -> Option<Self> {
-        match event {
-            Event::Cloud {
-                access,
-                account,
-                message,
-            } => Some(Self {
-                access: *access,
-                account: account.clone(),
-                message: message.clone(),
-            }),
-            _ => None,
-        }
-    }
-}
-
 /// What was last heard of the person's Kerf account; None before anything
 /// is.
-pub fn cloud(cx: &App) -> Option<&Cloud> {
-    cx.try_global::<Cloud>()
+pub fn cloud(cx: &App) -> Option<&CloudStatus> {
+    cx.try_global::<Cloud>().map(|cloud| &cloud.0)
 }
 
-/// Keeps a `cloud` event for every window; another event changes nothing.
-pub fn hear_cloud(event: &Event, cx: &mut App) {
-    if let Some(cloud) = Cloud::of(event) {
-        cx.set_global(cloud);
-    }
+/// Keeps what a `cloud` event said for every window.
+pub fn hear_cloud(status: &CloudStatus, cx: &mut App) {
+    cx.set_global(Cloud(status.clone()));
 }
 
 /// At most `most` bytes of `text`, cut at a character boundary.

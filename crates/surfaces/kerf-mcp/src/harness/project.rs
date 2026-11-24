@@ -6,7 +6,8 @@
 use super::{cannot_said, parse, proposals_status};
 use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::{Project, Time};
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
 /// The most files of a folder one `look` reads.
@@ -190,13 +191,13 @@ impl KerfMcpRouter {
                     "media": id,
                     "why": why.reason(),
                 });
-                let plan = models
-                    .as_ref()
-                    .map_err(ToString::to_string)
-                    .and_then(|models| {
-                        kerf_engine::recipe::plan(project, &self.dir, id, models)
-                            .map_err(|error| error.to_string())
-                    });
+                // What refuses it, as an agent is told it; a models file that does not read is
+                // what does.
+                let plan = match &models {
+                    Ok(models) => kerf_engine::recipe::plan(project, &self.dir, id, models)
+                        .map_err(|cannot| cannot_said(cannot, Some(models))),
+                    Err(error) => Err(error.to_string()),
+                };
                 let found = stands(media);
                 if !found.is_empty() {
                     entry["notes"] = json!(found);
@@ -212,7 +213,7 @@ impl KerfMcpRouter {
                         ));
                     }
                     Err(cannot) => {
-                        entry["cannot"] = json!(cannot_said(cannot, models.as_ref().ok()));
+                        entry["cannot"] = json!(cannot);
                         entry["make"] = json!(format!(
                             "it cannot be made as it is: mend what `cannot` says first; then, {first}make it with `make`"
                         ));
@@ -428,40 +429,31 @@ impl KerfMcpRouter {
 /// The models a recipe's `generate` can name, as `look` lists them: each
 /// with what its owner's file says it takes, and the `render` line that draws
 /// a guide for it where it follows one.
-pub fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> {
+pub fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<ListedModel> {
     models
         .names()
         .map(|name| {
-            let mut listed = json!({"name": name});
+            let mut listed = ListedModel {
+                name: name.to_owned(),
+                ..ListedModel::default()
+            };
             let Some(takes) = models.takes(name) else {
                 return listed;
             };
-            if let Some(about) = &takes.about {
-                listed["about"] = json!(about);
-            }
             let size = takes
                 .size
                 .map(|(width, height)| format!("{width}x{height}"));
             let rate = takes.rate.map(fps_text);
-            if let Some(size) = &size {
-                listed["size"] = json!(size);
-            }
-            if let Some(rate) = takes.rate {
-                listed["rate"] = json!(rate);
-            }
-            if let Some(seconds) = takes.seconds {
-                listed["seconds"] = json!(seconds);
-            }
-            if let Some(reads) = &takes.reads {
-                listed["reads"] = json!(reads);
-            }
-            if !takes.more.is_empty() {
-                listed["more"] = json!(takes.more);
-            }
+            listed.about.clone_from(&takes.about);
+            listed.size.clone_from(&size);
+            listed.rate = takes.rate;
+            listed.seconds = takes.seconds;
+            listed.reads.clone_from(&takes.reads);
+            listed.more.clone_from(&takes.more);
             for (name, value) in &takes.other {
                 // What the file says under a name of its own never replaces one of these.
-                if listed.get(name).is_none() && name != "guide" {
-                    listed[name] = value.clone();
+                if !listed.says(name) && name != "guide" {
+                    listed.other.insert(name.clone(), value.clone());
                 }
             }
             if takes.follows_a_guide() == Some(true) && (size.is_some() || rate.is_some()) {
@@ -472,11 +464,56 @@ pub fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<Value> 
                 if let Some(rate) = rate {
                     line.push_str(&format!(" rate={rate}"));
                 }
-                listed["guide"] = json!(line);
+                listed.guide = Some(line);
             }
             listed
         })
         .collect()
+}
+
+/// A model a recipe's `generate` can name, as `look` lists it: its name; what its owner's
+/// file says it takes, each where the file says it (`about`, the `size` it makes as a line
+/// writes it, its `rate`, the most `seconds` it makes, what it `reads`, and `more`); what else
+/// the file says of it under names of its own, as said; and the `render` line that draws a
+/// guide for it, where it follows one.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ListedModel {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reads: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Map::is_empty")]
+    pub more: Map<String, Value>,
+    /// Written after those it names, as the file's own names were listed after them.
+    #[serde(flatten)]
+    pub other: Map<String, Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guide: Option<String>,
+}
+
+impl ListedModel {
+    /// Whether it says something under `key` already.
+    fn says(&self, key: &str) -> bool {
+        match key {
+            "name" => true,
+            "about" => self.about.is_some(),
+            "size" => self.size.is_some(),
+            "rate" => self.rate.is_some(),
+            "seconds" => self.seconds.is_some(),
+            "reads" => self.reads.is_some(),
+            "more" => !self.more.is_empty(),
+            "guide" => self.guide.is_some(),
+            other => self.other.contains_key(other),
+        }
+    }
 }
 
 /// Whether a file's extension says it is footage: what an import takes.

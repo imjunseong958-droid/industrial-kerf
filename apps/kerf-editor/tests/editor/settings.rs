@@ -1,7 +1,6 @@
 //! The Settings window: its pages, providers and keys as it shows them.
 
-use kerf_bridge::event::{CloudAccess, CloudAccount};
-use kerf_editor::session::Cloud;
+use kerf_bridge::event::{CloudAccess, CloudAccount, CloudStatus, ListedModel};
 use kerf_editor::settings::{
     account_status, cursor_imports, mcp_server_config, model_summary, models_opener, read_failure,
     releases_url, validate_mcp_config, McpClient,
@@ -138,42 +137,54 @@ fn tempdir(name: &str) -> PathBuf {
     dir
 }
 
+/// What a `cloud` event says: the access, the account and the message.
+fn cloud(
+    access: CloudAccess,
+    account: Option<(&str, &str, Option<u64>)>,
+    message: Option<&str>,
+) -> CloudStatus {
+    CloudStatus {
+        access,
+        account: account.map(|(email, plan, credits)| CloudAccount {
+            email: email.into(),
+            plan: plan.into(),
+            ai: true,
+            credits,
+        }),
+        message: message.map(str::to_owned),
+    }
+}
+
 #[test]
 fn the_account_says_where_it_stands_and_what_can_be_done() {
     let unheard = account_status(None);
     assert!(unheard.words.starts_with("Not available yet"));
     assert!(!unheard.sign_in && !unheard.sign_out);
-    let heard = |access, account: Option<(&str, u64)>, message: Option<&str>| Cloud {
-        access,
-        account: account.map(|(plan, credits)| CloudAccount {
-            email: "ed@kerf.dev".into(),
-            plan: plan.into(),
-            ai: true,
-            credits: Some(credits),
-        }),
-        message: message.map(str::to_owned),
-    };
-    let signed_out = account_status(Some(&heard(CloudAccess::SignedOut, None, None)));
+    let signed_out = account_status(Some(&cloud(CloudAccess::SignedOut, None, None)));
     assert_eq!(
         signed_out.words,
         "Signed out. Paste your Kerf sign-in token to sign in"
     );
     assert!(signed_out.sign_in && !signed_out.sign_out);
-    let ready = account_status(Some(&heard(CloudAccess::Ready, Some(("Pro", 41)), None)));
+    let ready = account_status(Some(&cloud(
+        CloudAccess::Ready,
+        Some(("ed@kerf.dev", "Pro", Some(41))),
+        None,
+    )));
     assert_eq!(
         ready.words,
         "Signed in as ed@kerf.dev · Pro plan · 41 requests left"
     );
     assert!(ready.sign_out && !ready.sign_in);
-    let spent = account_status(Some(&heard(
+    let spent = account_status(Some(&cloud(
         CloudAccess::OutOfCredits,
-        Some(("Free", 0)),
+        Some(("ed@kerf.dev", "Free", Some(0))),
         None,
     )));
     assert!(spent
         .words
         .ends_with("\nYou've used this period's requests"));
-    let away = account_status(Some(&heard(
+    let away = account_status(Some(&cloud(
         CloudAccess::Unreachable,
         None,
         Some("timed out"),
@@ -235,15 +246,26 @@ fn kerfs_own_mcp_config_is_ready_to_paste_in_each_client() {
 
 #[test]
 fn a_model_is_said_in_a_line() {
-    let model = json!({"name": "wan", "size": "832x480", "rate": 16.0, "seconds": 5.0,
-        "reads": ["guide", "ref"]});
+    let model = ListedModel {
+        name: "wan".into(),
+        size: Some("832x480".into()),
+        rate: Some(16.0),
+        seconds: Some(5.0),
+        reads: Some(vec!["guide".into(), "ref".into()]),
+        ..ListedModel::default()
+    };
     assert_eq!(
         model_summary(&model),
         "832x480 · 16 fps · up to 5 s · reads guide, ref"
     );
-    assert_eq!(model_summary(&json!({"rate": 23.976})), "23.976 fps");
-    assert_eq!(
-        model_summary(&json!({"name": "x"})),
-        "says nothing of what it takes"
-    );
+    let rate = ListedModel {
+        rate: Some(23.976),
+        ..ListedModel::default()
+    };
+    assert_eq!(model_summary(&rate), "23.976 fps");
+    let bare = ListedModel {
+        name: "x".into(),
+        ..ListedModel::default()
+    };
+    assert_eq!(model_summary(&bare), "says nothing of what it takes");
 }

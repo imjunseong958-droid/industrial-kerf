@@ -31,7 +31,10 @@ mod stands;
 mod text_lint;
 
 pub use making::{MakingEvent, MakingWatcher};
-pub use presets::{keep_looks, PRESET_FOLDERS};
+pub use presets::{
+    keep_looks, InspectedMade, InspectedSlot, PresetInspection, PresetLook, SlotClip, SlotFit,
+    PRESET_FOLDERS,
+};
 pub use qc::{check, CheckReport, Finding, Rect, Row, RowDef, Severity, Summary};
 pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
 pub use text_lint::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS, TITLE_SAFE};
@@ -188,6 +191,9 @@ struct McpError {
     code: McpCode,
     message: String,
     details: Option<Value>,
+    /// What a refused script named that is not there, as the language and the model said it
+    /// ([`kerf_model::Missing`]): for the harness to act on, and not sent.
+    missing: Vec<kerf_model::Missing>,
 }
 
 impl McpError {
@@ -196,6 +202,7 @@ impl McpError {
             code,
             message: message.into(),
             details: None,
+            missing: Vec::new(),
         }
     }
 

@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -18,6 +19,37 @@ pub enum EngineError {
     Compose(#[from] kerf_compose::ComposeError),
     #[error("ffmpeg failed ({code}): {stderr}")]
     Ffmpeg { code: i32, stderr: String },
+    /// The project has no media by this id.
+    #[error("no media `{0}` in this project")]
+    NoMedia(String),
+    /// A media's steps are still in the recipe file it names, where a making does not read
+    /// them: said with how they come into the document.
+    #[error(
+        "the steps of media `{media}` are in the recipe file `{recipe}`, and a media is made from the steps under its line: `kerf carry {media}`, or an agent's `edit` with `carry: [\"{media}\"]`, writes them there"
+    )]
+    NotCarried { media: String, recipe: String },
+    /// No model by this name is set up in the person's models file, `file`, which names the
+    /// models of `have`: said with how one is.
+    #[error(
+        "no model `{name}` is set up: {} {}. A model is a program named there, as `{{\"{name}\": {{\"run\": [\"<program>\", \"{}\"]}}}}`",
+        .file.display(),
+        names_said(.have),
+        crate::recipe::model::REQUEST
+    )]
+    NoModel {
+        name: String,
+        file: PathBuf,
+        have: Vec<String>,
+    },
+}
+
+/// The models a models file names, as [`EngineError::NoModel`] says them.
+fn names_said(have: &[String]) -> String {
+    if have.is_empty() {
+        "names none".to_owned()
+    } else {
+        format!("names {}", have.join(", "))
+    }
 }
 
 impl EngineError {

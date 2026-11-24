@@ -2,12 +2,14 @@
 //! the bridge's own (kerf-runtime's timeline view, kerf-bridge's events),
 //! under the editor's names; what the editor adds to them (how a clip, a
 //! track, a media or a proposal is named and shown) is here, as an
-//! extension trait for each. JSON the editor still reads itself
-//! ([`TimelineShow::from_value`], [`SnapshotShow::from_value`]) reads
-//! leniently: a field left out is at its default, and a timeline that does
-//! not read is empty, so a newer kerfd never breaks the window.
+//! extension trait for each. The window takes its snapshot from the bridge's
+//! `state` event, already read; a snapshot or a timeline given as JSON (as a
+//! test writes one) reads with [`SnapshotShow::from_value`] and
+//! [`TimelineShow::from_value`], leniently: a field left out is at its
+//! default, a snapshot's field of the wrong type too, and a timeline that
+//! does not read is empty.
 
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
 
 pub use kerf_bridge::event::{
@@ -51,7 +53,9 @@ pub trait TimelineShow {
 
     /// The picture the program plays into, in pixels: the sequence's own
     /// size; with none, the largest of its media's pictures; with none of
-    /// those, 1920 × 1080.
+    /// those, 1920 × 1080. kerfd sends a size with every sequence (a
+    /// document must say `size=`), so the fallbacks only answer a project
+    /// with no sequence, which has no clips to place.
     fn canvas(&self) -> (u32, u32);
 }
 
@@ -390,45 +394,32 @@ pub trait SnapshotShow {
 
 impl SnapshotShow for Snapshot {
     fn from_value(value: &Value) -> Self {
-        // The proposals and timelines read as the bridge's reader reads
-        // them: those that do not read left out, or empty.
-        let proposal_timeline = ["proposalTimeline", "pendingTimeline"]
-            .iter()
-            .map(|key| &value[*key])
-            .find(|timeline| timeline.is_object())
-            .cloned()
-            .unwrap_or(Value::Null);
-        let lenient = json!({
-            "proposals": value["proposals"],
-            "proposalTimeline": proposal_timeline,
-            "proposalTimelines": value["proposalTimelines"],
-        });
-        let read: Snapshot = serde_json::from_value(lenient).unwrap_or_default();
-        let mut snapshot = Self {
-            document: value["document"].as_str().unwrap_or_default().to_owned(),
-            timeline: Timeline::from_value(&value["timeline"]),
-            revision: value["revision"].as_u64().unwrap_or(0),
-            can_undo: value["canUndo"].as_bool().unwrap_or(false),
-            can_redo: value["canRedo"].as_bool().unwrap_or(false),
-            duration: value["duration"].as_f64().unwrap_or(0.0),
-            proposals: read.proposals,
-            proposal_timeline: read.proposal_timeline,
-            proposal_timelines: read.proposal_timelines,
-            projection_status: ProjectionStatus::from_name(
-                value["projectionStatus"].as_str().unwrap_or("current"),
-            ),
-            import_warnings: value["importWarnings"]
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            ..Snapshot::default()
-        };
+        let mut fields = value.as_object().cloned().unwrap_or_default();
+        // Two things this reader takes that the bridge's type refuses: the
+        // texts among import warnings that hold something else, and the
+        // proposal's timeline under its old name, which counts where the
+        // new one holds no timeline (the type takes the two names as one
+        // field said twice).
+        if let Some(Value::Array(warnings)) = fields.get_mut("importWarnings") {
+            warnings.retain(Value::is_string);
+        }
+        if let Some(old) = fields.remove("pendingTimeline")
+            && old.is_object()
+            && !fields.get("proposalTimeline").is_some_and(Value::is_object)
+        {
+            fields.insert("proposalTimeline".into(), old);
+        }
+        // Each field as the bridge's reader reads it (its proposals and
+        // timelines leniently already), kept only while the snapshot still
+        // reads with it: one that does not is left at its default.
+        let mut taken = Map::new();
+        for (name, field) in fields {
+            taken.insert(name.clone(), field);
+            if serde_json::from_value::<Self>(Value::Object(taken.clone())).is_err() {
+                taken.remove(&name);
+            }
+        }
+        let mut snapshot: Self = serde_json::from_value(Value::Object(taken)).unwrap_or_default();
         snapshot.name_clips();
         snapshot
     }

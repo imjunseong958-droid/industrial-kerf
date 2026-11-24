@@ -1,10 +1,9 @@
 //! The sidebar: the project's conversations, their folders and search.
 
-use kerf_bridge::event::{CloudAccess, CloudAccount};
+use kerf_bridge::event::{CloudAccess, CloudAccount, CloudStatus};
 use kerf_editor::commands::catalog;
 use kerf_editor::model::{Conversation, Proposal, ProposalStatus, Speaker, SummaryShow, Turn};
 use kerf_editor::prefs::Provider;
-use kerf_editor::session::Cloud;
 use kerf_editor::sidebar;
 use kerf_editor::sidebar::{
     account_line, app_rows, conversation_summary, folder_conversations, folder_entries,
@@ -47,37 +46,27 @@ proptest! {
 
 #[test]
 fn the_account_says_who_chat_runs_on() {
-    let account = CloudAccount {
-        email: "ed@kerf.dev".into(),
-        plan: "Pro".into(),
-        ai: true,
-        credits: Some(41),
-    };
-    let signed_in = Cloud {
-        access: CloudAccess::Ready,
-        account: Some(account.clone()),
+    let cloud = |access, plan: &str| CloudStatus {
+        access,
+        account: (access != CloudAccess::SignedOut).then(|| CloudAccount {
+            email: "ed@kerf.dev".into(),
+            plan: plan.into(),
+            ai: true,
+            credits: Some(41),
+        }),
         message: None,
     };
+    let signed_in = cloud(CloudAccess::Ready, "Pro");
     assert_eq!(
         account_line(Provider::Anthropic, Some(&signed_in), false, ""),
         ("ed@kerf.dev".into(), "Pro plan".into())
     );
-    let no_plan = Cloud {
-        account: Some(CloudAccount {
-            plan: String::new(),
-            ..account
-        }),
-        ..signed_in.clone()
-    };
+    let no_plan = cloud(CloudAccess::Ready, "");
     assert_eq!(
         account_line(Provider::Cloud, Some(&no_plan), true, "").1,
         "Kerf account"
     );
-    let signed_out = Cloud {
-        access: CloudAccess::SignedOut,
-        account: None,
-        message: None,
-    };
+    let signed_out = cloud(CloudAccess::SignedOut, "");
     assert_eq!(
         account_line(Provider::Cloud, Some(&signed_out), true, ""),
         ("Kerf".into(), "Not signed in".into())

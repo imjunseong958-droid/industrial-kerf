@@ -4,12 +4,13 @@
 
 use super::keys::{OpenMenu, ITEM};
 use super::{SidebarEvent, SidebarView};
-use editor_session::session::{Cloud, Session};
+use editor_session::session::Session;
 use editor_state::prefs::Provider;
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, layout, text};
 use editor_ui::ui::{self, icon_button};
 use gpui::{div, prelude::*, px, App, ClickEvent, Context, MouseDownEvent};
+use kerf_bridge::event::CloudStatus;
 
 /// Who chat runs on, as the account at the sidebar's foot says it: the Kerf
 /// account's email and plan while signed in; else Claude Code on "Your
@@ -17,7 +18,7 @@ use gpui::{div, prelude::*, px, App, ClickEvent, Context, MouseDownEvent};
 /// "Set up in Settings" while there is no key.
 pub fn account_line(
     provider: Provider,
-    cloud: Option<&Cloud>,
+    cloud: Option<&CloudStatus>,
     has_key: bool,
     model: &str,
 ) -> (String, String) {

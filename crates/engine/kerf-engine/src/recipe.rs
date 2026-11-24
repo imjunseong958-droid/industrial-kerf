@@ -228,7 +228,7 @@ pub struct Carry {
 pub fn carry(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<Carry> {
     let media = project
         .media(id)
-        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+        .ok_or_else(|| EngineError::NoMedia(id.to_string()))?;
     if !media.steps.is_empty() {
         return Err(EngineError::msg(format!(
             "media `{id}` has its steps under its line in the document already"
@@ -329,7 +329,7 @@ pub fn step_lines(id: &str, was: &str, now: &str) -> Result<Vec<String>> {
 pub fn written(project: &kerf_model::Project, id: &str) -> Result<String> {
     let media = project
         .media(id)
-        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+        .ok_or_else(|| EngineError::NoMedia(id.to_string()))?;
     if media.steps.is_empty() {
         return Err(match uncarried(media) {
             Some(recipe) => not_carried(id, recipe),
@@ -349,9 +349,10 @@ fn not_made(id: &str) -> EngineError {
 /// That media `id` still has its steps in the recipe file `recipe`, and how they come
 /// into the document, where a making reads them.
 pub fn not_carried(id: &str, recipe: &str) -> EngineError {
-    EngineError::msg(format!(
-        "the steps of media `{id}` are in the recipe file `{recipe}`, and a media is made from the steps under its line: `kerf carry {id}`, or an agent's `edit` with `carry: [\"{id}\"]`, writes them there"
-    ))
+    EngineError::NotCarried {
+        media: id.to_owned(),
+        recipe: recipe.to_owned(),
+    }
 }
 
 pub use kerf_model::making::Step;
@@ -638,7 +639,7 @@ pub fn plan(
 pub fn next_roll(project: &kerf_model::Project, directory: &Path, id: &str) -> Result<u32> {
     let media = project
         .media(id)
-        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+        .ok_or_else(|| EngineError::NoMedia(id.to_string()))?;
     Ok(takes(project, directory, media)?
         .iter()
         .filter(|take| take.current)
@@ -1017,7 +1018,7 @@ pub fn make(
     let directory = &rooted(directory)?;
     let media = project
         .media(&plan.media)
-        .ok_or_else(|| EngineError::msg(format!("no media `{}` in this project", plan.media)))?;
+        .ok_or_else(|| EngineError::NoMedia(plan.media.to_string()))?;
     let recipe = Recipe::parse(&plan.text)?
         .told(directory)?
         .rolled(plan.roll);

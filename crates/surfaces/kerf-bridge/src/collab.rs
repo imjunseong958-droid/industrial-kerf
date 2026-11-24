@@ -6,11 +6,11 @@
 
 use crate::event::{CollabStatus, CollabSync, Event};
 use crate::wake::Outbox;
-use crate::{emit, key, media, tasks, Command, Shared};
+use crate::{emit, key, media, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
 use kerf_runtime::{ErrorCode, RuntimeClient, RuntimeError, StateSnapshot};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -370,11 +370,10 @@ impl Collab {
     }
 
     fn done(&self, report: Value) {
-        // The report is always an object: `empty_report`'s, with kerfd's merged in.
-        let report = match report {
-            Value::Object(report) => report,
-            _ => Map::new(),
-        };
+        // The report is always `empty_report`'s, with kerfd's merged in. It reads field by
+        // field: one kerfd says otherwise than this build reads it is that field's default,
+        // and the rest still say what the sync did.
+        let report = serde_json::from_value(report).unwrap_or_default();
         emit(&self.tx, Event::CollabSync(CollabSync::Done { report }));
     }
 
@@ -696,9 +695,7 @@ impl Collab {
             .get_document(false)
             .map_err(|error| self.lost(error))?;
         let project = kerf_runtime::parse_document(&document).map_err(|error| error.message)?;
-        let result = media::consolidate(&project, &self.directory, |file| {
-            tasks::probe(file).map(drop)
-        });
+        let result = media::consolidate(&project, &self.directory, media::probe);
         let mut report = empty_report();
         report["summary"] = json!(result.summary());
         if !result.relinks.is_empty() {

@@ -121,7 +121,9 @@ impl KerfMcpRouter {
                 ));
             }
             let found = match &input.preset {
-                Some(file) => self.inspect_preset(&self.project_at(None)?.1, file),
+                Some(file) => self
+                    .inspect_preset(&self.project_at(None)?.1, file)
+                    .map(|inspection| json!(inspection)),
                 None => self.list_presets(),
             };
             return found.map(Some);

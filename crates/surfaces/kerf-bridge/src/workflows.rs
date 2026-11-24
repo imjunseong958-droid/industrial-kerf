@@ -24,12 +24,15 @@
 //! workflow as last said ([`Said::late`]), never of the text it was asked
 //! of, so a late answer cannot bring back what the edit changed.
 
+use crate::error::BridgeError;
 use crate::event::{ErrorEvent, Event};
 use crate::wake::Outbox;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
+use kerf_runtime::RuntimeError;
 use kerf_shots::workflow::{self, Set, Shown};
+use kerf_shots::ShotError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -58,7 +61,7 @@ impl Said {
     /// is known. An edit may have said the workflow again meanwhile: it is said of the
     /// workflow as last said, whose text is the newer, and not of the text it was asked of.
     /// Nothing is said when what was last said has it already, or is of another model.
-    pub(crate) fn late(&self, tx: &Outbox, own: Shown, asked: Result<Value, String>) {
+    pub(crate) fn late(&self, tx: &Outbox, own: Shown, asked: Result<Value, ShotError>) {
         let mut said = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let step = step_of(&own);
         let mut event = match said.get(&step) {
@@ -72,7 +75,7 @@ impl Said {
         };
         match asked {
             Ok(taken) => workflow::with_taken(&mut event, &taken),
-            Err(why) => event.taken_error = Some(why),
+            Err(why) => event.taken_error = Some(why.to_string()),
         }
         said.insert(step, event.clone());
         crate::emit(tx, Event::Workflow(Box::new(event)));
@@ -103,7 +106,7 @@ fn event(
     id: &str,
     line: usize,
     models: &Models,
-) -> Result<Shown, String> {
+) -> Result<Shown, ShotError> {
     let read = workflow::read(project, &shared.directory, id, line, models)?;
     let mut event = workflow::shown(id, line, &read)?;
     // What each input takes on the server, where that has been asked already.
@@ -114,18 +117,19 @@ fn event(
 }
 
 /// The project as kerfd has it.
-fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, String> {
+fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, RuntimeError> {
     client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
-        .map_err(|error| error.message)
 }
 
-fn failed(tx: &Outbox, id: &str, why: String) {
+fn failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
+    let why = why.into();
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
-            message: why,
+            message: why.to_string(),
+            code: why.code(),
             command: Some("workflow".to_owned()),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
@@ -142,10 +146,10 @@ pub(crate) fn get(
     tx: &Outbox,
 ) {
     let said = Models::load()
-        .map_err(|error| error.to_string())
+        .map_err(BridgeError::from)
         .and_then(|models| {
             let project = project(client)?;
-            event(&project, shared, id, line, &models)
+            Ok(event(&project, shared, id, line, &models)?)
         });
     match said {
         Ok(event) => {
@@ -202,7 +206,7 @@ pub(crate) fn edit(
 ) {
     let models = match Models::load() {
         Ok(models) => models,
-        Err(error) => return failed(tx, &edit.media, error.to_string()),
+        Err(error) => return failed(tx, &edit.media, error),
     };
     let project = match project(client) {
         Ok(project) => project,
@@ -223,6 +227,7 @@ pub(crate) fn edit(
         set,
         &models,
     )
+    .map_err(BridgeError::from)
     .and_then(|named| {
         crate::recipes::apply(client, &named.script).inspect_err(|_| {
             if let Some(copy) = &named.copy {

@@ -304,7 +304,7 @@ pub fn mark_carried(
     directory: &Path,
     id: &str,
 ) -> Result<usize> {
-    let no_media = || EngineError::msg(format!("no media `{id}` in this project"));
+    let no_media = || EngineError::NoMedia(id.to_string());
     let (was, now) = (
         before.media(id).ok_or_else(no_media)?,
         after.media(id).ok_or_else(no_media)?,
