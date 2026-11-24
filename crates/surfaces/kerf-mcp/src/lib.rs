@@ -42,6 +42,7 @@ pub use text_lint::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS, TIT
 use kerf_agent::{AgentTool, ToolMap};
 use kerf_runtime::{Author, AuthorKind, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease};
 use kerf_skills::{load_skills_with_bundled, Skill};
+use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::any::Any;
@@ -72,12 +73,23 @@ pub struct ToolAnnotations {
     pub idempotent_hint: Option<bool>,
 }
 
+/// A tool's refusal, as [`KerfMcpRouter::call`] says it under `error`.
 #[derive(Clone, Debug, Serialize)]
 pub struct McpErrorShape {
     pub code: McpCode,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub details: Option<Value>,
+}
+
+/// Why [`KerfMcpRouter::call_as`] has no answer of the type it was asked for.
+#[derive(Debug)]
+pub enum ToolError {
+    /// The tool refused, as [`KerfMcpRouter::call`] says it under `error`: its code says
+    /// which refusal it is.
+    Refused(McpErrorShape),
+    /// The tool answered, but not as the type asked for.
+    Unread(serde_json::Error),
 }
 
 /// Which refusal a tool answers with: what an agent decides by, where the message is what it
@@ -538,6 +550,28 @@ impl KerfMcpRouter {
     /// frames come back whole: the document is the agent's context and
     /// frames travel as images.
     pub fn call(&self, presented_name: &str, arguments: Value) -> Value {
+        match self.answer(presented_name, arguments) {
+            Ok(result) => json!({"ok": true, "result": result}),
+            Err(error) => json!({"ok": false, "error": error.shape()}),
+        }
+    }
+
+    /// Run a tool as [`call`](Self::call) does, and read what it answers as `T`: for a host
+    /// in this process, which has the answer as its type and a refusal with its code, not
+    /// `call`'s JSON to read by key.
+    pub fn call_as<T: DeserializeOwned>(
+        &self,
+        presented_name: &str,
+        arguments: Value,
+    ) -> Result<T, ToolError> {
+        let result = self
+            .answer(presented_name, arguments)
+            .map_err(|error| ToolError::Refused(error.shape()))?;
+        serde_json::from_value(result).map_err(ToolError::Unread)
+    }
+
+    /// What the tool `tools/list` presented as `presented_name` answers, or its refusal.
+    fn answer(&self, presented_name: &str, arguments: Value) -> Result<Value, McpError> {
         // Looks another process added since, as an applied preset's; one
         // that does not read leaves the catalog as it was.
         let _ = kerf_model::look::refresh_project_looks(&self.dir);
@@ -548,10 +582,7 @@ impl KerfMcpRouter {
                 .strip_prefix(&format!("{}.", self.namespace))
                 .unwrap_or(presented_name)
         };
-        match self.call_base(name, arguments) {
-            Ok(result) => json!({"ok": true, "result": result}),
-            Err(error) => json!({"ok": false, "error": error.shape()}),
-        }
+        self.call_base(name, arguments)
     }
 
     fn definition(&self, base_name: &str) -> ToolDefinition {

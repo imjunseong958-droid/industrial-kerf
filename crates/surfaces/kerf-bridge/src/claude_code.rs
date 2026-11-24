@@ -10,8 +10,11 @@
 //! run again with `--serve-mcp`.
 
 use crate::collab::program_path;
+use crate::event::{as_said, each_said};
 use kerf_agent::{summarize_targets, summarize_tool_result, AgentEvent, ToolResultSummary};
 use kerf_mcp::permissions::{Mode, MODE_VARIABLE};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -173,10 +176,11 @@ impl ClaudeCodeSession {
         };
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            let Ok(message) = serde_json::from_str::<Value>(&line) else {
+            // A line that is not a JSON object has nothing to say.
+            let Ok(line) = serde_json::from_str::<Line>(&line) else {
                 continue;
             };
-            stream.read(&message, &mut emit);
+            stream.read(line, &mut emit);
         }
         finished.store(true, Ordering::SeqCst);
         // The watcher only waits and kills; there is nothing it could fail with.
@@ -262,6 +266,198 @@ fn mcp_config(
     .to_string()
 }
 
+/// One line of Claude Code's `--output-format stream-json`: the session it is of, which any
+/// line may name, and what it says.
+#[derive(Deserialize)]
+struct Line {
+    #[serde(default, deserialize_with = "as_said")]
+    session_id: Option<String>,
+    #[serde(flatten, deserialize_with = "as_said")]
+    message: Message,
+}
+
+/// What a line says, by its `type`: those a turn is followed by, and [`Message::Other`] for
+/// any other, or a line that says none. Each field reads on its own ([`as_said`]): one said
+/// otherwise than it is read here is its default, and the rest of the line still says what
+/// it does.
+#[derive(Default, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Message {
+    /// `init` begins a turn, with the MCP servers Claude Code started for it.
+    System {
+        #[serde(default, deserialize_with = "as_said")]
+        subtype: Option<String>,
+        #[serde(default, deserialize_with = "each_said")]
+        mcp_servers: Vec<McpServer>,
+    },
+    /// One of the API's own streaming events (`--include-partial-messages`).
+    StreamEvent {
+        #[serde(default, deserialize_with = "as_said")]
+        event: ApiEvent,
+    },
+    /// What the model answered a request with: its tool calls, and what the request read.
+    Assistant {
+        #[serde(default, deserialize_with = "as_said")]
+        message: ApiMessage,
+    },
+    /// What went back to the model: its tool calls' results.
+    User {
+        #[serde(default, deserialize_with = "as_said")]
+        message: ApiMessage,
+    },
+    /// The turn's end: its answer, or why it failed.
+    #[serde(rename = "result")]
+    Finished {
+        #[serde(default, deserialize_with = "as_said")]
+        subtype: Option<String>,
+        #[serde(default, deserialize_with = "as_said")]
+        is_error: bool,
+        /// The answer's text; when the turn failed, why, if it says.
+        #[serde(default, deserialize_with = "as_said")]
+        result: String,
+        /// What each model the turn used read, by the model's name.
+        #[serde(rename = "modelUsage", default, deserialize_with = "each_value_said")]
+        models: Vec<ModelUsage>,
+    },
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+/// An MCP server Claude Code started for a turn, and how it stands: `connected`, or not.
+#[derive(Default, Deserialize)]
+struct McpServer {
+    #[serde(default, deserialize_with = "as_said")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "as_said")]
+    status: Option<String>,
+}
+
+/// The API's streaming events that are followed: a request's answer begins, and its text
+/// grows.
+#[derive(Default, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ApiEvent {
+    MessageStart,
+    ContentBlockDelta {
+        #[serde(default, deserialize_with = "as_said")]
+        delta: Delta,
+    },
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+/// How a block of the answer grew: by text, or otherwise.
+#[derive(Default, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Delta {
+    TextDelta {
+        #[serde(default, deserialize_with = "as_said")]
+        text: Option<String>,
+    },
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+/// A message of the API as Claude Code passes it on: its content, and, for the model's, what
+/// its request read.
+#[derive(Default, Deserialize)]
+struct ApiMessage {
+    #[serde(default, deserialize_with = "each_said")]
+    content: Vec<Block>,
+    #[serde(default, deserialize_with = "as_said")]
+    usage: Usage,
+}
+
+/// The tokens a request read: its new input, and what it wrote to the cache and read from it.
+#[derive(Default, Deserialize)]
+struct Usage {
+    #[serde(default, deserialize_with = "as_said")]
+    input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "as_said")]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default, deserialize_with = "as_said")]
+    cache_creation_input_tokens: Option<u64>,
+}
+
+impl Usage {
+    /// All the context the request read.
+    fn read(&self) -> u64 {
+        [
+            self.input_tokens,
+            self.cache_read_input_tokens,
+            self.cache_creation_input_tokens,
+        ]
+        .into_iter()
+        .flatten()
+        .sum()
+    }
+}
+
+/// A block of a message's content, of the kinds that are followed.
+#[derive(Default, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Block {
+    Text {
+        #[serde(default, deserialize_with = "as_said")]
+        text: Option<String>,
+    },
+    ToolUse {
+        #[serde(default, deserialize_with = "as_said")]
+        id: String,
+        #[serde(default, deserialize_with = "as_said")]
+        name: String,
+        /// The call's arguments. Their shape is the tool's own, so they stay JSON:
+        /// `summarize_targets` finds the ids and times in any.
+        #[serde(default)]
+        input: Value,
+    },
+    ToolResult {
+        #[serde(default, deserialize_with = "as_said")]
+        tool_use_id: String,
+        #[serde(default, deserialize_with = "as_said")]
+        is_error: bool,
+        #[serde(default, deserialize_with = "as_said")]
+        content: ResultContent,
+    },
+    #[default]
+    #[serde(other)]
+    Other,
+}
+
+/// What a tool's result says: text, or blocks, of which the text ones are read.
+#[derive(Default, Deserialize)]
+#[serde(untagged)]
+enum ResultContent {
+    Text(String),
+    Blocks(#[serde(deserialize_with = "each_said")] Vec<Block>),
+    #[default]
+    Nothing,
+}
+
+/// The context a model the turn used has room for.
+#[derive(Default, Deserialize)]
+struct ModelUsage {
+    #[serde(rename = "contextWindow", default, deserialize_with = "as_said")]
+    context_window: Option<u64>,
+}
+
+/// A map's values, each read on its own as [`each_said`] reads a list's items; what is not a
+/// map has none.
+fn each_value_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Object(values) => values
+            .into_iter()
+            .map(|(_, value)| serde_json::from_value(value).unwrap_or_default())
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
 /// What a turn's stream has said so far.
 #[derive(Default)]
 struct Stream {
@@ -286,19 +482,20 @@ impl Stream {
         }
     }
 
-    fn read(&mut self, message: &Value, emit: &mut impl FnMut(AgentEvent)) {
-        if let Some(session) = message["session_id"].as_str() {
-            self.session = Some(session.to_owned());
+    fn read(&mut self, line: Line, emit: &mut impl FnMut(AgentEvent)) {
+        if let Some(session) = line.session_id {
+            self.session = Some(session);
         }
-        match message["type"].as_str() {
-            Some("system") if message["subtype"] == "init" => {
-                let kerf = message["mcp_servers"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|server| server["name"] == SERVER);
+        match line.message {
+            Message::System {
+                subtype,
+                mcp_servers,
+            } if subtype.as_deref() == Some("init") => {
+                let kerf = mcp_servers
+                    .iter()
+                    .find(|server| server.name.as_deref() == Some(SERVER));
                 if let Some(server) = kerf
-                    && server["status"] != "connected"
+                    && server.status.as_deref() != Some("connected")
                 {
                     self.failure = Some(
                         "Claude Code could not start Kerf's tools (kerf-mcp). Check that \
@@ -307,103 +504,84 @@ impl Stream {
                     );
                 }
             }
-            Some("stream_event") => {
-                let event = &message["event"];
-                match event["type"].as_str() {
-                    Some("message_start") => emit(AgentEvent::TurnStarted {
-                        stop_reason: String::new(),
-                    }),
-                    Some("content_block_delta") if event["delta"]["type"] == "text_delta" => {
-                        if let Some(text) = event["delta"]["text"].as_str() {
-                            emit(AgentEvent::TextDelta(text.to_owned()));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            Some("assistant") => {
-                // What this request read: its new input and what it took from the cache.
-                let usage = &message["message"]["usage"];
-                let used = [
-                    "input_tokens",
-                    "cache_read_input_tokens",
-                    "cache_creation_input_tokens",
-                ]
-                .iter()
-                .filter_map(|key| usage[*key].as_u64())
-                .sum::<u64>();
+            Message::StreamEvent { event } => match event {
+                ApiEvent::MessageStart => emit(AgentEvent::TurnStarted {
+                    stop_reason: String::new(),
+                }),
+                ApiEvent::ContentBlockDelta {
+                    delta: Delta::TextDelta { text: Some(text) },
+                } => emit(AgentEvent::TextDelta(text)),
+                _ => {}
+            },
+            Message::Assistant { message } => {
+                let used = message.usage.read();
                 if used > 0 && used != self.context_used {
                     self.context_used = used;
                     self.say_context(emit);
                 }
-                for block in blocks(message) {
-                    if block["type"] != "tool_use" {
+                for block in message.content {
+                    let Block::ToolUse { id, name, input } = block else {
                         continue;
-                    }
-                    let id = block["id"].as_str().unwrap_or_default().to_owned();
-                    let name = tool_name(block["name"].as_str().unwrap_or_default());
+                    };
+                    let name = tool_name(&name);
                     self.tools.insert(id.clone(), name.clone());
                     emit(AgentEvent::ToolCallStarted {
                         id,
                         name,
-                        targets: summarize_targets(&block["input"]),
+                        targets: summarize_targets(&input),
                     });
                 }
             }
-            Some("user") => {
-                for block in blocks(message) {
-                    if block["type"] != "tool_result" {
+            Message::User { message } => {
+                for block in message.content {
+                    let Block::ToolResult {
+                        tool_use_id: id,
+                        is_error,
+                        content,
+                    } = block
+                    else {
                         continue;
-                    }
-                    let id = block["tool_use_id"].as_str().unwrap_or_default().to_owned();
+                    };
                     let name = self.tools.get(&id).cloned().unwrap_or_default();
-                    let ok = block["is_error"].as_bool() != Some(true);
+                    let ok = !is_error;
                     emit(AgentEvent::ToolCallFinished {
                         id,
                         name,
                         ok,
-                        summary: Box::new(result_summary(&block["content"], ok)),
+                        summary: Box::new(result_summary(&content, ok)),
                     });
                 }
             }
-            Some("result") => {
+            Message::Finished {
+                subtype,
+                is_error,
+                result,
+                models,
+            } => {
                 // The window of the model that answered: the largest, when it used helpers.
-                let window = message["modelUsage"]
-                    .as_object()
-                    .into_iter()
-                    .flat_map(|models| models.values())
-                    .filter_map(|model| model["contextWindow"].as_u64())
-                    .max();
+                let window = models.iter().filter_map(|model| model.context_window).max();
                 if let Some(window) = window.filter(|window| *window != self.context_window) {
                     self.context_window = window;
                     self.say_context(emit);
                 }
-                let text = message["result"].as_str().unwrap_or_default().to_owned();
-                if message["is_error"].as_bool() == Some(true) || message["subtype"] != "success" {
+                if is_error || subtype.as_deref() != Some("success") {
                     if self.failure.is_none() {
-                        self.failure = Some(if text.is_empty() {
+                        self.failure = Some(if result.is_empty() {
                             format!(
                                 "Claude Code stopped: {}",
-                                message["subtype"].as_str().unwrap_or("error")
+                                subtype.as_deref().unwrap_or("error")
                             )
                         } else {
-                            text
+                            result
                         });
                     }
                 } else {
-                    self.done = Some(text);
+                    self.done = Some(result);
                 }
             }
             _ => {}
         }
     }
-}
-
-fn blocks(message: &Value) -> impl Iterator<Item = &Value> {
-    message["message"]["content"]
-        .as_array()
-        .into_iter()
-        .flatten()
 }
 
 /// The tool as the built-in agent names it, without Claude Code's namespace.
@@ -412,16 +590,19 @@ fn tool_name(name: &str) -> String {
 }
 
 /// Kerf's tools answer in JSON text; read it for the proposal and status the
-/// editor follows. Raw output never reaches an event.
-fn result_summary(content: &Value, ok: bool) -> ToolResultSummary {
+/// editor follows. Raw output never reaches an event. What each text says stays JSON: it is
+/// whatever the tool answered, and `summarize_tool_result` finds what it knows in any.
+fn result_summary(content: &ResultContent, ok: bool) -> ToolResultSummary {
     let texts: Vec<&str> = match content {
-        Value::String(text) => vec![text.as_str()],
-        Value::Array(blocks) => blocks
+        ResultContent::Text(text) => vec![text.as_str()],
+        ResultContent::Blocks(blocks) => blocks
             .iter()
-            .filter(|block| block["type"] == "text")
-            .filter_map(|block| block["text"].as_str())
+            .filter_map(|block| match block {
+                Block::Text { text: Some(text) } => Some(text.as_str()),
+                _ => None,
+            })
             .collect(),
-        _ => Vec::new(),
+        ResultContent::Nothing => Vec::new(),
     };
     let values: Vec<Value> = texts
         .iter()
