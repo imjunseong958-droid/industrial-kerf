@@ -59,7 +59,7 @@ log = "0.4"
 # "Edited … ago" counts days on the person's own calendar: the system's
 # time zone (its zoneinfo on Unix; on Windows the zone's rules come
 # bundled).
-jiff = { version = "0.2", default-features = false }
+jiff = { version = "1", default-features = false }
 # On macOS a project's window represents its project.kerf (the title bar's
 # proxy icon), as a document's window does there, and a drag on
 # the toolbar (the title bar there) moves the window: AppKit through its

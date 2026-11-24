@@ -519,7 +519,7 @@ pub fn edited_ago_changes_in(then: i64, now: i64, zone: &jiff::tz::TimeZone) -> 
     }
     let midnight = jiff::Timestamp::from_second(now)
         .ok()
-        .and_then(|at| at.to_zoned(zone.clone()).tomorrow().ok())
+        .and_then(|at| at.to_zoned_datetime(zone.clone()).tomorrow().ok())
         .and_then(|tomorrow| tomorrow.start_of_day().ok())
         .map(|midnight| midnight.timestamp().as_second());
     let hour = (days == 0 && seconds < 86_400).then(|| then + (seconds / 3600 + 1) * 3600);
