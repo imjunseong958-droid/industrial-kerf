@@ -3,14 +3,14 @@
 //! [`kerf_collab::media`]), and which media are offline, not downloaded, or
 //! not carried by the project's repository.
 
-use crate::event::{CastToMake, ErrorCode, ErrorEvent, Event, MediaMakePlan};
+use crate::error::BridgeError;
+use crate::event::{CastToMake, ErrorEvent, Event, MediaMakePlan};
 use crate::wake::Outbox;
 use crate::{emit, Command, Shared};
 use kerf_collab::git::is_lfs_pointer;
 use kerf_collab::media::{absolute, external, relative_to};
 pub(crate) use kerf_collab::media::{copy_into_media, needs_copy};
 use kerf_model::{Catalog, Id, Op, Project};
-use kerf_shots::ShotError;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -29,7 +29,7 @@ pub(crate) fn copy_then(
     path: &str,
     commands: &SyncSender<Command>,
     tx: &Outbox,
-    probe: impl FnOnce(&Path) -> Result<(), String> + Send + 'static,
+    probe: impl FnOnce(&Path) -> Result<(), BridgeError> + Send + 'static,
     then: impl FnOnce(String) -> Command + Send + 'static,
 ) {
     let source = absolute(&shared.directory, Path::new(path));
@@ -77,7 +77,7 @@ pub(crate) fn make(
     let planned = client
         .get_document(false)
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
-        .map_err(|error| ShotError::from(error.message))
+        .map_err(BridgeError::from)
         .and_then(|project| {
             let models = kerf_engine::recipe::model::Models::load()?;
             // One making is the recipe as it is written. Several are rolls of it, each with
@@ -92,9 +92,8 @@ pub(crate) fn make(
         });
     let (project, models, plan, first) = match planned {
         Ok(planned) => planned,
-        // What refuses the plan says which kind of refusal it is, where it is one the
-        // editor does something about.
-        Err(error) => return make_refused(tx, id, &error, crate::recipes::code(&error)),
+        // What refuses the plan says which kind of refusal it is, by its code.
+        Err(error) => return make_failed(tx, id, error),
     };
     if !confirmed {
         return crate::emit(
@@ -254,11 +253,13 @@ pub(crate) fn cast(
 ) {
     use kerf_engine::recipe::cast::{Cast, Entry, Kind};
     let directory = shared.directory.as_path();
-    let failed = |error: String| {
+    // Said in `message`, by the code of `why`.
+    let failed = |message: String, why: &BridgeError| {
         crate::emit(
             tx,
             Event::Error(ErrorEvent {
-                message: error,
+                message,
+                code: why.code(),
                 command: Some("cast".to_owned()),
                 ..ErrorEvent::default()
             }),
@@ -272,7 +273,7 @@ pub(crate) fn cast(
                 let kind = match entry.kind.as_str() {
                     "cast" => Kind::Cast,
                     "style" => Kind::Style,
-                    other => return Err(format!("`{other}` is not `cast` or `style`")),
+                    other => return Err(format!("`{other}` is not `cast` or `style`").into()),
                 };
                 Ok((
                     kind,
@@ -283,19 +284,20 @@ pub(crate) fn cast(
                     },
                 ))
             })
-            .collect::<Result<Vec<_>, String>>();
+            .collect::<Result<Vec<_>, BridgeError>>();
         let written = entries.and_then(|entries| {
-            Cast::of_entries(entries)
-                .and_then(|cast| cast.write(directory))
-                .map_err(|error| error.to_string())
+            Ok(Cast::of_entries(entries).and_then(|cast| cast.write(directory))?)
         });
-        if let Err(error) = written {
-            return failed(format!("cannot save the cast: {error}"));
+        if let Err(why) = written {
+            return failed(format!("cannot save the cast: {why}"), &why);
         }
     }
     let cast = match Cast::read(directory) {
         Ok(cast) => cast,
-        Err(error) => return failed(error.to_string()),
+        Err(error) => {
+            let why = BridgeError::from(error);
+            return failed(why.to_string(), &why);
+        }
     };
     let entries: Vec<CastEntry> = cast
         .entries()
@@ -381,18 +383,14 @@ fn making(id: &str, take: u32, line: &str) -> Event {
 }
 
 /// A making of media `id` that did not end with a take: an `error` that names the media,
-/// so that what shows it being made stops.
-fn make_failed(tx: &Outbox, id: &str, why: impl std::fmt::Display) {
-    make_refused(tx, id, why, None);
-}
-
-/// The same, said by its `code` as well where the refusal has one.
-fn make_refused(tx: &Outbox, id: &str, why: impl std::fmt::Display, code: Option<ErrorCode>) {
+/// so that what shows it being made stops, said by its code where the refusal has one.
+fn make_failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
+    let why = why.into();
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
             message: format!("cannot make {id}: {why}"),
-            code,
+            code: why.code(),
             command: Some("media_make".to_owned()),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
@@ -489,8 +487,10 @@ pub(crate) fn cancel_makings(shared: &Shared) {
 }
 
 /// Whether `file` reads as media, as an import reads it.
-pub(crate) fn probe(file: &Path) -> Result<(), String> {
-    crate::tasks::probe(file).map(drop)
+pub(crate) fn probe(file: &Path) -> Result<(), BridgeError> {
+    crate::tasks::probe(file)
+        .map(drop)
+        .map_err(BridgeError::from)
 }
 
 /// A copy into `media/` that is running, counted in [`Files::copies`] until
@@ -610,7 +610,7 @@ impl Consolidation {
 pub(crate) fn consolidate(
     project: &Project,
     directory: &Path,
-    probe: impl Fn(&Path) -> Result<(), String>,
+    probe: impl Fn(&Path) -> Result<(), BridgeError>,
 ) -> Consolidation {
     let mut result = Consolidation::default();
     let mut copies: BTreeMap<PathBuf, String> = BTreeMap::new();
@@ -639,7 +639,9 @@ pub(crate) fn consolidate(
         let copy = match copies.get(file) {
             Some(copy) => Ok(copy.clone()),
             None => probe(file)
-                .and_then(|()| copy_into_media(directory, file).map_err(|error| error.to_string()))
+                .and_then(|()| {
+                    copy_into_media(directory, file).map_err(|error| error.to_string().into())
+                })
                 .inspect(|copy| {
                     result.copied += 1;
                     copies.insert(file.clone(), copy.clone());
@@ -719,7 +721,7 @@ mod tests {
             &source.to_string_lossy(),
             &commands,
             &tx,
-            |file| Err(format!("{} is text, not media", file.display())),
+            |file| Err(format!("{} is text, not media", file.display()).into()),
             |path| Command::Import {
                 path,
                 media_only: false,
@@ -749,7 +751,7 @@ mod tests {
         ]);
         let probe = |file: &Path| match file.extension().and_then(|e| e.to_str()) {
             Some("mov") => Ok(()),
-            _ => Err(format!("{} is not media", file.display())),
+            _ => Err(format!("{} is not media", file.display()).into()),
         };
         let result = consolidate(&project, &project_dir, probe);
         assert_eq!(result.copied, 1);
