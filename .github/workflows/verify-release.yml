@@ -113,7 +113,7 @@ jobs:
     env:
       TAG: ${{ needs.assets.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download the Windows zip
         shell: pwsh
         env:
@@ -188,7 +188,7 @@ jobs:
     env:
       TAG: ${{ needs.assets.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download the macOS app
         env:
           GH_TOKEN: ${{ github.token }}
@@ -250,7 +250,7 @@ jobs:
     env:
       TAG: ${{ needs.assets.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download the Linux package
         env:
           GH_TOKEN: ${{ github.token }}
