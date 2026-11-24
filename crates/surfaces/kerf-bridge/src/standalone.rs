@@ -2,9 +2,10 @@
 //! kerfd runs, Kerf's tools served over MCP, crash reports, the system keychain, the
 //! project launcher, the command registry and the catalog.
 
+use crate::tasks::PresetCheck;
 use crate::{secrets, tasks, updates, SERVE_MCP};
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // ---- about ---------------------------------------------------------------------
 
@@ -132,12 +133,10 @@ pub fn project_inspect(request: &Value) -> Value {
     tasks::inspect_project(request)
 }
 
-/// A preset file's slots, and how files would fill them: `{path, files?: [path]}` -> `{name,
-/// slots: [{id, seconds, video, audio, clips}], texts: {clipId: text}, files: [{path,
-/// seconds, video, audio, fits: [slotId], error?}]}` or `{error}`. It probes the files with
-/// ffprobe, so it may take a moment.
-pub fn preset_inspect(request: &Value) -> Value {
-    tasks::inspect_preset(request)
+/// The preset file at `path`, its slots and texts, and how each of `files` would fill them;
+/// or why it cannot be read. It probes the files with ffprobe, so it may take a moment.
+pub fn preset_inspect(path: &Path, files: &[PathBuf]) -> Result<PresetCheck, String> {
+    tasks::inspect_preset(path, files)
 }
 
 // ---- command registry ----------------------------------------------------------

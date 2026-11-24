@@ -8,14 +8,16 @@ use super::LauncherView;
 use crate::presets::{self, Fit, Picked, PresetChoice};
 use editor_ui::input::{InputEvent, TextInput};
 use gpui::{prelude::*, App, Context, Entity, PathPromptOptions, Subscription, Task, Window};
+use kerf_bridge::event::PresetSlot;
+use kerf_bridge::PresetCheck;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 /// A media slot of the preset being started from, and the file for it.
 pub(super) struct SlotFile {
     pub(super) id: String,
-    /// The slot as the preset describes it (`{id, seconds, video, audio, clips}`).
-    pub(super) slot: Value,
+    /// The slot as the preset describes it.
+    pub(super) slot: PresetSlot,
     pub(super) file: Option<PathBuf>,
     pub(super) fit: Option<Fit>,
     /// Where it starts in the file, in seconds.
@@ -37,9 +39,9 @@ pub(super) struct PresetPage {
     /// The one chosen among them; None for none, or a file chosen apart.
     pub(super) chosen: Option<usize>,
     pub(super) path: Option<PathBuf>,
-    /// What the bridge read of it (`{name, slots, texts, made}` or
-    /// `{error}`); None while it reads.
-    pub(super) preset: Option<Value>,
+    /// What the bridge read of it, or why it could not; None while it
+    /// reads.
+    pub(super) preset: Option<Result<PresetCheck, String>>,
     pub(super) slots: Vec<SlotFile>,
     pub(super) texts: Vec<PresetText>,
     /// The chosen files are being checked against the slots.
@@ -53,8 +55,10 @@ impl PresetPage {
     /// The preset's own name, else its file's.
     pub(super) fn name(&self) -> Option<String> {
         let preset = self.preset.as_ref()?;
-        preset["name"]
-            .as_str()
+        preset
+            .as_ref()
+            .ok()
+            .map(|preset| preset.name.as_str())
             .filter(|name| !name.is_empty())
             .map(str::to_owned)
             .or_else(|| {
@@ -74,7 +78,7 @@ impl PresetPage {
                 "Choose a preset".into()
             });
         };
-        if preset["error"].is_string() {
+        if preset.is_err() {
             return Some("Choose a preset".into());
         }
         if self.slots.iter().any(|slot| slot.file.is_none()) {
@@ -163,10 +167,10 @@ impl LauncherView {
         self.preset.slots.clear();
         self.preset.texts.clear();
         self.preset.checking = false;
-        let asked = path.to_string_lossy().into_owned();
+        let asked = path.clone();
         let reading = cx
             .background_executor()
-            .spawn(async move { kerf_bridge::preset_inspect(&json!({"path": asked})) });
+            .spawn(async move { kerf_bridge::preset_inspect(&asked, &[]) });
         self.preset._reading = Some(cx.spawn_in(window, async move |this, cx| {
             let answer = reading.await;
             let _ = this.update_in(cx, |this, window, cx| {
@@ -180,10 +184,16 @@ impl LauncherView {
 
     /// What the bridge read of the preset: its slots, each with a Start
     /// field, and its texts, each with a field of its own.
-    fn show_preset(&mut self, preset: Value, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_preset(
+        &mut self,
+        preset: Result<PresetCheck, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mut fields = Vec::new();
         let mut slots = Vec::new();
-        for slot in preset["slots"].as_array().into_iter().flatten() {
+        let read = preset.as_ref().ok();
+        for slot in read.into_iter().flat_map(|read| &read.slots) {
             let start = cx.new(|cx| {
                 let mut input = TextInput::new(cx, "0");
                 input.set_text("0", cx);
@@ -191,7 +201,7 @@ impl LauncherView {
             });
             fields.push(cx.subscribe_in(&start, window, Self::preset_field));
             slots.push(SlotFile {
-                id: slot["id"].as_str().unwrap_or_default().to_owned(),
+                id: slot.id.clone(),
                 slot: slot.clone(),
                 file: None,
                 fit: None,
@@ -199,8 +209,8 @@ impl LauncherView {
             });
         }
         let mut texts = Vec::new();
-        for (clip, original) in preset["texts"].as_object().into_iter().flatten() {
-            let original = original.as_str().unwrap_or_default().to_owned();
+        for (clip, original) in read.into_iter().flat_map(|read| &read.texts) {
+            let original = original.clone();
             let words = original.clone();
             let input = cx.new(|cx| {
                 let mut input = TextInput::new(cx, "Text");
@@ -317,7 +327,6 @@ impl LauncherView {
         let Some(path) = self.preset.path.clone() else {
             return;
         };
-        let path = path.to_string_lossy().into_owned();
         let mut files: Vec<PathBuf> = Vec::new();
         for file in self
             .preset
@@ -333,13 +342,10 @@ impl LauncherView {
             return;
         }
         self.preset.checking = true;
-        let asked: Vec<String> = files
-            .iter()
-            .map(|file| file.to_string_lossy().into_owned())
-            .collect();
-        let checking = cx.background_executor().spawn(async move {
-            kerf_bridge::preset_inspect(&json!({"path": path, "files": asked}))
-        });
+        let asked = files.clone();
+        let checking = cx
+            .background_executor()
+            .spawn(async move { kerf_bridge::preset_inspect(&path, &asked) });
         self.preset._reading = Some(cx.spawn(async move |this, cx| {
             let answer = checking.await;
             let _ = this.update(cx, |this, cx| {

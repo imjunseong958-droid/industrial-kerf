@@ -135,7 +135,7 @@ pub use standalone::{
     crash_reports, ffmpeg_bin, fx_catalog_all, keychain_off, preset_inspect, project_inspect,
     secret, serve_mcp, update_check, REPOSITORY,
 };
-pub use tasks::Task;
+pub use tasks::{CheckedFile, PresetCheck, Task};
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};
 pub use wake::Wake;
 pub use workers::Workers;

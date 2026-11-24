@@ -8,8 +8,9 @@ use kerf_bridge::event::workflow::{
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
     ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
-    LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, TakeRead, ToolState,
+    InspectedMade, InspectedSlot, LoudnessEvent, MeterReading, PresetInspection, PresetLook,
+    Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus,
+    SlotClip, SlotFit, TakeRead, ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -23,7 +24,9 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text.
+/// unread, so that the types they now are write the same text. The one after those is what
+/// a preset file holds (`preset_inspect`), with a slot that a made media reads and texts,
+/// written the same way before it was a type; its folder is made neutral.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -125,7 +128,90 @@ fn event() -> impl Strategy<Value = Event> {
         collab_sync(),
         take_read(),
         workflow(),
+        preset_inspect(),
     ]
+}
+
+/// A clip of a preset's pattern that plays a slot.
+fn slot_clip() -> impl Strategy<Value = SlotClip> {
+    (text(), some_text(), text(), text(), text()).prop_map(|(id, name, sequence, track, at)| {
+        SlotClip {
+            id,
+            name,
+            sequence,
+            track,
+            at,
+        }
+    })
+}
+
+/// What a preset file holds, as kerf-mcp's `look` says it: its slots with the clips that
+/// play them, the media it makes, its texts and its looks.
+fn preset_inspect() -> impl Strategy<Value = Event> {
+    let fit = (text(), any::<i64>()).prop_map(|(media, latest_frame)| SlotFit {
+        media,
+        latest_frame,
+    });
+    let slot = (
+        (text(), any::<bool>(), any::<bool>(), text(), number()),
+        (vec(slot_clip(), 0..3), vec(text(), 0..3), vec(fit, 0..3)),
+    )
+        .prop_map(
+            |((id, video, audio, minimum_duration, seconds), (clips, read_by, fits))| {
+                InspectedSlot {
+                    id,
+                    video,
+                    audio,
+                    minimum_duration,
+                    seconds,
+                    clips,
+                    read_by,
+                    fits,
+                }
+            },
+        );
+    let made = (
+        text(),
+        text(),
+        some_text(),
+        vec(text(), 0..3),
+        vec(slot_clip(), 0..3),
+    )
+        .prop_map(|(id, path, of, steps, clips)| InspectedMade {
+            id,
+            path,
+            of,
+            steps,
+            clips,
+        });
+    let look = (text(), any::<u32>(), text()).prop_map(|(id, version, name)| PresetLook {
+        id,
+        version,
+        name,
+    });
+    (
+        text(),
+        (text(), text(), text(), text()),
+        (vec(slot, 0..3), vec(made, 0..3)),
+        (btree_map(text(), text(), 0..3), vec(look, 0..3)),
+    )
+        .prop_map(
+            |(path, (preset, name, document, sequence), (slots, made), (text_slots, looks))| {
+                Event::PresetInspect {
+                    path,
+                    preset: PresetInspection {
+                        preset,
+                        name,
+                        document,
+                        sequence,
+                        slots,
+                        made,
+                        text_slots,
+                        looks,
+                    },
+                }
+            },
+        )
 }
 
 /// One input of a workflow's node: a link, with what it takes where a server has said, or
