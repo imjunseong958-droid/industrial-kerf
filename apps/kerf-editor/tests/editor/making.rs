@@ -14,6 +14,7 @@ use kerf_editor::making::{
     Workflow, ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
 };
 use kerf_editor::model::Ask;
+use kerf_editor::model::Interp;
 use kerf_editor::store::Making;
 use proptest::prelude::*;
 use serde_json::{json, Value};
@@ -530,19 +531,19 @@ proptest! {
         let drawn: BTreeMap<usize, f64> =
             values.iter().enumerate().map(|(at, value)| (start + at, *value)).collect();
         let keys = signal_keys(&drawn, 0.02);
-        let at: Vec<usize> = keys.iter().map(|key| key["at"].as_u64().unwrap() as usize).collect();
+        let at: Vec<usize> = keys.iter().map(|key| key.at as usize).collect();
         prop_assert_eq!(at.first().copied(), Some(start));
         prop_assert_eq!(at.last().copied(), Some(start + values.len() - 1));
         prop_assert!(at.windows(2).all(|pair| pair[0] < pair[1]), "{at:?}");
-        prop_assert!(keys.iter().all(|key| key["interp"] == "linear"));
+        prop_assert!(keys.iter().all(|key| key.interp == Interp::Linear));
         for (frame, value) in &drawn {
-            let after = keys.iter().position(|key| key["at"].as_u64().unwrap() as usize >= *frame).unwrap();
+            let after = keys.iter().position(|key| key.at as usize >= *frame).unwrap();
             let line = if at[after] == *frame {
-                keys[after]["value"].as_f64().unwrap()
+                keys[after].value.as_f64().unwrap()
             } else {
                 let (a, b) = (&keys[after - 1], &keys[after]);
-                let (fa, fb) = (a["at"].as_f64().unwrap(), b["at"].as_f64().unwrap());
-                let (va, vb) = (a["value"].as_f64().unwrap(), b["value"].as_f64().unwrap());
+                let (fa, fb) = (a.at as f64, b.at as f64);
+                let (va, vb) = (a.value.as_f64().unwrap(), b.value.as_f64().unwrap());
                 va + (vb - va) * (*frame as f64 - fa) / (fb - fa)
             };
             prop_assert!((line - value).abs() <= 0.02 + 0.001, "{frame}: {line} vs {value}");

@@ -28,7 +28,7 @@ pub use format_bank::{format_beside, format_index, FormatBank};
 use choice::ChoiceMenu;
 use clip::{Field, Inspected};
 use editor_session::session::{BridgeEvent, Session};
-use editor_state::model::Timeline;
+use editor_state::model::{EditParam, Timeline};
 use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::{self, radius, space, text};
 use editor_ui::ui;
@@ -224,7 +224,7 @@ impl InspectorView {
         });
     }
 
-    fn set_param(&mut self, clip: &str, field: &Field, value: Value, cx: &mut Context<Self>) {
+    fn set_param(&mut self, clip: &str, field: &Field, value: EditParam, cx: &mut Context<Self>) {
         self.edit(vec![field.op(clip, value)], cx);
     }
 

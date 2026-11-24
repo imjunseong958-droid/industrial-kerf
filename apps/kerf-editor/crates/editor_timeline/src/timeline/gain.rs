@@ -9,9 +9,9 @@ use super::drag::Gesture;
 use super::lane_ink;
 use super::lanes::ClipBox;
 use super::TimelineView;
-use editor_state::model::{ClipShow, GainKey, Interp};
+use editor_state::model::{ClipShow, EditKey, EditParam, GainKey, Interp};
 use gpui::{px, Context, PathBuilder, Window};
-use serde_json::{json, Value};
+use serde_json::json;
 
 /// The lowest and highest a sound clip's rubber band reads, in dB.
 pub const GAIN_FLOOR: f64 = -60.0;
@@ -83,17 +83,21 @@ impl BandDrag {
     }
 
     /// What its release sets: the level, or the keys with their new values.
-    pub(super) fn gain(&self) -> Value {
+    pub(super) fn gain(&self) -> EditParam {
         if !self.keyed {
-            return json!(self.values.first().copied().unwrap_or(0.0));
+            return EditParam::Value(json!(self.values.first().copied().unwrap_or(0.0)));
         }
-        let keys: Vec<Value> = self
-            .keys
-            .iter()
-            .zip(&self.values)
-            .map(|(key, value)| json!({"at": key.frame, "value": value, "interp": key.interp.name()}))
-            .collect();
-        json!({ "keys": keys })
+        EditParam::Keyed(
+            self.keys
+                .iter()
+                .zip(&self.values)
+                .map(|(key, value)| EditKey {
+                    at: key.frame,
+                    value: json!(value),
+                    interp: key.interp,
+                })
+                .collect(),
+        )
     }
 }
 

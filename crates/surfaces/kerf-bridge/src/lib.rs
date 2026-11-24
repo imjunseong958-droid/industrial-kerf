@@ -127,7 +127,9 @@ pub use kerf_collab::git::Tools as GitTools;
 pub use kerf_collab::scaffold::Created as CreatedProject;
 pub use kerf_collab::scaffold::GitHubRepository;
 pub use kerf_playback::drawing_settled;
-pub use kerf_runtime::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
+pub use kerf_runtime::{
+    EditKey, EditOp, EditParam, GeneratorSpec, MaskOutline, RateSpec, TrimSide,
+};
 pub use media::CastEntry;
 pub use paperwork::CaptionsRequest;
 pub use previews::{PreviewEffect, Request as EffectPreviewsRequest};

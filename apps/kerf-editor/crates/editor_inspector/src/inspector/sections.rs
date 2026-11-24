@@ -8,7 +8,7 @@ use super::clip::{held, name_id, Field, Held, Inspected, Target};
 use super::fields::SWATCH;
 use super::values::{humanize, swatch_color, value_words};
 use super::{field_frame, InspectorView};
-use editor_state::model::ViewParam;
+use editor_state::model::{EditParam, ViewParam};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, height, radius, space, text};
 use editor_ui::ui;
@@ -370,7 +370,7 @@ impl InspectorView {
                         on,
                         move |on, _, cx| {
                             this.update(cx, |view, cx| {
-                                view.set_param(&clip_id, &key, json!(on), cx)
+                                view.set_param(&clip_id, &key, EditParam::Value(json!(on)), cx)
                             })
                             .ok();
                         },
@@ -445,7 +445,7 @@ impl InspectorView {
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                         if event.click_count >= 2 {
-                            this.set_param(&clip_id, &key, Value::Null, cx);
+                            this.set_param(&clip_id, &key, EditParam::Default, cx);
                         }
                     }),
                 )

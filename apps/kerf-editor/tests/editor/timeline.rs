@@ -107,21 +107,21 @@ proptest! {
             .collect();
         let keys = signal_keys(&drawn, 0.02);
         prop_assert!(!keys.is_empty() && keys.len() <= drawn.len());
-        let frames: Vec<i64> = keys.iter().map(|key| key["at"].as_i64().unwrap()).collect();
+        let frames: Vec<i64> = keys.iter().map(|key| key.at).collect();
         prop_assert_eq!(frames[0], start);
         prop_assert_eq!(*frames.last().unwrap(), start + values.len() as i64 - 1);
         prop_assert!(frames.windows(2).all(|pair| pair[0] < pair[1]));
         for key in &keys {
-            prop_assert_eq!(key["interp"].as_str(), Some("linear"));
+            prop_assert_eq!(key.interp, Interp::Linear);
         }
         for (frame, value) in &drawn {
             let after = frames.iter().position(|kept| kept >= frame).unwrap();
             let line = if frames[after] == *frame || after == 0 {
-                keys[after]["value"].as_f64().unwrap()
+                keys[after].value.as_f64().unwrap()
             } else {
                 let (a, b) = (&keys[after - 1], &keys[after]);
                 let (fa, fb) = (frames[after - 1] as f64, frames[after] as f64);
-                let (va, vb) = (a["value"].as_f64().unwrap(), b["value"].as_f64().unwrap());
+                let (va, vb) = (a.value.as_f64().unwrap(), b.value.as_f64().unwrap());
                 va + (vb - va) * (*frame as f64 - fa) / (fb - fa)
             };
             prop_assert!((line - value).abs() <= 0.02 + 0.002, "{frame}: {line} vs {value}");

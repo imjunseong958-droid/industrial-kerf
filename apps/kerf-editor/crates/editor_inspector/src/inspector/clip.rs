@@ -4,10 +4,10 @@
 
 use super::catalog::{catalog, Param};
 use super::values::humanize;
-use editor_state::model::{Timeline, TrackKind, ViewParam};
+use editor_state::model::{EditParam, Timeline, TrackKind, ViewParam};
 use gpui::ElementId;
 use kerf_bridge::event::{ViewEffect, ViewMask};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
 /// Whose parameter a field sets: the clip's own (its properties, and a
@@ -41,10 +41,9 @@ impl Field {
         }
     }
 
-    /// The edit that gives it `value` (`null` restores its default).
-    pub(super) fn op(&self, clip: &str, value: Value) -> Value {
-        let mut values = Map::new();
-        values.insert(self.name.clone(), value);
+    /// The edit that gives it `value`.
+    pub(super) fn op(&self, clip: &str, value: EditParam) -> Value {
+        let values = BTreeMap::from([(self.name.clone(), value)]);
         match self.target {
             Target::Clip => json!({"op": "set", "clip": clip, "props": values}),
             Target::Effect(index) => {

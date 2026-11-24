@@ -1,6 +1,7 @@
 //! The bridge's commands and events as JSON: what the editor was sent reads as events that
-//! write the very same text, a command or event written reads back as itself, and an event
-//! this build does not know reads as one to ignore.
+//! write the very same text, a command or event written reads back as itself, an event this
+//! build does not know reads as one to ignore, and an edit's parameter value, whatever JSON it
+//! was written as, writes back the text it was read from.
 
 use kerf_bridge::event::workflow::{
     Blank, By, Described, DescribedInput, DescribedNode, OriginKind, Shown,
@@ -14,13 +15,15 @@ use kerf_bridge::event::{
     Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead, TimelineView, ToolState,
     ViewParamDef,
 };
-use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
-use kerf_model::{Content, Param, Rgba, Time, Value};
+use kerf_bridge::{
+    Command, EditKey, EditOp, EditParam, Event, GeneratorSpec, MaskOutline, ShotOf, TrimSide,
+};
+use kerf_model::{Content, Interp, Param, Rgba, Time, Value};
 use proptest::collection::{btree_map, vec};
 use proptest::option;
 use proptest::prelude::*;
 use proptest::sample::select;
-use serde_json::json;
+use serde_json::{json, Value as Json};
 
 /// One event of each kind (and of each status the session gave) the editor was sent in a
 /// recorded session, as it got them, with the recording machine's paths and names made
@@ -110,6 +113,17 @@ proptest! {
         let value: serde_json::Value = serde_json::from_str(&written).unwrap();
         prop_assert_eq!(value["type"].as_str(), Some(command.kind()));
         prop_assert_eq!(&read, &command);
+        prop_assert_eq!(serde_json::to_string(&read).unwrap(), written);
+    }
+
+    /// kerfd journals a typed edit by its text and checks a retried request against it, so a
+    /// parameter's value reads into an `EditParam` that writes the very text it came as: one
+    /// value, `null`, keys as they write themselves, keys written as kerfd has also always read
+    /// them (`at` as `24.0`, no `interp`, fields beside), and what kerfd refuses.
+    #[test]
+    fn a_parameter_value_reads_as_a_type_that_writes_the_text_it_came_as(json in param_json()) {
+        let written = serde_json::to_string(&json).unwrap();
+        let read: EditParam = serde_json::from_str(&written).unwrap();
         prop_assert_eq!(serde_json::to_string(&read).unwrap(), written);
     }
 
@@ -1056,5 +1070,134 @@ fn edit_op() -> impl Strategy<Value = EditOp> {
         }),
         vec(text(), 0..4).prop_map(|clips| EditOp::Delete { clips }),
         vec(text(), 0..4).prop_map(|clips| EditOp::RippleDelete { clips }),
+        (text(), edit_params(), some_text()).prop_map(|(clip, props, name)| EditOp::Set {
+            clip,
+            props,
+            name
+        }),
+        (
+            text(),
+            any::<usize>(),
+            option::of(any::<bool>()),
+            edit_params()
+        )
+            .prop_map(|(clip, index, enabled, params)| EditOp::FxSet {
+                clip,
+                index,
+                enabled,
+                params
+            }),
+        (text(), text(), edit_params()).prop_map(|(clip, name, params)| EditOp::MaskSet {
+            clip,
+            name,
+            outline: MaskOutline::default(),
+            mode: None,
+            inverted: None,
+            params,
+        }),
+        (text(), edit_params(), any::<i64>(), any::<i64>()).prop_map(|(fx, params, frames, at)| {
+            EditOp::Insert {
+                media: None,
+                source_in: 0,
+                generator: Some(GeneratorSpec { fx, params }),
+                frames,
+                at,
+                tracks: Vec::new(),
+                ids: Vec::new(),
+                sequence: None,
+                mode: None,
+            }
+        }),
+    ]
+}
+
+/// Parameter values by name, as a typed op sets them.
+fn edit_params() -> impl Strategy<Value = std::collections::BTreeMap<String, EditParam>> {
+    btree_map(text(), edit_param(), 0..4)
+}
+
+/// A parameter's value as a client gives one: back to its default, one value, or keys.
+fn edit_param() -> impl Strategy<Value = EditParam> {
+    prop_oneof![
+        Just(EditParam::Default),
+        one_value().prop_map(EditParam::Value),
+        vec(edit_key(), 0..5).prop_map(EditParam::Keyed),
+    ]
+}
+
+fn edit_key() -> impl Strategy<Value = EditKey> {
+    (
+        any::<i64>(),
+        one_value(),
+        interp().prop_filter_map("a curve", |name| Interp::parse(&name)),
+    )
+        .prop_map(|(at, value, interp)| EditKey { at, value, interp })
+}
+
+/// A number (whole, or a float), a bool, or a text.
+fn one_value() -> impl Strategy<Value = Json> {
+    prop_oneof![
+        any::<i64>().prop_map(Json::from),
+        number().prop_map(Json::from),
+        any::<bool>().prop_map(Json::from),
+        text().prop_map(Json::from),
+    ]
+}
+
+/// What a parameter's value may come as: anything a typed op's value could hold, and keys
+/// written each of the ways a client has written them, or kerfd refuses them.
+fn param_json() -> impl Strategy<Value = Json> {
+    let at = prop_oneof![
+        any::<i64>().prop_map(Json::from),
+        any::<u64>().prop_map(Json::from),
+        (-1000i32..1000).prop_map(|frames| Json::from(f64::from(frames))),
+        number().prop_map(Json::from),
+        Just(json!("1s")),
+        Just(Json::Null),
+    ];
+    let interp = prop_oneof![
+        interp().prop_map(Json::from),
+        Just(json!("0.250,0.1,0.75,0.90")),
+        Just(json!("wobble")),
+        Just(json!(3)),
+        Just(Json::Null),
+    ];
+    let key = (
+        option::of(at),
+        option::of(one_value()),
+        option::of(interp),
+        option::of(one_value()),
+        any::<bool>(),
+    )
+        .prop_map(|(at, value, interp, beside, backwards)| {
+            let mut fields = vec![
+                ("at", at),
+                ("value", value),
+                ("interp", interp),
+                ("frame", beside),
+            ];
+            if backwards {
+                fields.reverse();
+            }
+            let key: serde_json::Map<String, Json> = fields
+                .into_iter()
+                .filter_map(|(name, field)| field.map(|field| (name.to_owned(), field)))
+                .collect();
+            Json::Object(key)
+        });
+    let keys = vec(prop_oneof![9 => key, 1 => one_value()], 0..4);
+    let leaf = prop_oneof![Just(Json::Null), one_value()];
+    let any_json = leaf.clone().prop_recursive(3, 16, 4, |inner| {
+        prop_oneof![
+            vec(inner.clone(), 0..4).prop_map(Json::Array),
+            btree_map(text(), inner, 0..4)
+                .prop_map(|fields| Json::Object(fields.into_iter().collect())),
+        ]
+    });
+    prop_oneof![
+        leaf,
+        keys.clone().prop_map(|keys| json!({ "keys": keys })),
+        (keys, any_json.clone()).prop_map(|(keys, beside)| json!({ "keys": keys, "loop": beside })),
+        any_json,
     ]
 }

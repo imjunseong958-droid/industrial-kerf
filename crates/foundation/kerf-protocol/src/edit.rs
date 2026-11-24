@@ -1,7 +1,9 @@
 //! The typed edits an editor sends: what a gesture or a field changes, in frames and ids.
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value as Json;
+use kerf_model::Interp;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::{Map, Value as Json};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,15 +71,14 @@ pub enum EditOp {
     Extract {
         clips: Vec<String>,
     },
-    /// Property or generator parameter values: a static value, keyframes
-    /// as `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}` with
-    /// `at` counted from the clip's first frame, or `null` to restore the
-    /// default. `name` renames the clip; an empty one gives it back the
-    /// name of what it shows.
+    /// Property or generator parameter values ([`EditParam`]): a static
+    /// value, keyframes with `at` counted from the clip's first frame, or
+    /// `null` to restore the default. `name` renames the clip; an empty one
+    /// gives it back the name of what it shows.
     Set {
         clip: String,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        props: BTreeMap<String, Json>,
+        props: BTreeMap<String, EditParam>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
@@ -92,7 +93,7 @@ pub enum EditOp {
         clip: String,
         fx: String,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        params: BTreeMap<String, Json>,
+        params: BTreeMap<String, EditParam>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
@@ -104,7 +105,7 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         enabled: Option<bool>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        params: BTreeMap<String, Json>,
+        params: BTreeMap<String, EditParam>,
     },
     FxRemove {
         clip: String,
@@ -124,7 +125,7 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         inverted: Option<bool>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        params: BTreeMap<String, Json>,
+        params: BTreeMap<String, EditParam>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         index: Option<usize>,
     },
@@ -140,7 +141,7 @@ pub enum EditOp {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         inverted: Option<bool>,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-        params: BTreeMap<String, Json>,
+        params: BTreeMap<String, EditParam>,
     },
     MaskRemove {
         clip: String,
@@ -284,6 +285,207 @@ pub enum EditOp {
     },
 }
 
+/// A property's or a parameter's value as a typed op gives it, the
+/// counterpart of the [`ViewParam`](crate::ViewParam) a view shows: `null`
+/// to restore its default, one value, or keyframes as
+/// `{"keys": [{"at": frames, "value": v, "interp": "linear"}]}`.
+///
+/// It reads any JSON and writes back the very text it read: kerfd journals
+/// an op by its text and checks a retried request against it, so that text
+/// must not change for being read into a type, nor with the build's
+/// serde_json features. Keys written as [`EditKey`]s write themselves read as
+/// [`EditParam::Keyed`]. Keys written as kerfd has always also taken them
+/// (`at` as `24.0`, `interp` absent or `null`, other fields beside, a curve's
+/// numbers written otherwise) stay [`EditParam::Value`] as written, and
+/// [`EditParam::keys`] reads those too.
+#[derive(Clone, Debug, PartialEq)]
+pub enum EditParam {
+    /// `null`: back to its default.
+    Default,
+    /// Keyframes, in any order: kerfd puts them in time order.
+    Keyed(Vec<EditKey>),
+    /// One value throughout: a number, a bool, or a text (a choice's name,
+    /// a file, a color as `#rrggbb[aa]`). Or any other JSON, as it was
+    /// written: keys written loosely, or what kerfd refuses.
+    Value(Json),
+}
+
+impl EditParam {
+    /// What `json` reads as: [`EditParam::Default`] for `null`,
+    /// [`EditParam::Keyed`] for keys written exactly as they would write
+    /// themselves, and `json` as it is otherwise.
+    pub fn from_json(json: Json) -> Self {
+        if json.is_null() {
+            return Self::Default;
+        }
+        if let Some(keys) = read_keys(&json) {
+            let keyed = Self::Keyed(keys);
+            if written_alike(&keyed.to_json(), &json) {
+                return keyed;
+            }
+        }
+        Self::Value(json)
+    }
+
+    /// It as JSON: what it was read from, or what it stands for.
+    pub fn to_json(&self) -> Json {
+        match self {
+            Self::Default => Json::Null,
+            Self::Keyed(keys) => {
+                let mut object = Map::new();
+                object.insert(
+                    "keys".into(),
+                    Json::Array(keys.iter().map(EditKey::to_json).collect()),
+                );
+                Json::Object(object)
+            }
+            Self::Value(value) => value.clone(),
+        }
+    }
+
+    /// Whether it restores the default: [`EditParam::Default`], or a `null`
+    /// value, which writes the same.
+    pub fn is_default(&self) -> bool {
+        matches!(self, Self::Default | Self::Value(Json::Null))
+    }
+
+    /// Whether it gives keyframes, whether or not they read: it is
+    /// [`EditParam::Keyed`], or an object with `keys`.
+    pub fn is_keyed(&self) -> bool {
+        match self {
+            Self::Default => false,
+            Self::Keyed(_) => true,
+            Self::Value(value) => value.get("keys").is_some(),
+        }
+    }
+
+    /// Its keyframes, those written loosely too, as kerfd reads them: an
+    /// object with `keys` and nothing else, a list of keys that each read
+    /// ([`EditKey`]). None for one value, and for keys that do not read.
+    pub fn keys(&self) -> Option<Cow<'_, [EditKey]>> {
+        match self {
+            Self::Default => None,
+            Self::Keyed(keys) => Some(Cow::Borrowed(keys)),
+            Self::Value(value) => read_keys(value).map(Cow::Owned),
+        }
+    }
+}
+
+impl From<Json> for EditParam {
+    fn from(json: Json) -> Self {
+        Self::from_json(json)
+    }
+}
+
+impl From<Vec<EditKey>> for EditParam {
+    fn from(keys: Vec<EditKey>) -> Self {
+        Self::Keyed(keys)
+    }
+}
+
+impl Serialize for EditParam {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Value(value) => value.serialize(serializer),
+            _ => self.to_json().serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for EditParam {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Json::deserialize(deserializer).map(Self::from_json)
+    }
+}
+
+/// A keyframe of an [`EditParam`]:
+/// `{"at": 24, "value": 0.5, "interp": "ease"}`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditKey {
+    /// Whole frames of its clip's sequence from the clip's first frame (a
+    /// [`ViewKey`](crate::ViewKey)'s `frame`).
+    pub at: i64,
+    /// A number, a bool, or a text, as [`EditParam::Value`] gives one.
+    pub value: Json,
+    /// How its curve takes the value to the next key's: written as its name
+    /// or a curve's handles `x1,y1,x2,y2` ([`Interp::name`]).
+    pub interp: Interp,
+}
+
+impl EditKey {
+    /// It as a JSON object with `at`, `value` and `interp` put in that
+    /// order. serde_json writes an object's fields in the order they were
+    /// put in where `preserve_order` is on (the editor's build), and sorted
+    /// where it is off (kerfd's), so a key comes out as the object the
+    /// editor and kerfd wrote for it before it was a type.
+    fn to_json(&self) -> Json {
+        let mut key = Map::new();
+        key.insert("at".into(), self.at.into());
+        key.insert("value".into(), self.value.clone());
+        key.insert("interp".into(), self.interp.name().into_owned().into());
+        Json::Object(key)
+    }
+
+    /// A key as kerfd reads one: an object with `at`, a whole number of
+    /// frames (`24` or `24.0`); `value`; and `interp`, a name or a curve's
+    /// numbers, `linear` where it is absent or `null`. Other fields are left
+    /// unread.
+    fn read(json: &Json) -> Option<Self> {
+        let key = json.as_object()?;
+        let at = key.get("at").and_then(whole)?;
+        let value = key.get("value")?.clone();
+        let interp = match key.get("interp") {
+            None | Some(Json::Null) => Interp::Linear,
+            Some(Json::String(name)) => Interp::parse(name)?,
+            Some(_) => return None,
+        };
+        Some(Self { at, value, interp })
+    }
+}
+
+/// The keys of `{"keys": [...]}` with nothing beside them, when each reads.
+fn read_keys(json: &Json) -> Option<Vec<EditKey>> {
+    let object = json.as_object()?;
+    if object.len() != 1 {
+        return None;
+    }
+    object
+        .get("keys")?
+        .as_array()?
+        .iter()
+        .map(EditKey::read)
+        .collect()
+}
+
+/// A whole number within `i64`: an integer, or a number with no fraction.
+fn whole(json: &Json) -> Option<i64> {
+    if let Some(whole) = json.as_i64() {
+        return Some(whole);
+    }
+    // `i64::MAX as f64` rounds up to 2^63, the first number past it.
+    let number = json.as_f64()?;
+    (number.fract() == 0.0 && number >= i64::MIN as f64 && number < i64::MAX as f64)
+        .then_some(number as i64)
+}
+
+/// Whether `a` and `b` write the same text: the same values, and each
+/// object's fields in the same order (which only a `preserve_order` build
+/// keeps).
+fn written_alike(a: &Json, b: &Json) -> bool {
+    match (a, b) {
+        (Json::Object(a), Json::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .zip(b)
+                    .all(|((a_name, a), (b_name, b))| a_name == b_name && written_alike(a, b))
+        }
+        (Json::Array(a), Json::Array(b)) => {
+            a.len() == b.len() && a.iter().zip(b).all(|(a, b)| written_alike(a, b))
+        }
+        _ => a == b,
+    }
+}
+
 /// A generated picture for `insert` and `overwrite`: a generator of the
 /// catalog (`title`, `solid`, `adjustment`) and its parameter values,
 /// static or keyframed as `set` takes them; the rest stay at their
@@ -292,7 +494,7 @@ pub enum EditOp {
 pub struct GeneratorSpec {
     pub fx: String,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub params: BTreeMap<String, Json>,
+    pub params: BTreeMap<String, EditParam>,
 }
 
 /// A frame rate as the editor gives one: `{"num": 30000, "den": 1001}`,

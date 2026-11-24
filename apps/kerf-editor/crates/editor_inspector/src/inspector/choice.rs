@@ -6,6 +6,7 @@ use super::catalog::{Kind, Param};
 use super::clip::{held, Field, Inspected};
 use super::values::words_of;
 use super::InspectorView;
+use editor_state::model::EditParam;
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, height, radius, space, text};
 use editor_ui::ui;
@@ -276,7 +277,7 @@ impl InspectorView {
         };
         let held = held(param, set.as_ref(), clip.at);
         if choice_sends(value, held.value.as_str().unwrap_or_default(), held.keyed) {
-            self.set_param(clip_id, field, json!(value), cx);
+            self.set_param(clip_id, field, EditParam::Value(json!(value)), cx);
         }
     }
 
@@ -469,7 +470,7 @@ impl InspectorView {
             .child(words_of(option))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                 if !selected {
-                    this.set_param(&clip_id, &key, json!(value), cx);
+                    this.set_param(&clip_id, &key, EditParam::Value(json!(value)), cx);
                 }
             }))
         });
