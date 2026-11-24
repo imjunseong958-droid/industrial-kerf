@@ -23,7 +23,7 @@ ffmpeg-next = { workspace = true, features = [
     "software-scaling",
 ] }
 log.workspace = true
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 rayon.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
