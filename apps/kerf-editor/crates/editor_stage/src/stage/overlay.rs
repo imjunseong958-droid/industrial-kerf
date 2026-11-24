@@ -4,22 +4,30 @@
 //! snapshot's timeline as the bridge sends it, so that they can be held to
 //! the compositor's own numbers.
 
-use editor_state::model::{Clip, Timeline, TimelineShow, TrackKind};
+use editor_state::model::{Clip, Timeline, TimelineShow, TrackKind, ViewParam};
 use kerf_bridge::event::{Finding, ViewMask};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
 /// A clip's properties by name, as the timeline says them: each a value, or its
 /// keyframes.
-pub type Props = Map<String, Value>;
+pub type Props = BTreeMap<String, ViewParam>;
 
 /// The text `name` of a clip's `props` says, when it says one.
 fn text_of<'a>(props: &'a Props, name: &str) -> Option<&'a str> {
-    props.get(name).and_then(Value::as_str)
+    props
+        .get(name)
+        .and_then(ViewParam::value)
+        .and_then(Value::as_str)
 }
 
 /// Whether `name` of a clip's `props` is on.
 fn is_on(props: &Props, name: &str) -> bool {
-    props.get(name).and_then(Value::as_bool) == Some(true)
+    props
+        .get(name)
+        .and_then(ViewParam::value)
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 /// A point: across, then down.
@@ -232,72 +240,13 @@ impl Projective {
     }
 }
 
-/// How far along a span `interp` is, `t` of the way across
-/// (kerf_model's `Interp::curve`).
-pub fn curve(interp: &str, t: f64) -> f64 {
-    match interp {
-        "linear" => t,
-        "hold" => 0.0,
-        "ease-in" => t * t,
-        "ease-out" => 1.0 - (1.0 - t) * (1.0 - t),
-        "ease" => t * t * (3.0 - 2.0 * t),
-        other => bezier(other, t).unwrap_or(t),
-    }
-}
-
-/// A curve written as its two handles, `x1,y1,x2,y2`.
-fn bezier(interp: &str, t: f64) -> Option<f64> {
-    let numbers: Vec<f64> = interp
-        .split(',')
-        .map(|part| part.trim().parse().ok())
-        .collect::<Option<_>>()?;
-    let [x1, y1, x2, y2] = numbers[..] else {
-        return None;
-    };
-    let cubic = |a: f64, b: f64, s: f64| {
-        let r = 1.0 - s;
-        3.0 * r * r * s * a + 3.0 * r * s * s * b + s * s * s
-    };
-    let (mut low, mut high) = (0.0, 1.0);
-    for _ in 0..40 {
-        let middle = (low + high) / 2.0;
-        if cubic(x1, x2, middle) < t {
-            low = middle;
-        } else {
-            high = middle;
-        }
-    }
-    Some(cubic(y1, y2, (low + high) / 2.0))
-}
-
 /// The number `name` of a clip's `props` at `clip_time` seconds into
 /// it: a value, or its keyframes between; `fallback` when it has none.
 pub fn property_at(props: &Props, name: &str, clip_time: f64, fallback: f64) -> f64 {
-    match props.get(name) {
-        Some(Value::Number(number)) => number.as_f64().unwrap_or(fallback),
-        Some(Value::Array(keys)) if !keys.is_empty() => {
-            let at = |index: usize| keys[index]["at"].as_f64().unwrap_or(0.0);
-            let value = |index: usize| keys[index]["value"].as_f64().unwrap_or(fallback);
-            if clip_time <= at(0) {
-                return value(0);
-            }
-            for index in 1..keys.len() {
-                if clip_time > at(index) {
-                    continue;
-                }
-                let span = at(index) - at(index - 1);
-                let t = if span > 0.0 {
-                    (clip_time - at(index - 1)) / span
-                } else {
-                    1.0
-                };
-                let interp = keys[index - 1]["interp"].as_str().unwrap_or("linear");
-                return value(index - 1) + (value(index) - value(index - 1)) * curve(interp, t);
-            }
-            value(keys.len() - 1)
-        }
-        _ => fallback,
-    }
+    props
+        .get(name)
+        .and_then(|param| param.number_at(clip_time))
+        .unwrap_or(fallback)
 }
 
 /// A clip's geometry at a moment: the compositor's `GEOMETRY`.
@@ -962,9 +911,9 @@ fn with_path(clip: &Clip, points: &[Pt], along: Option<f64>) -> Clip {
         .map(|(x, y)| format!("{x},{y}"))
         .collect::<Vec<_>>()
         .join(" ");
-    moved.props.insert("path".into(), json!(text));
+    moved.props.insert("path".into(), json!(text).into());
     if let Some(along) = along {
-        moved.props.insert("along".into(), json!(along));
+        moved.props.insert("along".into(), json!(along).into());
     }
     moved
 }
@@ -1544,7 +1493,10 @@ pub fn start_path(timeline: &Timeline, id: &str, position: f64) -> Option<Value>
         "path".into(),
         json!(path_text(&[(0.0, 0.0), (toward, 0.0)])),
     );
-    if props.get("along").is_none_or(Value::is_null) {
+    if props
+        .get("along")
+        .is_none_or(|along| along.value().is_some_and(Value::is_null))
+    {
         let last = (clip.duration_frames - 1).max(1);
         set.insert(
             "along".into(),

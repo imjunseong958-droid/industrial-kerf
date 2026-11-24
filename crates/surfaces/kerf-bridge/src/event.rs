@@ -50,11 +50,11 @@ pub mod workflow {
     };
 }
 pub use kerf_runtime::{
-    Author, AuthorKind, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry,
+    Author, AuthorKind, ErrorCode, Interp, PendingProposal, ProjectionStatus, ProposalEntry,
     ProposalFreshness, ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus,
-    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
-    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
-    ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewKey, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack,
+    ViewTrackKind, ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -1386,8 +1386,9 @@ pub enum CollabSync {
 /// `pushed`, `conflicts`, `renamed` and `summary` are always said; `branch` when the command
 /// switched to one, and left out otherwise; the rest as the command had them.
 ///
-/// Each field reads on its own: part of a report is kerfd's, merged in, and a field said
-/// otherwise than this build reads it reads as its default without taking the rest with it.
+/// Each field reads on its own: part of a report is kerfd's, read from what it said, and a
+/// field said otherwise than this build reads it reads as its default without taking the
+/// rest with it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SyncReport {
@@ -1428,6 +1429,19 @@ impl SyncReport {
     /// out when `None` would write as no `remote` at all.
     pub fn remote(&self) -> Option<&str> {
         self.rest.get("remote").and_then(Value::as_str)
+    }
+
+    /// Say the remote a publish pushed to, `None` when its address could not be read; see
+    /// [`remote`](Self::remote).
+    pub(crate) fn say_remote(&mut self, remote: Option<String>) {
+        self.rest.insert("remote".to_owned(), remote.into());
+    }
+
+    /// Say whether Git LFS files were downloaded. It is among the [`rest`](Self::rest), not a
+    /// field, so that where JSON keeps the order it was written in (the editor's build) it is
+    /// written after what kerfd said, as it always has been: a field would come before them.
+    pub(crate) fn say_downloaded(&mut self, downloaded: bool) {
+        self.rest.insert("downloaded".to_owned(), downloaded.into());
     }
 }
 
@@ -1556,7 +1570,7 @@ fn texts<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::E
 }
 
 /// A field as said, or its default when what was said is not of its type.
-fn as_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+pub(crate) fn as_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     deserializer: D,
 ) -> Result<T, D::Error> {
     Ok(serde_json::from_value(Value::deserialize(deserializer)?).unwrap_or_default())

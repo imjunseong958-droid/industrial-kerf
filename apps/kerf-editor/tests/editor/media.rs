@@ -1080,7 +1080,9 @@ fn name_of<'a>(session: &'a Session, clip: &str) -> Option<&'a str> {
 }
 
 fn prop_of(session: &Session, clip: &str, prop: &str) -> Option<Value> {
-    timeline_clip(session, clip).and_then(|clip| clip.props.get(prop).cloned())
+    timeline_clip(session, clip)
+        .and_then(|clip| clip.props.get(prop))
+        .map(|param| serde_json::to_value(param).expect("a value"))
 }
 
 fn choose_clip(cx: &mut VisualTestContext, session: &Entity<Session>, id: &str) {

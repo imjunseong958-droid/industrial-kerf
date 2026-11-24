@@ -114,7 +114,7 @@ fn program(mut timeline: Value) -> Timeline {
 
 /// A clip's props as a timeline holds them, from the JSON a test writes them in.
 fn props_of(props: &Value) -> Props {
-    props.as_object().cloned().expect("props by name")
+    serde_json::from_value(props.clone()).expect("props by name")
 }
 
 /// kerf-compose's `a_parents_motion_is_where_the_table_says`: each row is a

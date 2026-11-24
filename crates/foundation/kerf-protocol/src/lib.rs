@@ -24,6 +24,8 @@ mod view;
 pub use author::{Author, AuthorKind};
 pub use edit::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
 pub use error::{ErrorCode, RuntimeError};
+/// A keyframe's ease ([`ViewKey::interp`]), the model's own.
+pub use kerf_model::Interp;
 pub use named::Unnamed;
 pub use render::{RenderJob, RenderRange, StartRenderOptions, MAX_RENDER_RANGE_SECONDS};
 pub use request::{validate_actor, RequestEnvelope, RuntimeRequest, RuntimeResponse};
@@ -33,7 +35,7 @@ pub use state::{
 };
 pub use status::{ProjectionStatus, ProposalStatus, RenderCodec, RenderQuality, RenderStatus};
 pub use view::{
-    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
-    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
-    ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewKey, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack,
+    ViewTrackKind, ViewTransition,
 };

@@ -563,7 +563,7 @@ impl FocusRegion {
     ) -> Self {
         bind_keys(cx);
         let clip = &target.clip;
-        let old_crop = crop_box(&Value::Object(clip.props.clone()));
+        let old_crop = crop_box(&serde_json::to_value(&clip.props).unwrap_or_default());
         let start_at = if old_crop.is_none() {
             target.at
         } else {

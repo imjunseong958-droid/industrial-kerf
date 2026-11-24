@@ -91,8 +91,10 @@ pub fn colour_change(
         effect
             .params
             .iter()
-            .filter(|(_, value)| !value.is_array() && !value.is_object())
-            .map(|(key, value)| (key.clone(), value.clone()))
+            .filter_map(|(key, param)| {
+                let value = param.value()?;
+                (!value.is_array() && !value.is_object()).then(|| (key.clone(), value.clone()))
+            })
             .collect()
     };
     for effect in &now.effects {
