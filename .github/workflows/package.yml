@@ -162,7 +162,7 @@ jobs:
           if (-not $failure) { throw 'The installer check passed an installer that registers no kerf:// links' }
           if ($failure -notmatch 'kerf:// opens with') { throw "The installer check failed before it reached the links: $failure" }
           Write-Host "Failed, as it should: $failure"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-windows-x64
           path: |
@@ -184,7 +184,7 @@ jobs:
         run: rustup toolchain install
       - name: Collect the source of the package
         run: scripts/collect-kerf-windows-sources.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-windows-x64-source
           path: |
@@ -249,7 +249,7 @@ jobs:
           echo "Failed, as it should"
       - name: Collect the source of the app
         run: scripts/collect-kerf-macos-sources.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-macos
           path: |
@@ -258,7 +258,7 @@ jobs:
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-macos-source
           path: |
@@ -354,7 +354,7 @@ jobs:
         run: rm -rf target/release
       - name: Collect the source of the package
         run: scripts/collect-kerf-linux-sources.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-linux-x64
           path: |
@@ -367,7 +367,7 @@ jobs:
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-linux-x64-source
           path: |
