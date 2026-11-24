@@ -382,7 +382,8 @@ fn written_loosely(keys: &[EditKey], how: &[Loosely]) -> Json {
 }
 
 /// Keys an older client wrote in the looser ways kerfd has always read make the keyframes
-/// the same keys make written as `EditKey`s write themselves.
+/// the same keys make written as `EditKey`s write themselves; what it never read is refused,
+/// as it always was.
 #[test]
 fn keys_written_loosely_make_what_typed_keys_make() {
     let project = Project::new("loose-keys");
@@ -394,7 +395,9 @@ fn keys_written_loosely_make_what_typed_keys_make() {
          \x20 track V1 video\n\
          \x20   clip typed media=m1 src=0f at=0f dur=96f\n\
          \x20 track V2 video\n\
-         \x20   clip loose media=m1 src=0f at=0f dur=96f\n",
+         \x20   clip loose media=m1 src=0f at=0f dur=96f\n\
+         \x20 track V3 video\n\
+         \x20   clip title gen=title@1 at=0f dur=96f\n",
     )
     .unwrap();
     let daemon = start_daemon(&project.0);
@@ -464,6 +467,42 @@ fn keys_written_loosely_make_what_typed_keys_make() {
         prop_assert_eq!(typed, x_of("loose"), "{}", loose);
         Ok(())
     });
+    let keyframes = "`x` keyframes are {\"keys\": [{\"at\": <frame>, \"value\": <number>, \
+        \"interp\": linear|hold|ease-in|ease-out|ease}]}, at least one, at whole frames";
+    let key = json!({"at": 0, "value": 0.5, "interp": "linear"});
+    let refused = [
+        (json!({"keys": [{"at": 24.5, "value": 0.5}]}), keyframes),
+        (json!({"keys": [{"at": "1s", "value": 0.5}]}), keyframes),
+        (
+            json!({"keys": [{"at": 1_073_741_825, "value": 0.5}]}),
+            keyframes,
+        ),
+        (json!({"keys": [{"at": i64::MIN, "value": 0.5}]}), keyframes),
+        (json!({"keys": [{"value": 0.5}]}), keyframes),
+        (json!({"keys": [{"at": 0}]}), keyframes),
+        (json!({"keys": [{"at": 0, "value": null}]}), keyframes),
+        (json!({"keys": [{"at": 0, "value": "half"}]}), keyframes),
+        (
+            json!({"keys": [{"at": 0, "value": 0.5, "interp": 3}]}),
+            keyframes,
+        ),
+        (
+            json!({"keys": [{"at": 0, "value": 0.5, "interp": "wobble"}]}),
+            keyframes,
+        ),
+        (json!({"keys": [key, 0]}), keyframes),
+        (json!({"keys": [key], "loop": true}), keyframes),
+        (json!({"keys": key}), keyframes),
+        (json!({"keys": []}), keyframes),
+        (json!("half"), "`x` expects a number"),
+    ];
+    for (x, message) in refused {
+        let response = ask(json!([{"op": "set", "clip": "loose", "props": {"x": x}}]));
+        assert_eq!(response["error"]["code"], "INVALID_EDIT", "{x}: {response}");
+        assert_eq!(response["error"]["message"], message, "{x}");
+    }
+    let still = ask(json!([{"op": "set", "clip": "title", "props": {"weight": {"keys": [key]}}}]));
+    assert_eq!(still["error"]["message"], "`weight` cannot be animated");
     stop_daemon(daemon);
     outcome.unwrap();
 }
