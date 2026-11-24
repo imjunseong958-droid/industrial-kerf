@@ -5,6 +5,7 @@ use gpui::{
     div, point, px, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     Modifiers, ParentElement, Render, Styled, TestAppContext, VisualTestContext, Window,
 };
+use kerf_bridge::event::RenderQuality;
 use kerf_editor::artwork::{
     fill_gaps, frame_index, parse_pam_stream, pixel_format_has_alpha, strip_frame_count,
     strip_height, waveform_columns, waveform_raise, Artwork, Bucket, PeakReducer, Peaks,
@@ -1288,30 +1289,38 @@ fn every_way_of_exporting_the_master_sends_where_the_project_keeps_it() {
     let mut prefs = Prefs::default();
     // Nothing kept: deliveries/, as the toolbar sent it before.
     assert_eq!(
-        request(Some(project), &prefs, "master"),
-        kerf_editor::delivery::export_request(Some(project), "master")
+        request(Some(project), &prefs, RenderQuality::Master),
+        kerf_editor::delivery::export_request(Some(project), RenderQuality::Master)
     );
     prefs.master_outputs.insert(
         kerf_editor::prefs::project_key(project),
         keeps(Some("masters"), Some("Harbour final"), Some("h264")),
     );
     assert_eq!(
-        request(Some(project), &prefs, "master"),
+        request(Some(project), &prefs, RenderQuality::Master),
         command(
             json!({"type": "export", "quality": "master", "codec": "h264", "output": "masters", "name": "Harbour final"})
         )
     );
     // A review copy, a full render and a preview are not the master's.
-    for quality in ["review", "full", "preview"] {
+    for quality in [
+        RenderQuality::Review,
+        RenderQuality::Full,
+        RenderQuality::Preview,
+    ] {
         assert_eq!(
-            request(Some(project), &prefs, quality),
+            request(Some(project), &prefs, quality.clone()),
             kerf_editor::delivery::export_request(Some(project), quality)
         );
     }
     // Another project keeps nothing.
     assert_eq!(
-        serde_json::to_value(request(Some(Path::new("/films/atlas")), &prefs, "master")).unwrap()
-            ["output"],
+        serde_json::to_value(request(
+            Some(Path::new("/films/atlas")),
+            &prefs,
+            RenderQuality::Master
+        ))
+        .unwrap()["output"],
         "deliveries/"
     );
 }
@@ -1422,7 +1431,7 @@ proptest! {
         // With nothing kept, the toolbar's request is the master's.
         prop_assert_eq!(
             master_request(Some(&path), None),
-            kerf_editor::delivery::export_request(Some(&path), "master")
+            kerf_editor::delivery::export_request(Some(&path), RenderQuality::Master)
         );
     }
 }
@@ -1591,7 +1600,7 @@ proptest! {
 fn a_master_and_a_draft_go_into_deliveries_named_after_the_folder() {
     let project = Path::new("/films/Atlas");
     assert_eq!(
-        export_request(Some(project), "master"),
+        export_request(Some(project), RenderQuality::Master),
         command(
             json!({"type": "export", "quality": "master", "output": DELIVERIES, "name": "Atlas_master"})
         )
@@ -1605,11 +1614,11 @@ fn a_master_and_a_draft_go_into_deliveries_named_after_the_folder() {
     );
     // Other qualities, and a project with no folder name, go where kerfd puts them.
     assert_eq!(
-        export_request(Some(project), "preview"),
+        export_request(Some(project), RenderQuality::Preview),
         command(json!({"type": "export", "quality": "preview"}))
     );
     assert_eq!(
-        export_request(None, "review"),
+        export_request(None, RenderQuality::Review),
         command(json!({"type": "export", "quality": "review", "codec": "h264"}))
     );
 }
@@ -1617,7 +1626,7 @@ fn a_master_and_a_draft_go_into_deliveries_named_after_the_folder() {
 #[test]
 fn the_export_button_names_its_quality_and_why_it_cannot_render() {
     assert_eq!(Quality::default(), Quality::Master);
-    assert_eq!(Quality::Master.wire(), "master");
+    assert_eq!(Quality::Master.wire(), RenderQuality::Master);
     assert_eq!(Quality::Draft.name(), "Draft");
     assert_eq!(Quality::Master.makes(), "ProRes 422 HQ");
     assert_eq!(export_tip(Quality::Master, None), "Export master");
@@ -1633,7 +1642,10 @@ proptest! {
     fn every_delivery_is_the_folders_name_and_its_kind(folder in "[A-Za-z0-9 _-]{1,24}") {
         prop_assume!(!folder.trim().is_empty());
         let project = PathBuf::from("/work").join(&folder);
-        for (quality, suffix) in [("master", "master"), ("review", "draft")] {
+        for (quality, suffix) in [
+            (RenderQuality::Master, "master"),
+            (RenderQuality::Review, "draft"),
+        ] {
             let request = serde_json::to_value(export_request(Some(&project), quality)).unwrap();
             prop_assert_eq!(request["output"].as_str(), Some(DELIVERIES));
             let name = format!("{folder}_{suffix}");

@@ -74,7 +74,7 @@ pub fn settled_words(accepted: bool, revision: Option<u64>, ago: Option<Duration
 /// `mcp`), else how many there are.
 pub fn strays_note(strays: &[Proposal]) -> String {
     if let [only] = strays {
-        let agent = only.author.kind == "mcp";
+        let agent = only.author.kind == kerf_bridge::event::AuthorKind::Mcp;
         let name = only.author.name.trim();
         if agent && !name.is_empty() {
             return format!("{name} proposed this over MCP.");

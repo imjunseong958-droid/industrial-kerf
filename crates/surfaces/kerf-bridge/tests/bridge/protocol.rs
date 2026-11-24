@@ -10,7 +10,7 @@
 //! FFmpeg.
 
 use kerf_bridge::Bridge;
-use kerf_runtime::{Author, RuntimeClient};
+use kerf_runtime::{Author, AuthorKind, RuntimeClient};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -448,7 +448,7 @@ fn proposals_wait_side_by_side_and_one_previews_in_place_of_the_program() {
     let base = client.get_state().unwrap().revision;
     let agent = Author {
         id: Some("codex".into()),
-        ..Author::new("mcp", "Codex")
+        ..Author::new(AuthorKind::Mcp, "Codex")
     };
     let kerf = client
         .stage_script_proposal_by(
@@ -573,7 +573,7 @@ fn a_stale_proposal_is_brought_forward_or_refused_by_the_clip_that_changed() {
     let base = client.get_state().unwrap().revision;
     let agent = Author {
         id: Some("codex".into()),
-        ..Author::new("mcp", "Codex")
+        ..Author::new(AuthorKind::Mcp, "Codex")
     };
     // A marker where the clips end.
     let staged = client

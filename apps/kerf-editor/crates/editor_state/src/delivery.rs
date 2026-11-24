@@ -10,13 +10,12 @@ use std::path::Path;
 /// Where Finish's deliveries go, inside the project.
 pub const DELIVERIES: &str = "deliveries/";
 
-/// The `export` request for `quality` in `project`. A master (`master`)
-/// or a review copy (`review`, H.264) goes into the project's deliveries/,
-/// named after its folder: `<folder>_master`, `<folder>_draft`. Another
-/// quality (`full`, `preview`), or a project with no folder name, goes
-/// where kerfd puts it, under its own name.
-pub fn export_request(project: Option<&Path>, quality: &str) -> Command {
-    let quality = RenderQuality::from_name(quality);
+/// The `export` request for `quality` in `project`. A master or a review
+/// copy (H.264) goes into the project's deliveries/, named after its
+/// folder: `<folder>_master`, `<folder>_draft`. Another quality (a full
+/// render, a preview), or a project with no folder name, goes where kerfd
+/// puts it, under its own name.
+pub fn export_request(project: Option<&Path>, quality: RenderQuality) -> Command {
     let folder = project
         .and_then(Path::file_name)
         .map(|name| name.to_string_lossy().into_owned())
@@ -53,20 +52,20 @@ impl Quality {
     pub const ALL: [Quality; 2] = [Quality::Master, Quality::Draft];
 
     /// As the bridge's `export` takes it.
-    pub fn wire(self) -> &'static str {
+    pub fn wire(self) -> RenderQuality {
         match self {
-            Quality::Master => "master",
-            Quality::Draft => "review",
+            Quality::Master => RenderQuality::Master,
+            Quality::Draft => RenderQuality::Review,
         }
     }
 
     /// As File ▸ Export… asks the registry's `file.export` for it: the
-    /// full-size render (`full`) for Master, `preview` for Draft, both
-    /// where kerfd puts them rather than into deliveries/.
-    pub fn file_wire(self) -> &'static str {
+    /// full-size render for Master, a preview for Draft, both where kerfd
+    /// puts them rather than into deliveries/.
+    pub fn file_wire(self) -> RenderQuality {
         match self {
-            Quality::Master => "full",
-            Quality::Draft => "preview",
+            Quality::Master => RenderQuality::Full,
+            Quality::Draft => RenderQuality::Preview,
         }
     }
 
@@ -151,13 +150,12 @@ pub fn export_of(command: &Command) -> Option<&ExportRequest> {
 }
 
 /// The `export` request the toolbar's Export, ⌘E (`export.master`) and
-/// Finish send for `quality` (`master`, `review`, `full`, `preview`) in
-/// `project`: a master as [`master_request`] makes it, with what `prefs`
-/// keep for the project; anything else as
+/// Finish send for `quality` in `project`: a master as [`master_request`]
+/// makes it, with what `prefs` keep for the project; anything else as
 /// [`export_request`] makes it. `editor_finish::export::render_master` sends
 /// it, and `Session::export` is to.
-pub fn request(project: Option<&Path>, prefs: &Prefs, quality: &str) -> Command {
-    if quality == Quality::Master.wire() {
+pub fn request(project: Option<&Path>, prefs: &Prefs, quality: RenderQuality) -> Command {
+    if quality == RenderQuality::Master {
         let kept = project.and_then(|project| prefs.master_output(project));
         master_request(project, kept)
     } else {

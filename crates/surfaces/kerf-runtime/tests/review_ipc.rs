@@ -7,7 +7,7 @@
 #![cfg(any(unix, windows))]
 
 use kerf_runtime::{
-    Author, EditOp, RenderQuality, RuntimeClient, StartRenderOptions, StateSnapshot,
+    Author, AuthorKind, EditOp, RenderQuality, RuntimeClient, StartRenderOptions, StateSnapshot,
 };
 use serde_json::json;
 use std::fs;
@@ -88,7 +88,7 @@ fn pending(state: &StateSnapshot) -> Vec<&kerf_runtime::ProposalEntry> {
 fn agent() -> Author {
     Author {
         id: Some("codex".into()),
-        ..Author::new("mcp", "Codex")
+        ..Author::new(AuthorKind::Mcp, "Codex")
     }
 }
 

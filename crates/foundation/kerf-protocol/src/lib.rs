@@ -21,7 +21,7 @@ mod state;
 mod status;
 mod view;
 
-pub use author::{Author, AUTHOR_KINDS};
+pub use author::{Author, AuthorKind};
 pub use edit::{EditOp, GeneratorSpec, MaskOutline, RateSpec, TrimSide};
 pub use error::{ErrorCode, RuntimeError};
 pub use named::Unnamed;

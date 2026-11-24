@@ -1,7 +1,7 @@
 //! The clock a proposal's and a revision's records are stamped with, beside who staged a
 //! proposal ([`Author`]).
 
-pub use kerf_protocol::{Author, AUTHOR_KINDS};
+pub use kerf_protocol::{Author, AuthorKind};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Now, in RFC 3339 (UTC, microseconds). Later calls in one process always

@@ -45,10 +45,10 @@ pub mod workflow {
     };
 }
 pub use kerf_runtime::{
-    Author, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness,
-    ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus, TimelineView,
-    ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey, ViewSequence,
-    ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    Author, AuthorKind, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry,
+    ProposalFreshness, ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus,
+    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
+    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.

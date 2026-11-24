@@ -37,7 +37,7 @@ pub use qc_full::{check_full, check_full_with, QcLimits, FULL_ROWS};
 pub use text_lint::{CAPTION_GAP_FRAMES, READING_SPEED, SHORT_CAPTION_SIXTHS, TITLE_SAFE};
 
 use kerf_agent::{AgentTool, ToolMap};
-use kerf_runtime::{Author, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease};
+use kerf_runtime::{Author, AuthorKind, ErrorCode, RuntimeClient, RuntimeError, RuntimeLease};
 use kerf_skills::{load_skills_with_bundled, Skill};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -818,7 +818,7 @@ pub fn client_author(name: Option<&str>) -> Author {
         .find(|(prefix, _)| key.starts_with(prefix))
         .map(|(_, name)| (*name).to_owned());
     let mut author = Author::new(
-        "mcp",
+        AuthorKind::Mcp,
         known
             .or_else(|| given.clone())
             .unwrap_or_else(|| "MCP client".to_owned()),
