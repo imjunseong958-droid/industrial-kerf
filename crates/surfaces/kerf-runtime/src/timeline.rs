@@ -1,6 +1,6 @@
 //! Building the timeline view ([`TimelineView`]) editor snapshots carry, and
 //! the catalog of effects in the same terms: parameter definitions as
-//! [`ViewParamDef`]s, and values as JSON.
+//! [`ViewParamDef`]s (their defaults JSON), and values as [`ViewParam`]s.
 
 use crate::{
     TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewKey, ViewMarker, ViewMask, ViewOutline,
