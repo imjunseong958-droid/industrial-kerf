@@ -120,11 +120,6 @@ impl Workspace {
         let states = self.command_states(cx);
         let checked = self.checked_commands(cx);
         let (_, _, signed_in) = sidebar::account_of(session, cx);
-        // Why the last sync failed, until one succeeds: View ▸ Sync says so.
-        let collab = sidebar::with_sync_failure(
-            session.state.collab.as_ref(),
-            self.collab.read(cx).failure(),
-        );
         sidebar::app_rows(&sidebar::AppMenuInput {
             signed_in,
             keymap,
@@ -133,7 +128,9 @@ impl Workspace {
             states: &states,
             checked: &checked,
             zoom: self.stage.read(cx).zoom(),
-            collab: collab.as_ref(),
+            collab: session.state.collab.as_ref(),
+            // Why the last sync failed, until one succeeds: View ▸ Sync says so.
+            sync_failure: self.collab.read(cx).failure(),
             revision: session.revision(),
             // Only macOS draws a menu bar.
             menu_bar: cfg!(target_os = "macos"),

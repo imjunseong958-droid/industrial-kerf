@@ -10,6 +10,7 @@ use editor_state::prefs::Keymap;
 use editor_ui::icons::Icon;
 use editor_ui::ui;
 use gpui::SharedString;
+use kerf_bridge::event::CollabStatus;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -154,9 +155,11 @@ pub struct AppMenuInput<'a> {
     pub checked: &'a std::collections::BTreeSet<String>,
     /// The viewer's zoom (0 fits).
     pub zoom: f32,
-    /// The project's Git standing (the last `collab` event's `status`),
-    /// with why the last sync failed under [`SYNC_FAILURE`] when it did.
-    pub collab: Option<&'a Value>,
+    /// The project's Git standing (the last `collab` event's `status`).
+    pub collab: Option<&'a CollabStatus>,
+    /// Why the last sync failed, until one succeeds: the Sync submenu says
+    /// so ([`sync_problem`]).
+    pub sync_failure: Option<&'a str>,
     pub revision: u64,
     /// The system draws the registry's menus in a menu bar (macOS):
     /// they are not repeated here.
@@ -276,15 +279,14 @@ fn view_rows(input: &AppMenuInput) -> Vec<AppRow> {
 
 /// What a sync's standing says over its rows: the revision, then how far
 /// it is from its upstream ("Revision 22 · 1 commit to pull").
-pub fn sync_summary(collab: Option<&Value>, revision: u64) -> String {
+pub fn sync_summary(collab: Option<&CollabStatus>, revision: u64) -> String {
     let revision = format!("Revision {revision}");
-    let Some(status) = collab.filter(|status| status["repository"].as_bool() == Some(true)) else {
+    let Some(status) = collab.filter(|status| status.git.repository) else {
         return format!("{revision} · not shared yet");
     };
-    let count = |name: &str| status[name].as_i64().unwrap_or(0).max(0);
-    let (behind, ahead) = (count("behind"), count("ahead"));
+    let (behind, ahead) = (status.git.behind, status.git.ahead);
     let mut parts = vec![revision];
-    let plural = |n: i64, one: &str, many: &str| {
+    let plural = |n: u32, one: &str, many: &str| {
         if n == 1 {
             one.to_owned()
         } else {
@@ -303,31 +305,16 @@ pub fn sync_summary(collab: Option<&Value>, revision: u64) -> String {
     parts.join(" · ")
 }
 
-/// Where the window puts why the last sync failed (until one succeeds)
-/// in the standing it gives the app's menu ([`AppMenuInput::collab`]):
-/// the Sync submenu says so ([`with_sync_failure`]).
-pub const SYNC_FAILURE: &str = "syncFailure";
-
-/// `collab` (the project's Git standing) with why the last sync failed,
-/// when it did, for the app's menu ([`SYNC_FAILURE`]).
-pub fn with_sync_failure(collab: Option<&Value>, failure: Option<&str>) -> Option<Value> {
-    let mut status = collab.cloned()?;
-    if let (Some(failure), Some(fields)) = (failure, status.as_object_mut()) {
-        fields.insert(SYNC_FAILURE.to_owned(), Value::from(failure));
-    }
-    Some(status)
-}
-
 /// What the Sync submenu warns of under its summary: "A merge is
 /// unfinished; finish it with git" while one is, else "Sync failed: <why>"
-/// after a sync that failed; none when nothing went wrong.
-pub fn sync_problem(collab: Option<&Value>) -> Option<String> {
+/// after a sync that `failure` says failed; none when nothing went wrong,
+/// or before the project's Git standing (`collab`) is known.
+pub fn sync_problem(collab: Option<&CollabStatus>, failure: Option<&str>) -> Option<String> {
     let status = collab?;
-    if status["conflicted"].as_bool() == Some(true) {
+    if status.git.conflicted {
         return Some("A merge is unfinished; finish it with git".to_owned());
     }
-    status[SYNC_FAILURE]
-        .as_str()
+    failure
         .filter(|failure| !failure.trim().is_empty())
         .map(|failure| format!("Sync failed: {failure}"))
 }
@@ -337,12 +324,10 @@ pub fn sync_problem(collab: Option<&Value>) -> Option<String> {
 /// Request…. A project that is no repository yet offers Publish only.
 fn sync_rows(input: &AppMenuInput) -> Vec<AppRow> {
     let mut rows = vec![AppRow::note(sync_summary(input.collab, input.revision))];
-    let status = input
-        .collab
-        .filter(|status| status["repository"].as_bool() == Some(true));
+    let status = input.collab.filter(|status| status.git.repository);
     // What went wrong, when something did: an unfinished merge, else why
     // the last sync failed.
-    if let Some(problem) = sync_problem(input.collab) {
+    if let Some(problem) = sync_problem(input.collab, input.sync_failure) {
         rows.push(AppRow {
             icon: Some(Icon::Dot),
             // All of it, where the row cuts it to one line.
@@ -354,16 +339,14 @@ fn sync_rows(input: &AppMenuInput) -> Vec<AppRow> {
         rows.push(command_row(input, "collab.publish", None).separated());
         return rows;
     };
-    let current = status["branch"].as_str().unwrap_or_default().to_owned();
+    let current = status.git.branch.clone().unwrap_or_default();
     let mut branches: Vec<String> = Vec::new();
     if !current.is_empty() {
         branches.push(current.clone());
     }
-    for branch in status["branches"].as_array().into_iter().flatten() {
-        if let Some(branch) = branch.as_str().filter(|branch| !branch.is_empty())
-            && !branches.iter().any(|known| known == branch)
-        {
-            branches.push(branch.to_owned());
+    for branch in &status.git.branches {
+        if !branch.is_empty() && !branches.contains(branch) {
+            branches.push(branch.clone());
         }
     }
     let switch_reason = editor_session::palette::unavailable(input.states, "collab.switchBranch")
@@ -433,15 +416,14 @@ fn registry_rows(input: &AppMenuInput, menu: &str) -> Vec<AppRow> {
 fn other_branches(input: &AppMenuInput) -> Vec<AppRow> {
     let current = input
         .collab
-        .and_then(|status| status["branch"].as_str())
+        .and_then(|status| status.git.branch.as_deref())
         .unwrap_or_default();
     let mut rows: Vec<AppRow> = Vec::new();
     for branch in input
         .collab
-        .and_then(|status| status["branches"].as_array())
         .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
+        .flat_map(|status| &status.git.branches)
+        .map(String::as_str)
         .filter(|branch| !branch.is_empty() && *branch != current)
     {
         if !rows.iter().any(|row| row.words == branch) {

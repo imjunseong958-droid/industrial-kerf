@@ -10,7 +10,6 @@ use editor_ui::ui;
 use gpui::{div, prelude::*, px, AnyElement, Context, ElementId, Rgba, SharedString};
 use kerf_bridge::event::{CheckSummary, Finding, Row, Severity};
 use kerf_bridge::Command;
-use serde_json::{json, Value};
 
 /// The most findings listed; the rest are counted.
 const FINDINGS_MOST: usize = 300;
@@ -21,8 +20,6 @@ pub(super) struct Report {
     revision: u64,
     valid: bool,
     pub(super) summary: CheckSummary,
-    /// The summary as the bridge writes it, for Export's Preflight.
-    pub(super) summary_value: Value,
     findings: Vec<Finding>,
 }
 
@@ -92,7 +89,6 @@ impl Report {
             revision,
             valid,
             summary: summary.clone(),
-            summary_value: serde_json::to_value(summary).unwrap_or_default(),
             findings,
         }
     }
@@ -278,11 +274,11 @@ impl FinishView {
         };
         let seek = row.at.filter(|_| !row.passed);
         let ask = (!row.passed && can_ask).then(|| {
-            let words: SharedString = ask_text(&json!({
-                "name": row.name(),
-                "value": row.value,
-                "limit": row.limit,
-            }))
+            // Named as the row shows it: by its code when it has no name.
+            let words: SharedString = ask_text(&Row {
+                name: row.name().to_owned(),
+                ..row.clone()
+            })
             .into();
             ui::button(ElementId::named_usize("finish-row-ask", index), "Ask Kerf")
                 .small()

@@ -4,13 +4,12 @@
 
 use super::keys::{OpenMenu, ITEM};
 use super::{SidebarEvent, SidebarView};
-use editor_session::session::Session;
+use editor_session::session::{Cloud, Session};
 use editor_state::prefs::Provider;
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, layout, text};
 use editor_ui::ui::{self, icon_button};
 use gpui::{div, prelude::*, px, App, ClickEvent, Context, MouseDownEvent};
-use serde_json::Value;
 
 /// Who chat runs on, as the account at the sidebar's foot says it: the Kerf
 /// account's email and plan while signed in; else Claude Code on "Your
@@ -18,17 +17,15 @@ use serde_json::Value;
 /// "Set up in Settings" while there is no key.
 pub fn account_line(
     provider: Provider,
-    cloud: Option<&Value>,
+    cloud: Option<&Cloud>,
     has_key: bool,
     model: &str,
 ) -> (String, String) {
     if editor_launcher::settings::account_status(cloud).sign_out {
-        let account = cloud.map(|cloud| &cloud["account"]);
-        let email = account
-            .and_then(|account| account["email"].as_str())
-            .unwrap_or_default();
+        let account = cloud.and_then(|cloud| cloud.account.as_ref());
+        let email = account.map_or("", |account| account.email.as_str());
         let plan = account
-            .and_then(|account| account["plan"].as_str())
+            .map(|account| account.plan.as_str())
             .filter(|plan| !plan.trim().is_empty())
             .map_or_else(|| "Kerf account".to_owned(), |plan| format!("{plan} plan"));
         return (email.to_owned(), plan);

@@ -10,7 +10,9 @@ use editor_state::prefs::{Prefs, Provider};
 use editor_state::store::{Change, EditorState};
 use editor_ui::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, RenderImage, Task, Window};
-use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus, RenderQuality};
+use kerf_bridge::event::{
+    AgentUpdate, CloudAccess, CloudAccount, Export, ExportStatus, PreviewStatus, RenderQuality,
+};
 use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1960,10 +1962,10 @@ impl Session {
                 "durationFrames": clip.duration_frames,
             });
         }
-        if let Some(collab) = &self.state.collab {
-            context["collab"] = collab.clone();
+        if let Some(Ok(mut collab)) = self.state.collab.as_ref().map(serde_json::to_value) {
             // Consolidate Media follows the media outside the project folder.
-            context["collab"]["externalMedia"] = json!(self.state.media_status.external.len());
+            collab["externalMedia"] = json!(self.state.media_status.external.len());
+            context["collab"] = collab;
         }
         // The pinned card's proposal, else (none pinned, or one gone since)
         // the newest pending one.
@@ -2155,14 +2157,14 @@ impl Session {
     /// kept and none in the environment, Kerf's account standing (`cloud`,
     /// the last `cloud` event's `access`, `unavailable` until one is
     /// heard). None when it can.
-    pub fn ai_access(&self, cloud: Option<&Value>) -> Option<String> {
+    pub fn ai_access(&self, cloud: Option<&Cloud>) -> Option<String> {
         match self.prefs.provider {
             Provider::ClaudeCode => None,
             Provider::Cloud => {
-                let access = cloud
-                    .and_then(|cloud| cloud["access"].as_str())
-                    .unwrap_or("unavailable");
-                (access != "ready").then(|| access.to_owned())
+                let access = cloud.map_or(CloudAccess::Unavailable, |cloud| cloud.access);
+                // By its name on the wire (`signedOut`), as the registry takes it.
+                (access != CloudAccess::Ready)
+                    .then(|| json!(access).as_str().unwrap_or_default().to_owned())
             }
             provider => self.api_key(provider).is_none().then(|| "noKey".into()),
         }
@@ -2171,7 +2173,7 @@ impl Session {
     /// Each registry command's id with why it is unavailable now, or null
     /// when it is (`kerf_bridge::commands_states`). `cloud` is the last
     /// `cloud` event heard, for Ask's reason.
-    pub fn command_states(&self, cloud: Option<&Value>) -> Value {
+    pub fn command_states(&self, cloud: Option<&Cloud>) -> Value {
         let mut context = self.command_context();
         if let Some(access) = self.ai_access(cloud) {
             context["aiAccess"] = json!(access);
@@ -2857,20 +2859,47 @@ pub fn started_kerfd(cx: &App) -> Option<PathBuf> {
     cx.try_global::<StartedKerfd>().map(|kerfd| kerfd.0.clone())
 }
 
-/// The last `cloud` event any window heard: the person's Kerf account.
-struct Cloud(Value);
+/// The person's Kerf account, as the last `cloud` event any window heard
+/// says it: whether Kerf can be asked, the account signed in to, and what
+/// went wrong when something did.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cloud {
+    pub access: CloudAccess,
+    pub account: Option<CloudAccount>,
+    pub message: Option<String>,
+}
 
 impl Global for Cloud {}
 
-/// What was last heard of the person's Kerf account (`cloud {access,
-/// account?, message?}`); None before anything is.
-pub fn cloud(cx: &App) -> Option<&Value> {
-    cx.try_global::<Cloud>().map(|cloud| &cloud.0)
+impl Cloud {
+    /// What a `cloud` event says of the account; None for another event.
+    pub fn of(event: &Event) -> Option<Self> {
+        match event {
+            Event::Cloud {
+                access,
+                account,
+                message,
+            } => Some(Self {
+                access: *access,
+                account: account.clone(),
+                message: message.clone(),
+            }),
+            _ => None,
+        }
+    }
 }
 
-/// Keeps a `cloud` event for every window.
-pub fn hear_cloud(event: &Value, cx: &mut App) {
-    cx.set_global(Cloud(event.clone()));
+/// What was last heard of the person's Kerf account; None before anything
+/// is.
+pub fn cloud(cx: &App) -> Option<&Cloud> {
+    cx.try_global::<Cloud>()
+}
+
+/// Keeps a `cloud` event for every window; another event changes nothing.
+pub fn hear_cloud(event: &Event, cx: &mut App) {
+    if let Some(cloud) = Cloud::of(event) {
+        cx.set_global(cloud);
+    }
 }
 
 /// At most `most` bytes of `text`, cut at a character boundary.

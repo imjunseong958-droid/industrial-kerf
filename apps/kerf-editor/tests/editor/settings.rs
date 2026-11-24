@@ -1,5 +1,7 @@
 //! The Settings window: its pages, providers and keys as it shows them.
 
+use kerf_bridge::event::{CloudAccess, CloudAccount};
+use kerf_editor::session::Cloud;
 use kerf_editor::settings::{
     account_status, cursor_imports, mcp_server_config, model_summary, models_opener, read_failure,
     releases_url, validate_mcp_config, McpClient,
@@ -141,27 +143,41 @@ fn the_account_says_where_it_stands_and_what_can_be_done() {
     let unheard = account_status(None);
     assert!(unheard.words.starts_with("Not available yet"));
     assert!(!unheard.sign_in && !unheard.sign_out);
-    let signed_out = account_status(Some(&json!({"access": "signedOut"})));
+    let heard = |access, account: Option<(&str, u64)>, message: Option<&str>| Cloud {
+        access,
+        account: account.map(|(plan, credits)| CloudAccount {
+            email: "ed@kerf.dev".into(),
+            plan: plan.into(),
+            ai: true,
+            credits: Some(credits),
+        }),
+        message: message.map(str::to_owned),
+    };
+    let signed_out = account_status(Some(&heard(CloudAccess::SignedOut, None, None)));
     assert_eq!(
         signed_out.words,
         "Signed out. Paste your Kerf sign-in token to sign in"
     );
     assert!(signed_out.sign_in && !signed_out.sign_out);
-    let ready = account_status(Some(&json!({"access": "ready",
-        "account": {"email": "ed@kerf.dev", "plan": "Pro", "ai": true, "credits": 41}})));
+    let ready = account_status(Some(&heard(CloudAccess::Ready, Some(("Pro", 41)), None)));
     assert_eq!(
         ready.words,
         "Signed in as ed@kerf.dev · Pro plan · 41 requests left"
     );
     assert!(ready.sign_out && !ready.sign_in);
-    let spent = account_status(Some(&json!({"access": "outOfCredits",
-        "account": {"email": "ed@kerf.dev", "plan": "Free", "ai": true, "credits": 0}})));
+    let spent = account_status(Some(&heard(
+        CloudAccess::OutOfCredits,
+        Some(("Free", 0)),
+        None,
+    )));
     assert!(spent
         .words
         .ends_with("\nYou've used this period's requests"));
-    let away = account_status(Some(
-        &json!({"access": "unreachable", "message": "timed out"}),
-    ));
+    let away = account_status(Some(&heard(
+        CloudAccess::Unreachable,
+        None,
+        Some("timed out"),
+    )));
     assert_eq!(away.words, "Kerf can't be reached right now\ntimed out");
     assert!(away.sign_in);
 }

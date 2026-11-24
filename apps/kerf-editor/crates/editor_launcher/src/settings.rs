@@ -12,7 +12,7 @@
 
 use crate::launcher::{ago, app_icon, field, home_relative};
 use editor_session::commands::{self, RunCommand};
-use editor_session::session::{BridgeEvent, Session};
+use editor_session::session::{BridgeEvent, Cloud, Session};
 use editor_state::prefs::{ApiMode, Keymap, Permissions, Provider, CLAUDE_CODE_MODELS};
 use editor_ui::icons::Icon;
 use editor_ui::input::{InputEvent, TextInput};
@@ -24,6 +24,7 @@ use gpui::{
     Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
     Keystroke, MouseButton, ScrollHandle, SharedString, Subscription, Task, Window,
 };
+use kerf_bridge::event::CloudAccess;
 use kerf_bridge::{Command, Event};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -352,10 +353,7 @@ impl SettingsView {
     fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
         match event {
             Event::Cloud { .. } => {
-                editor_session::session::hear_cloud(
-                    &serde_json::to_value(event).unwrap_or_default(),
-                    cx,
-                );
+                editor_session::session::hear_cloud(event, cx);
                 self.signing = false;
                 cx.notify();
             }
@@ -2136,47 +2134,47 @@ pub struct AccountStatus {
     pub sign_out: bool,
 }
 
-/// What the last `cloud {access, account?, message?}` event says of the
-/// account; None before one is heard.
-pub fn account_status(cloud: Option<&Value>) -> AccountStatus {
-    let access = cloud
-        .and_then(|cloud| cloud["access"].as_str())
-        .unwrap_or("");
-    let account = cloud.map(|cloud| &cloud["account"]);
-    let email = account
-        .and_then(|account| account["email"].as_str())
-        .unwrap_or("");
-    let available = !access.is_empty() && access != "unavailable";
-    let signed_in = available && !email.is_empty() && access != "signedOut";
+/// What the last `cloud` event says of the account (`cloud`, None before
+/// one is heard).
+pub fn account_status(cloud: Option<&Cloud>) -> AccountStatus {
+    let access = cloud.map(|cloud| cloud.access);
+    let account = cloud.and_then(|cloud| cloud.account.as_ref());
+    let email = account.map_or("", |account| account.email.as_str());
+    let available = access.is_some_and(|access| access != CloudAccess::Unavailable);
+    let signed_in = available && !email.is_empty() && access != Some(CloudAccess::SignedOut);
     let mut words = if !available {
         "Not available yet. Chat can run on your own API key or Claude Code".to_owned()
     } else if !signed_in {
-        if access == "unreachable" {
+        if access == Some(CloudAccess::Unreachable) {
             "Kerf can't be reached right now".to_owned()
         } else {
             "Signed out. Paste your Kerf sign-in token to sign in".to_owned()
         }
     } else {
         let plan = account
-            .and_then(|account| account["plan"].as_str())
+            .map(|account| account.plan.as_str())
             .filter(|plan| !plan.is_empty())
             .unwrap_or("Kerf");
         let mut words = format!("Signed in as {email} · {plan} plan");
-        if let Some(credits) = account.and_then(|account| account["credits"].as_u64()) {
+        if let Some(credits) = account.and_then(|account| account.credits) {
             words.push_str(&format!(
                 " · {credits} request{} left",
                 if credits == 1 { "" } else { "s" }
             ));
         }
         match access {
-            "notIncluded" => words.push_str("\nThis plan doesn't include requests to Kerf"),
-            "outOfCredits" => words.push_str("\nYou've used this period's requests"),
+            Some(CloudAccess::NotIncluded) => {
+                words.push_str("\nThis plan doesn't include requests to Kerf")
+            }
+            Some(CloudAccess::OutOfCredits) => {
+                words.push_str("\nYou've used this period's requests")
+            }
             _ => {}
         }
         words
     };
     if let Some(message) = cloud
-        .and_then(|cloud| cloud["message"].as_str())
+        .and_then(|cloud| cloud.message.as_deref())
         .filter(|message| !message.trim().is_empty())
     {
         words.push('\n');

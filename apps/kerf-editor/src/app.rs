@@ -829,7 +829,7 @@ fn open_at(
         // The account is the person's, whichever window heard of it.
         cx.subscribe(&session, |_, event: &BridgeEvent, cx| {
             if let Event::Cloud { .. } = &*event.0 {
-                hear_cloud(&serde_json::to_value(&event.0).unwrap_or_default(), cx);
+                hear_cloud(&event.0, cx);
             }
         })
         .detach();

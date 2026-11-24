@@ -34,8 +34,8 @@ mod row;
 pub use account::{account_line, account_of};
 pub use ages::{parse_time, relative_time, relative_time_changes};
 pub use app_menu::{
-    app_menu_items, app_rows, sync_problem, sync_summary, with_sync_failure, AppDoes, AppMenuInput,
-    AppRow, ChooseKeymap, SignOut, SwitchBranch, SYNC_FAILURE,
+    app_menu_items, app_rows, sync_problem, sync_summary, AppDoes, AppMenuInput, AppRow,
+    ChooseKeymap, SignOut, SwitchBranch,
 };
 pub use conversation_files::{conversation_summary, folder_conversations, CONVERSATIONS};
 pub use edge::{is_second_press, EDGE_TIP};
@@ -220,10 +220,7 @@ impl SidebarView {
             // Kerf's account, as the foot says it.
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
                 if let Event::Cloud { .. } = &*event.0 {
-                    editor_session::session::hear_cloud(
-                        &serde_json::to_value(&event.0).unwrap_or_default(),
-                        cx,
-                    );
+                    editor_session::session::hear_cloud(&event.0, cx);
                     cx.notify();
                 }
             }),

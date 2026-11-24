@@ -183,7 +183,7 @@ impl Workspace {
             .state
             .collab
             .as_ref()
-            .and_then(|collab| collab["branch"].as_str())
+            .and_then(|collab| collab.git.branch.as_deref())
             .unwrap_or_default()
             .to_owned();
         let folder = session.project_name();

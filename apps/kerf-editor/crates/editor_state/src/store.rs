@@ -453,7 +453,7 @@ pub struct EditorState {
     /// Conversations that finished while you looked elsewhere.
     pub settled: Vec<String>,
     /// The project's Git standing, as the last `collab` event said it.
-    pub collab: Option<Value>,
+    pub collab: Option<event::CollabStatus>,
     /// The name Save Current as Preset sent, until the bridge answers: a
     /// refusal for a preset of that name already there is then asked
     /// about (`editor_launcher::presets::SavePreset`), not said.
@@ -850,9 +850,7 @@ impl EditorState {
             }
             Event::ViewerReset => Change::ViewerReset,
             Event::Collab { status } => {
-                if let Ok(status @ Value::Object(_)) = serde_json::to_value(status) {
-                    self.collab = Some(status);
-                }
+                self.collab = Some(status.clone());
                 Change::Other
             }
             Event::Preview(preview) => {
