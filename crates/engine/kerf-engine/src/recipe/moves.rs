@@ -23,6 +23,7 @@
 
 use kerf_compose::{ComposeOptions, Compositor, Pass};
 use kerf_model::{Catalog, Project};
+use serde::Serialize;
 
 /// The height of the frames a place is read on, in pixels, where the sequence is as tall.
 const HEIGHT: f64 = 216.0;
@@ -30,8 +31,8 @@ const HEIGHT: f64 = 216.0;
 /// How far a byte of a pixel may be from a clip's color and still be that clip's.
 const NEAR: u8 = 6;
 
-/// Where a clip goes, as a model is handed it.
-#[derive(Clone, Debug, PartialEq)]
+/// Where a clip goes, as a model is handed it, and as a request holds it.
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Moves {
     /// The clip it is, by its id.
     pub name: String,
@@ -122,15 +123,5 @@ impl Moves {
             None => true,
             Some(first) => shown.all(|place| place == first),
         }
-    }
-
-    /// As a request holds it.
-    pub(crate) fn asked(&self) -> serde_json::Value {
-        serde_json::json!({
-            "name": self.name,
-            "rate": self.rate,
-            "frame": [self.frame.0, self.frame.1],
-            "places": self.places,
-        })
     }
 }

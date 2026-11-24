@@ -58,7 +58,9 @@
 
 use super::{moves::Moves, signal::Signal};
 use crate::error::{EngineError, Result};
-use serde_json::{json, Value};
+use crate::said;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -126,55 +128,114 @@ const REQUEST_VERSION: u32 = 1;
 
 pub use kerf_model::making::{names_a_guide, Ask, Source, FILES, MOVES, SIGNAL, WORKFLOW};
 
+/// The request a model's program reads, as [`REQUEST_FILE`] holds it: what a `generate` step
+/// asks, with every file it names where that file is.
+#[derive(Debug, Serialize)]
+pub(crate) struct Request<'a> {
+    #[serde(rename = "kerf-request")]
+    version: u32,
+    model: &'a str,
+    prompt: &'a str,
+    guide: Option<String>,
+    /// The other guides, by what each is of, in the order the step names them.
+    #[serde(serialize_with = "in_order")]
+    guides: Vec<(String, String)>,
+    /// The first and the last frame, which a picture in motion given as one is made a still
+    /// for.
+    pub(crate) first: Option<String>,
+    pub(crate) last: Option<String>,
+    references: Vec<String>,
+    seconds: Option<f64>,
+    size: Option<[u32; 2]>,
+    seed: Option<u64>,
+    signals: &'a [Signal],
+    moves: &'a [Moves],
+    workflow: Option<String>,
+    more: &'a BTreeMap<String, String>,
+    out: String,
+    /// Said only of a part of a longer shot: a request for a whole one reads as it did.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<f64>,
+}
+
+/// Names and their files as an object, made in the order they are said: a name said twice
+/// is there once, with the file it was last given.
+fn in_order<S: serde::Serializer>(
+    guides: &[(String, String)],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.collect_map(guides.iter().map(|(name, file)| (name, file)))
+}
+
+impl Request<'_> {
+    /// The file of the guide of what `name` is, the last one the step gives it.
+    fn guide_of(&self, name: &str) -> Option<&str> {
+        self.guides
+            .iter()
+            .rev()
+            .find(|(said, _)| said == name)
+            .map(|(_, file)| file.as_str())
+    }
+
+    /// The request as its file holds it. Made a JSON object first, so that its keys are in
+    /// the order every object this build writes is: sorted, or, where serde_json keeps order
+    /// (the editor's build), the order of the fields above.
+    pub(crate) fn file(&self) -> Result<Vec<u8>> {
+        Ok(serde_json::to_vec_pretty(&serde_json::to_value(self)?)?)
+    }
+}
+
 /// The request a model's program reads of what `ask` asks, with every file where it is:
 /// `file` says where one of the project is, and `made` where one a step
 /// made is, the one this writes among them. `signals` and `moves` are the ones it
 /// names, read from the project.
-pub(crate) fn request(
-    ask: &Ask,
+pub(crate) fn request<'a>(
+    ask: &'a Ask,
     file: &dyn Fn(&str) -> Result<PathBuf>,
     made: &dyn Fn(&str) -> PathBuf,
-    signals: &[Signal],
-    moves: &[Moves],
-) -> Result<Value> {
-    let place = |source: &Source| -> Result<Value> {
-        Ok(Value::String(
-            match source {
-                Source::File(named) => file(named)?,
-                Source::Made(name) => made(name),
-            }
-            .to_string_lossy()
-            .into_owned(),
-        ))
+    signals: &'a [Signal],
+    moves: &'a [Moves],
+) -> Result<Request<'a>> {
+    let place = |source: &Source| -> Result<String> {
+        Ok(match source {
+            Source::File(named) => file(named)?,
+            Source::Made(name) => made(name),
+        }
+        .to_string_lossy()
+        .into_owned())
     };
     let optional = |source: &Option<Source>| source.as_ref().map(place).transpose();
-    let mut asked = json!({
-        "kerf-request": REQUEST_VERSION,
-        "model": ask.model,
-        "prompt": ask.prompt,
-        "guide": optional(&ask.guide)?,
-        "guides": ask
+    Ok(Request {
+        version: REQUEST_VERSION,
+        model: &ask.model,
+        prompt: &ask.prompt,
+        guide: optional(&ask.guide)?,
+        guides: ask
             .guides
             .iter()
             .map(|(name, source)| Ok((name.clone(), place(source)?)))
-            .collect::<Result<serde_json::Map<String, Value>>>()?,
-        "first": optional(&ask.first)?,
-        "last": optional(&ask.last)?,
-        "references": ask.references.iter().map(place).collect::<Result<Vec<_>>>()?,
-        "seconds": ask.seconds,
-        "size": ask.size.map(|(width, height)| [width, height]),
-        "seed": ask.seed,
-        "signals": signals.iter().map(Signal::asked).collect::<Vec<_>>(),
-        "moves": moves.iter().map(Moves::asked).collect::<Vec<_>>(),
-        WORKFLOW: optional(&ask.workflow)?,
-        "more": ask.more,
-        "out": made(&ask.out).to_string_lossy(),
-    });
-    // Said only of a part of a longer shot: a request for a whole one reads as it did.
-    if let Some(from) = ask.from {
-        asked["from"] = json!(from);
+            .collect::<Result<_>>()?,
+        first: optional(&ask.first)?,
+        last: optional(&ask.last)?,
+        references: ask.references.iter().map(place).collect::<Result<_>>()?,
+        seconds: ask.seconds,
+        size: ask.size.map(|(width, height)| [width, height]),
+        seed: ask.seed,
+        signals,
+        moves,
+        workflow: optional(&ask.workflow)?,
+        more: &ask.more,
+        out: made(&ask.out).to_string_lossy().into_owned(),
+        from: ask.from,
+    })
+}
+
+/// A number as a blank is filled with it: a whole one without a point.
+fn number_text(number: &serde_json::Number) -> String {
+    match number.as_f64() {
+        Some(whole) if whole.fract() == 0.0 && whole.abs() < 1e15 => format!("{whole:.0}"),
+        _ => number.to_string(),
     }
-    Ok(asked)
 }
 
 /// The command that asks a model: `words`, as the person's models file gives its `run`,
@@ -198,25 +259,30 @@ pub(crate) fn command_for(
     model: &str,
     words: &[String],
     request: &Path,
-    asked: &Value,
+    asked: &Request,
     takes: Option<&Takes>,
 ) -> Result<Vec<String>> {
+    // What the person's file gives a name under `more`, as they wrote it.
     let text = |value: &Value| match value {
         Value::String(text) => Some(text.clone()),
-        Value::Number(number) => Some(match number.as_f64() {
-            Some(whole) if whole.fract() == 0.0 && whole.abs() < 1e15 => format!("{whole:.0}"),
-            _ => number.to_string(),
-        }),
+        Value::Number(number) => Some(number_text(number)),
         Value::Bool(flag) => Some(flag.to_string()),
         _ => None,
     };
     let filled = |name: &str| -> Option<String> {
-        let size = |at: usize| asked["size"].get(at).and_then(Value::as_u64);
+        let size = |at: usize| asked.size.map(|size| size[at]);
         match name {
             "request" => Some(request.to_string_lossy().into_owned()),
-            "out" | "prompt" | "guide" | "first" | "last" | "seconds" | "seed" => {
-                text(&asked[name])
-            }
+            "out" => Some(asked.out.clone()),
+            "prompt" => Some(asked.prompt.to_owned()),
+            "guide" => asked.guide.clone(),
+            "first" => asked.first.clone(),
+            "last" => asked.last.clone(),
+            "seconds" => asked
+                .seconds
+                .and_then(serde_json::Number::from_f64)
+                .map(|seconds| number_text(&seconds)),
+            "seed" => asked.seed.map(|seed| number_text(&seed.into())),
             "size" => Some(format!("{}x{}", size(0)?, size(1)?)),
             "width" => size(0).map(|side| side.to_string()),
             "height" => size(1).map(|side| side.to_string()),
@@ -232,15 +298,16 @@ pub(crate) fn command_for(
                             .map(|at| at - 1),
                     };
                     if let Some(at) = at {
-                        return asked["references"].get(at).and_then(text);
+                        return asked.references.get(at).cloned();
                     }
                 }
                 if let Some(guide) = other.strip_prefix("guide_") {
-                    return asked["guides"].get(guide).and_then(text);
+                    return asked.guide_of(guide).map(str::to_owned);
                 }
-                asked["more"]
+                asked
+                    .more
                     .get(other)
-                    .and_then(text)
+                    .cloned()
                     .or_else(|| takes.and_then(|takes| takes.more.get(other)).and_then(text))
             }
         }
@@ -313,7 +380,8 @@ pub struct Takes {
 }
 
 impl Takes {
-    /// Read a model's `takes`. What is wrong is said by its name.
+    /// Read a model's `takes`. What is wrong is said by its name, in words a person who
+    /// wrote the file follows, not serde's: so it is read part by part, as JSON.
     fn parse(value: &Value) -> std::result::Result<Self, String> {
         let fields = value
             .as_object()
@@ -390,6 +458,18 @@ impl Takes {
     }
 }
 
+/// A model's entry in the models file, read as [`said`] reads.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Entry {
+    /// Its program and arguments: none where they are not a list of words.
+    #[serde(deserialize_with = "said::as_said")]
+    run: Vec<String>,
+    /// What it takes, said at all, `null` included. JSON, as [`Takes::parse`] reads it.
+    #[serde(deserialize_with = "said::present")]
+    takes: Option<Value>,
+}
+
 /// The models a person has set up, each a program that is handed a request.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Models {
@@ -452,10 +532,9 @@ impl Models {
         let mut commands = BTreeMap::new();
         let mut takes = BTreeMap::new();
         for (name, model) in named {
-            let command: Vec<String> = model
-                .get("run")
-                .and_then(|run| serde_json::from_value(run.clone()).ok())
-                .filter(|run: &Vec<String>| !run.is_empty())
+            let model: Entry = said::object_of(model);
+            let command = Some(model.run)
+                .filter(|run| !run.is_empty())
                 .ok_or_else(|| {
                     wrong(format!(
                         "model `{name}` has no `run`, a program and its arguments as a list"
@@ -469,7 +548,7 @@ impl Models {
                     "model `{name}`'s `run` names neither `{REQUEST}` nor `{OUT}`, so its program is never told what is asked or where its file goes"
                 )));
             }
-            if let Some(said) = model.get("takes") {
+            if let Some(said) = &model.takes {
                 let said =
                     Takes::parse(said).map_err(|what| wrong(format!("model `{name}`: {what}")))?;
                 takes.insert(name.clone(), said);
