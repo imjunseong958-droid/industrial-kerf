@@ -10,15 +10,18 @@
 //! A parameter's definition is a [`ViewParamDef`], and the effects,
 //! transitions and generators of the catalog are [`ViewFxDef`]s; a
 //! timeline's definitions that do not read as one (a newer kerfd's) are
-//! left out, and the rest of it still reads. Parameter values stay JSON. Each is a static value (a number, a bool, a
-//! text, or a color as `#rrggbb[aa]`), or a keyframe list when animated:
-//! each key with its clip-relative `at` in seconds, the same offset as a
-//! whole `frame` on the sequence rate (what a typed op's `{"keys": [...]}`
-//! takes back), its `value` and its `interp`. An expression shows as what it
-//! gives at the clip's first frame. Anything absent is at its default.
+//! left out, and the rest of it still reads. A parameter's value is a
+//! [`ViewParam`]: a static value, or [`ViewKey`]s when animated. Each key has
+//! its clip-relative `at` in seconds, the same offset as a whole `frame` on
+//! the sequence rate (what a typed op's `{"keys": [...]}` takes back), its
+//! `value` and its `interp`. A value itself stays JSON (a number, a bool, a
+//! text, or a color as `#rrggbb[aa]`): which it is, its definition's `type`
+//! says. An expression shows as what it gives at the clip's first frame.
+//! Anything absent is at its default.
 
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use kerf_model::{Interp, Rgba};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 
 /// A project as a timeline shows it: its media, its sequences, the first
@@ -313,8 +316,8 @@ pub struct ViewClip {
     /// The properties it sets, then a generator's parameters, each a
     /// parameter value. The timeline's `properties` and `generators` define
     /// them.
-    #[serde(skip_serializing_if = "Map::is_empty")]
-    pub props: Map<String, Value>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub props: BTreeMap<String, ViewParam>,
     /// Its effect stack, in order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<ViewEffect>,
@@ -374,7 +377,129 @@ pub struct ViewEffect {
     pub doc: Option<String>,
     /// The parameters it sets, each a parameter value, as the effect catalog
     /// (`kerf_runtime::fx_catalog_all`) defines them.
-    pub params: Map<String, Value>,
+    pub params: BTreeMap<String, ViewParam>,
+}
+
+/// A parameter's value as a view gives it: in JSON the value itself, or an
+/// array of its keyframes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ViewParam {
+    /// Keyframes, in time order.
+    Keyed(Vec<ViewKey>),
+    /// One value throughout: a number, a bool, a text, or a color as
+    /// `#rrggbb[aa]`.
+    Value(Value),
+}
+
+impl ViewParam {
+    /// Its one value; none for keyframes.
+    pub fn value(&self) -> Option<&Value> {
+        match self {
+            Self::Value(value) => Some(value),
+            Self::Keyed(_) => None,
+        }
+    }
+
+    /// Its keyframes; none for one value.
+    pub fn keys(&self) -> &[ViewKey] {
+        match self {
+            Self::Keyed(keys) => keys,
+            Self::Value(_) => &[],
+        }
+    }
+
+    /// What it comes to `at` seconds into its clip, as kerf-model's
+    /// `Param::value_at` works it out: one value throughout; before the first
+    /// keyframe the first's value and from the last on the last's; between
+    /// two, the first's curve takes numbers and colors to the next, and holds
+    /// anything else. Null for no keyframes.
+    pub fn value_at(&self, at: f64) -> Value {
+        let keys = match self {
+            Self::Value(value) => return value.clone(),
+            Self::Keyed(keys) => keys,
+        };
+        let next = keys.partition_point(|key| key.at <= at);
+        match (
+            next.checked_sub(1).map(|index| &keys[index]),
+            keys.get(next),
+        ) {
+            (None, Some(first)) => first.value.clone(),
+            (Some(last), None) => last.value.clone(),
+            (Some(left), Some(right)) => {
+                let span = right.at - left.at;
+                let t = if span > 0.0 {
+                    (at - left.at) / span
+                } else {
+                    1.0
+                };
+                interpolate(&left.value, &right.value, left.interp.curve(t))
+            }
+            (None, None) => Value::Null,
+        }
+    }
+
+    /// [`ViewParam::value_at`] as a number; none where that is not one.
+    pub fn number_at(&self, at: f64) -> Option<f64> {
+        self.value_at(at).as_f64()
+    }
+}
+
+impl From<Value> for ViewParam {
+    fn from(value: Value) -> Self {
+        Self::Value(value)
+    }
+}
+
+/// `a` `t` of the way to `b`, `t` already eased, by kerf-model's
+/// `Value::interpolate`: numbers and colors move, and anything else holds at
+/// `a`.
+fn interpolate(a: &Value, b: &Value, t: f64) -> Value {
+    let model = |value: &Value| match value {
+        Value::Number(number) => number.as_f64().map(kerf_model::Value::Number),
+        Value::String(text) => Rgba::parse(text).map(kerf_model::Value::Color),
+        _ => None,
+    };
+    match (model(a), model(b)) {
+        (Some(from), Some(to)) => match from.interpolate(&to, t) {
+            kerf_model::Value::Number(number) => Value::from(number),
+            kerf_model::Value::Color(color) => Value::String(color.to_string()),
+            _ => a.clone(),
+        },
+        _ => a.clone(),
+    }
+}
+
+/// A keyframe of a [`ViewParam`].
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewKey {
+    /// Seconds from its clip's first frame.
+    pub at: f64,
+    /// The same offset in whole frames of the sequence's rate.
+    pub frame: i64,
+    pub value: Value,
+    /// How its curve takes the value to the next key's: a name, or a
+    /// curve's handles `x1,y1,x2,y2`. One this build cannot read eases
+    /// linearly.
+    #[serde(with = "interp_name")]
+    pub interp: Interp,
+}
+
+/// An [`Interp`] as the language writes it.
+mod interp_name {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(interp: &Interp, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&interp.name())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Interp, D::Error> {
+        Ok(Value::deserialize(deserializer)?
+            .as_str()
+            .and_then(Interp::parse)
+            .unwrap_or_default())
+    }
 }
 
 /// A mask on a clip's picture.
@@ -387,7 +512,7 @@ pub struct ViewMask {
     pub inverted: bool,
     /// The properties it sets, each a parameter value, as `maskProperties`
     /// defines them.
-    pub params: Map<String, Value>,
+    pub params: BTreeMap<String, ViewParam>,
     /// Its outline; a moving one's first keyframe's.
     #[serde(flatten)]
     pub outline: ViewOutline,

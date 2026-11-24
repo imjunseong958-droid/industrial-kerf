@@ -296,7 +296,7 @@ impl<'a> ClipPaint<'a> {
     fn band(&self, window: &mut Window) {
         let (clip, row, frame) = (self.clip, self.row, self.frame);
         if row.audio() && !clip.card() && !row.previewed {
-            let (keys, values, keyed) = gain_drawn(clip, frame.lanes.fps, frame.gain.as_ref());
+            let (keys, values, keyed) = gain_drawn(clip, frame.gain.as_ref());
             let dragged = frame.gain.as_ref().is_some_and(|gain| gain.clip == clip.id);
             let level = values.first().copied().unwrap_or(0.0);
             // At 0 dB with no keys it shows only where it can be dragged.

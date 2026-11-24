@@ -365,11 +365,10 @@ fn field_frame(input: &Entity<TextInput>, focused: bool, tall: f32) -> gpui::Div
 
 #[cfg(test)]
 mod tests {
-    use super::clip::{keyed_value, Field, Target};
+    use super::clip::{Field, Target};
     use super::number::Drag;
     use super::values::{format_number, parse_number};
     use proptest::prelude::*;
-    use serde_json::json;
 
     proptest! {
 
@@ -381,13 +380,6 @@ mod tests {
             prop_assert!((back - value).abs() <= 0.5e-4 + 1e-9, "{} shown as {}", value, shown);
             // Showing what it reads back as changes nothing.
             prop_assert_eq!(format_number(back, places), shown);
-        }
-
-        #[test]
-        fn between_two_linear_keys_a_value_stays_between_them(a in -100.0f64..100.0, b in -100.0f64..100.0, at in -1.0f64..2.0) {
-            let keys = json!([{"at": 0.0, "value": a, "interp": "linear"}, {"at": 1.0, "value": b, "interp": "linear"}]);
-            let value = keyed_value(keys.as_array().unwrap(), at).as_f64().unwrap();
-            prop_assert!(value >= a.min(b) - 1e-9 && value <= a.max(b) + 1e-9);
         }
 
         #[test]

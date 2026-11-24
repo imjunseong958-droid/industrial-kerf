@@ -3,15 +3,15 @@
 //! [`ViewParamDef`]s, and values as JSON.
 
 use crate::{
-    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
-    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
-    ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewKey, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack,
+    ViewTrackKind, ViewTransition,
 };
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Media, Param, ParamDef,
     ParamType, Params, Project, Rate, Sequence, Time, Track, TrackKind, Value,
 };
-use serde_json::{json, Map, Value as Json};
+use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 
 /// The view as the JSON a snapshot carries.
@@ -367,7 +367,7 @@ fn outline_view(shape: &MaskShape) -> ViewOutline {
     }
 }
 
-fn params_json(params: &Params, rate: Rate) -> Map<String, Json> {
+fn params_json(params: &Params, rate: Rate) -> BTreeMap<String, ViewParam> {
     params
         .iter()
         .map(|(name, param)| (name.clone(), param_json(param, rate)))
@@ -419,23 +419,22 @@ fn param_def_view(def: &ParamDef) -> ViewParamDef {
     }
 }
 
-fn param_json(param: &Param, rate: Rate) -> Json {
+fn param_json(param: &Param, rate: Rate) -> ViewParam {
     match param {
-        Param::Static(value) => value_json(value),
+        Param::Static(value) => ViewParam::Value(value_json(value)),
         // The editor has numbers and keyframes: an expression shows as what it gives at the
         // clip's first frame, and setting it there replaces it.
-        Param::Expr(_) => value_json(&param.value_at(Time::ZERO)),
-        Param::Animated(keys) => keys
-            .iter()
-            .map(|key| {
-                json!({
-                    "at": key.at.seconds(),
-                    "frame": frames(rate, key.at),
-                    "value": value_json(&key.value),
-                    "interp": key.interp.name(),
+        Param::Expr(_) => ViewParam::Value(value_json(&param.value_at(Time::ZERO))),
+        Param::Animated(keys) => ViewParam::Keyed(
+            keys.iter()
+                .map(|key| ViewKey {
+                    at: key.at.seconds(),
+                    frame: frames(rate, key.at),
+                    value: value_json(&key.value),
+                    interp: key.interp,
                 })
-            })
-            .collect(),
+                .collect(),
+        ),
     }
 }
 

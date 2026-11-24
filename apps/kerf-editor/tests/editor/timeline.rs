@@ -2,8 +2,8 @@
 
 use kerf_editor::model::{
     default_targets, proposal_changes, signal_keys, source_targets, toggle_target, ClipShow,
-    GainKey, Proposal, ProposalBand, ProposalStatus, ProposalVersion, Snapshot, SnapshotShow,
-    Timeline, TimelineShow, TrackKind, TrackShow,
+    GainKey, Interp, Proposal, ProposalBand, ProposalStatus, ProposalVersion, Snapshot,
+    SnapshotShow, Timeline, TimelineShow, TrackKind, TrackShow,
 };
 use kerf_editor::prefs::TrackHeights;
 use kerf_editor::store::MediaActivity;
@@ -278,10 +278,10 @@ proptest! {
         let mut keys: Vec<GainKey> = if keyed {
             known
                 .iter()
-                .map(|(frame, value)| GainKey { at: *frame as f64 / fps, frame: *frame, value: *value, interp: "linear".into() })
+                .map(|(frame, value)| GainKey { at: *frame as f64 / fps, frame: *frame, value: *value, interp: Interp::Linear })
                 .collect()
         } else {
-            vec![GainKey { at: 0.0, frame: 0, value: -6.0, interp: "linear".into() }]
+            vec![GainKey { at: 0.0, frame: 0, value: -6.0, interp: Interp::Linear }]
         };
         let index = add_gain_key(&mut keys, keyed, frame, fps, level);
         prop_assert_eq!(keys[index].frame, frame);
@@ -418,7 +418,7 @@ fn clips_read_their_gain_speed_and_title() {
         tl.tracks[0].clips[0].clone()
     };
     let level = clip(json!({"gain": -6.0}), json!({}));
-    let (keys, keyed) = level.gain_keys(24.0);
+    let (keys, keyed) = level.gain_keys();
     assert!(!keyed);
     assert_eq!(keys[0].value, -6.0);
     let keyed_clip = clip(
@@ -428,13 +428,13 @@ fn clips_read_their_gain_speed_and_title() {
         ]}),
         json!({}),
     );
-    let (keys, keyed) = keyed_clip.gain_keys(24.0);
+    let (keys, keyed) = keyed_clip.gain_keys();
     assert!(keyed);
     assert_eq!(
         keys.iter().map(|key| key.frame).collect::<Vec<_>>(),
         [0, 24]
     );
-    assert_eq!(keys[0].interp, "hold");
+    assert_eq!(keys[0].interp, Interp::Hold);
     assert_eq!(clip(json!({}), json!({"speed": 0.5})).secondary(), "50%");
     assert_eq!(clip(json!({}), json!({"speed": -2.0})).secondary(), "200%");
     assert_eq!(clip(json!({}), json!({})).secondary(), "");
