@@ -7,7 +7,9 @@
 //! back as typed operations ([`EditOp`](crate::EditOp)), never by patching this.
 //!
 //! Every type reads leniently: a key that is absent reads as its default.
-//! Parameter values stay JSON. Each is a static value (a number, a bool, a
+//! A parameter's definition is a [`ViewParamDef`], and the effects,
+//! transitions and generators of the catalog are [`ViewFxDef`]s; parameter
+//! values stay JSON. Each is a static value (a number, a bool, a
 //! text, or a color as `#rrggbb[aa]`), or a keyframe list when animated:
 //! each key with its clip-relative `at` in seconds, the same offset as a
 //! whole `frame` on the sequence rate (what a typed op's `{"keys": [...]}`
@@ -16,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// A project as a timeline shows it: its media, its sequences, the first
 /// sequence's tracks and markers, and the catalog definitions its clips'
@@ -33,13 +35,13 @@ pub struct TimelineView {
     pub sequences: Vec<ViewSequence>,
     /// The catalog's intrinsic clip property definitions, by track type
     /// (`video`, `audio`).
-    pub properties: Map<String, Value>,
+    pub properties: BTreeMap<String, Vec<ViewParamDef>>,
     /// The definitions of the properties a mask sets.
-    pub mask_properties: Vec<Value>,
+    pub mask_properties: Vec<ViewParamDef>,
     /// The modes a mask can combine by.
     pub mask_modes: Vec<String>,
     /// Each generator's parameter definitions, by its fx id.
-    pub generators: Map<String, Value>,
+    pub generators: BTreeMap<String, Vec<ViewParamDef>>,
     pub tracks: Vec<ViewTrack>,
     pub markers: Vec<ViewMarker>,
     /// The first sequence's id.
@@ -367,7 +369,7 @@ pub struct ViewEffect {
     /// process that made the view does not have it.
     pub doc: Option<String>,
     /// The parameters it sets, each a parameter value, as the effect catalog
-    /// (`kerf_runtime::fx_catalog_all_json`) defines them.
+    /// (`kerf_runtime::fx_catalog_all`) defines them.
     pub params: Map<String, Value>,
 }
 
@@ -424,6 +426,58 @@ pub struct ViewOutlineKey {
     pub interp: String,
     #[serde(flatten)]
     pub outline: ViewOutline,
+}
+
+/// A parameter's definition, as the catalog gives it: a property of a clip
+/// or of a mask, or a parameter of an effect, a transition or a generator.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ViewParamDef {
+    pub name: String,
+    /// What it holds: `number`, `time` (seconds), `bool`, `color`, `enum`
+    /// (one of `options`), or what is held as text: `text`, `file` (with one
+    /// of `extensions`), `track`, `sound`, `mask`, `points` or `moves`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// What it is where nothing sets it: a static parameter value.
+    pub default: Value,
+    /// Whether keyframes may animate it.
+    pub animatable: bool,
+    pub doc: String,
+    /// The least and the most it may be; absent where it has no such limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// What a number counts, such as `frame widths`; absent for a bare one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// An `enum`'s choices, in order; absent for every other type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+    /// The extensions a `file` takes; absent for every other type.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Vec<String>>,
+}
+
+/// An effect, a transition or a generator of the catalog.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ViewFxDef {
+    /// The fx id documents name it by, without its version.
+    pub id: String,
+    /// `effect`, `transition`, or `generator`.
+    pub kind: String,
+    /// Where it is listed, such as `Color Correction`.
+    pub category: String,
+    /// What it is called: its doc up to the first `: `.
+    pub name: String,
+    pub doc: String,
+    /// What draws it: `graph`, `raster`, `kerf`, or `look`.
+    pub engine: String,
+    pub params: Vec<ViewParamDef>,
+    /// What it works on: `video` or `audio`.
+    pub domain: String,
 }
 
 /// A transition across the cut at the end of its `from` clip.

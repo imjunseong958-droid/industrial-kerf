@@ -9,7 +9,7 @@ use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
     ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
     LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, TakeRead, ToolState,
+    RenderQuality, RenderStatus, Snapshot, TakeRead, TimelineView, ToolState, ViewParamDef,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -23,7 +23,9 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text.
+/// unread, so that the types they now are write the same text. The `state`'s timeline
+/// carries the catalog's definitions as kerfd writes them (`properties`, `maskProperties`,
+/// `generators`), which were JSON passed on unread too and are `ViewParamDef`s now.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -125,7 +127,68 @@ fn event() -> impl Strategy<Value = Event> {
         collab_sync(),
         take_read(),
         workflow(),
+        state(),
     ]
+}
+
+/// A parameter's definition: a type this build may not know, a default of each kind a
+/// parameter value is, and each limit, the unit, the choices and the extensions there or
+/// left out (a list of none being there).
+fn param_def() -> impl Strategy<Value = ViewParamDef> {
+    let default = prop_oneof![
+        number().prop_map(serde_json::Value::from),
+        any::<bool>().prop_map(serde_json::Value::from),
+        text().prop_map(serde_json::Value::from),
+    ];
+    let names = || option::of(vec(text(), 0..3));
+    (
+        (text(), text(), default, any::<bool>(), text()),
+        (
+            option::of(number()),
+            option::of(number()),
+            some_text(),
+            names(),
+            names(),
+        ),
+    )
+        .prop_map(
+            |((name, kind, default, animatable, doc), (min, max, unit, options, extensions))| {
+                ViewParamDef {
+                    name,
+                    kind,
+                    default,
+                    animatable,
+                    doc,
+                    min,
+                    max,
+                    unit,
+                    options,
+                    extensions,
+                }
+            },
+        )
+}
+
+/// A snapshot whose timeline carries the catalog's definitions: the clip properties and the
+/// generators' parameters by name, and the mask properties.
+fn state() -> impl Strategy<Value = Event> {
+    let defs = || vec(param_def(), 0..3);
+    (
+        btree_map(text(), defs(), 0..3),
+        defs(),
+        btree_map(text(), defs(), 0..3),
+    )
+        .prop_map(|(properties, mask_properties, generators)| Event::State {
+            snapshot: Box::new(Snapshot {
+                timeline: TimelineView {
+                    properties,
+                    mask_properties,
+                    generators,
+                    ..TimelineView::default()
+                },
+                ..Snapshot::default()
+            }),
+        })
 }
 
 /// One input of a workflow's node: a link, with what it takes where a server has said, or
