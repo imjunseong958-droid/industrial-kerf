@@ -41,8 +41,7 @@ pub mod graph {
 /// of it, and of each blank what fills it.
 pub mod workflow {
     pub use kerf_shots::workflow::{
-        Blank, Blanks, By, Described, DescribedFrames, DescribedInput, DescribedNode, OriginKind,
-        Shown,
+        Blank, By, Described, DescribedFrames, DescribedInput, DescribedNode, OriginKind, Shown,
     };
 }
 pub use kerf_runtime::{

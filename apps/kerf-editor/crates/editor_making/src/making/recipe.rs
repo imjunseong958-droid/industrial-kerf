@@ -4,9 +4,10 @@
 
 use crate::making::value_text;
 use kerf_bridge::event::graph::{Gives, Kind, ModelNode, RunnerKind, TakesNode, What};
-use kerf_bridge::event::workflow::{Blanks, By, DescribedInput, DescribedNode, OriginKind, Shown};
+use kerf_bridge::event::workflow::{Blank, By, DescribedInput, DescribedNode, OriginKind, Shown};
 use kerf_bridge::event::Recipe as RecipeEvent;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// What a node is: one of a shot's graph, with what the bridge says of one of its kind,
 /// or one of a model's workflow's own nodes.
@@ -217,7 +218,9 @@ pub struct Workflow {
     /// Its text as read: what an edit says it changes.
     pub text: String,
     /// Each blank by name: what fills it (`says`), what the line gives for it now (`given`).
-    pub blanks: Blanks,
+    pub blanks: BTreeMap<String, Blank>,
+    /// The blanks' names, in the order the workflow's nodes first hold them.
+    pub blanks_as_held: Vec<String>,
     pub graph: Recipe,
 }
 
@@ -293,6 +296,12 @@ impl Workflow {
             about: event.described.about.clone(),
             text: event.text.clone(),
             blanks: event.described.blanks.clone(),
+            blanks_as_held: event
+                .described
+                .blanks_as_held()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             graph,
         }
     }

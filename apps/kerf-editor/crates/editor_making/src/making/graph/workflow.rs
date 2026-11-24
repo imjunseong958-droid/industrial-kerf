@@ -189,7 +189,7 @@ impl ShotGraph {
         }
         if !workflow.blanks.is_empty() {
             column = column.child(section("Blanks the steps fill"));
-            for name in workflow.blanks.names() {
+            for name in &workflow.blanks_as_held {
                 column = column
                     .child(ui::label(
                         format!("{{{name}}}"),

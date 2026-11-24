@@ -31,6 +31,7 @@ use crate::names::{
 use crate::workflow::Workflow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Number, Value};
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 /// A JSON text read only as far as where each thing in it is.
@@ -386,76 +387,6 @@ pub struct Blank {
     pub given: Option<String>,
 }
 
-/// A workflow's blanks by name, in the order its nodes first hold them: the order a
-/// person meets them in. Written as an object, a field a blank; read back in the order
-/// the object has them.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Blanks(Vec<(String, Blank)>);
-
-impl Blanks {
-    pub fn get(&self, name: &str) -> Option<&Blank> {
-        self.iter()
-            .find_map(|(named, blank)| (named == name).then_some(blank))
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, &Blank)> {
-        self.0.iter().map(|(name, blank)| (name.as_str(), blank))
-    }
-
-    pub fn iter_mut(&mut self) -> impl Iterator<Item = (&str, &mut Blank)> {
-        self.0
-            .iter_mut()
-            .map(|(name, blank)| (name.as_str(), blank))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// The blanks' names, in their order.
-    pub fn names(&self) -> impl Iterator<Item = &str> {
-        self.iter().map(|(name, _)| name)
-    }
-
-    /// Add blank `name` after the ones there are, unless it is one of them.
-    fn add(&mut self, name: &str, blank: impl FnOnce() -> Blank) {
-        if self.get(name).is_none() {
-            self.0.push((name.to_owned(), blank()));
-        }
-    }
-}
-
-impl Serialize for Blanks {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(self.iter())
-    }
-}
-
-impl<'de> Deserialize<'de> for Blanks {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        struct Read;
-        impl<'de> serde::de::Visitor<'de> for Read {
-            type Value = Blanks;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("blanks by name")
-            }
-
-            fn visit_map<A: serde::de::MapAccess<'de>>(
-                self,
-                mut map: A,
-            ) -> Result<Blanks, A::Error> {
-                let mut blanks = Blanks::default();
-                while let Some((name, blank)) = map.next_entry::<String, Blank>()? {
-                    blanks.0.push((name, blank));
-                }
-                Ok(blanks)
-            }
-        }
-        deserializer.deserialize_map(Read)
-    }
-}
-
 /// A value that is there, `null` too: a workflow may set a blank to it.
 fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
@@ -505,7 +436,7 @@ impl Serialize for DescribedInput {
         if let Some(choices) = &self.choices {
             map.serialize_entry("choices", choices)?;
         }
-        for (name, bound) in [("min", &self.min), ("max", &self.max), ("step", &self.step)] {
+        for (name, bound) in [("max", &self.max), ("min", &self.min), ("step", &self.step)] {
             if let Some(bound) = bound {
                 map.serialize_entry(name, bound)?;
             }
@@ -550,7 +481,7 @@ pub struct Described {
     pub size: (u32, u32),
     pub nodes: Vec<DescribedNode>,
     /// Each blank by its name.
-    pub blanks: Blanks,
+    pub blanks: BTreeMap<String, Blank>,
     /// The rate its model makes frames at: left out where the workflow says none.
     #[serde(skip_serializing_if = "not_positive")]
     pub fps: f64,
@@ -558,6 +489,27 @@ pub struct Described {
 
 fn not_positive(fps: &f64) -> bool {
     *fps <= 0.0 || fps.is_nan()
+}
+
+impl Described {
+    /// The blanks' names in the order the nodes first hold them, which is the order a
+    /// person meets them in; then any no node holds, by name.
+    pub fn blanks_as_held(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = Vec::new();
+        let held = self
+            .nodes
+            .iter()
+            .flat_map(|node| &node.inputs)
+            .flat_map(|input| &input.blanks)
+            .map(String::as_str)
+            .filter(|name| self.blanks.contains_key(*name));
+        for name in held.chain(self.blanks.keys().map(String::as_str)) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+        names
+    }
 }
 
 /// The workflow `text` holds, for an editor to show: what it makes, and
@@ -568,7 +520,7 @@ fn not_positive(fps: &f64) -> bool {
 pub fn described(text: &str) -> Result<Described, String> {
     let workflow = Workflow::parse(text)?;
     let nodes = nodes(text)?;
-    let mut blanks = Blanks::default();
+    let mut blanks = BTreeMap::new();
     let described = nodes
         .iter()
         .map(|node| {
@@ -584,7 +536,7 @@ pub fn described(text: &str) -> Result<Described, String> {
                     None => {
                         let named = blanks_of(&input.value);
                         for name in &named {
-                            blanks.add(name, || {
+                            blanks.entry(name.clone()).or_insert_with(|| {
                                 let (by, says, default) = filled(name, &workflow);
                                 Blank {
                                     by,
@@ -787,11 +739,10 @@ mod tests {
             let said = described(text).unwrap_or_else(|error| panic!("{name}: {error}"));
             let workflow = Workflow::parse(text).unwrap();
             // Every blank the workflow has is said, with what fills it.
-            let mut named: Vec<&str> = said.blanks.names().collect();
-            named.sort_unstable();
+            let named: Vec<&String> = said.blanks.keys().collect();
             let mut have: Vec<String> = workflow.blanks().into_iter().collect();
             have.sort();
-            assert_eq!(named, have, "{name}");
+            assert_eq!(named, have.iter().collect::<Vec<_>>(), "{name}");
             assert!(!said.nodes.is_empty(), "{name}");
             // A value of it set and set back is the text it was.
             let node = said.nodes.iter().find_map(|node| {
@@ -814,7 +765,7 @@ mod tests {
         // Points are the line's to give, as a value it sets, and said as points.
         let matte =
             described(BUNDLED.iter().find(|(name, _)| *name == "matte").unwrap().1).unwrap();
-        let inside = matte.blanks.get("inside").unwrap();
+        let inside = &matte.blanks["inside"];
         assert_eq!((inside.by, &inside.default), (By::Set, &Some(json!(""))));
         assert!(
             inside

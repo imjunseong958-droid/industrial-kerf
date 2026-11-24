@@ -96,15 +96,25 @@ pub enum Kind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum What {
+    /// A sequence of the project a step draws.
     Sequence(SequenceNode),
+    /// A `render` step: Kerf drawing a sequence into a file.
     Render(RenderNode),
+    /// A `generate` step: a model asked for a file.
     Model(Box<ModelNode>),
+    /// A `join` step: parts of a longer shot set end to end.
     Join(JoinNode),
+    /// A file of the project a step reads.
     File(FileNode),
+    /// A signal clip of the project.
     Signal(SignalNode),
+    /// A clip of the project whose way across the frame a model is handed.
     Moves(MovesNode),
+    /// One of the project's cast.
     Cast(NamedNode),
+    /// One of the project's styles.
     Style(NamedNode),
+    /// The shot's takes: what the last step writes.
     Takes(TakesNode),
 }
 
@@ -384,12 +394,6 @@ pub struct Node {
     /// What it is, and what else there is to say of one of its kind.
     #[serde(flatten)]
     pub what: What,
-}
-
-impl Node {
-    pub fn kind(&self) -> Kind {
-        self.what.kind()
-    }
 }
 
 /// One reading: what `from` gives, read by `to` under the name `port`.

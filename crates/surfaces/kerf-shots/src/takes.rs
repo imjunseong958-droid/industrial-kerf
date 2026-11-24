@@ -270,7 +270,7 @@ pub fn summary(guide: &Guide, readings: &[Reading]) -> Summary {
     let best = readings
         .iter()
         // A mean that is not a number holds nothing.
-        .filter(|reading| reading.overlap > 0.0)
+        .filter(|reading| reading.overlap.is_finite() && reading.overlap > 0.0)
         .max_by(|a, b| a.overlap.total_cmp(&b.overlap))
         .filter(|_| readings.len() > 1)
         .map(|reading| reading.take);

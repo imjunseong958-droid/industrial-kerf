@@ -29,7 +29,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub use kerf_workflow::detail::{
-    Blank, Blanks, By, Described, DescribedFrames, DescribedInput, DescribedNode,
+    Blank, By, Described, DescribedFrames, DescribedInput, DescribedNode,
 };
 
 /// The program a workflow is run by, by its file's name.
@@ -253,7 +253,7 @@ pub struct Shown {
 pub fn shown(id: &str, line: usize, read: &Read) -> Result<Shown, String> {
     let mut described = kerf_workflow::detail::described(&read.text)?;
     // Beside what fills each blank, what the line gives for it now.
-    for (name, blank) in described.blanks.iter_mut() {
+    for (name, blank) in &mut described.blanks {
         blank.given = given(&read.ask, name);
     }
     let (origin, file) = match &read.origin {
