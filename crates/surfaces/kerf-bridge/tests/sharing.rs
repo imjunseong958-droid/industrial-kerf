@@ -84,6 +84,7 @@ fn hermetic(test: &str) -> bool {
             .map(|line| format!("[{test}] {line}\n"))
             .collect();
         let _ = std::io::stderr().write_all(lines.as_bytes());
+        diag_keep(&lines);
     }
     assert!(
         out.status.success() && said.contains("test result: ok. 1 passed"),
@@ -612,7 +613,44 @@ fn the_launcher_starts_a_shared_project_from_a_preset() {
 // DIAGNOSTIC (temporary): how long the editor waits for its first `collab` status, over
 // several rounds, and how long each tool probe takes with the runner's home and with the
 // tests' own. Only exit codes and times are written, never what a probe prints.
+/// The lines worth reading at the end of a CI job, kept in a file a later step prints.
+fn diag_keep(lines: &str) {
+    use std::io::Write;
+    let wanted: String = lines
+        .lines()
+        .filter(|line| {
+            [
+                "probe",
+                "local_tools",
+                "emit_status",
+                "ensure_driver",
+                "collab_status",
+                "gh answered",
+                "diag",
+                "test:",
+            ]
+            .iter()
+            .any(|word| line.contains(word))
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    if let Ok(mut file) = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("kerf-collab-timing.txt"))
+    {
+        let _ = file.write_all(wanted.as_bytes());
+    }
+}
+
 fn diag_probes(label: &str) {
+    let say = |line: String| {
+        git::diag_line(&line);
+        // In a test's own process, hermetic() keeps what it passes on.
+        if std::env::var_os(HERMETIC).is_none() {
+            diag_keep(&format!("[outer] {line}"));
+        }
+    };
     let timed = |program: &str, args: &[&str]| {
         let start = Instant::now();
         let code = Command::new(program)
@@ -633,7 +671,7 @@ fn diag_probes(label: &str) {
             ("gh", &["auth", "token"][..]),
         ] {
             let (code, secs) = timed(program, args);
-            git::diag_line(&format!(
+            say(format!(
                 "diag[{label}] `{program} {}` exit {code:?} in {secs:.3}s",
                 args.join(" ")
             ));
@@ -644,7 +682,7 @@ fn diag_probes(label: &str) {
         .map(|_| std::thread::spawn(move || timed("gh", &["auth", "token"])))
         .collect();
     let each: Vec<_> = threads.into_iter().map(|t| t.join().unwrap()).collect();
-    git::diag_line(&format!(
+    say(format!(
         "diag[{label}] three `gh auth token` at once: {each:?}, {:.3}s in all",
         start.elapsed().as_secs_f64()
     ));
@@ -655,11 +693,11 @@ fn diag_probes(label: &str) {
             "/usr/bin/security",
             &["find-generic-password", "-s", "gh:github.com"],
         );
-        git::diag_line(&format!(
+        say(format!(
             "diag[{label}] keychain lookup for gh:github.com exit {code:?} in {secs:.3}s"
         ));
         let (code, secs) = timed("/usr/bin/security", &["list-keychains"]);
-        git::diag_line(&format!(
+        say(format!(
             "diag[{label}] `security list-keychains` exit {code:?} in {secs:.3}s"
         ));
     }
@@ -674,7 +712,7 @@ fn diag_collab_status_latency() {
         return;
     }
     diag_probes("tests' home");
-    for round in 0..6 {
+    for round in 0..4 {
         let root = Root::new("diag");
         let remote = root.0.join("remote.git");
         fs::create_dir_all(&remote).unwrap();

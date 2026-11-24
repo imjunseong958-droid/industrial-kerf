@@ -802,3 +802,24 @@ impl Collab {
         }
     }
 }
+
+// DIAGNOSTIC (temporary): CI's last step on each system runs the ignored tests named
+// `real_keychain`; this one prints what the sharing tests kept of their timing, so it is
+// at the end of the job's log.
+#[cfg(test)]
+mod diag_tests {
+    #[test]
+    #[ignore = "DIAGNOSTIC: prints the sharing tests' timing in CI's last step"]
+    fn real_keychain_step_prints_the_collab_timing() {
+        use std::io::Write;
+        let path = std::env::temp_dir().join("kerf-collab-timing.txt");
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let _ = std::io::stderr().write_all(
+            format!(
+                "==== kerf collab timing ({} lines)\n{text}==== end\n",
+                text.lines().count()
+            )
+            .as_bytes(),
+        );
+    }
+}
