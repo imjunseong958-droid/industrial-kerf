@@ -1,7 +1,7 @@
 //! Probe parsers and ffmpeg/ffprobe wrappers.
 
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
@@ -17,6 +17,7 @@ use crate::process::ffmpeg::{
     resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, run_in, video_decode_prefix,
 };
 use crate::process::resources::extract_job_count;
+use crate::said;
 
 static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"silence_(start|end):\s*(-?\d+(?:\.\d+)?)").expect("a fixed pattern that compiles")
@@ -482,8 +483,73 @@ const LENS_TAGS: [&str; 4] = [
 ];
 const REEL_TAGS: [&str; 4] = ["reel_name", "com.apple.proapps.reel", "reel", "tape_name"];
 
+/// ffprobe's output as [`parse_media_info_json`] reads it: leniently, a field that is not of its
+/// type absent, where [`parse_ffprobe_json`] refuses the whole of it.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ProbedMedia {
+    #[serde(deserialize_with = "said::objects")]
+    streams: Option<Vec<ProbedStream>>,
+    #[serde(deserialize_with = "said::object")]
+    format: ProbedFormat,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ProbedFormat {
+    #[serde(deserialize_with = "said::as_said")]
+    tags: Tags,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ProbedStream {
+    #[serde(deserialize_with = "said::as_said")]
+    codec_type: Option<String>,
+    #[serde(deserialize_with = "said::object")]
+    disposition: Disposition,
+    #[serde(deserialize_with = "said::as_said")]
+    tags: Tags,
+    #[serde(deserialize_with = "text")]
+    codec_name: Option<String>,
+    #[serde(deserialize_with = "text")]
+    profile: Option<String>,
+    #[serde(deserialize_with = "text")]
+    pix_fmt: Option<String>,
+    #[serde(deserialize_with = "text")]
+    sample_fmt: Option<String>,
+    #[serde(deserialize_with = "colour_tag")]
+    color_space: Option<String>,
+    #[serde(deserialize_with = "colour_tag")]
+    color_transfer: Option<String>,
+    #[serde(deserialize_with = "colour_tag")]
+    color_primaries: Option<String>,
+    #[serde(deserialize_with = "colour_tag")]
+    color_range: Option<String>,
+    #[serde(deserialize_with = "count")]
+    bits_per_raw_sample: Option<u32>,
+    #[serde(deserialize_with = "count")]
+    bits_per_sample: Option<u32>,
+    #[serde(deserialize_with = "count")]
+    channels: Option<u32>,
+    #[serde(deserialize_with = "count")]
+    sample_rate: Option<u32>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Disposition {
+    /// 1 where the stream is cover art.
+    #[serde(deserialize_with = "said::as_said")]
+    attached_pic: Option<u64>,
+}
+
+/// What the file's writer tagged a stream or the container with. JSON, as the names are the
+/// writer's own and [`tag`] looks one up without regard to case, in the order the JSON keeps.
+type Tags = serde_json::Map<String, serde_json::Value>;
+
 /// A tag's value, looked up without regard to case, when it is not blank.
-fn tag(tags: &serde_json::Map<String, serde_json::Value>, names: &[&str]) -> Option<String> {
+fn tag(tags: &Tags, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
         tags.iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
@@ -496,21 +562,37 @@ fn tag(tags: &serde_json::Map<String, serde_json::Value>, names: &[&str]) -> Opt
     })
 }
 
+/// Text FFmpeg reports, or nothing when it is blank or `unknown`.
+fn text<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    let said: Option<String> = said::as_said(deserializer)?;
+    Ok(said
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty() && *text != "unknown")
+        .map(str::to_owned))
+}
+
 /// A colour tag FFmpeg reports, or nothing when it says the file has none.
-fn colour_tag(value: Option<&serde_json::Value>) -> Option<String> {
-    let text = value?.as_str()?.trim();
-    (!text.is_empty() && !matches!(text, "unknown" | "unspecified" | "reserved"))
-        .then(|| text.to_owned())
+fn colour_tag<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    let said: Option<String> = said::as_said(deserializer)?;
+    Ok(said.as_deref().map(str::trim).and_then(|text| {
+        (!text.is_empty() && !matches!(text, "unknown" | "unspecified" | "reserved"))
+            .then(|| text.to_owned())
+    }))
 }
 
 /// A count FFmpeg gives as a number or as a decimal string; 0 is "unknown".
-fn count(value: Option<&serde_json::Value>) -> Option<u32> {
-    let value = value?;
-    value
+fn count<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<u32>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(value
         .as_u64()
         .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
         .and_then(|number| u32::try_from(number).ok())
-        .filter(|number| *number > 0)
+        .filter(|number| *number > 0))
 }
 
 /// Bits per component a pixel format holds: `yuv422p10le` 10, `p010le`
@@ -581,46 +663,28 @@ pub fn pix_fmt_bit_depth(pix_fmt: &str) -> Option<u32> {
 /// [`MediaInfo`] from `ffprobe -print_format json -show_format
 /// -show_streams` output.
 pub fn parse_media_info_json(stdout: &str) -> Result<MediaInfo> {
-    let parsed: serde_json::Value = serde_json::from_str(stdout)?;
-    let empty = serde_json::Map::new();
-    let streams = parsed
-        .get("streams")
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let probed: ProbedMedia = said::object_of(serde_json::from_str(stdout)?);
+    let streams = probed.streams.unwrap_or_default();
     let of_type = |kind: &str| {
         streams.iter().find(|stream| {
-            stream.get("codec_type").and_then(serde_json::Value::as_str) == Some(kind)
+            stream.codec_type.as_deref() == Some(kind)
                 // Cover art is a picture stream too; it is not the media's picture.
-                && stream
-                    .get("disposition")
-                    .and_then(|disposition| disposition.get("attached_pic"))
-                    .and_then(serde_json::Value::as_u64)
-                    != Some(1)
+                && stream.disposition.attached_pic != Some(1)
         })
-    };
-    let tags_of = |value: Option<&serde_json::Value>| {
-        value
-            .and_then(|value| value.get("tags"))
-            .and_then(serde_json::Value::as_object)
-            .unwrap_or(&empty)
-            .clone()
-    };
-    let text = |value: Option<&serde_json::Value>, key: &str| {
-        value
-            .and_then(|value| value.get(key))
-            .and_then(serde_json::Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty() && *text != "unknown")
-            .map(str::to_owned)
     };
     let video = of_type("video");
     let audio = of_type("audio");
-    let format_tags = tags_of(parsed.get("format"));
+    let of = |stream: Option<&ProbedStream>, field: fn(&ProbedStream) -> &Option<String>| {
+        stream.and_then(|stream| field(stream).clone())
+    };
+    let empty = Tags::new();
     // Camera and reel tags live on the container, on the picture, or on a
     // timecode track, depending on who wrote the file.
-    let mut every = vec![format_tags, tags_of(video)];
-    every.extend(streams.iter().map(|stream| tags_of(Some(stream))));
+    let mut every = vec![
+        &probed.format.tags,
+        video.map_or(&empty, |video| &video.tags),
+    ];
+    every.extend(streams.iter().map(|stream| &stream.tags));
     let any = |names: &[&str]| every.iter().find_map(|tags| tag(tags, names));
     let make = any(&MAKE_TAGS);
     let model = any(&MODEL_TAGS);
@@ -632,28 +696,31 @@ pub fn parse_media_info_json(stdout: &str) -> Result<MediaInfo> {
         (Some(make), Some(model)) => Some(format!("{make} {model}")),
         (make, model) => model.or(make),
     };
-    let pix_fmt = text(video, "pix_fmt");
-    let bit_depth = count(video.and_then(|video| video.get("bits_per_raw_sample")))
+    let pix_fmt = of(video, |video| &video.pix_fmt);
+    let bit_depth = video
+        .and_then(|video| video.bits_per_raw_sample)
         .or_else(|| pix_fmt.as_deref().and_then(pix_fmt_bit_depth));
     Ok(MediaInfo {
-        codec: text(video, "codec_name").or_else(|| text(audio, "codec_name")),
-        profile: text(video, "profile").or_else(|| text(audio, "profile")),
+        codec: of(video, |stream| &stream.codec_name)
+            .or_else(|| of(audio, |stream| &stream.codec_name)),
+        profile: of(video, |stream| &stream.profile)
+            .or_else(|| of(audio, |stream| &stream.profile)),
         pix_fmt,
         bit_depth,
-        color_space: colour_tag(video.and_then(|video| video.get("color_space"))),
-        transfer: colour_tag(video.and_then(|video| video.get("color_transfer"))),
-        primaries: colour_tag(video.and_then(|video| video.get("color_primaries"))),
-        color_range: colour_tag(video.and_then(|video| video.get("color_range"))),
+        color_space: of(video, |video| &video.color_space),
+        transfer: of(video, |video| &video.color_transfer),
+        primaries: of(video, |video| &video.color_primaries),
+        color_range: of(video, |video| &video.color_range),
         camera,
         lens: any(&LENS_TAGS),
         reel: any(&REEL_TAGS),
         timecode: any(&["timecode"]),
-        audio_codec: text(audio, "codec_name"),
-        audio_sample_fmt: text(audio, "sample_fmt"),
-        audio_bit_depth: count(audio.and_then(|audio| audio.get("bits_per_raw_sample")))
-            .or_else(|| count(audio.and_then(|audio| audio.get("bits_per_sample")))),
-        audio_channels: count(audio.and_then(|audio| audio.get("channels"))),
-        audio_sample_rate: count(audio.and_then(|audio| audio.get("sample_rate"))),
+        audio_codec: of(audio, |audio| &audio.codec_name),
+        audio_sample_fmt: of(audio, |audio| &audio.sample_fmt),
+        audio_bit_depth: audio
+            .and_then(|audio| audio.bits_per_raw_sample.or(audio.bits_per_sample)),
+        audio_channels: audio.and_then(|audio| audio.channels),
+        audio_sample_rate: audio.and_then(|audio| audio.sample_rate),
     })
 }
 

@@ -1221,9 +1221,9 @@ impl Making<'_> {
                     )?;
                     // A picture in motion given as the first frame is where it ended, and as
                     // the last, where it began: a shot that goes on from another, or into one.
-                    for (name, end) in [("first", true), ("last", false)] {
-                        let moving = asked[name]
-                            .as_str()
+                    for (said, end) in [(&mut asked.first, true), (&mut asked.last, false)] {
+                        let moving = said
+                            .as_deref()
                             .map(PathBuf::from)
                             .filter(|file| in_motion(file));
                         if let Some(file) = moving {
@@ -1242,11 +1242,10 @@ impl Making<'_> {
                                 "ffmpeg",
                                 &mut |_| {},
                             )?;
-                            asked[name] =
-                                serde_json::Value::String(still.to_string_lossy().into_owned());
+                            *said = Some(still.to_string_lossy().into_owned());
                         }
                     }
-                    std::fs::write(&request, serde_json::to_vec_pretty(&asked)?)?;
+                    std::fs::write(&request, asked.file()?)?;
                     let words = model::command_for(
                         &ask.model,
                         self.models.command(&ask.model)?,
