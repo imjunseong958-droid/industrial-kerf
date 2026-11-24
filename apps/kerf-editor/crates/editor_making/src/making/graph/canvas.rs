@@ -11,7 +11,7 @@ use super::layout::{
 };
 use super::paint::paint_ring;
 use super::ShotGraph;
-use crate::making::{reads_port, GraphEdge, Recipe};
+use crate::making::{gives_word, reads_port, GraphEdge, Recipe};
 use editor_state::store::Making;
 use editor_ui::icons::Icon;
 use editor_ui::motion;
@@ -22,6 +22,7 @@ use gpui::{
     CursorStyle, ElementId, KeyBinding, MouseButton, MouseDownEvent, PathBuilder, Pixels, Rgba,
     ScrollWheelEvent, Window,
 };
+use kerf_bridge::event::graph::{Gives, Kind};
 use std::collections::HashMap;
 
 actions!(
@@ -266,7 +267,7 @@ impl ShotGraph {
         graph
             .nodes
             .iter()
-            .filter(|node| node.kind != "takes")
+            .filter(|node| !node.is(Kind::Takes))
             .filter_map(|node| {
                 let at = camera.to_view(out_port(graph, places, &node.id)?);
                 let id = node.id.clone();
@@ -311,7 +312,7 @@ impl ShotGraph {
             let node = graph.node(&id)?;
             Some((
                 self.camera.to_view(out_port(graph, places, &id)?),
-                gives_color(&node.gives),
+                gives_color(node.gives),
                 held,
             ))
         })
@@ -328,7 +329,7 @@ impl ShotGraph {
                 Some((
                     self.camera.to_view(out_port(graph, places, from)?),
                     *at,
-                    gives_color(&node.gives),
+                    gives_color(node.gives),
                     over.is_none(),
                 ))
             }),
@@ -408,7 +409,7 @@ impl ShotGraph {
                         .flex()
                         .items_center()
                         .gap(px(theme::space::S6))
-                        .child(sample(gives_color("file")))
+                        .child(sample(gives_color(Gives::File)))
                         .child(ui::label("link", text::META, theme::ink2())),
                 )
                 .child(
@@ -435,8 +436,8 @@ impl ShotGraph {
                 )
         } else {
             // The four a shot is told by, always; words and other files where the graph has them.
-            let mut shown: Vec<&str> = vec!["video", "image", "path", "signal"];
-            for more in ["words", "file"] {
+            let mut shown = vec![Gives::Video, Gives::Image, Gives::Path, Gives::Signal];
+            for more in [Gives::Words, Gives::File] {
                 if graph.edges.iter().any(|edge| edge.gives == more) {
                     shown.push(more);
                 }
@@ -447,7 +448,7 @@ impl ShotGraph {
                     .items_center()
                     .gap(px(theme::space::S6))
                     .child(sample(gives_color(gives)))
-                    .child(ui::label(gives, text::META, theme::ink2()))
+                    .child(ui::label(gives_word(gives), text::META, theme::ink2()))
             }))
         };
         let zoom = card()
@@ -514,7 +515,7 @@ fn edge_lines(
         .filter_map(|edge| {
             let start = camera.to_view(out_port(graph, places, &edge.from)?);
             let end = camera.to_view(in_port(graph, places, edge)?);
-            let color = gives_color(&edge.gives);
+            let color = gives_color(edge.gives);
             let dashed = graph
                 .node(&edge.to)
                 .is_some_and(|to| !reads_port(to, &edge.port));
@@ -546,7 +547,7 @@ fn edge_ends(
             Some((
                 camera.to_view(out_port(graph, places, &edge.from)?),
                 camera.to_view(in_port(graph, places, edge)?),
-                gives_color(&edge.gives),
+                gives_color(edge.gives),
             ))
         })
         .collect()
@@ -569,7 +570,7 @@ fn port_labels(
         .filter(|edge| {
             graph
                 .node(&edge.to)
-                .is_some_and(|to| matches!(to.kind.as_str(), "model" | "run" | "join"))
+                .is_some_and(|to| matches!(to.kind(), Some(Kind::Model | Kind::Join)))
         })
         .filter_map(|edge| {
             let end = camera.to_view(in_port(graph, places, edge)?);

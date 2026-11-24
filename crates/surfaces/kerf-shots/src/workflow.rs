@@ -24,8 +24,13 @@ use kerf_engine::recipe::model::{Ask, Models, Source};
 use kerf_engine::recipe::text::{self, Change};
 use kerf_engine::recipe::{Recipe, Step};
 use kerf_model::Project;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
+
+pub use kerf_workflow::detail::{
+    Blank, By, Described, DescribedFrames, DescribedInput, DescribedNode,
+};
 
 /// The program a workflow is run by, by its file's name.
 const PROGRAM: &str = "kerf-comfy";
@@ -199,30 +204,76 @@ fn given(ask: &Ask, name: &str) -> Option<String> {
     }
 }
 
+/// Where a shown workflow comes from, by its name: see [`Origin`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OriginKind {
+    /// It comes with `kerf-comfy`.
+    #[default]
+    Bundled,
+    /// A file the person's models entry names, outside the project.
+    File,
+    /// The shot's own copy, a file of the project.
+    Own,
+}
+
+/// The workflow of one `generate` step, as an editor shows it and an agent reads it: the
+/// step it is of (`media`, and `line`, as whoever asked counts it), the model and the
+/// workflow its entry runs (`name`), the workflow's text, where it comes from and the
+/// shot's own copy where it has one (`file`, else `null`), and what
+/// [`kerf_workflow::detail::described`] says of it, with what the step's line gives for
+/// each blank now (`given`).
+///
+/// Once a server has been asked what it takes ([`with_taken`]) it says `taken`; whoever
+/// could not ask says why under `takenError`; and the editor's bridge says `edited` of
+/// one a person just changed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Shown {
+    #[serde(flatten)]
+    pub described: Described,
+    pub media: String,
+    pub line: usize,
+    pub model: String,
+    pub name: String,
+    pub text: String,
+    pub origin: OriginKind,
+    pub file: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub taken: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub taken_error: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub edited: bool,
+}
+
 /// The workflow of one step as an editor shows it and an agent reads it:
 /// what it makes, every node with every input, and of each blank what fills
 /// it and what the line gives for it now (`given`).
-pub fn shown(id: &str, line: usize, read: &Read) -> Result<Value, String> {
-    let mut event = kerf_workflow::detail::described(&read.text)?;
+pub fn shown(id: &str, line: usize, read: &Read) -> Result<Shown, String> {
+    let mut described = kerf_workflow::detail::described(&read.text)?;
     // Beside what fills each blank, what the line gives for it now.
-    if let Some(blanks) = event["blanks"].as_object_mut() {
-        for (name, blank) in blanks {
-            blank["given"] = json!(given(&read.ask, name));
-        }
+    for (name, blank) in &mut described.blanks {
+        blank.given = given(&read.ask, name);
     }
-    event["media"] = json!(id);
-    event["line"] = json!(line);
-    event["model"] = json!(read.ask.model);
-    event["name"] = json!(read.name);
-    event["text"] = json!(read.text);
     let (origin, file) = match &read.origin {
-        Origin::Bundled => ("bundled", None),
-        Origin::File => ("file", None),
-        Origin::Own(stored, _) => ("own", Some(stored.clone())),
+        Origin::Bundled => (OriginKind::Bundled, None),
+        Origin::File => (OriginKind::File, None),
+        Origin::Own(stored, _) => (OriginKind::Own, Some(stored.clone())),
     };
-    event["origin"] = json!(origin);
-    event["file"] = json!(file);
-    Ok(event)
+    Ok(Shown {
+        described,
+        media: id.to_owned(),
+        line,
+        model: read.ask.model.clone(),
+        name: read.name.clone(),
+        text: read.text.clone(),
+        origin,
+        file,
+        taken: false,
+        taken_error: None,
+        edited: false,
+    })
 }
 
 /// The name of the copy a shot keeps of a workflow, beside its recipe: the
@@ -364,24 +415,35 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
 }
 
 /// `shown`, a workflow as [`shown`] says it, with what each of its inputs takes beside
-/// it: `choices`, or `min`, `max` and `step`, from `taken`.
-pub fn with_taken(shown: &mut Value, taken: &Value) {
-    for node in shown["nodes"].as_array_mut().into_iter().flatten() {
-        let class = node["class"].as_str().unwrap_or_default().to_owned();
+/// it: what another node hands it (`type`), `choices`, or `min`, `max` and `step`, from
+/// `taken`, which is what the model's program printed ([`taken`]).
+pub fn with_taken(shown: &mut Shown, taken: &Value) {
+    for node in &mut shown.described.nodes {
+        let of_class = &taken[&node.class];
         // What it gives at each output, for a link drawn from it.
-        if let Some(outputs) = taken[&class].get(OUTPUTS) {
-            node["outputs"] = outputs.clone();
+        if let Some(outputs) = of_class.get(OUTPUTS).and_then(Value::as_array) {
+            node.outputs = Some(outputs.clone());
         }
-        for input in node["inputs"].as_array_mut().into_iter().flatten() {
-            let name = input["name"].as_str().unwrap_or_default().to_owned();
-            if let Some(takes) = taken[&class][&name].as_object() {
-                for (key, value) in takes {
-                    input[key] = value.clone();
+        for input in &mut node.inputs {
+            let takes = &of_class[&input.name];
+            if let Some(kind) = takes["type"].as_str() {
+                input.takes = Some(kind.to_owned());
+            }
+            if let Some(choices) = takes["choices"].as_array() {
+                input.choices = Some(choices.clone());
+            }
+            for (bound, held) in [
+                ("min", &mut input.min),
+                ("max", &mut input.max),
+                ("step", &mut input.step),
+            ] {
+                if let Value::Number(number) = &takes[bound] {
+                    *held = Some(number.clone());
                 }
             }
         }
     }
-    shown["taken"] = json!(true);
+    shown.taken = true;
 }
 
 /// Whether each of `sets` is something its input takes, by `taken`: one of its choices,
@@ -392,24 +454,19 @@ pub fn with_taken(shown: &mut Value, taken: &Value) {
 /// input says nothing of whether the input is the workflow's to set.
 fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
     let described = kerf_workflow::detail::described(&read.text)?;
+    let class_of = |id: &str| {
+        described
+            .nodes
+            .iter()
+            .find(|node| node.id == id)
+            .map_or("", |node| node.class.as_str())
+    };
     for set in sets {
-        let class = described["nodes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|node| node["id"] == set.node)
-            .and_then(|node| node["class"].as_str())
-            .unwrap_or_default();
+        let class = class_of(set.node);
         let takes = &taken[class][set.input];
         if let Some((from, output)) = set.link {
             // A link carries what its input takes: a model to a model, pictures to pictures.
-            let from_class = described["nodes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|node| node["id"] == from)
-                .and_then(|node| node["class"].as_str())
-                .unwrap_or_default();
+            let from_class = class_of(from);
             let gives = &taken[from_class][OUTPUTS];
             if let (Some(wanted), Some(outputs)) = (takes["type"].as_str(), gives.as_array()) {
                 match outputs.get(output as usize).and_then(Value::as_str) {

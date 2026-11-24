@@ -4,7 +4,9 @@
 //! leave it.
 
 use super::ShotGraph;
-use crate::making::{input_kind, shown_value, value_text, GraphNode, InputKind};
+use crate::making::{
+    input_kind, plain, shown_number, shown_value, value_text, GraphNode, Holds, InputKind,
+};
 use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::{self, radius, text};
 use editor_ui::ui;
@@ -12,6 +14,7 @@ use gpui::{
     div, prelude::*, px, AnyElement, App, Context, ElementId, Entity, Focusable, Subscription,
     Window,
 };
+use kerf_bridge::event::graph::What;
 use kerf_bridge::{RecipeEdit, WorkflowEdit};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -34,54 +37,64 @@ struct Want {
 /// Any other name goes to the model as it is written: `name=value`.
 pub(super) const ADD: &str = "+add";
 
-fn want(key: &str, label: &str, value: &Value, placeholder: &str) -> Want {
+fn want(key: &str, label: &str, value: impl Into<String>, placeholder: &str) -> Want {
     Want {
         key: key.to_owned(),
         label: label.to_owned(),
-        value: value_text(value),
+        value: value.into(),
         placeholder: placeholder.to_owned(),
         multiline: false,
         tip: None,
     }
 }
 
+/// What a line says of a name, or nothing where it says none.
+fn said(value: &Option<String>) -> String {
+    value.clone().unwrap_or_default()
+}
+
 /// The fields of a node, by its kind: what its line sets. A guide's Draws
 /// is chosen from a menu, and a workflow's values are set by what each is.
 fn wants_of(node: &GraphNode) -> Vec<Want> {
-    let holds = &node.holds;
-    match node.kind.as_str() {
-        "model" => {
+    match &node.holds {
+        Holds::Shot(What::Model(model)) => {
             let mut wants = vec![Want {
                 multiline: true,
                 ..want(
                     "prompt",
                     "Prompt",
-                    &holds["prompt"],
+                    model.prompt.as_str(),
                     "What the file should show",
                 )
             }];
-            wants.push(want("seed", "Seed", &holds["seed"], "the model picks one"));
-            let longest = if holds["modelSeconds"].is_null() {
-                "as the model makes".to_owned()
-            } else {
-                format!("up to {}", value_text(&holds["modelSeconds"]))
+            wants.push(want(
+                "seed",
+                "Seed",
+                model.seed.map(|seed| seed.to_string()).unwrap_or_default(),
+                "the model picks one",
+            ));
+            let longest = match model.model_seconds {
+                None => "as the model makes".to_owned(),
+                Some(seconds) => format!("up to {}", plain(seconds)),
             };
-            wants.push(want("seconds", "Seconds", &holds["seconds"], &longest));
-            let size = holds["modelSize"]
-                .as_str()
-                .unwrap_or("the model's own")
-                .to_owned();
-            wants.push(want("size", "Size", &holds["size"], &size));
+            wants.push(want(
+                "seconds",
+                "Seconds",
+                model.seconds.map(plain).unwrap_or_default(),
+                &longest,
+            ));
+            let size = model.model_size.as_deref().unwrap_or("the model's own");
+            wants.push(want("size", "Size", said(&model.size), size));
             // A part of a longer shot says where in its sequences' time it starts.
-            if !holds["from"].is_null() {
-                wants.push(want("from", "From", &holds["from"], "the sequence's start"));
+            if let Some(from) = model.from {
+                wants.push(want("from", "From", plain(from), "the sequence's start"));
             }
-            for knob in holds["knobs"].as_array().into_iter().flatten() {
-                let name = knob["name"].as_str().unwrap_or_default();
+            for knob in &model.knobs {
+                let name = knob.name.as_str();
                 if name.is_empty() {
                     continue;
                 }
-                let comes = value_text(&knob["default"]);
+                let comes = knob.default.as_ref().map(value_text).unwrap_or_default();
                 let tip = if comes.is_empty() {
                     format!("{name}, as the line sets it; emptied, it is taken off the line")
                 } else {
@@ -89,62 +102,55 @@ fn wants_of(node: &GraphNode) -> Vec<Want> {
                 };
                 wants.push(Want {
                     tip: Some(tip),
-                    ..want(name, name, &knob["value"], &comes)
+                    ..want(name, name, said(&knob.value), &comes)
                 });
             }
-            wants.push(want(ADD, "Add", &Value::Null, "name=value"));
+            wants.push(want(ADD, "Add", "", "name=value"));
             wants
         }
-        "render" => vec![
-            want("sequence", "Sequence", &holds["sequence"], ""),
-            want("size", "Size", &holds["size"], "the sequence's"),
-            want("rate", "Rate", &holds["rate"], "the sequence's"),
+        Holds::Shot(What::Render(render)) => vec![
+            want("sequence", "Sequence", render.sequence.as_str(), ""),
+            want("size", "Size", said(&render.size), "the sequence's"),
+            want("rate", "Rate", said(&render.rate), "the sequence's"),
             want(
                 "matte",
                 "Matte of",
-                &holds["matte"],
+                said(&render.matte),
                 "a clip, alone in white",
             ),
-            want("from", "From", &holds["from"], "its start"),
-            want("seconds", "Seconds", &holds["seconds"], "to its end"),
+            want("from", "From", said(&render.from), "its start"),
+            want("seconds", "Seconds", said(&render.seconds), "to its end"),
         ],
-        "join" => {
-            let lap = holds["lap"].as_u64().filter(|lap| *lap > 0);
-            vec![Want {
-                value: lap.map(|lap| lap.to_string()).unwrap_or_default(),
-                ..want("lap", "Lap", &Value::Null, "0 frames")
-            }]
+        Holds::Shot(What::Join(join)) => {
+            let lap = Some(join.lap).filter(|lap| *lap > 0);
+            vec![want(
+                "lap",
+                "Lap",
+                lap.map(|lap| lap.to_string()).unwrap_or_default(),
+                "0 frames",
+            )]
         }
-        "part" => holds["inputs"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        Holds::Part(part) => part
+            .inputs
+            .iter()
             .filter(|input| input_kind(input) == InputKind::Value)
             .filter(|input| {
-                let held = &input["value"];
+                let held = &input.value;
                 (held.is_string() || held.is_number())
-                    && input["choices"]
-                        .as_array()
-                        .is_none_or(|choices| choices.is_empty())
+                    && input.choices.as_ref().is_none_or(Vec::is_empty)
             })
             .map(|input| {
-                let name = input["name"].as_str().unwrap_or_default();
-                let held = &input["value"];
-                let (least, most) = (&input["min"], &input["max"]);
-                let tip =
-                    (held.is_number() && (least.is_number() || most.is_number())).then(|| {
-                        let end = |end: &Value| {
-                            if end.is_number() {
-                                shown_value(end)
-                            } else {
-                                "any".to_owned()
-                            }
-                        };
-                        format!("{} to {}", end(least), end(most))
-                    });
+                let held = &input.value;
+                let (least, most) = (&input.min, &input.max);
+                let tip = (held.is_number() && (least.is_some() || most.is_some())).then(|| {
+                    let end = |end: &Option<serde_json::Number>| {
+                        end.as_ref().map_or_else(|| "any".to_owned(), shown_number)
+                    };
+                    format!("{} to {}", end(least), end(most))
+                });
                 Want {
-                    key: name.to_owned(),
-                    label: name.to_owned(),
+                    key: input.name.clone(),
+                    label: input.name.clone(),
                     value: shown_value(held),
                     placeholder: String::new(),
                     multiline: false,
@@ -152,7 +158,7 @@ fn wants_of(node: &GraphNode) -> Vec<Want> {
                 }
             })
             .collect(),
-        _ => Vec::new(),
+        Holds::Shot(_) => Vec::new(),
     }
 }
 
@@ -297,25 +303,21 @@ impl ShotGraph {
             .filter(|old| old.node == node.id)
             .map(|old| carried_typing(&old.fields, window, cx))
             .unwrap_or_default();
-        let part_node = node.holds["id"].as_str().map(str::to_owned);
         let mut fields = Vec::new();
         let mut subscriptions = Vec::new();
         for want in wants {
             let kind = if want.key == ADD {
                 FieldKind::Add
-            } else if let Some(part) = part_node.as_ref().filter(|_| node.is_part()) {
-                let input = node.holds["inputs"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .find(|input| input["name"] == want.key.as_str())
-                    .cloned()
-                    .unwrap_or_default();
+            } else if let Some(part) = node.part() {
+                let input = part.inputs.iter().find(|input| input.name == want.key);
+                let bound = |bound: &Option<serde_json::Number>| {
+                    bound.as_ref().and_then(serde_json::Number::as_f64)
+                };
                 FieldKind::Part {
-                    node: part.clone(),
-                    number: input["value"].is_number(),
-                    least: input["min"].as_f64(),
-                    most: input["max"].as_f64(),
+                    node: part.id.clone(),
+                    number: input.is_some_and(|input| input.value.is_number()),
+                    least: input.and_then(|input| bound(&input.min)),
+                    most: input.and_then(|input| bound(&input.max)),
                 }
             } else {
                 FieldKind::Line

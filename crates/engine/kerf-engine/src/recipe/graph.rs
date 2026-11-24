@@ -27,13 +27,13 @@ use super::{stored, text::step_lines, within, Recipe, Step};
 use crate::error::{EngineError, Result};
 use kerf_compose::Pass;
 use kerf_model::{Content, Param, Project, Value};
-use serde::Serialize;
-use serde_json::{json, Map, Value as Json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value as Json;
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// What goes along an edge, and what a node gives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Gives {
     /// A picture in motion: a sequence, a guide, a take.
@@ -47,6 +47,7 @@ pub enum Gives {
     /// Words, with or without pictures: one of the cast, a style.
     Words,
     /// Any other file: a mesh, a camera's path, a scene.
+    #[default]
     File,
 }
 
@@ -66,8 +67,7 @@ impl Gives {
 }
 
 /// What a node is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
     /// A sequence of the project a step draws.
     Sequence,
@@ -91,40 +91,328 @@ pub enum Kind {
     Takes,
 }
 
+/// What a node is, and what else there is to say of one of its kind. Written beside the
+/// node's own fields, under `kind` and each field's name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum What {
+    /// A sequence of the project a step draws.
+    Sequence(SequenceNode),
+    /// A `render` step: Kerf drawing a sequence into a file.
+    Render(RenderNode),
+    /// A `generate` step: a model asked for a file.
+    Model(Box<ModelNode>),
+    /// A `join` step: parts of a longer shot set end to end.
+    Join(JoinNode),
+    /// A file of the project a step reads.
+    File(FileNode),
+    /// A signal clip of the project.
+    Signal(SignalNode),
+    /// A clip of the project whose way across the frame a model is handed.
+    Moves(MovesNode),
+    /// One of the project's cast.
+    Cast(NamedNode),
+    /// One of the project's styles.
+    Style(NamedNode),
+    /// The shot's takes: what the last step writes.
+    Takes(TakesNode),
+}
+
+impl What {
+    pub fn kind(&self) -> Kind {
+        match self {
+            Self::Sequence(_) => Kind::Sequence,
+            Self::Render(_) => Kind::Render,
+            Self::Model(_) => Kind::Model,
+            Self::Join(_) => Kind::Join,
+            Self::File(_) => Kind::File,
+            Self::Signal(_) => Kind::Signal,
+            Self::Moves(_) => Kind::Moves,
+            Self::Cast(_) => Kind::Cast,
+            Self::Style(_) => Kind::Style,
+            Self::Takes(_) => Kind::Takes,
+        }
+    }
+
+    /// The file a step makes, by the name it has in braces: none for what is not a step.
+    pub fn makes(&self) -> Option<&str> {
+        match self {
+            Self::Render(render) => Some(&render.makes),
+            Self::Model(model) => Some(&model.makes),
+            Self::Join(join) => Some(&join.makes),
+            _ => None,
+        }
+    }
+
+    /// What a step made on the way to the take shown, where there is such a file.
+    pub fn made(&self) -> Option<&Made> {
+        match self {
+            Self::Render(render) => render.made.as_ref(),
+            Self::Model(model) => model.made.as_ref(),
+            Self::Join(join) => join.made.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Where a step's [`Made`] is kept: none for what is not a step.
+    fn made_mut(&mut self) -> Option<&mut Option<Made>> {
+        match self {
+            Self::Render(render) => Some(&mut render.made),
+            Self::Model(model) => Some(&mut model.made),
+            Self::Join(join) => Some(&mut join.made),
+            _ => None,
+        }
+    }
+
+    /// Whether what a step reads is there to read: a file, a sequence, a clip, one of the
+    /// cast. A step, and the takes, are always there.
+    pub fn there(&self) -> bool {
+        match self {
+            Self::Sequence(sequence) => sequence.there,
+            Self::File(file) => file.there,
+            Self::Signal(signal) => signal.there,
+            Self::Moves(moves) => moves.there,
+            Self::Cast(named) | Self::Style(named) => named.there,
+            Self::Render(_) | Self::Model(_) | Self::Join(_) | Self::Takes(_) => true,
+        }
+    }
+}
+
+/// A sequence a step draws, by its id.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SequenceNode {
+    pub sequence: String,
+    pub there: bool,
+}
+
+/// A file a step reads, as the step names it, and from the project's folder where it is
+/// inside it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FileNode {
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_project: Option<String>,
+    pub there: bool,
+}
+
+/// A clip of a sequence that plays a sound, which a signal's keys can be read from.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Sound {
+    pub clip: String,
+    /// The name it shows.
+    pub name: String,
+}
+
+/// A signal clip. One that reads says its sequence, how many frames it is at how many a
+/// second, what it comes to along them (0 to 1, at most [`POINTS`] of them), and the
+/// sounds of its sequence.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SignalNode {
+    pub clip: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frames: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<f64>>,
+    pub there: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sounds: Option<Vec<Sound>>,
+}
+
+/// A clip whose way across the frame a model is handed. One that is there says its
+/// sequence and that sequence's width over its height, and the path it is led along,
+/// where it has one, as its line writes it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MovesNode {
+    pub clip: String,
+    pub there: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sequence: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aspect: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// One of the cast or a style, by its name, with its pictures where the cast file has it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NamedNode {
+    pub name: String,
+    pub there: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refs: Option<Vec<String>>,
+}
+
+/// What a step made on the way to the take shown: the take, and the file from the
+/// project's folder.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Made {
+    pub take: u32,
+    pub path: String,
+}
+
+/// A `render` step, as its line says each part (`null` where it says none).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RenderNode {
+    pub sequence: String,
+    pub makes: String,
+    /// `picture`, or the pass by its name.
+    pub pass: String,
+    pub size: Option<String>,
+    pub rate: Option<String>,
+    pub matte: Option<String>,
+    pub from: Option<String>,
+    pub seconds: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub made: Option<Made>,
+}
+
+/// A `join` step: the parts it sets end to end, and how many frames each laps the one
+/// before.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JoinNode {
+    pub makes: String,
+    pub parts: Vec<String>,
+    pub lap: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub made: Option<Made>,
+}
+
+/// A name a `generate` line can set for its model alone: what the line sets it to
+/// (`null` where it leaves it), and what it is when the line does not, as the person's
+/// models file says.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Knob {
+    pub name: String,
+    pub value: Option<String>,
+    pub default: Option<Json>,
+}
+
+/// The program a model is run with, where its workflow can be opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunnerKind {
+    /// `kerf-comfy`.
+    Comfy,
+}
+
+/// What runs a model: which program, and which workflow.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Runner {
+    pub kind: RunnerKind,
+    pub workflow: String,
+}
+
+/// A `generate` step: what its line asks (`null` where it says none), whether the model
+/// is set up on this computer, and what the person's models file says the model takes,
+/// each left out where the file does not say.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ModelNode {
+    pub model: String,
+    pub set_up: bool,
+    pub prompt: String,
+    pub seed: Option<u64>,
+    pub seconds: Option<f64>,
+    pub from: Option<f64>,
+    pub size: Option<String>,
+    pub makes: String,
+    /// The shot's own workflow, as the line names it.
+    pub workflow: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reads: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_size: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_rate: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_seconds: Option<f64>,
+    pub knobs: Vec<Knob>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub made: Option<Made>,
+    /// Said by whoever knows which program runs the model, which is not this crate:
+    /// `kerf-shots`, for a model `kerf-comfy` runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runner: Option<Runner>,
+}
+
+/// One take of the shot, as the takes' node lists it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TakeSaid {
+    pub number: u32,
+    /// Its path as a document names it.
+    pub path: String,
+    pub chosen: bool,
+    pub rolled: u32,
+    pub changed: Vec<String>,
+    pub kept: bool,
+}
+
+/// The shot's takes, and why the shot wants making as things stand (`null` where it
+/// does not).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TakesNode {
+    pub media: String,
+    pub takes: Vec<TakeSaid>,
+    pub wants: Option<String>,
+}
+
 /// One node of a recipe's graph.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Node {
     /// What it is told apart by, which stays the same while the recipe's
     /// other lines change: a step by the file it makes, what is read by its
     /// name.
     pub id: String,
-    pub kind: Kind,
     /// What it is called, and a line on what it holds.
+    #[serde(default)]
     pub title: String,
+    #[serde(default)]
     pub detail: String,
+    #[serde(default)]
     pub gives: Gives,
     /// The line of the recipe it is, for a step, counted from 1.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
-    /// What else there is to say of one of its kind.
+    /// What it is, and what else there is to say of one of its kind.
     #[serde(flatten)]
-    pub holds: Map<String, Json>,
+    pub what: What,
 }
 
 /// One reading: what `from` gives, read by `to` under the name `port`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Edge {
     pub from: String,
     pub to: String,
     /// The name the reading step gives it: `guide`, `ref`, `signal`.
     pub port: String,
     /// Which of the words of that name on the line it is, from 0.
+    #[serde(default)]
     pub nth: usize,
+    #[serde(default)]
     pub gives: Gives,
 }
 
 /// A media's recipe, laid out.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Graph {
     /// The media made, its recipe as the document names it, and the shot's name.
     /// Steps the document holds under the media have no recipe to name: `recipe`
@@ -261,15 +549,13 @@ impl Building<'_> {
                 .as_ref()
                 .is_some_and(|inside| building.directory.join(inside).is_file());
             let path = Path::new(file);
-            let mut holds = Map::new();
-            holds.insert("path".to_owned(), json!(file));
-            if let Some(inside) = &inside {
-                holds.insert("inProject".to_owned(), json!(stored(inside)));
-            }
-            holds.insert("there".to_owned(), json!(there));
+            let what = What::File(FileNode {
+                path: file.to_owned(),
+                in_project: inside.as_deref().map(stored),
+                there,
+            });
             Node {
                 id: format!("file:{file}"),
-                kind: Kind::File,
                 title: path
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
@@ -285,7 +571,7 @@ impl Building<'_> {
                 },
                 gives: Gives::of_file(file),
                 line: None,
-                holds,
+                what,
             }
         })
     }
@@ -294,12 +580,12 @@ impl Building<'_> {
     fn sequence(&mut self, id: &str) -> String {
         self.read(format!("sequence:{id}"), |building| {
             let sequence = building.project.sequence(id);
-            let mut holds = Map::new();
-            holds.insert("sequence".to_owned(), json!(id));
-            holds.insert("there".to_owned(), json!(sequence.is_some()));
+            let what = What::Sequence(SequenceNode {
+                sequence: id.to_owned(),
+                there: sequence.is_some(),
+            });
             Node {
                 id: format!("sequence:{id}"),
-                kind: Kind::Sequence,
                 title: sequence
                     .map(|sequence| sequence.name.trim())
                     .filter(|name| !name.is_empty())
@@ -311,7 +597,7 @@ impl Building<'_> {
                 ),
                 gives: Gives::Video,
                 line: None,
-                holds,
+                what,
             }
         })
     }
@@ -320,8 +606,10 @@ impl Building<'_> {
     fn signal(&mut self, clip: &str) -> String {
         self.read(format!("signal:{clip}"), |building| {
             let project = building.project;
-            let mut holds = Map::new();
-            holds.insert("clip".to_owned(), json!(clip));
+            let mut said = SignalNode {
+                clip: clip.to_owned(),
+                ..SignalNode::default()
+            };
             let at = project.locate(clip);
             let read = Signal::read(project, clip);
             let detail = match (&read, at) {
@@ -348,14 +636,14 @@ impl Building<'_> {
                     if (frames - 1) % step as i64 != 0 {
                         values.push(at_frame(frames - 1));
                     }
-                    holds.insert("sequence".to_owned(), json!(sequence.id.as_str()));
-                    holds.insert("frames".to_owned(), json!(frames));
-                    holds.insert("fps".to_owned(), json!(rate.fps()));
-                    holds.insert("values".to_owned(), json!(values));
-                    holds.insert("there".to_owned(), json!(true));
+                    said.sequence = Some(sequence.id.to_string());
+                    said.frames = Some(frames);
+                    said.fps = Some(rate.fps());
+                    said.values = Some(values);
+                    said.there = true;
                     // The clips of its sequence that play a sound, whose moments its keys
                     // can be read from: each once, by its id and the name it shows.
-                    let mut sounds: Vec<Json> = Vec::new();
+                    let mut sounds: Vec<Sound> = Vec::new();
                     for heard in sequence.tracks.iter().flat_map(|track| &track.clips) {
                         let plays = match &heard.content {
                             Content::Media { media, .. } => project
@@ -371,35 +659,31 @@ impl Building<'_> {
                         let on_sound = track_of
                             .is_some_and(|track| track.kind == kerf_model::TrackKind::Audio);
                         if plays && on_sound {
-                            sounds.push(json!({
-                                "clip": heard.id.as_str(),
-                                "name": heard.name.clone().unwrap_or_else(|| heard.id.to_string()),
-                            }));
+                            sounds.push(Sound {
+                                clip: heard.id.to_string(),
+                                name: heard.name.clone().unwrap_or_else(|| heard.id.to_string()),
+                            });
                         }
                     }
-                    holds.insert("sounds".to_owned(), json!(sounds));
+                    said.sounds = Some(sounds);
                     format!(
                         "{} · {frames} frames at {}",
                         sequence.id,
                         super::plain(rate.fps())
                     )
                 }
-                (Err(why), _) => {
-                    holds.insert("there".to_owned(), json!(false));
-                    why.clone()
-                }
+                (Err(why), _) => why.clone(),
                 (Ok(_), None) => unreachable!("a signal that reads is a clip"),
             };
             Node {
                 id: format!("signal:{clip}"),
-                kind: Kind::Signal,
                 title: at
                     .and_then(|at| project.clip_at(at).name.clone())
                     .unwrap_or_else(|| clip.to_owned()),
                 detail,
                 gives: Gives::Signal,
                 line: None,
-                holds,
+                what: What::Signal(said),
             }
         })
     }
@@ -408,25 +692,25 @@ impl Building<'_> {
     fn moves(&mut self, clip: &str) -> String {
         self.read(format!("moves:{clip}"), |building| {
             let project = building.project;
-            let mut holds = Map::new();
-            holds.insert("clip".to_owned(), json!(clip));
             let at = project.locate(clip);
-            holds.insert("there".to_owned(), json!(at.is_some()));
+            let mut said = MovesNode {
+                clip: clip.to_owned(),
+                there: at.is_some(),
+                ..MovesNode::default()
+            };
             let detail = match at {
                 Some(at) => {
                     let sequence = &project.sequences[at.sequence];
                     let found = project.clip_at(at);
-                    holds.insert("sequence".to_owned(), json!(sequence.id.as_str()));
-                    holds.insert(
-                        "aspect".to_owned(),
-                        json!(f64::from(sequence.width) / f64::from(sequence.height.max(1))),
-                    );
+                    said.sequence = Some(sequence.id.to_string());
+                    said.aspect =
+                        Some(f64::from(sequence.width) / f64::from(sequence.height.max(1)));
                     // The path it is led along, where it has one: its points, as its
                     // line writes them.
                     if let Some(Param::Static(Value::Text(path))) = found.props.get("path")
                         && !path.trim().is_empty()
                     {
-                        holds.insert("path".to_owned(), json!(path));
+                        said.path = Some(path.clone());
                     }
                     format!("where it goes in {}", sequence.id)
                 }
@@ -434,14 +718,13 @@ impl Building<'_> {
             };
             Node {
                 id: format!("moves:{clip}"),
-                kind: Kind::Moves,
                 title: at
                     .and_then(|at| project.clip_at(at).name.clone())
                     .unwrap_or_else(|| clip.to_owned()),
                 detail,
                 gives: Gives::Path,
                 line: None,
-                holds,
+                what: What::Moves(said),
             }
         })
     }
@@ -456,18 +739,13 @@ impl Building<'_> {
         let word = kind.word();
         self.read(format!("{word}:{name}"), |_| {
             let entry = cast.and_then(|cast| cast.of(kind).find(|(named, _)| *named == name));
-            let mut holds = Map::new();
-            holds.insert("name".to_owned(), json!(name));
-            holds.insert("there".to_owned(), json!(entry.is_some()));
-            if let Some((_, entry)) = entry {
-                holds.insert("refs".to_owned(), json!(entry.references));
-            }
+            let named = NamedNode {
+                name: name.to_owned(),
+                there: entry.is_some(),
+                refs: entry.map(|(_, entry)| entry.references.clone()),
+            };
             Node {
                 id: format!("{word}:{name}"),
-                kind: match kind {
-                    super::cast::Kind::Cast => Kind::Cast,
-                    super::cast::Kind::Style => Kind::Style,
-                },
                 title: name.to_owned(),
                 detail: entry.map_or_else(
                     || format!("not in {}", super::cast::FILE),
@@ -475,7 +753,10 @@ impl Building<'_> {
                 ),
                 gives: Gives::Words,
                 line: None,
-                holds,
+                what: match kind {
+                    super::cast::Kind::Cast => What::Cast(named),
+                    super::cast::Kind::Style => What::Style(named),
+                },
             }
         })
     }
@@ -484,36 +765,15 @@ impl Building<'_> {
     fn model(&mut self, ask: &Ask, line: usize, cast: Option<&super::cast::Cast>) -> String {
         let id = self.ids.of(format!("made:{}", ask.out));
         let takes = self.models.takes(&ask.model);
-        let mut holds = Map::new();
-        holds.insert("model".to_owned(), json!(ask.model));
-        holds.insert(
-            "setUp".to_owned(),
-            json!(self.models.command(&ask.model).is_ok()),
-        );
-        holds.insert("prompt".to_owned(), json!(ask.prompt));
-        holds.insert("seed".to_owned(), json!(ask.seed));
-        holds.insert("seconds".to_owned(), json!(ask.seconds));
-        holds.insert("from".to_owned(), json!(ask.from));
-        holds.insert(
-            "size".to_owned(),
-            json!(ask.size.map(|(width, height)| format!("{width}x{height}"))),
-        );
-        holds.insert("makes".to_owned(), json!(ask.out));
-        holds.insert(
-            super::model::WORKFLOW.to_owned(),
-            json!(ask.workflow.as_ref().map(|workflow| match workflow {
-                Source::File(file) => file.clone(),
-                Source::Made(name) => format!("{{{name}}}"),
-            })),
-        );
         // What the line sets for this model alone, then what the model has said it
         // takes and the line leaves as it comes.
-        let mut knobs: Vec<Json> = ask
+        let mut knobs: Vec<Knob> = ask
             .more
             .iter()
-            .map(|(name, value)| {
-                json!({"name": name, "value": value,
-                    "default": takes.and_then(|takes| takes.more.get(name))})
+            .map(|(name, value)| Knob {
+                name: name.clone(),
+                value: Some(value.clone()),
+                default: takes.and_then(|takes| takes.more.get(name)).cloned(),
             })
             .collect();
         if let Some(takes) = takes {
@@ -522,27 +782,36 @@ impl Building<'_> {
                     .more
                     .iter()
                     .filter(|(name, _)| !ask.more.contains_key(*name))
-                    .map(
-                        |(name, default)| json!({"name": name, "value": null, "default": default}),
-                    ),
+                    .map(|(name, default)| Knob {
+                        name: name.clone(),
+                        value: None,
+                        default: Some(default.clone()),
+                    }),
             );
-            if let Some(about) = &takes.about {
-                holds.insert("about".to_owned(), json!(about));
-            }
-            if let Some(reads) = &takes.reads {
-                holds.insert("reads".to_owned(), json!(reads));
-            }
-            if let Some((width, height)) = takes.size {
-                holds.insert("modelSize".to_owned(), json!(format!("{width}x{height}")));
-            }
-            if let Some(rate) = takes.rate {
-                holds.insert("modelRate".to_owned(), json!(rate));
-            }
-            if let Some(seconds) = takes.seconds {
-                holds.insert("modelSeconds".to_owned(), json!(seconds));
-            }
         }
-        holds.insert("knobs".to_owned(), json!(knobs));
+        let sized = |(width, height): (u32, u32)| format!("{width}x{height}");
+        let said = ModelNode {
+            model: ask.model.clone(),
+            set_up: self.models.command(&ask.model).is_ok(),
+            prompt: ask.prompt.clone(),
+            seed: ask.seed,
+            seconds: ask.seconds,
+            from: ask.from,
+            size: ask.size.map(sized),
+            makes: ask.out.clone(),
+            workflow: ask.workflow.as_ref().map(|workflow| match workflow {
+                Source::File(file) => file.clone(),
+                Source::Made(name) => format!("{{{name}}}"),
+            }),
+            about: takes.and_then(|takes| takes.about.clone()),
+            reads: takes.and_then(|takes| takes.reads.clone()),
+            model_size: takes.and_then(|takes| takes.size).map(sized),
+            model_rate: takes.and_then(|takes| takes.rate),
+            model_seconds: takes.and_then(|takes| takes.seconds),
+            knobs,
+            made: None,
+            runner: None,
+        };
         // What it reads first, so that each stands before it in the list, as it does on the page.
         if let Some(guide) = &ask.guide {
             let (from, gives) = self.source(guide);
@@ -587,12 +856,11 @@ impl Building<'_> {
         let gives = self.made(&ask.out);
         self.nodes.push(Node {
             id: id.clone(),
-            kind: Kind::Model,
             title: ask.model.clone(),
             detail: ask.prompt.clone(),
             gives,
             line: Some(line),
-            holds,
+            what: What::Model(Box::new(said)),
         });
         self.makers.insert(ask.out.clone(), id.clone());
         id
@@ -667,25 +935,21 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 if let Some(rate) = rate {
                     at.push(format!("{} fps", super::plain(rate.fps())));
                 }
-                let mut holds = Map::new();
-                holds.insert("sequence".to_owned(), json!(sequence));
-                holds.insert("makes".to_owned(), json!(to));
-                holds.insert(
-                    "pass".to_owned(),
-                    json!(if *pass == Pass::Picture {
-                        "picture"
+                let said = RenderNode {
+                    sequence: sequence.clone(),
+                    makes: to.clone(),
+                    pass: if *pass == Pass::Picture {
+                        "picture".to_owned()
                     } else {
-                        pass.name()
-                    }),
-                );
-                holds.insert(
-                    "size".to_owned(),
-                    json!(size.map(|(width, height)| format!("{width}x{height}"))),
-                );
-                holds.insert("rate".to_owned(), json!(rate.map(|rate| rate.to_string())));
-                holds.insert("matte".to_owned(), json!(matte));
-                holds.insert("from".to_owned(), json!(starts.map(super::plain)));
-                holds.insert("seconds".to_owned(), json!(seconds.map(super::plain)));
+                        pass.name().to_owned()
+                    },
+                    size: size.map(|(width, height)| format!("{width}x{height}")),
+                    rate: rate.map(|rate| rate.to_string()),
+                    matte: matte.clone(),
+                    from: starts.map(super::plain),
+                    seconds: seconds.map(super::plain),
+                    made: None,
+                };
                 // The part of the sequence it draws, where it is not the whole.
                 match (starts, seconds) {
                     (None, None) => {}
@@ -698,7 +962,6 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 }
                 building.nodes.push(Node {
                     id: id.clone(),
-                    kind: Kind::Render,
                     title: render_title(*pass, matte.as_deref()),
                     detail: if at.is_empty() {
                         "at the sequence's size and rate".to_owned()
@@ -707,7 +970,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                     },
                     gives: building.made(to),
                     line: Some(line),
-                    holds,
+                    what: What::Render(said),
                 });
                 building.edge(from, &id, "sequence", 0, Gives::Video);
                 building.makers.insert(to.clone(), id.clone());
@@ -716,13 +979,8 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
             Step::Generate(ask) => building.model(ask, line, cast.as_ref()),
             Step::Join { parts, to, lap } => {
                 let id = building.ids.of(format!("made:{to}"));
-                let mut holds = Map::new();
-                holds.insert("makes".to_owned(), json!(to));
-                holds.insert("parts".to_owned(), json!(parts));
-                holds.insert("lap".to_owned(), json!(lap));
                 building.nodes.push(Node {
                     id: id.clone(),
-                    kind: Kind::Join,
                     title: "Join".to_owned(),
                     detail: match lap {
                         0 => format!("{} parts, end to end", parts.len()),
@@ -737,7 +995,12 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                     },
                     gives: Gives::Video,
                     line: Some(line),
-                    holds,
+                    what: What::Join(JoinNode {
+                        makes: to.clone(),
+                        parts: parts.clone(),
+                        lap: *lap,
+                        made: None,
+                    }),
                 });
                 for (nth, part) in parts.iter().enumerate() {
                     if let Some(maker) = building.makers.get(part).cloned() {
@@ -760,33 +1023,33 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
     if let Some(shown) = chosen.or(made.last().map(|take| take.number)) {
         for node in &mut building.nodes {
             let file = node
-                .holds
-                .get("makes")
-                .and_then(Json::as_str)
+                .what
+                .makes()
                 .filter(|makes| *makes != super::OUT)
                 .and_then(|makes| super::takes::step_file(directory, media, shown, makes));
-            if let Some(file) = file {
-                node.holds
-                    .insert("made".to_owned(), json!({"take": shown, "path": file}));
+            if let (Some(path), Some(made)) = (file, node.what.made_mut()) {
+                *made = Some(Made { take: shown, path });
             }
         }
     }
-    let mut holds = Map::new();
-    holds.insert("media".to_owned(), json!(id));
-    holds.insert(
-        "takes".to_owned(),
-        made.iter()
-            .map(|take| {
-                json!({"number": take.number, "path": take.stored, "chosen": take.chosen,
-                    "rolled": take.rolled, "changed": take.changed, "kept": take.kept})
+    let takes = TakesNode {
+        media: id.to_owned(),
+        takes: made
+            .iter()
+            .map(|take| TakeSaid {
+                number: take.number,
+                path: take.stored.clone(),
+                chosen: take.chosen,
+                rolled: take.rolled,
+                changed: take.changed.clone(),
+                kept: take.kept,
             })
             .collect(),
-    );
-    holds.insert("wants".to_owned(), json!(wants));
+        wants,
+    };
     let gives = building.out;
     building.nodes.push(Node {
         id: "takes".to_owned(),
-        kind: Kind::Takes,
         title: graph.name.clone(),
         detail: match (chosen, made.len()) {
             (_, 0) => "no take yet".to_owned(),
@@ -796,7 +1059,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
         },
         gives,
         line: None,
-        holds,
+        what: What::Takes(takes),
     });
     if let Some(last) = last {
         building.edge(last, "takes", "take", 0, gives);

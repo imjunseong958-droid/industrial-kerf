@@ -5,14 +5,14 @@
 
 use super::inspector::{note, section};
 use super::ShotGraph;
-use crate::making::{number, strings, GraphNode};
+use crate::making::GraphNode;
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, radius, text};
 use editor_ui::ui;
 use gpui::{canvas, div, prelude::*, px, Context, ElementId, Rgba};
+use kerf_bridge::event::graph::TakeSaid;
 use kerf_bridge::event::TakeRead;
 use kerf_bridge::{Command, RecipeEdit};
-use serde_json::Value;
 
 /// Holding the takes to their guide.
 #[derive(Clone, Debug, PartialEq)]
@@ -34,14 +34,15 @@ pub fn reading_lines(reading: &TakeRead) -> Vec<String> {
         .clips
         .iter()
         .map(|clip| {
-            let name = clip["clip"].as_str().unwrap_or_default();
-            match clip["note"].as_str() {
+            let name = &clip.clip;
+            match &clip.note {
                 Some(note) => format!("{name}: {note}"),
                 None => format!(
                     "{name}: {:.2} of where it was asked for, followed on {} of the {} frames the guide shows it on",
-                    clip["overlap"].as_f64().unwrap_or(0.0),
-                    clip["frames"].as_u64().unwrap_or(0),
-                    clip["shown"].as_u64().unwrap_or(0),
+                    // One that is not a number was said as none.
+                    Some(clip.overlap).filter(|overlap| overlap.is_finite()).unwrap_or(0.0),
+                    clip.frames.unwrap_or(0),
+                    clip.shown.unwrap_or(0),
                 ),
             }
         })
@@ -71,12 +72,12 @@ impl ShotGraph {
         connected: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let holds = &node.holds;
         let mut column = div().flex().flex_col().gap(px(theme::space::S6));
-        if let Some(wants) = holds["wants"].as_str() {
+        let said = node.takes();
+        if let Some(wants) = said.and_then(|said| said.wants.as_ref()) {
             column = column.child(note(format!("Wants making: {wants}."), theme::warn()));
         }
-        let takes = holds["takes"].as_array().cloned().unwrap_or_default();
+        let takes = said.map(|said| said.takes.clone()).unwrap_or_default();
         if takes.is_empty() {
             return column.child(note(
                 "No take yet. Make runs its steps and writes the first; every take after it is kept beside it.".into(),
@@ -109,14 +110,14 @@ impl ShotGraph {
     /// its tip says what a press does, then how each subject was read.
     fn take_row(
         &self,
-        take: &Value,
+        take: &TakeSaid,
         making: bool,
         connected: bool,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let number_of = number(&take["number"]);
-        let chosen = take["chosen"].as_bool().unwrap_or(false);
-        let path = take["path"].as_str().unwrap_or_default().to_owned();
+        let number_of = take.number;
+        let chosen = take.chosen;
+        let path = take.path.clone();
         let reading = self.readings.get(&number_of);
         // What there is to say of it: how it holds beside its guide once
         // that is read, what has changed since it was made, or which roll it is.
@@ -133,11 +134,10 @@ impl ShotGraph {
             };
             says.push(format!("{overlap:.2} of its guide{closest}"));
         }
-        let changed = strings(&take["changed"]);
-        if !changed.is_empty() {
-            says.push(format!("{} changed since", changed.join(", ")));
-        } else if let Some(rolled) = take["rolled"].as_u64().filter(|rolled| *rolled > 0) {
-            says.push(format!("roll {rolled}"));
+        if !take.changed.is_empty() {
+            says.push(format!("{} changed since", take.changed.join(", ")));
+        } else if take.rolled > 0 {
+            says.push(format!("roll {}", take.rolled));
         }
         let picture = self
             .in_project(&path, cx)
@@ -236,16 +236,15 @@ impl ShotGraph {
     /// button back to them. None for any other take.
     fn restore_button(
         &self,
-        take: &Value,
+        take: &TakeSaid,
         making: bool,
         cx: &mut Context<Self>,
     ) -> Option<gpui::Div> {
-        let kept =
-            take["chosen"].as_bool().unwrap_or(false) && take["kept"].as_bool().unwrap_or(false);
-        if !kept || strings(&take["changed"]).is_empty() {
+        let kept = take.chosen && take.kept;
+        if !kept || take.changed.is_empty() {
             return None;
         }
-        let restore = number(&take["number"]);
+        let restore = take.number;
         Some(
             div().flex().child(
                 ui::button("graph-restore", format!("Restore take {restore}'s steps"))

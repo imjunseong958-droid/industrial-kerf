@@ -15,7 +15,7 @@
 use kerf_engine::recipe::takes::Take;
 use kerf_engine::recipe::{Recipe, Step};
 use kerf_model::Project;
-use serde_json::{json, Value};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::path::Path;
 
 /// What a shot's takes are held to: the sequence its guide is drawn from,
@@ -54,17 +54,59 @@ pub fn guide(project: &Project, id: &str) -> Result<Guide, String> {
     })
 }
 
+/// A number that was written as `null` because it was not finite, read back as NaN so
+/// that it writes as `null` again.
+fn number<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Option::<f64>::deserialize(deserializer)?.unwrap_or(f64::NAN))
+}
+
+/// One subject of a guide as a take has it: how much of where the take has it and where
+/// the guide asked for it is the same (`overlap`, 0 to 1), how far off its middle is in
+/// frame heights and how large it is beside the guide's, and on how many of the frames
+/// the guide shows it (`shown`) it was followed (`frames`). A subject the take has
+/// nothing of is 0 with why (`note`), and says none of the rest.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ClipReading {
+    pub clip: String,
+    #[serde(deserialize_with = "number")]
+    pub overlap: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub off: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frames: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shown: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One take held to its guide: its number, file and whether the media is it; each
+/// subject's reading; and `overlap`, the mean of theirs, to four places.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Reading {
+    pub take: u32,
+    pub path: String,
+    pub chosen: bool,
+    #[serde(deserialize_with = "number")]
+    pub overlap: f64,
+    pub clips: Vec<ClipReading>,
+}
+
 /// One take of media `id` held to `guide`: for each subject where the take
 /// has it beside where it was asked for, and `overlap` at the top, the mean
 /// of theirs. A subject the take has nothing of is 0, and says so (`note`).
 /// `project` has its media paths resolved.
-pub fn read(project: &Project, directory: &Path, id: &str, take: &Take, guide: &Guide) -> Value {
+pub fn read(project: &Project, directory: &Path, id: &str, take: &Take, guide: &Guide) -> Reading {
     let rate = project
         .media(id)
         .map_or(24, |media| media.rate.fps().round().max(1.0) as u32);
     let file = directory.join(&take.stored);
     let mut sum = 0.0;
-    let clips: Vec<Value> = guide
+    let clips: Vec<ClipReading> = guide
         .clips
         .iter()
         .map(|clip| {
@@ -77,27 +119,32 @@ pub fn read(project: &Project, directory: &Path, id: &str, take: &Take, guide: &
             ) {
                 Ok(placed) => {
                     sum += placed.overlap;
-                    json!({
-                        "clip": clip,
-                        "overlap": placed.overlap,
-                        "off": placed.off,
-                        "size": placed.size,
-                        "frames": placed.frames,
-                        "shown": placed.shown,
-                    })
+                    ClipReading {
+                        clip: clip.clone(),
+                        overlap: placed.overlap,
+                        off: Some(placed.off),
+                        size: Some(placed.size),
+                        frames: Some(placed.frames),
+                        shown: Some(placed.shown),
+                        note: None,
+                    }
                 }
-                Err(error) => json!({"clip": clip, "overlap": 0.0, "note": error.to_string()}),
+                Err(error) => ClipReading {
+                    clip: clip.clone(),
+                    note: Some(error.to_string()),
+                    ..ClipReading::default()
+                },
             }
         })
         .collect();
     let overlap = ((sum / guide.clips.len().max(1) as f64) * 1e4).round() / 1e4;
-    json!({
-        "take": take.number,
-        "path": take.stored,
-        "chosen": take.chosen,
-        "overlap": overlap,
-        "clips": clips,
-    })
+    Reading {
+        take: take.number,
+        path: take.stored.clone(),
+        chosen: take.chosen,
+        overlap,
+        clips,
+    }
 }
 
 /// The takes of media `id`, in the order they were made.
@@ -205,26 +252,32 @@ pub fn restored(
     Ok(Restored { text: now, files })
 }
 
+/// What a shot's readings say together: the sequence and the clips they are of, the take
+/// that holds its guide best (`null` where fewer than two were read or none holds it at
+/// all), and what `overlap` means.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Summary {
+    pub sequence: String,
+    pub clips: Vec<String>,
+    pub best: Option<u32>,
+    pub says: String,
+}
+
 /// What the readings say together: the sequence and the clips they are of,
 /// and which take holds its guide best, where more than one was read.
-pub fn summary(guide: &Guide, readings: &[Value]) -> Value {
+pub fn summary(guide: &Guide, readings: &[Reading]) -> Summary {
     let best = readings
         .iter()
-        .filter(|reading| {
-            reading["overlap"]
-                .as_f64()
-                .is_some_and(|overlap| overlap > 0.0)
-        })
-        .max_by(|a, b| {
-            let of = |reading: &Value| reading["overlap"].as_f64().unwrap_or(0.0);
-            of(a).total_cmp(&of(b))
-        })
+        // A mean that is not a number holds nothing.
+        .filter(|reading| reading.overlap.is_finite() && reading.overlap > 0.0)
+        .max_by(|a, b| a.overlap.total_cmp(&b.overlap))
         .filter(|_| readings.len() > 1)
-        .map(|reading| reading["take"].clone());
-    json!({
-        "sequence": guide.sequence,
-        "clips": guide.clips,
-        "best": best,
-        "says": "`overlap` is how much of where a take has the subject and where its guide asked for it is the same, as a mean over every frame the guide shows it on: 1 where it is where and as large as asked on every frame, 0 where the take has none of it. Where it was followed on few of the frames shown, it says little.",
-    })
+        .map(|reading| reading.take);
+    Summary {
+        sequence: guide.sequence.clone(),
+        clips: guide.clips.clone(),
+        best,
+        says: "`overlap` is how much of where a take has the subject and where its guide asked for it is the same, as a mean over every frame the guide shows it on: 1 where it is where and as large as asked on every frame, 0 where the take has none of it. Where it was followed on few of the frames shown, it says little.".to_owned(),
+    }
 }

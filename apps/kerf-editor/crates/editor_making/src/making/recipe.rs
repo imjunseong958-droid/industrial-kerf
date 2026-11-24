@@ -2,26 +2,48 @@
 //! each reads ([`Recipe`]), or a model's ComfyUI workflow as a graph of its
 //! own nodes ([`Workflow`]); and what may read what, under which name.
 
-use crate::making::{strings, value_text};
+use crate::making::value_text;
+use kerf_bridge::event::graph::{Gives, Kind, ModelNode, RunnerKind, TakesNode, What};
+use kerf_bridge::event::workflow::{Blank, By, DescribedInput, DescribedNode, OriginKind, Shown};
 use kerf_bridge::event::Recipe as RecipeEvent;
-use serde_json::{Map, Value};
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// What a node is: one of a shot's graph, with what the bridge says of one of its kind,
+/// or one of a model's workflow's own nodes.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Holds {
+    Shot(What),
+    Part(DescribedNode),
+}
 
 /// One node of a shot's graph, as the bridge's `recipe` lays it out; or,
-/// in a model's workflow, one of the workflow's own nodes (kind `part`).
-#[derive(Clone, Debug, Default, PartialEq)]
+/// in a model's workflow, one of the workflow's own nodes (a part).
+#[derive(Clone, Debug, PartialEq)]
 pub struct GraphNode {
     pub id: String,
-    pub kind: String,
     pub title: String,
     pub detail: String,
-    pub gives: String,
+    pub gives: Gives,
     /// The step's line, from 1, for a step.
     pub line: Option<usize>,
-    /// The whole node, for what else it holds by its kind.
-    pub holds: Value,
+    /// What else it holds, by its kind.
+    pub holds: Holds,
 }
 
 impl GraphNode {
+    /// What it is in a shot's graph: none for one of a workflow's own nodes.
+    pub fn kind(&self) -> Option<Kind> {
+        match &self.holds {
+            Holds::Shot(what) => Some(what.kind()),
+            Holds::Part(_) => None,
+        }
+    }
+
+    pub fn is(&self, kind: Kind) -> bool {
+        self.kind() == Some(kind)
+    }
+
     /// A step of the shot: a line of its steps.
     pub fn is_step(&self) -> bool {
         self.line.is_some_and(|line| line > 0)
@@ -29,31 +51,70 @@ impl GraphNode {
 
     /// One of a model's workflow's own nodes.
     pub fn is_part(&self) -> bool {
-        self.kind == "part"
+        matches!(self.holds, Holds::Part(_))
+    }
+
+    /// The workflow's own node it is, for a part.
+    pub fn part(&self) -> Option<&DescribedNode> {
+        match &self.holds {
+            Holds::Part(part) => Some(part),
+            Holds::Shot(_) => None,
+        }
+    }
+
+    /// What its `generate` line asks, for a model.
+    pub fn model(&self) -> Option<&ModelNode> {
+        match &self.holds {
+            Holds::Shot(What::Model(model)) => Some(model),
+            _ => None,
+        }
+    }
+
+    /// The shot's takes, for the node that lists them.
+    pub fn takes(&self) -> Option<&TakesNode> {
+        match &self.holds {
+            Holds::Shot(What::Takes(takes)) => Some(takes),
+            _ => None,
+        }
     }
 
     /// A model its entry runs with kerf-comfy: it has a workflow to open.
     pub fn has_workflow(&self) -> bool {
-        self.kind == "model" && self.holds["runner"]["kind"] == "comfy"
+        self.model()
+            .and_then(|model| model.runner.as_ref())
+            .is_some_and(|runner| runner.kind == RunnerKind::Comfy)
     }
 
     /// A model not set up on this computer, or a file that is not there.
     pub fn is_missing(&self) -> bool {
-        if self.kind == "model" {
-            return self.holds["setUp"] == Value::Bool(false);
+        match &self.holds {
+            Holds::Shot(What::Model(model)) => !model.set_up,
+            Holds::Shot(what) => !what.there(),
+            Holds::Part(_) => false,
         }
-        self.holds["there"] == Value::Bool(false)
     }
 }
 
 /// One reading: what `from` gives, read by `to` under the name `port`.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
     pub port: String,
     pub nth: usize,
-    pub gives: String,
+    pub gives: Gives,
+}
+
+/// What goes along an edge, as its badge says it.
+pub fn gives_word(gives: Gives) -> &'static str {
+    match gives {
+        Gives::Video => "video",
+        Gives::Image => "image",
+        Gives::Signal => "signal",
+        Gives::Path => "path",
+        Gives::Words => "words",
+        Gives::File => "file",
+    }
 }
 
 /// A media's steps as a graph (the bridge's `recipe`), or a model's
@@ -72,69 +133,54 @@ pub struct Recipe {
     pub cannot: Option<String>,
     pub notes: Vec<String>,
     pub models_error: Option<String>,
-    /// A model's workflow: its nodes are `part`s.
+    /// A model's workflow: its nodes are parts.
     pub parts: bool,
 }
 
 impl Recipe {
-    /// Reads a `recipe` event's graph, leniently. An edge to or from what is
-    /// not there is left out.
+    /// Reads a `recipe` event's graph. A node with no id, and an edge to or from what is
+    /// not there, is left out.
     pub fn read(event: &RecipeEvent) -> Self {
-        let field = |key: &str| event.graph.get(key).unwrap_or(&Value::Null);
-        let words = |key: &str| field(key).as_str().unwrap_or_default().to_owned();
-        let said = |key: &str| {
-            field(key)
-                .as_str()
-                .filter(|said| !said.is_empty())
-                .map(str::to_owned)
-        };
-        let nodes: Vec<GraphNode> = field("nodes")
-            .as_array()
-            .map(|nodes| {
-                nodes
-                    .iter()
-                    .map(|node| GraphNode {
-                        id: node["id"].as_str().unwrap_or_default().to_owned(),
-                        kind: node["kind"].as_str().unwrap_or_default().to_owned(),
-                        title: node["title"].as_str().unwrap_or_default().to_owned(),
-                        detail: node["detail"].as_str().unwrap_or_default().to_owned(),
-                        gives: node["gives"].as_str().unwrap_or_default().to_owned(),
-                        line: node["line"].as_u64().map(|line| line as usize),
-                        holds: node.clone(),
-                    })
-                    .filter(|node| !node.id.is_empty())
-                    .collect()
+        let graph = &event.graph;
+        let said = |said: &Option<String>| said.clone().filter(|said| !said.is_empty());
+        let nodes: Vec<GraphNode> = graph
+            .nodes
+            .iter()
+            .filter(|node| !node.id.is_empty())
+            .map(|node| GraphNode {
+                id: node.id.clone(),
+                title: node.title.clone(),
+                detail: node.detail.clone(),
+                gives: node.gives,
+                line: node.line,
+                holds: Holds::Shot(node.what.clone()),
             })
-            .unwrap_or_default();
+            .collect();
         let there = |id: &str| nodes.iter().any(|node| node.id == id);
-        let edges = field("edges")
-            .as_array()
-            .map(|edges| {
-                edges
-                    .iter()
-                    .map(|edge| GraphEdge {
-                        from: edge["from"].as_str().unwrap_or_default().to_owned(),
-                        to: edge["to"].as_str().unwrap_or_default().to_owned(),
-                        port: edge["port"].as_str().unwrap_or_default().to_owned(),
-                        nth: edge["nth"].as_u64().unwrap_or(0) as usize,
-                        gives: edge["gives"].as_str().unwrap_or_default().to_owned(),
-                    })
-                    .filter(|edge| there(&edge.from) && there(&edge.to))
-                    .collect()
+        let edges = graph
+            .edges
+            .iter()
+            .filter(|edge| there(&edge.from) && there(&edge.to))
+            .map(|edge| GraphEdge {
+                from: edge.from.clone(),
+                to: edge.to.clone(),
+                port: edge.port.clone(),
+                nth: edge.nth,
+                gives: edge.gives,
             })
-            .unwrap_or_default();
+            .collect();
         Self {
-            media: words("media"),
-            recipe: words("recipe"),
-            document: field("document").as_bool().unwrap_or(false),
-            name: words("name"),
-            text: words("text"),
+            media: graph.media.clone(),
+            recipe: graph.recipe.clone(),
+            document: graph.document,
+            name: graph.name.clone(),
+            text: graph.text.clone(),
             nodes,
             edges,
-            error: said("error"),
-            cannot: said("cannot"),
-            notes: strings(field("notes")),
-            models_error: event.models_error.clone().filter(|said| !said.is_empty()),
+            error: said(&graph.error),
+            cannot: said(&graph.cannot),
+            notes: graph.notes.clone(),
+            models_error: said(&event.models_error),
             parts: false,
         }
     }
@@ -156,7 +202,7 @@ impl Recipe {
 
 /// The workflow a model is run with, where its program is kerf-comfy (the
 /// bridge's `workflow`): every node and input of the ComfyUI graph, as a
-/// graph of `part`s, and the blanks the shot's steps fill.
+/// graph of parts, and the blanks the shot's steps fill.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Workflow {
     pub media: String,
@@ -164,15 +210,17 @@ pub struct Workflow {
     pub line: usize,
     pub model: String,
     pub name: String,
-    /// `own` (the shot's own copy), `file` (the models entry's), or `bundled`.
-    pub origin: String,
+    /// The shot's own copy, the models entry's file, or one that comes with kerf-comfy.
+    pub origin: OriginKind,
     /// The shot's own copy, where it has one.
     pub file: String,
     pub about: String,
     /// Its text as read: what an edit says it changes.
     pub text: String,
     /// Each blank by name: what fills it (`says`), what the line gives for it now (`given`).
-    pub blanks: serde_json::Map<String, Value>,
+    pub blanks: BTreeMap<String, Blank>,
+    /// The blanks' names, in the order the workflow's nodes first hold them.
+    pub blanks_as_held: Vec<String>,
     pub graph: Recipe,
 }
 
@@ -182,103 +230,103 @@ pub fn part_id(id: &str) -> String {
 }
 
 impl Workflow {
-    /// Reads a `workflow` event's fields, leniently.
-    pub fn read(event: &Map<String, Value>) -> Self {
-        let field = |key: &str| event.get(key).unwrap_or(&Value::Null);
-        let words = |key: &str| field(key).as_str().unwrap_or_default().to_owned();
-        let (media, model, name, origin, file) = (
-            words("media"),
-            words("model"),
-            words("name"),
-            words("origin"),
-            words("file"),
-        );
+    /// Reads a `workflow` event. A node with no id is left out, and so is a link from one
+    /// that is not there.
+    pub fn read(event: &Shown) -> Self {
+        let file = event.file.clone().unwrap_or_default();
         let mut graph = Recipe {
-            media: media.clone(),
-            name: model.clone(),
-            recipe: if origin == "own" {
+            media: event.media.clone(),
+            name: event.model.clone(),
+            recipe: if event.origin == OriginKind::Own {
                 file.clone()
             } else {
-                name.clone()
+                event.name.clone()
             },
-            text: words("text"),
+            text: event.text.clone(),
             parts: true,
             ..Recipe::default()
         };
-        for node in field("nodes").as_array().into_iter().flatten() {
-            let id = value_text(&node["id"]);
-            if id.is_empty() {
+        for node in &event.described.nodes {
+            if node.id.is_empty() {
                 continue;
             }
             // By what ComfyUI's own editor calls it where its export says, else by its kind.
-            let class = node["class"].as_str().unwrap_or_default().to_owned();
-            let title = node["title"]
-                .as_str()
+            let class = node.class.clone();
+            let title = node
+                .title
+                .clone()
                 .filter(|title| !title.is_empty())
-                .map_or_else(|| class.clone(), str::to_owned);
+                .unwrap_or_else(|| class.clone());
             let detail = if title == class { String::new() } else { class };
             graph.nodes.push(GraphNode {
-                id: part_id(&id),
-                kind: "part".into(),
+                id: part_id(&node.id),
                 title,
                 detail,
-                gives: "file".into(),
+                gives: Gives::File,
                 line: None,
-                holds: node.clone(),
+                holds: Holds::Part(node.clone()),
             });
         }
         let mut edges = Vec::new();
         for node in &graph.nodes {
-            for input in node.holds["inputs"].as_array().into_iter().flatten() {
-                let Some(from) = input["link"].as_array().and_then(|link| link.first()) else {
+            for input in node.part().into_iter().flat_map(|part| &part.inputs) {
+                let Some((from, _)) = &input.link else {
                     continue;
                 };
-                let from = part_id(&value_text(from));
+                let from = part_id(from);
                 if graph.node(&from).is_some() {
                     edges.push(GraphEdge {
                         from,
                         to: node.id.clone(),
-                        port: input["name"].as_str().unwrap_or_default().to_owned(),
+                        port: input.name.clone(),
                         nth: 0,
-                        gives: "file".into(),
+                        gives: Gives::File,
                     });
                 }
             }
         }
         graph.edges = edges;
         Self {
-            media,
-            line: field("line").as_u64().unwrap_or(0) as usize,
-            model,
-            name,
-            origin,
+            media: event.media.clone(),
+            line: event.line,
+            model: event.model.clone(),
+            name: event.name.clone(),
+            origin: event.origin,
             file,
-            about: words("about"),
-            text: words("text"),
-            blanks: field("blanks").as_object().cloned().unwrap_or_default(),
+            about: event.described.about.clone(),
+            text: event.text.clone(),
+            blanks: event.described.blanks.clone(),
+            blanks_as_held: event
+                .described
+                .blanks_as_held()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
             graph,
         }
     }
 
     /// The shot's own copy, which its line names.
     pub fn is_own(&self) -> bool {
-        self.origin == "own"
+        self.origin == OriginKind::Own
     }
 
     /// What fills blank `name`, and what the line gives for it now.
     pub fn blank_says(&self, name: &str) -> String {
-        let blank = self.blanks.get(name).cloned().unwrap_or_default();
-        let says = capitalised(blank["says"].as_str().unwrap_or_default());
+        let Some(blank) = self.blanks.get(name) else {
+            return String::new();
+        };
+        let says = capitalised(&blank.says);
         if says.is_empty() {
             return says;
         }
-        match &blank["given"] {
-            Value::String(given) => format!("{says}. Now: {given}"),
+        match &blank.given {
+            Some(given) => format!("{says}. Now: {given}"),
             // A file or a signal it gives none of leaves the node out.
-            _ if matches!(blank["by"].as_str(), Some("file" | "signal" | "moves")) => {
+            None if matches!(blank.by, By::File | By::Signal | By::Moves) => {
                 format!("{says}. The line gives none, so the node is left out")
             }
-            _ => says,
+            None => says,
         }
     }
 }
@@ -300,17 +348,13 @@ pub enum InputKind {
     Value,
 }
 
-pub fn input_kind(input: &Value) -> InputKind {
-    if input.get("link").is_some_and(|link| !link.is_null()) {
-        return InputKind::Link;
-    }
-    if input["blanks"]
-        .as_array()
-        .is_some_and(|blanks| !blanks.is_empty())
-    {
-        InputKind::Blank
-    } else {
+pub fn input_kind(input: &DescribedInput) -> InputKind {
+    if input.link.is_some() {
+        InputKind::Link
+    } else if input.blanks.is_empty() {
         InputKind::Value
+    } else {
+        InputKind::Blank
     }
 }
 
@@ -318,16 +362,31 @@ pub fn input_kind(input: &Value) -> InputKind {
 /// as it is written, a list or a table as JSON.
 pub fn shown_value(value: &Value) -> String {
     match value {
-        Value::Number(number) => match (number.as_i64(), number.as_f64()) {
-            (Some(whole), _) => whole.to_string(),
-            (None, Some(real)) if real.fract() == 0.0 && real.abs() < 1e15 => {
-                format!("{}", real as i64)
-            }
-            (None, Some(real)) => format!("{real}"),
-            _ => number.to_string(),
-        },
+        Value::Number(number) => shown_number(number),
         other => value_text(other),
     }
+}
+
+/// A number of a workflow as a row of it shows it: as it is written, a whole one without
+/// a point.
+pub fn shown_number(number: &serde_json::Number) -> String {
+    match (number.as_i64(), number.as_f64()) {
+        (Some(whole), _) => whole.to_string(),
+        (None, Some(real)) if real.fract() == 0.0 && real.abs() < 1e15 => {
+            format!("{}", real as i64)
+        }
+        (None, Some(real)) => format!("{real}"),
+        _ => number.to_string(),
+    }
+}
+
+/// What a workflow node gives at each output, as a server named them in words.
+fn outputs_of(part: &DescribedNode) -> Vec<&str> {
+    part.outputs
+        .iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect()
 }
 
 // ------------------------------------------------------------------ wiring
@@ -342,20 +401,22 @@ pub fn shown_value(value: &Value) -> String {
 /// is a link already and takes what it gives.
 pub fn ports_for(from: &GraphNode, to: &GraphNode) -> Vec<String> {
     if from.is_part() || to.is_part() {
-        if from.kind != to.kind || from.id == to.id {
+        let (Some(gives), Some(takes)) = (from.part(), to.part()) else {
+            return Vec::new();
+        };
+        if from.id == to.id {
             return Vec::new();
         }
-        let gives = strings(&from.holds["outputs"]);
-        return to.holds["inputs"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        let gives = outputs_of(gives);
+        return takes
+            .inputs
+            .iter()
             .filter(|input| input_kind(input) == InputKind::Link)
             .filter(|input| {
-                let takes = input["type"].as_str().unwrap_or_default();
-                gives.is_empty() || takes.is_empty() || gives.iter().any(|gives| gives == takes)
+                let takes = input.takes.as_deref().unwrap_or_default();
+                gives.is_empty() || takes.is_empty() || gives.contains(&takes)
             })
-            .map(|input| input["name"].as_str().unwrap_or_default().to_owned())
+            .map(|input| input.name.clone())
             .collect();
     }
     if from.id == to.id || !to.is_step() {
@@ -365,38 +426,41 @@ pub fn ports_for(from: &GraphNode, to: &GraphNode) -> Vec<String> {
         return Vec::new();
     }
     let one = |port: &str| vec![port.to_owned()];
-    if to.kind == "render" {
-        return if from.kind == "sequence" {
+    if to.is(Kind::Render) {
+        return if from.is(Kind::Sequence) {
             one("sequence")
         } else {
             Vec::new()
         };
     }
-    if to.kind != "model" {
+    let Some(model) = to.model() else {
         return Vec::new();
-    }
-    match from.kind.as_str() {
-        "signal" => return one("signal"),
-        "moves" => return one("moves"),
-        "cast" => return one("cast"),
-        "style" => return one("style"),
-        "sequence" | "takes" => return Vec::new(),
+    };
+    match from.kind() {
+        Some(Kind::Signal) => return one("signal"),
+        Some(Kind::Moves) => return one("moves"),
+        Some(Kind::Cast) => return one("cast"),
+        Some(Kind::Style) => return one("style"),
+        Some(Kind::Sequence | Kind::Takes) => return Vec::new(),
         _ => {}
     }
-    match from.gives.as_str() {
-        "video" => {
+    match from.gives {
+        Gives::Video => {
             let mut ports = one("guide");
             // The guides it reads beside the first, by what each is of.
             ports.extend(
-                strings(&to.holds["reads"])
-                    .into_iter()
-                    .filter(|read| read.starts_with("guide_")),
+                model
+                    .reads
+                    .iter()
+                    .flatten()
+                    .filter(|read| read.starts_with("guide_"))
+                    .cloned(),
             );
             // As a first frame it is where it ended: the shot goes on from it.
             ports.extend(["ref".to_owned(), "first".to_owned()]);
             ports
         }
-        "image" => ["first", "last", "ref"].map(str::to_owned).to_vec(),
+        Gives::Image => ["first", "last", "ref"].map(str::to_owned).to_vec(),
         _ => one("ref"),
     }
 }
@@ -405,26 +469,20 @@ pub fn ports_for(from: &GraphNode, to: &GraphNode) -> Vec<String> {
 /// cast or a style by its name, a file by its path, a sequence by its id, a
 /// step's file by the name it has in braces. Nothing for the takes.
 pub fn value_of(from: &GraphNode) -> String {
-    let said = |key: &str| from.holds[key].as_str().unwrap_or_default().to_owned();
-    match from.kind.as_str() {
-        "signal" | "moves" => said("clip"),
-        "cast" | "style" => said("name"),
-        "file" => said("path"),
-        "sequence" => said("sequence"),
-        "takes" => String::new(),
-        _ => {
-            // A program may make several: the first of them.
-            let makes = match &from.holds["makes"] {
-                Value::Array(names) => names.first().and_then(Value::as_str),
-                other => other.as_str(),
-            }
-            .unwrap_or_default();
-            if makes.is_empty() {
-                String::new()
-            } else {
-                format!("{{{makes}}}")
-            }
-        }
+    let Holds::Shot(what) = &from.holds else {
+        return String::new();
+    };
+    match what {
+        What::Signal(signal) => signal.clip.clone(),
+        What::Moves(moves) => moves.clip.clone(),
+        What::Cast(named) | What::Style(named) => named.name.clone(),
+        What::File(file) => file.path.clone(),
+        What::Sequence(sequence) => sequence.sequence.clone(),
+        What::Takes(_) => String::new(),
+        What::Render(_) | What::Model(_) | What::Join(_) => match what.makes() {
+            Some(makes) if !makes.is_empty() => format!("{{{makes}}}"),
+            _ => String::new(),
+        },
     }
 }
 
@@ -451,10 +509,10 @@ pub fn port_says(port: &str) -> String {
 /// Whether `to` makes use of what comes in as `port`: a model that has
 /// said what it reads reads only that, and the cast and styles always.
 pub fn reads_port(to: &GraphNode, port: &str) -> bool {
-    if to.kind != "model" || to.holds.get("reads").is_none_or(Value::is_null) {
+    let Some(reads) = to.model().and_then(|model| model.reads.as_ref()) else {
         return true;
-    }
-    port == "cast" || port == "style" || strings(&to.holds["reads"]).iter().any(|read| read == port)
+    };
+    port == "cast" || port == "style" || reads.iter().any(|read| read == port)
 }
 
 /// Which word of `port` on `to`'s line a new reading is: a name a line
@@ -474,15 +532,15 @@ pub fn wire_nth(recipe: &Recipe, to: &str, port: &str) -> usize {
 /// Which output of workflow node `from` input `input` of `to` reads: the
 /// first that gives what the input takes.
 pub fn link_output(from: &GraphNode, to: &GraphNode, input: &str) -> usize {
-    let takes = to.holds["inputs"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|known| known["name"] == input)
-        .and_then(|known| known["type"].as_str())
+    let takes = to
+        .part()
+        .and_then(|part| part.inputs.iter().find(|known| known.name == input))
+        .and_then(|known| known.takes.as_deref())
         .unwrap_or_default();
-    strings(&from.holds["outputs"])
+    from.part()
+        .map(outputs_of)
+        .unwrap_or_default()
         .iter()
-        .position(|gives| gives == takes)
+        .position(|gives| *gives == takes)
         .unwrap_or(0)
 }

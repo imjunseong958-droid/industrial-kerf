@@ -5,9 +5,7 @@
 
 use super::layout::{card_rect, nearest_toward, save_places, Toward};
 use super::{MenuKind, ShotGraph};
-use crate::making::{
-    link_output, port_says, ports_for, strings, value_of, value_text, wire_nth, GraphNode,
-};
+use crate::making::{link_output, port_says, ports_for, value_of, wire_nth, GraphNode};
 use editor_ui::ui;
 use gpui::{
     Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta,
@@ -330,13 +328,13 @@ impl ShotGraph {
             return;
         }
         // More than one name would read it: which is the person's to say.
-        let said_reads = to.holds.get("reads").is_some_and(|reads| !reads.is_null());
+        let reads = to.model().and_then(|model| model.reads.clone());
         let items = ports
             .iter()
             .map(|port| {
                 // What the model has said it has no use for is still the
                 // line's to say, and is said so.
-                let says = if said_reads && !strings(&to.holds["reads"]).contains(port) {
+                let says = if reads.as_ref().is_some_and(|reads| !reads.contains(port)) {
                     "the model has no use for it".to_owned()
                 } else {
                     port_says(port)
@@ -381,8 +379,8 @@ impl ShotGraph {
     /// that gives what it takes.
     fn link(&mut self, from: &GraphNode, to: &GraphNode, input: &str, cx: &mut Context<Self>) {
         let output = link_output(from, to, input);
-        let node = value_text(&to.holds["id"]);
-        let source = value_text(&from.holds["id"]);
+        let id_of = |node: &GraphNode| node.part().map_or_else(String::new, |part| part.id.clone());
+        let (node, source) = (id_of(to), id_of(from));
         self.edit_workflow(
             WorkflowEdit {
                 node,

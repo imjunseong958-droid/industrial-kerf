@@ -17,7 +17,6 @@ use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use std::path::Path;
 
 /// A change to a media's recipe: one name on one line, or with `text` the
@@ -70,10 +69,7 @@ pub(crate) fn event(
     models: &Models,
     models_error: Option<String>,
 ) -> Result<Recipe, String> {
-    let graph = match kerf_shots::graph::shown(project, directory, id, models)? {
-        Value::Object(graph) => graph,
-        _ => Map::new(),
-    };
+    let graph = kerf_shots::graph::shown(project, directory, id, models)?;
     Ok(Recipe {
         graph,
         models_error,

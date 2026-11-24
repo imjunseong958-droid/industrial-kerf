@@ -2,14 +2,17 @@
 //! write the very same text, a command or event written reads back as itself, and an event
 //! this build does not know reads as one to ignore.
 
+use kerf_bridge::event::workflow::{
+    Blank, By, Described, DescribedInput, DescribedNode, OriginKind, Shown,
+};
 use kerf_bridge::event::{
-    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, CollabSync, ConnectionStatus,
-    ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, LoudnessEvent, MeterReading,
-    Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus,
-    ToolState,
+    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
+    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
+    LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
+    RenderQuality, RenderStatus, TakeRead, ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
-use proptest::collection::vec;
+use proptest::collection::{btree_map, vec};
 use proptest::option;
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -17,7 +20,10 @@ use serde_json::json;
 
 /// One event of each kind (and of each status the session gave) the editor was sent in a
 /// recorded session, as it got them, with the recording machine's paths and names made
-/// neutral.
+/// neutral. The last three are of a shot that session had none of: its `recipe`, the
+/// `workflow` of one of its models with what a server takes, and a take held to its guide
+/// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
+/// unread, so that the types they now are write the same text.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -117,7 +123,167 @@ fn event() -> impl Strategy<Value = Event> {
             line,
         }),
         collab_sync(),
+        take_read(),
+        workflow(),
     ]
+}
+
+/// One input of a workflow's node: a link, with what it takes where a server has said, or
+/// a value (a text, a whole number, a yes or no, nothing) with the blanks it holds, and
+/// what a server takes there.
+fn workflow_input() -> impl Strategy<Value = DescribedInput> {
+    let value = prop_oneof![
+        text().prop_map(serde_json::Value::from),
+        any::<i64>().prop_map(serde_json::Value::from),
+        any::<bool>().prop_map(serde_json::Value::from),
+        Just(serde_json::Value::Null),
+    ];
+    prop_oneof![
+        (text(), text(), any::<u64>(), some_text()).prop_map(|(name, from, output, takes)| {
+            DescribedInput {
+                name,
+                link: Some((from, output)),
+                takes,
+                ..DescribedInput::default()
+            }
+        }),
+        (
+            text(),
+            value,
+            vec(text(), 0..3),
+            option::of(vec(text().prop_map(serde_json::Value::from), 0..3)),
+            option::of(any::<u32>()),
+            option::of(any::<i32>()),
+        )
+            .prop_map(
+                |(name, value, blanks, choices, most, least)| DescribedInput {
+                    name,
+                    value,
+                    blanks,
+                    choices,
+                    max: most.map(serde_json::Number::from),
+                    min: least.map(serde_json::Number::from),
+                    ..DescribedInput::default()
+                }
+            ),
+    ]
+}
+
+fn workflow() -> impl Strategy<Value = Event> {
+    let node = (
+        text(),
+        text(),
+        vec(workflow_input(), 0..3),
+        some_text(),
+        option::of(vec(text().prop_map(serde_json::Value::from), 0..3)),
+    )
+        .prop_map(|(id, class, inputs, title, outputs)| DescribedNode {
+            id,
+            class,
+            inputs,
+            title,
+            outputs,
+        });
+    let blank = (
+        select(vec![
+            By::Line,
+            By::Kerf,
+            By::Moves,
+            By::Set,
+            By::Signal,
+            By::File,
+        ]),
+        text(),
+        option::of(text().prop_map(serde_json::Value::from)),
+        some_text(),
+    )
+        .prop_map(|(by, says, default, given)| Blank {
+            by,
+            says,
+            default,
+            given,
+        });
+    (
+        (text(), any::<usize>(), text(), text(), text()),
+        select(vec![OriginKind::Bundled, OriginKind::File, OriginKind::Own]),
+        some_text(),
+        vec(node, 0..3),
+        btree_map(text(), blank, 0..3),
+        (any::<bool>(), some_text(), any::<bool>()),
+    )
+        .prop_map(
+            |((media, line, model, name, text), origin, file, nodes, blanks, said)| {
+                Event::Workflow(Box::new(Shown {
+                    described: Described {
+                        nodes,
+                        blanks,
+                        ..Described::default()
+                    },
+                    media,
+                    line,
+                    model,
+                    name,
+                    text,
+                    origin,
+                    file,
+                    taken: said.0,
+                    taken_error: said.1,
+                    edited: said.2,
+                }))
+            },
+        )
+}
+
+/// One subject of a take's reading: followed, with where and on how many frames, or not,
+/// with why.
+fn clip_reading() -> impl Strategy<Value = ClipReading> {
+    prop_oneof![
+        (
+            text(),
+            number(),
+            number(),
+            number(),
+            any::<usize>(),
+            any::<usize>()
+        )
+            .prop_map(|(clip, overlap, off, size, frames, shown)| ClipReading {
+                clip,
+                overlap,
+                off: Some(off),
+                size: Some(size),
+                frames: Some(frames),
+                shown: Some(shown),
+                note: None,
+            }),
+        (text(), text()).prop_map(|(clip, note)| ClipReading {
+            clip,
+            note: Some(note),
+            ..ClipReading::default()
+        }),
+    ]
+}
+
+fn take_read() -> impl Strategy<Value = Event> {
+    (
+        any::<u32>(),
+        text(),
+        any::<bool>(),
+        number(),
+        vec(clip_reading(), 0..3),
+        text(),
+        any::<u64>(),
+    )
+        .prop_map(|(take, path, chosen, overlap, clips, media, revision)| {
+            Event::TakeRead(TakeRead {
+                take,
+                path,
+                chosen,
+                overlap,
+                clips,
+                media,
+                revision,
+            })
+        })
 }
 
 fn meter() -> impl Strategy<Value = Event> {

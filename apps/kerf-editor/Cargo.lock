@@ -3996,6 +3996,7 @@ dependencies = [
  "kerf-model",
  "kerf-track",
  "kerf-workflow",
+ "serde",
  "serde_json",
 ]
 

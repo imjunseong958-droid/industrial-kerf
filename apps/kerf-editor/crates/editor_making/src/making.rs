@@ -28,8 +28,8 @@ pub use graph::{
 pub use makings::{card_state, card_title, CardState, Makings, Progress};
 pub use plan::{ask_words, takes_words, AskWords, MakePlan, Plan};
 pub use recipe::{
-    input_kind, link_output, part_id, port_says, ports_for, reads_port, shown_value, value_of,
-    wire_nth, GraphEdge, GraphNode, InputKind, Recipe, Workflow,
+    gives_word, input_kind, link_output, part_id, port_says, ports_for, reads_port, shown_number,
+    shown_value, value_of, wire_nth, GraphEdge, GraphNode, Holds, InputKind, Recipe, Workflow,
 };
 
 /// Open the graph of the steps that make `media`.
@@ -75,25 +75,6 @@ pub fn bind_keys(cx: &mut App) {
 const HEAD: f32 = 48.0;
 
 // ------------------------------------------------------------------ values as they are read
-
-fn strings(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn number(value: &Value) -> u32 {
-    value
-        .as_u64()
-        .map_or(0, |value| value.min(u64::from(u32::MAX)) as u32)
-}
 
 /// A value as a field shows it: words as they are, a whole number without a
 /// point, nothing for null.

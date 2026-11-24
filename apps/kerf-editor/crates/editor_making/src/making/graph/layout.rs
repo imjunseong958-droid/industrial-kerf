@@ -4,10 +4,11 @@
 //! it on the graph, the card an arrow goes to, and the places a person put
 //! cards, kept with the editor's settings.
 
-use crate::making::{GraphEdge, GraphNode, Recipe};
+use crate::making::{GraphEdge, GraphNode, Holds, Recipe};
 use editor_session::session::Session;
 use editor_ui::ui;
 use gpui::{px, App, Entity};
+use kerf_bridge::event::graph::{Kind, What};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -61,13 +62,12 @@ pub(super) fn graph_size(viewport: (f32, f32)) -> (f32, f32) {
 /// Whether a card draws something under its lines: a signal's number over
 /// its time, or the path a clip is led along.
 pub fn draws_curve(node: &GraphNode) -> bool {
-    match node.kind.as_str() {
-        "signal" => node.holds["values"]
-            .as_array()
+    match &node.holds {
+        Holds::Shot(What::Signal(signal)) => signal
+            .values
+            .as_ref()
             .is_some_and(|values| !values.is_empty()),
-        "moves" => node.holds["path"]
-            .as_str()
-            .is_some_and(|path| !path.is_empty()),
+        Holds::Shot(What::Moves(moves)) => moves.path.as_ref().is_some_and(|path| !path.is_empty()),
         _ => false,
     }
 }
@@ -76,12 +76,12 @@ pub fn draws_curve(node: &GraphNode) -> bool {
 /// is its name and a row for each input; a model says a third thing; a
 /// signal or a clip's way draws under its lines.
 pub fn card_size(node: &GraphNode) -> (f32, f32) {
-    if node.is_part() {
-        let rows = node.holds["inputs"].as_array().map_or(0, Vec::len);
+    if let Some(part) = node.part() {
+        let rows = part.inputs.len();
         return (PART_W, PART_HEAD + PART_ROW * rows as f32 + 8.0);
     }
     let mut height = CARD_H;
-    if node.kind == "model" {
+    if node.is(Kind::Model) {
         height += CARD_MODEL;
     }
     if draws_curve(node) {
@@ -242,10 +242,11 @@ pub fn in_port(
 ) -> Option<(f32, f32)> {
     let [x, y, _, height] = card_rect(recipe, places, &edge.to)?;
     let to = recipe.node(&edge.to)?;
-    if to.is_part() {
-        let row = to.holds["inputs"]
-            .as_array()
-            .and_then(|inputs| inputs.iter().rposition(|input| input["name"] == edge.port))
+    if let Some(part) = to.part() {
+        let row = part
+            .inputs
+            .iter()
+            .rposition(|input| input.name == edge.port)
             .unwrap_or(0);
         return Some((x, y + PART_HEAD + PART_ROW * (row as f32 + 0.5)));
     }
@@ -459,12 +460,16 @@ pub(super) fn save_places(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kerf_bridge::event::graph::Gives;
 
-    fn node(id: &str, kind: &str) -> GraphNode {
+    fn node(id: &str, what: What) -> GraphNode {
         GraphNode {
             id: id.into(),
-            kind: kind.into(),
-            ..GraphNode::default()
+            title: String::new(),
+            detail: String::new(),
+            gives: Gives::Video,
+            line: None,
+            holds: Holds::Shot(what),
         }
     }
 
@@ -473,14 +478,18 @@ mod tests {
             from: from.into(),
             to: to.into(),
             port: "guide".into(),
-            ..GraphEdge::default()
+            nth: 0,
+            gives: Gives::Video,
         }
     }
 
     #[test]
     fn a_loop_does_not_keep_the_layout_from_ending() {
         let recipe = Recipe {
-            nodes: vec![node("a", "render"), node("b", "model")],
+            nodes: vec![
+                node("a", What::Render(Default::default())),
+                node("b", What::Model(Box::default())),
+            ],
             edges: vec![edge("a", "b"), edge("b", "a"), edge("a", "missing")],
             ..Recipe::default()
         };

@@ -11,7 +11,9 @@ use super::layout::{
 use super::paint::{paint_line, paint_ring, paint_under};
 use super::signal::signal_line;
 use super::ShotGraph;
-use crate::making::{clock, input_kind, shown_value, value_text, GraphNode, InputKind, Recipe};
+use crate::making::{
+    clock, gives_word, input_kind, plain, shown_value, GraphNode, Holds, InputKind, Recipe,
+};
 use editor_state::store::Making;
 use editor_ui::icons::Icon;
 use editor_ui::motion;
@@ -21,55 +23,53 @@ use gpui::{
     canvas, div, fill, point, prelude::*, px, size, AnyElement, Bounds, Context, ElementId,
     MouseButton, MouseDownEvent, Rgba,
 };
-use serde_json::Value;
+use kerf_bridge::event::graph::{Gives, Kind, What};
 
 /// What an edge carrying `gives` is coloured.
-pub(super) fn gives_color(gives: &str) -> Rgba {
+pub(super) fn gives_color(gives: Gives) -> Rgba {
     match gives {
-        "video" => theme::accent_ink(),
-        "image" => theme::pos(),
-        "path" => theme::playhead(),
-        "signal" => theme::warn(),
-        _ => theme::ink3(),
+        Gives::Video => theme::accent_ink(),
+        Gives::Image => theme::pos(),
+        Gives::Path => theme::playhead(),
+        Gives::Signal => theme::warn(),
+        Gives::Words | Gives::File => theme::ink3(),
     }
 }
 
-pub(super) fn kind_icon(kind: &str) -> Icon {
+/// A node's icon, by what it is in a shot's graph: a dot for one of a workflow's own.
+pub(super) fn kind_icon(kind: Option<Kind>) -> Icon {
     match kind {
-        "sequence" => Icon::Film,
-        "render" => Icon::Eye,
-        "model" => Icon::Sparkle,
-        "join" => Icon::Scissors,
-        "file" => Icon::Folder,
-        "signal" => Icon::Clock,
-        "moves" => Icon::Pen,
-        "cast" | "style" => Icon::Chat,
-        "takes" => Icon::Media,
-        _ => Icon::Dot,
+        Some(Kind::Sequence) => Icon::Film,
+        Some(Kind::Render) => Icon::Eye,
+        Some(Kind::Model) => Icon::Sparkle,
+        Some(Kind::Join) => Icon::Scissors,
+        Some(Kind::File) => Icon::Folder,
+        Some(Kind::Signal) => Icon::Clock,
+        Some(Kind::Moves) => Icon::Pen,
+        Some(Kind::Cast | Kind::Style) => Icon::Chat,
+        Some(Kind::Takes) => Icon::Media,
+        None => Icon::Dot,
     }
 }
 
 /// A model's seed, length, size and what else its line sets, as its card's
 /// third line says them.
 fn model_line(node: &GraphNode) -> String {
-    let holds = &node.holds;
     let mut said = Vec::new();
-    if !holds["seed"].is_null() {
-        said.push(format!("seed {}", value_text(&holds["seed"])));
-    }
-    if !holds["seconds"].is_null() {
-        said.push(format!("{} s", value_text(&holds["seconds"])));
-    }
-    if let Some(size) = holds["size"].as_str() {
-        said.push(size.to_owned());
-    }
-    for knob in holds["knobs"].as_array().into_iter().flatten() {
-        if !knob["value"].is_null() {
-            said.push(format!(
-                "{} {}",
-                knob["name"].as_str().unwrap_or_default(),
-                value_text(&knob["value"])
-            ));
+    if let Some(model) = node.model() {
+        if let Some(seed) = model.seed {
+            said.push(format!("seed {seed}"));
+        }
+        if let Some(seconds) = model.seconds {
+            said.push(format!("{} s", plain(seconds)));
+        }
+        if let Some(size) = &model.size {
+            said.push(size.clone());
+        }
+        for knob in &model.knobs {
+            if let Some(value) = &knob.value {
+                said.push(format!("{} {value}", knob.name));
+            }
         }
     }
     if said.is_empty() {
@@ -81,17 +81,12 @@ fn model_line(node: &GraphNode) -> String {
 
 /// What is wrong with a node, by a dot: not there in brick, wanting a look in ochre.
 fn node_mark(node: &GraphNode) -> Option<Rgba> {
-    let holds = &node.holds;
-    if holds["there"] == Value::Bool(false) {
-        return Some(theme::neg());
+    match &node.holds {
+        Holds::Shot(what) if !what.there() => Some(theme::neg()),
+        Holds::Shot(What::Model(model)) if !model.set_up => Some(theme::warn()),
+        Holds::Shot(What::Takes(takes)) if takes.wants.is_some() => Some(theme::warn()),
+        _ => None,
     }
-    if node.kind == "model" && holds["setUp"] == Value::Bool(false) {
-        return Some(theme::warn());
-    }
-    if node.kind == "takes" && !holds["wants"].is_null() {
-        return Some(theme::warn());
-    }
-    None
 }
 
 impl ShotGraph {
@@ -106,14 +101,14 @@ impl ShotGraph {
     ) -> AnyElement {
         let zoom = self.camera.zoom;
         let z = |points: f32| px(points * zoom);
-        let color = gives_color(&node.gives);
+        let color = gives_color(node.gives);
         let selected = self.selected.as_deref() == Some(node.id.as_str());
         let id = node.id.clone();
-        let striped = making.filter(|_| node.kind == "takes");
+        let striped = making.filter(|_| node.is(Kind::Takes));
         let lines = card_lines(node, striped, color, zoom);
         let phase = striped.map(|making| motion::phase(making.since, scene::STRIPE_CYCLE));
         // Under the lines: a signal's number over its clip, or the path a clip is led along.
-        let under = if node.kind == "model" {
+        let under = if node.is(Kind::Model) {
             CARD_H - 9.0 + CARD_MODEL
         } else {
             CARD_H - 9.0
@@ -170,7 +165,7 @@ impl ShotGraph {
                             .justify_center()
                             .rounded(z(radius::CARD))
                             .bg(theme::with_alpha(color, 0.16))
-                            .child(kind_icon(&node.kind).view(16.0 * zoom, color)),
+                            .child(kind_icon(node.kind()).view(16.0 * zoom, color)),
                     )
                     .child(lines),
             )
@@ -200,16 +195,15 @@ impl ShotGraph {
         let z = |points: f32| px(points * zoom);
         let selected = self.selected.as_deref() == Some(node.id.as_str());
         let id = node.id.clone();
-        let number = format!("#{}", value_text(&node.holds["id"]));
-        let rows = node.holds["inputs"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
+        let part = node.part();
+        let number = format!("#{}", part.map_or("", |part| part.id.as_str()));
+        let rows = part
             .into_iter()
+            .flat_map(|part| &part.inputs)
             .map(|input| {
-                let name = input["name"].as_str().unwrap_or_default().to_owned();
-                let kind = input_kind(&input);
-                let value = shown_value(&input["value"]);
+                let name = input.name.clone();
+                let kind = input_kind(input);
+                let value = shown_value(&input.value);
                 div()
                     .h(z(PART_ROW))
                     .flex()
@@ -324,7 +318,7 @@ fn card_lines(node: &GraphNode, striped: Option<&Making>, color: Rgba, zoom: f32
     let z = |points: f32| px(points * zoom);
     let detail = match striped {
         Some(making) => format!("Making take {} · {}", making.take, clock(making.since)),
-        None if node.kind == "model" && node.detail.trim().is_empty() => "no prompt".to_owned(),
+        None if node.is(Kind::Model) && node.detail.trim().is_empty() => "no prompt".to_owned(),
         None => one_line(&node.detail),
     };
     let mut lines = div()
@@ -360,7 +354,7 @@ fn card_lines(node: &GraphNode, striped: Option<&Making>, color: Rgba, zoom: f32
                         .rounded(z(8.0))
                         .bg(theme::with_alpha(color, 0.14))
                         .child(zoomed(
-                            ui::label(node.gives.clone(), text::BADGE, color),
+                            ui::label(gives_word(node.gives), text::BADGE, color),
                             text::BADGE,
                             zoom,
                         )),
@@ -380,7 +374,7 @@ fn card_lines(node: &GraphNode, striped: Option<&Making>, color: Rgba, zoom: f32
             text::META,
             zoom,
         ));
-    if node.kind == "model" {
+    if node.is(Kind::Model) {
         lines = lines.child(zoomed(
             ui::line(model_line(node), text::MONO_SMALL, theme::ink3()),
             text::MONO_SMALL,
@@ -393,16 +387,17 @@ fn card_lines(node: &GraphNode, striped: Option<&Making>, color: Rgba, zoom: f32
 /// A signal's curve or a clip's path drawn under a card's lines, `under`
 /// points down it.
 fn card_curve(node: &GraphNode, color: Rgba, under: f32, zoom: f32) -> AnyElement {
-    let holds = &node.holds;
-    let values: Vec<f64> = holds["values"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .map(|value| value.as_f64().unwrap_or(0.0))
-        .collect();
-    let aspect = holds["aspect"].as_f64().unwrap_or(16.0 / 9.0).max(0.1);
-    let path: Option<Vec<(f64, f64)>> = holds["path"]
-        .as_str()
+    let (values, moves) = match &node.holds {
+        Holds::Shot(What::Signal(signal)) => (signal.values.clone().unwrap_or_default(), None),
+        Holds::Shot(What::Moves(moves)) => (Vec::new(), Some(moves)),
+        _ => (Vec::new(), None),
+    };
+    let aspect = moves
+        .and_then(|moves| moves.aspect)
+        .unwrap_or(16.0 / 9.0)
+        .max(0.1);
+    let path: Option<Vec<(f64, f64)>> = moves
+        .and_then(|moves| moves.path.as_deref())
         .and_then(editor_stage::stage::overlay::parse_path)
         .map(|points| {
             if points.len() >= 2 {
@@ -411,7 +406,7 @@ fn card_curve(node: &GraphNode, color: Rgba, under: f32, zoom: f32) -> AnyElemen
                 points
             }
         });
-    let signal = node.kind == "signal";
+    let signal = node.is(Kind::Signal);
     let ground = theme::with_alpha(theme::surround_dim(), 0.6);
     let node_fill = theme::card();
     div()
