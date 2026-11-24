@@ -1,13 +1,25 @@
 //! Provider adapters. The session keeps one Anthropic-shaped history; each
 //! adapter translates it to its API and normalizes the streamed reply.
+//!
+//! Each API's requests and replies are types of its own module (`anthropic`, `chat`,
+//! `responses`): a request is written from them, and each thing a server says is read into
+//! them once, as it comes. What stays JSON is what has no one shape: the transcript the
+//! session keeps, a tool's arguments and schema, and what a tool answered.
 
 use crate::{ProviderName, ReasoningEffort};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use serde_json::{Map, Value};
 use std::fmt;
 use std::sync::Arc;
 use std::time::Duration;
+
+mod anthropic;
+mod chat;
+mod responses;
+mod said;
+mod transcript;
+
+use transcript::Block;
 
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-opus-5-5";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
@@ -17,6 +29,7 @@ pub const DEFAULT_RESPONSES_MODEL: &str = "gpt-5.6-luna";
 pub struct NormalizedTool {
     pub name: String,
     pub description: String,
+    /// A JSON Schema, each tool's own (`AgentTool::input_schema`), so it stays JSON.
     #[serde(rename = "input_schema")]
     pub input_schema: Value,
 }
@@ -26,6 +39,8 @@ pub struct ProviderRequest {
     pub model: String,
     pub system: String,
     pub tools: Vec<NormalizedTool>,
+    /// The session's transcript, in the Anthropic Messages API's shape. It stays JSON:
+    /// the session keeps it on disk and `session.read` points into it.
     pub messages: Vec<Value>,
 }
 
@@ -38,6 +53,7 @@ pub enum ProviderChunk {
     MessageEnd {
         #[serde(rename = "stopReason")]
         stop_reason: String,
+        /// The reply's blocks, as the transcript keeps them (see [`ProviderRequest::messages`]).
         content: Vec<Value>,
     },
 }
@@ -94,39 +110,20 @@ pub trait LlmProvider: Send + Sync {
     }
 }
 
-/// The text a streamed event of any of the three APIs adds to the reply:
-/// Anthropic's `text_delta`, Chat Completions' `delta.content`, and
-/// Responses' `response.output_text.delta`.
-fn live_text(event: &Value) -> Option<&str> {
-    let text = match event.get("type").and_then(Value::as_str) {
-        Some("content_block_delta") => {
-            let delta = event.get("delta")?;
-            (delta.get("type").and_then(Value::as_str) == Some("text_delta"))
-                .then(|| delta.get("text").and_then(Value::as_str))
-                .flatten()
-        }
-        Some("response.output_text.delta") => event.get("delta").and_then(Value::as_str),
-        _ => event
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("delta"))
-            .and_then(|delta| delta.get("content"))
-            .and_then(Value::as_str),
-    };
-    text.filter(|text| !text.is_empty())
-}
+/// Told of each thing a server says as it is read, with the text it adds to the reply, if
+/// any; answers whether to read on.
+type OnSaid<'a> = dyn FnMut(Option<&str>) -> bool + 'a;
 
 /// Run one exchange, telling `on_text` its text as each event brings it, or
 /// all of it at the end where no event did (a reply that came whole).
 fn relay_live(
-    exchange: impl FnOnce(&mut dyn FnMut(&Value) -> bool) -> Result<Vec<ProviderChunk>, ProviderError>,
+    exchange: impl FnOnce(&mut OnSaid) -> Result<Vec<ProviderChunk>, ProviderError>,
     on_text: &mut dyn FnMut(&str),
     stop: &dyn Fn() -> bool,
 ) -> Result<Vec<ProviderChunk>, ProviderError> {
     let mut live = false;
-    let chunks = exchange(&mut |event| {
-        if let Some(text) = live_text(event) {
+    let chunks = exchange(&mut |text| {
+        if let Some(text) = text.filter(|text| !text.is_empty()) {
             live = true;
             on_text(text);
         }
@@ -142,7 +139,44 @@ fn relay_live(
     Ok(chunks)
 }
 
+/// One thing an API's server says, read once: an event of a streamed reply, or the reply
+/// whole.
+trait Said: Sized {
+    /// What `said` says; something that is not an object says nothing that is read.
+    fn read(said: &Value) -> Self;
+
+    /// The text it adds to the reply as it streams.
+    fn text(&self) -> Option<&str>;
+}
+
+/// Send `request` to `url` and read each thing the server says as an `S`, once, as it comes:
+/// `on_said` is told the text each adds and answers whether to read on.
+fn exchange<S: Said>(
+    client: &dyn JsonHttpClient,
+    url: &str,
+    headers: &[(String, String)],
+    request: &impl Serialize,
+    on_said: &mut OnSaid,
+) -> Result<Vec<S>, ProviderError> {
+    let body = json(request);
+    let mut read = Vec::new();
+    let said = client.post_stream_each(url, headers, &body, &mut |said| {
+        let said = S::read(said);
+        let more = on_said(said.text());
+        read.push(said);
+        more
+    })?;
+    // A client that reads the whole reply before handing it over gives back what it did
+    // not hand over too; the reply is all of it, as it always was.
+    let handed = read.len();
+    read.extend(said.iter().skip(handed).map(S::read));
+    Ok(read)
+}
+
 /// Injectable JSON HTTP boundary. Tests can replace it without a network.
+///
+/// It carries JSON, not the APIs' types: one client serves all three, and each adapter
+/// reads what it hands over into its own types, once.
 pub trait JsonHttpClient: Send + Sync {
     fn post_json(
         &self,
@@ -348,9 +382,6 @@ fn parse_stream_events(body: &str) -> Result<Vec<Value>, ProviderError> {
     Ok(events)
 }
 
-/// The most a response may write, thinking included.
-const ANTHROPIC_MAX_TOKENS: u32 = 32_000;
-
 /// Anthropic messages adapter. The system prompt and the conversation so
 /// far are marked for prompt caching; thinking blocks are kept with their
 /// signatures so they can be sent back unchanged.
@@ -400,24 +431,6 @@ impl AnthropicProvider {
     }
 }
 
-/// `messages` with a cache breakpoint on the last block, so the next
-/// request reads everything before it from the cache.
-fn with_cache_breakpoint(messages: &[Value]) -> Vec<Value> {
-    let mut messages = messages.to_vec();
-    if let Some(last) = messages.last_mut() {
-        if let Some(text) = last["content"].as_str() {
-            last["content"] = json!([{"type": "text", "text": text}]);
-        }
-        if let Some(block) = last["content"]
-            .as_array_mut()
-            .and_then(|blocks| blocks.last_mut())
-        {
-            block["cache_control"] = json!({"type": "ephemeral"});
-        }
-    }
-    messages
-}
-
 impl LlmProvider for AnthropicProvider {
     fn name(&self) -> ProviderName {
         ProviderName::Anthropic
@@ -437,7 +450,7 @@ impl LlmProvider for AnthropicProvider {
         on_text: &mut dyn FnMut(&str),
         stop: &dyn Fn() -> bool,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
-        relay_live(|on_event| self.exchange(request, on_event), on_text, stop)
+        relay_live(|on_said| self.exchange(request, on_said), on_text, stop)
     }
 }
 
@@ -445,7 +458,7 @@ impl AnthropicProvider {
     fn exchange(
         &self,
         request: &ProviderRequest,
-        on_event: &mut dyn FnMut(&Value) -> bool,
+        on_said: &mut OnSaid,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
         let mut headers = vec![
             ("anthropic-version".into(), "2023-06-01".into()),
@@ -454,177 +467,14 @@ impl AnthropicProvider {
         if let Some(key) = &self.api_key {
             headers.push(("x-api-key".into(), key.clone()));
         }
-        let mut body = json!({
-            "model": request.model,
-            "max_tokens": ANTHROPIC_MAX_TOKENS,
-            "tools": request.tools.iter().map(anthropic_tool).collect::<Vec<_>>(),
-            "messages": with_cache_breakpoint(&request.messages),
-            "stream": true,
-        });
-        if !request.system.is_empty() {
-            body["system"] = json!([{
-                "type": "text",
-                "text": request.system,
-                "cache_control": {"type": "ephemeral"},
-            }]);
-        }
-        if let Some(effort) = self.effort {
-            let effort = match effort {
-                ReasoningEffort::None | ReasoningEffort::Minimal => "low",
-                other => other.name(),
-            };
-            body["output_config"] = json!({"effort": effort});
-        }
-        let events = self.client.post_stream_each(
+        let said = exchange(
+            self.client.as_ref(),
             &format!("{}/messages", self.base_url),
             &headers,
-            &body,
-            on_event,
+            &anthropic::Request::new(request, self.effort),
+            on_said,
         )?;
-        if events.len() != 1 || events[0].get("content").is_none() {
-            return Ok(anthropic_stream_chunks(&events));
-        }
-        let response = &events[0];
-        let content = response
-            .get("content")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let text = text_from_blocks(&content);
-        let mut chunks = Vec::new();
-        if !text.is_empty() {
-            chunks.push(ProviderChunk::TextDelta { text });
-        }
-        chunks.push(ProviderChunk::MessageEnd {
-            stop_reason: response
-                .get("stop_reason")
-                .and_then(Value::as_str)
-                .unwrap_or("end_turn")
-                .to_owned(),
-            content,
-        });
-        Ok(chunks)
-    }
-}
-
-fn anthropic_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
-    let mut blocks = Vec::new();
-    let mut tool_arguments = BTreeMap::<usize, String>::new();
-    let mut stop_reason = "end_turn".to_owned();
-    let mut chunks = Vec::new();
-    for event in events {
-        match event.get("type").and_then(Value::as_str) {
-            Some("content_block_start") => {
-                let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                set_block(
-                    &mut blocks,
-                    index,
-                    event
-                        .get("content_block")
-                        .cloned()
-                        .unwrap_or_else(|| json!({"type": "text", "text": ""})),
-                );
-            }
-            Some("content_block_delta") => {
-                let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                let delta = event.get("delta").cloned().unwrap_or_else(|| json!({}));
-                match delta.get("type").and_then(Value::as_str) {
-                    Some("text_delta") => {
-                        let text = delta
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        if !text.is_empty() {
-                            ensure_text_block(&mut blocks, index);
-                            if let Some(block_text) = blocks[index].get_mut("text") {
-                                let current = block_text.as_str().unwrap_or_default().to_owned();
-                                *block_text = Value::String(format!("{current}{text}"));
-                            }
-                            chunks.push(ProviderChunk::TextDelta { text: text.into() });
-                        }
-                    }
-                    Some("thinking_delta") => {
-                        let thinking = delta
-                            .get("thinking")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        if let Some(block) = blocks.get_mut(index) {
-                            let current = block["thinking"].as_str().unwrap_or_default();
-                            block["thinking"] = Value::String(format!("{current}{thinking}"));
-                        }
-                    }
-                    Some("signature_delta") => {
-                        if let (Some(block), Some(signature)) = (
-                            blocks.get_mut(index),
-                            delta.get("signature").and_then(Value::as_str),
-                        ) {
-                            block["signature"] = Value::String(signature.into());
-                        }
-                    }
-                    Some("input_json_delta") => {
-                        tool_arguments.entry(index).or_default().push_str(
-                            delta
-                                .get("partial_json")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default(),
-                        );
-                    }
-                    _ => {}
-                }
-            }
-            Some("message_delta") => {
-                if let Some(value) = event
-                    .get("delta")
-                    .and_then(|delta| delta.get("stop_reason"))
-                    .and_then(Value::as_str)
-                {
-                    stop_reason = value.to_owned();
-                }
-            }
-            _ => {}
-        }
-    }
-    for (index, arguments) in tool_arguments {
-        ensure_tool_block(&mut blocks, index);
-        blocks[index]["input"] = serde_json::from_str(&arguments).unwrap_or_else(|_| json!({}));
-    }
-    chunks.push(ProviderChunk::MessageEnd {
-        stop_reason: normalize_stop_reason(Some(&stop_reason)),
-        content: blocks,
-    });
-    chunks
-}
-
-fn set_block(blocks: &mut Vec<Value>, index: usize, block: Value) {
-    while blocks.len() <= index {
-        blocks.push(json!({}));
-    }
-    blocks[index] = block;
-}
-
-fn ensure_text_block(blocks: &mut Vec<Value>, index: usize) {
-    if blocks
-        .get(index)
-        .and_then(|block| block.get("type"))
-        .and_then(Value::as_str)
-        != Some("text")
-    {
-        set_block(blocks, index, json!({"type": "text", "text": ""}));
-    }
-}
-
-fn ensure_tool_block(blocks: &mut Vec<Value>, index: usize) {
-    if blocks
-        .get(index)
-        .and_then(|block| block.get("type"))
-        .and_then(Value::as_str)
-        != Some("tool_use")
-    {
-        set_block(
-            blocks,
-            index,
-            json!({"type": "tool_use", "id": "call_tool", "name": "", "input": {}}),
-        );
+        Ok(anthropic::reply(said))
     }
 }
 
@@ -685,7 +535,7 @@ impl LlmProvider for OpenAiProvider {
         on_text: &mut dyn FnMut(&str),
         stop: &dyn Fn() -> bool,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
-        relay_live(|on_event| self.exchange(request, on_event), on_text, stop)
+        relay_live(|on_said| self.exchange(request, on_said), on_text, stop)
     }
 }
 
@@ -693,123 +543,21 @@ impl OpenAiProvider {
     fn exchange(
         &self,
         request: &ProviderRequest,
-        on_event: &mut dyn FnMut(&Value) -> bool,
+        on_said: &mut OnSaid,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
         let mut headers = vec![("content-type".into(), "application/json".into())];
         if let Some(key) = &self.api_key {
             headers.push(("authorization".into(), format!("Bearer {key}")));
         }
-        let mut messages = vec![json!({"role": "system", "content": request.system})];
-        messages.extend(to_openai_messages(&request.messages));
-        let body = json!({
-            "model": request.model,
-            "messages": messages,
-            "tools": request.tools.iter().map(to_openai_tool).collect::<Vec<_>>(),
-            "tool_choice": "auto",
-            "stream": true,
-        });
-        let events = self.client.post_stream_each(
+        let said = exchange(
+            self.client.as_ref(),
             &format!("{}/chat/completions", self.base_url),
             &headers,
-            &body,
-            on_event,
+            &chat::Request::new(request),
+            on_said,
         )?;
-        if events.len() != 1
-            || events[0]
-                .get("choices")
-                .and_then(Value::as_array)
-                .and_then(|choices| choices.first())
-                .and_then(|choice| choice.get("message"))
-                .is_none()
-        {
-            return Ok(openai_chat_stream_chunks(&events));
-        }
-        let response = &events[0];
-        let message = response
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        let content = assistant_to_blocks(&message);
-        let text = text_from_blocks(&content);
-        let mut chunks = Vec::new();
-        if !text.is_empty() {
-            chunks.push(ProviderChunk::TextDelta { text });
-        }
-        let finish = response
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("finish_reason"))
-            .and_then(Value::as_str);
-        chunks.push(ProviderChunk::MessageEnd {
-            stop_reason: normalize_openai_stop_reason(finish, &content),
-            content,
-        });
-        Ok(chunks)
+        Ok(chat::reply(said))
     }
-}
-
-fn openai_chat_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
-    let mut text = String::new();
-    let mut tool_calls = BTreeMap::<usize, (String, String, String)>::new();
-    let mut finish_reason = None;
-    let mut chunks = Vec::new();
-    for event in events {
-        let Some(choice) = event
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-        else {
-            continue;
-        };
-        let delta = choice.get("delta").cloned().unwrap_or_else(|| json!({}));
-        if let Some(value) = delta.get("content").and_then(Value::as_str)
-            && !value.is_empty()
-        {
-            text.push_str(value);
-            chunks.push(ProviderChunk::TextDelta { text: value.into() });
-        }
-        if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
-            for call in calls {
-                let index = call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
-                let entry = tool_calls.entry(index).or_default();
-                if let Some(id) = call.get("id").and_then(Value::as_str) {
-                    entry.0 = id.to_owned();
-                }
-                if let Some(function) = call.get("function") {
-                    if let Some(name) = function.get("name").and_then(Value::as_str) {
-                        entry.1.push_str(name);
-                    }
-                    if let Some(arguments) = function.get("arguments").and_then(Value::as_str) {
-                        entry.2.push_str(arguments);
-                    }
-                }
-            }
-        }
-        if let Some(reason) = choice.get("finish_reason").and_then(Value::as_str) {
-            finish_reason = Some(reason.to_owned());
-        }
-    }
-    let mut content = Vec::new();
-    if !text.is_empty() {
-        content.push(json!({"type": "text", "text": text}));
-    }
-    for (_, (id, name, arguments)) in tool_calls {
-        content.push(json!({
-            "type": "tool_use",
-            "id": if id.is_empty() { format!("call_{name}") } else { id },
-            "name": name,
-            "input": serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({})),
-        }));
-    }
-    chunks.push(ProviderChunk::MessageEnd {
-        stop_reason: normalize_openai_stop_reason(finish_reason.as_deref(), &content),
-        content,
-    });
-    chunks
 }
 
 /// OpenAI Responses API adapter.
@@ -882,7 +630,7 @@ impl LlmProvider for OpenAiResponsesProvider {
         on_text: &mut dyn FnMut(&str),
         stop: &dyn Fn() -> bool,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
-        relay_live(|on_event| self.exchange(request, on_event), on_text, stop)
+        relay_live(|on_said| self.exchange(request, on_said), on_text, stop)
     }
 }
 
@@ -890,485 +638,71 @@ impl OpenAiResponsesProvider {
     fn exchange(
         &self,
         request: &ProviderRequest,
-        on_event: &mut dyn FnMut(&Value) -> bool,
+        on_said: &mut OnSaid,
     ) -> Result<Vec<ProviderChunk>, ProviderError> {
         let mut headers = vec![("content-type".into(), "application/json".into())];
         if let Some(key) = &self.api_key {
             headers.push(("authorization".into(), format!("Bearer {key}")));
         }
-        let mut body = json!({
-            "model": request.model,
-            "instructions": request.system,
-            "input": to_openai_responses_input(&request.messages),
-            "tools": request.tools.iter().map(to_openai_responses_tool).collect::<Vec<_>>(),
-            "tool_choice": "auto",
-            "stream": true,
-        });
-        if let Some(effort) = self.reasoning_effort {
-            body["reasoning"] = json!({"effort": effort.name()});
-        }
-        let events = self.client.post_stream_each(
+        let said = exchange(
+            self.client.as_ref(),
             &format!("{}/responses", self.base_url),
             &headers,
-            &body,
-            on_event,
+            &responses::Request::new(request, self.reasoning_effort),
+            on_said,
         )?;
-        if events.len() != 1 || events[0].get("output").is_none() {
-            return Ok(openai_responses_stream_chunks(&events));
-        }
-        let response = &events[0];
-        let content = response_output_to_blocks(response);
-        let text = text_from_blocks(&content);
-        let mut chunks = Vec::new();
-        if !text.is_empty() {
-            chunks.push(ProviderChunk::TextDelta { text });
-        }
-        chunks.push(ProviderChunk::MessageEnd {
-            stop_reason: if content.iter().any(is_tool_use) {
-                "tool_use".into()
-            } else {
-                "end_turn".into()
-            },
-            content,
-        });
-        Ok(chunks)
+        Ok(responses::reply(said))
     }
 }
 
-fn openai_responses_stream_chunks(events: &[Value]) -> Vec<ProviderChunk> {
-    let mut text = String::new();
-    let mut calls = BTreeMap::<String, (String, String, String)>::new();
-    let mut final_response = None;
-    let mut chunks = Vec::new();
-    for event in events {
-        match event.get("type").and_then(Value::as_str) {
-            Some("response.output_text.delta") => {
-                if let Some(delta) = event.get("delta").and_then(Value::as_str)
-                    && !delta.is_empty()
-                {
-                    text.push_str(delta);
-                    chunks.push(ProviderChunk::TextDelta { text: delta.into() });
-                }
-            }
-            Some("response.output_item.added") | Some("response.output_item.done") => {
-                if let Some(item) = event.get("item")
-                    && item.get("type").and_then(Value::as_str) == Some("function_call")
-                {
-                    let id = item
-                        .get("call_id")
-                        .or_else(|| item.get("id"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("call_tool")
-                        .to_owned();
-                    let entry = calls.entry(id).or_default();
-                    entry.0 = item
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    entry.1 = item
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    if let Some(arguments) = item.get("arguments").and_then(Value::as_str) {
-                        entry.2 = arguments.to_owned();
-                    }
-                }
-            }
-            Some("response.function_call_arguments.delta") => {
-                let id = event
-                    .get("call_id")
-                    .or_else(|| event.get("item_id"))
-                    .or_else(|| event.get("output_index"))
-                    .map(value_key)
-                    .unwrap_or_else(|| "0".into());
-                let entry = calls.entry(id).or_default();
-                if let Some(name) = event.get("name").and_then(Value::as_str) {
-                    entry.1 = name.to_owned();
-                }
-                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                    entry.2.push_str(delta);
-                }
-            }
-            Some("response.completed") => {
-                final_response = event.get("response").cloned();
-            }
-            Some("error") => {
-                chunks.push(ProviderChunk::MessageEnd {
-                    stop_reason: "error".into(),
-                    content: vec![json!({
-                        "type": "text",
-                        "text": event.get("message").and_then(Value::as_str).unwrap_or("Responses API stream error")
-                    })],
-                });
-                return chunks;
-            }
-            _ => {}
-        }
-    }
-    let content = final_response
-        .as_ref()
-        .map(response_output_to_blocks)
-        .unwrap_or_else(|| {
-            let mut content = Vec::new();
-            if !text.is_empty() {
-                content.push(json!({"type": "text", "text": text}));
-            }
-            for (call_id, (id, name, arguments)) in calls {
-                content.push(json!({
-                    "type": "tool_use",
-                    "id": if call_id.is_empty() { id } else { call_id },
-                    "name": name,
-                    "input": serde_json::from_str::<Value>(&arguments).unwrap_or_else(|_| json!({})),
-                }));
-            }
-            content
-        });
-    if text.is_empty()
-        && let Some(value) = content.iter().find_map(|block| {
-            (block.get("type").and_then(Value::as_str) == Some("text"))
-                .then(|| block.get("text").and_then(Value::as_str))
-                .flatten()
-        })
-    {
-        chunks.push(ProviderChunk::TextDelta { text: value.into() });
-    }
-    chunks.push(ProviderChunk::MessageEnd {
-        stop_reason: if content.iter().any(is_tool_use) {
-            "tool_use".into()
-        } else {
-            "end_turn".into()
-        },
-        content,
-    });
-    chunks
-}
-
-fn value_key(value: &Value) -> String {
-    value
-        .as_str()
-        .map(str::to_owned)
-        .or_else(|| value.as_u64().map(|number| number.to_string()))
-        .unwrap_or_else(|| "0".into())
-}
-
-fn anthropic_tool(tool: &NormalizedTool) -> Value {
-    json!({
-        "name": tool.name,
-        "description": tool.description,
-        "input_schema": tool.input_schema,
-    })
-}
-
+/// `tool` as a Chat Completions tool, in JSON.
 pub fn to_openai_tool(tool: &NormalizedTool) -> Value {
-    json!({
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.input_schema,
-        }
-    })
+    json(chat::Tool::from(tool))
 }
 
+/// `tool` as a Responses API tool, in JSON.
 pub fn to_openai_responses_tool(tool: &NormalizedTool) -> Value {
-    json!({
-        "type": "function",
-        "name": tool.name,
-        "description": tool.description,
-        "parameters": tool.input_schema,
-    })
+    json(responses::Tool::from(tool))
 }
 
 /// Translate the canonical Anthropic-shaped history to Chat Completions.
 pub fn to_openai_messages(messages: &[Value]) -> Vec<Value> {
-    let mut output = Vec::new();
-    for message in messages {
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-        let blocks = content_blocks(message);
-        if role == "user" {
-            if let Some(text) = message.get("content").and_then(Value::as_str) {
-                output.push(json!({"role": "user", "content": text}));
-                continue;
-            }
-            let text = text_from_blocks(&blocks);
-            if !text.trim().is_empty() {
-                output.push(json!({"role": "user", "content": text}));
-            }
-            for block in blocks {
-                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-                    continue;
-                }
-                let id = block
-                    .get("tool_use_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let (tool_text, image_urls) = tool_result_visuals(&block);
-                output.push(json!({
-                    "role": "tool",
-                    "tool_call_id": id,
-                    "content": tool_text,
-                }));
-                if !image_urls.is_empty() {
-                    let mut content = vec![json!({
-                        "type": "text",
-                        "text": visual_link_text(id),
-                    })];
-                    content.extend(
-                        image_urls
-                            .into_iter()
-                            .map(|url| json!({"type": "image_url", "image_url": {"url": url}})),
-                    );
-                    output.push(json!({"role": "user", "content": content}));
-                }
-            }
-            continue;
-        }
-        let text = text_from_blocks(&blocks);
-        let mut assistant = json!({
-            "role": "assistant",
-            "content": if text.is_empty() { Value::Null } else { Value::String(text) },
-        });
-        let tool_calls = blocks
-            .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-            .map(|block| {
-                json!({
-                    "id": block.get("id").and_then(Value::as_str).unwrap_or_default(),
-                    "type": "function",
-                    "function": {
-                        "name": block.get("name").and_then(Value::as_str).unwrap_or_default(),
-                        "arguments": serde_json::to_string(block.get("input").unwrap_or(&Value::Null)).unwrap_or_else(|_| "{}".into()),
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        if !tool_calls.is_empty() {
-            assistant["tool_calls"] = Value::Array(tool_calls);
-        }
-        output.push(assistant);
-    }
-    output
+    chat::messages_of(messages).into_iter().map(json).collect()
 }
 
 /// Translate history to Responses API input items.
 pub fn to_openai_responses_input(messages: &[Value]) -> Vec<Value> {
-    let mut output = Vec::new();
-    for message in messages {
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-        let blocks = content_blocks(message);
-        if role == "user" {
-            if let Some(text) = message.get("content").and_then(Value::as_str) {
-                output.push(json!({"role": "user", "content": text}));
-                continue;
-            }
-            let text = text_from_blocks(&blocks);
-            if !text.trim().is_empty() {
-                output.push(json!({"role": "user", "content": text}));
-            }
-            for block in blocks {
-                if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-                    continue;
-                }
-                let id = block
-                    .get("tool_use_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let (tool_text, image_urls) = tool_result_visuals(&block);
-                output.push(json!({
-                    "type": "function_call_output",
-                    "call_id": id,
-                    "output": tool_text,
-                }));
-                if !image_urls.is_empty() {
-                    let mut content = vec![json!({
-                        "type": "input_text",
-                        "text": visual_link_text(id),
-                    })];
-                    content.extend(
-                        image_urls
-                            .into_iter()
-                            .map(|url| json!({"type": "input_image", "image_url": url})),
-                    );
-                    output.push(json!({"role": "user", "content": content}));
-                }
-            }
-            continue;
-        }
-        let text = text_from_blocks(&blocks);
-        if !text.trim().is_empty() {
-            output.push(json!({"role": "assistant", "content": text}));
-        }
-        for block in blocks {
-            if block.get("type").and_then(Value::as_str) != Some("tool_use") {
-                continue;
-            }
-            output.push(json!({
-                "type": "function_call",
-                "call_id": block.get("id").and_then(Value::as_str).unwrap_or_default(),
-                "name": block.get("name").and_then(Value::as_str).unwrap_or_default(),
-                "arguments": serde_json::to_string(block.get("input").unwrap_or(&Value::Null)).unwrap_or_else(|_| "{}".into()),
-            }));
-        }
-    }
-    output
-}
-
-fn assistant_to_blocks(message: &Value) -> Vec<Value> {
-    let mut blocks = Vec::new();
-    if let Some(text) = message.get("content").and_then(Value::as_str)
-        && !text.is_empty()
-    {
-        blocks.push(json!({"type": "text", "text": text}));
-    }
-    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
-        for call in tool_calls {
-            let function = call.get("function").cloned().unwrap_or_else(|| json!({}));
-            let input = function
-                .get("arguments")
-                .and_then(Value::as_str)
-                .and_then(|value| serde_json::from_str(value).ok())
-                .unwrap_or_else(|| json!({}));
-            blocks.push(json!({
-                "type": "tool_use",
-                "id": call.get("id").and_then(Value::as_str).unwrap_or_default(),
-                "name": function.get("name").and_then(Value::as_str).unwrap_or_default(),
-                "input": input,
-            }));
-        }
-    }
-    blocks
-}
-
-fn response_output_to_blocks(response: &Value) -> Vec<Value> {
-    let mut blocks = Vec::new();
-    let output = response
-        .get("output")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    for item in output {
-        match item.get("type").and_then(Value::as_str) {
-            Some("message") => {
-                if let Some(content) = item.get("content").and_then(Value::as_array) {
-                    for part in content {
-                        if part.get("type").and_then(Value::as_str) == Some("output_text")
-                            && let Some(text) = part.get("text").and_then(Value::as_str)
-                        {
-                            blocks.push(json!({"type": "text", "text": text}));
-                        }
-                    }
-                }
-            }
-            Some("function_call") => {
-                let input = item
-                    .get("arguments")
-                    .and_then(Value::as_str)
-                    .and_then(|value| serde_json::from_str(value).ok())
-                    .unwrap_or_else(|| json!({}));
-                let id = item
-                    .get("call_id")
-                    .or_else(|| item.get("id"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("call_tool");
-                blocks.push(json!({
-                    "type": "tool_use",
-                    "id": id,
-                    "name": item.get("name").and_then(Value::as_str).unwrap_or_default(),
-                    "input": input,
-                }));
-            }
-            _ => {}
-        }
-    }
-    if blocks.is_empty()
-        && let Some(text) = response.get("output_text").and_then(Value::as_str)
-        && !text.is_empty()
-    {
-        blocks.push(json!({"type": "text", "text": text}));
-    }
-    blocks
-}
-
-fn content_blocks(message: &Value) -> Vec<Value> {
-    match message.get("content") {
-        Some(Value::Array(blocks)) => blocks.clone(),
-        Some(Value::String(text)) => vec![json!({"type": "text", "text": text})],
-        _ => Vec::new(),
-    }
-}
-
-pub(crate) fn text_from_blocks(blocks: &[Value]) -> String {
-    blocks
-        .iter()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
-        .map(|block| {
-            block
-                .get("text")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-        })
+    responses::input_of(messages)
+        .into_iter()
+        .map(json)
         .collect()
 }
 
-fn image_block_to_data_url(block: &Value) -> Option<String> {
-    let source = block.get("source")?;
-    if source.get("type").and_then(Value::as_str) == Some("url") {
-        return source.get("url").and_then(Value::as_str).map(str::to_owned);
-    }
-    if source.get("type").and_then(Value::as_str) != Some("base64") {
-        return None;
-    }
-    let data = source.get("data").and_then(Value::as_str)?;
-    if data.starts_with("data:image/png;base64,") || data.starts_with("data:image/jpeg;base64,") {
-        return Some(data.to_owned());
-    }
-    let media_type = source.get("media_type").and_then(Value::as_str)?;
-    matches!(media_type, "image/png" | "image/jpeg")
-        .then(|| format!("data:{media_type};base64,{data}"))
+/// One of this module's types in JSON, as it is sent or kept. Their keys are all text, so
+/// they always write as JSON.
+fn json(said: impl Serialize) -> Value {
+    serde_json::to_value(said).expect("Kerf's provider types write as JSON")
 }
 
-fn tool_result_visuals(block: &Value) -> (String, Vec<String>) {
-    match block.get("content") {
-        Some(Value::String(text)) => (text.clone(), Vec::new()),
-        Some(Value::Array(parts)) => {
-            let mut text = Vec::new();
-            let mut images = Vec::new();
-            for part in parts {
-                match part.get("type").and_then(Value::as_str) {
-                    Some("text") => text.push(
-                        part.get("text")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                    ),
-                    Some("image") => {
-                        if let Some(url) = image_block_to_data_url(part) {
-                            images.push(url);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            (
-                if text.is_empty() {
-                    if images.is_empty() {
-                        serde_json::to_string(parts).unwrap_or_else(|_| "null".into())
-                    } else {
-                        "Tool result includes visual output.".into()
-                    }
-                } else {
-                    text.join("\n")
-                },
-                images,
-            )
-        }
-        value => (
-            serde_json::to_string(value.unwrap_or(&Value::Null)).unwrap_or_else(|_| "null".into()),
-            Vec::new(),
-        ),
-    }
+/// The text of `blocks`' text blocks, run together.
+pub(crate) fn text_from_blocks(blocks: &[Value]) -> String {
+    transcript::text_of(&blocks.iter().map(Block::read).collect::<Vec<_>>())
+}
+
+pub(crate) fn is_tool_use(block: &Value) -> bool {
+    Block::read(block).is_tool_use()
+}
+
+/// A tool call's arguments as JSON text, as OpenAI's APIs take them.
+fn arguments(input: &Value) -> String {
+    serde_json::to_string(input).unwrap_or_else(|_| "{}".into())
+}
+
+/// A tool call's arguments from their JSON text; ones that are not JSON are none.
+fn input(arguments: Option<&str>) -> Value {
+    arguments
+        .and_then(|arguments| serde_json::from_str(arguments).ok())
+        .unwrap_or_else(|| Value::Object(Map::new()))
 }
 
 fn visual_link_text(id: &str) -> String {
@@ -1382,16 +716,4 @@ fn normalize_stop_reason(value: Option<&str>) -> String {
         _ => "end_turn",
     }
     .into()
-}
-
-fn normalize_openai_stop_reason(value: Option<&str>, content: &[Value]) -> String {
-    if matches!(value, Some("stop" | "STOP")) && content.iter().any(is_tool_use) {
-        "tool_use".into()
-    } else {
-        normalize_stop_reason(value)
-    }
-}
-
-pub(crate) fn is_tool_use(block: &Value) -> bool {
-    block.get("type").and_then(Value::as_str) == Some("tool_use")
 }

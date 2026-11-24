@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc a4854388b0ff024366c7485f00cfff28e9d2c16b67639baf1529f2363d149cdc # shrinks to extras = [{}, {}, {"x_a": Null}, {}], streamed = false
+cc b3a76facdc3c3c69972ae8f01a1dfd7db0281f2e4ccd6ca33e81ab5d2ece3b5f # shrinks to api = Anthropic, extra = {"x_a": Null}, unknown = []

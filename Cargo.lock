@@ -1612,6 +1612,7 @@ version = "0.1.5"
 dependencies = [
  "base64",
  "kerf-skills",
+ "proptest",
  "serde",
  "serde_json",
  "ureq",
