@@ -9,7 +9,7 @@ use super::{catalog, diagnostics, not_pending, operation_key, parse};
 use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_lang::{apply_script, apply_script_with, print_document, PrintOptions};
 use kerf_model::Project;
-use kerf_runtime::{Author, CachedFacts, ErrorCode, ProposalEntry, StateSnapshot};
+use kerf_runtime::{Author, AuthorKind, CachedFacts, ErrorCode, ProposalEntry, StateSnapshot};
 use serde_json::{json, Value};
 
 impl KerfMcpRouter {
@@ -388,7 +388,11 @@ impl KerfMcpRouter {
             Ok(permissions) if permissions.accepts_edits() => {
                 let accepted = self.runtime.accept_proposal(
                     proposal_id,
-                    if author.kind == "mcp" { "mcp" } else { "agent" },
+                    if author.kind == AuthorKind::Mcp {
+                        "mcp"
+                    } else {
+                        "agent"
+                    },
                     &operation_key("agent-accept"),
                     revision,
                 );

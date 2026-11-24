@@ -903,8 +903,9 @@ fn a_refusal_reads_as_the_code_kerfd_wrote() {
 }
 
 /// A state from a kerfd of another build, where a proposal or the project file stands in a
-/// way this build has no name for: it still reads, and is written as it came, which a
-/// journal's checksum over the states it keeps depends on.
+/// way this build has no name for, or a proposal is by a kind of author it has none for: it
+/// still reads, and is written as it came, which a journal's checksum over the states it
+/// keeps depends on.
 #[test]
 fn a_state_with_a_status_this_build_has_no_name_for_reads_and_writes_the_same() {
     let read = |written: &serde_json::Value| -> StateSnapshot {
@@ -928,8 +929,13 @@ fn a_state_with_a_status_this_build_has_no_name_for_reads_and_writes_the_same() 
 
     written["projectionStatus"] = "frozen".into();
     written["proposals"][0]["status"] = "withdrawn".into();
+    written["proposals"][0]["author"]["kind"] = "robot".into();
     let state = read(&written);
     assert!(!state.proposals[0].is_pending());
     assert_ne!(state.projection_status, ProjectionStatus::Current);
+    assert_ne!(
+        state.proposals[0].author.kind,
+        kerf_runtime::AuthorKind::Kerf
+    );
     assert_eq!(serde_json::to_value(&state).unwrap(), written);
 }

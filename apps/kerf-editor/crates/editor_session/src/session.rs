@@ -10,7 +10,7 @@ use editor_state::prefs::{Prefs, Provider};
 use editor_state::store::{Change, EditorState};
 use editor_ui::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, RenderImage, Task, Window};
-use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus};
+use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus, RenderQuality};
 use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -1207,27 +1207,28 @@ impl Session {
     /// a master goes where the project keeps it (its master output, else
     /// deliveries/), a review copy into deliveries/, as ⌘E and the
     /// toolbar's Export send them. False when it was not sent.
-    pub fn export(&mut self, quality: &str) -> bool {
+    pub fn export(&mut self, quality: RenderQuality) -> bool {
+        let name = match &quality {
+            RenderQuality::Master => "Master",
+            RenderQuality::Review => "Draft",
+            RenderQuality::Full => "Full render",
+            RenderQuality::Preview => "Preview",
+            other @ RenderQuality::Other(_) => other.as_str(),
+        }
+        .to_owned();
         let command =
             editor_state::delivery::request(self.project.as_deref(), &self.prefs, quality);
         let sent = self.send(command);
         if sent {
-            let name = match quality {
-                "master" => "Master",
-                "review" => "Draft",
-                "full" => "Full render",
-                "preview" => "Preview",
-                other => other,
-            };
             self.activity
                 .push("export", &format!("Export started ({name})"));
         }
         sent
     }
 
-    /// Renders the master (`master`) or a review copy (`review`) into the
-    /// project's deliveries/ (Finish, ⌘E): [`Session::export`].
-    pub fn deliver(&mut self, quality: &str) {
+    /// Renders the master or a review copy into the project's deliveries/
+    /// (Finish, ⌘E): [`Session::export`].
+    pub fn deliver(&mut self, quality: RenderQuality) {
         self.export(quality);
     }
 

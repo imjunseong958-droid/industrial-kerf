@@ -1,10 +1,21 @@
 //! Who staged a proposal.
 
+use crate::named::named;
 use crate::{ErrorCode, RuntimeError};
 use serde::{Deserialize, Serialize};
 
-/// Who may stage a proposal.
-pub const AUTHOR_KINDS: [&str; 4] = ["kerf", "mcp", "person", "qc"];
+named! {
+    /// What stages a proposal. kerfd takes one by these four alone ([`Author::validate`]).
+    pub enum AuthorKind {
+        /// Kerf's own agent.
+        Kerf = "kerf",
+        /// An agent that reached Kerf over MCP.
+        Mcp = "mcp",
+        Person = "person",
+        /// Kerf's QC pass.
+        Qc = "qc",
+    }
+}
 
 const MAX_NAME_BYTES: usize = 256;
 
@@ -13,7 +24,7 @@ const MAX_NAME_BYTES: usize = 256;
 /// (`MCP · via Kerf`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Author {
-    pub kind: String,
+    pub kind: AuthorKind,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -29,9 +40,9 @@ impl Default for Author {
 }
 
 impl Author {
-    pub fn new(kind: impl Into<String>, name: impl Into<String>) -> Self {
+    pub fn new(kind: AuthorKind, name: impl Into<String>) -> Self {
         Self {
-            kind: kind.into(),
+            kind,
             name: name.into(),
             id: None,
             role: None,
@@ -40,13 +51,13 @@ impl Author {
 
     /// Kerf's own agent.
     pub fn kerf() -> Self {
-        Self::new("kerf", "Kerf")
+        Self::new(AuthorKind::Kerf, "Kerf")
     }
 
     /// Whether kerfd takes it: a kind it knows, and a name, id and role of a length it keeps.
     pub fn validate(&self) -> Result<(), RuntimeError> {
         let invalid = |message: &str| RuntimeError::new(ErrorCode::InvalidAuthor, message);
-        if !AUTHOR_KINDS.contains(&self.kind.as_str()) {
+        if matches!(self.kind, AuthorKind::Other(_)) {
             return Err(invalid("author kind must be kerf, mcp, person, or qc"));
         }
         if self.name.trim().is_empty() || self.name.len() > MAX_NAME_BYTES {

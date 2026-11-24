@@ -32,13 +32,13 @@ pub use ipc::{
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
 };
 pub use kerf_protocol::{
-    validate_actor, Author, EditOp, ErrorCode, GeneratorSpec, MaskOutline, PendingProposal,
-    ProjectionStatus, ProposalEntry, ProposalFreshness, ProposalStatus, ProposalVersion, RateSpec,
-    RenderCodec, RenderJob, RenderQuality, RenderRange, RenderStatus, RequestEnvelope,
-    RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions, StateSnapshot, TimelineView,
-    TrimSide, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition, MAX_PROPOSALS,
-    MAX_RENDER_RANGE_SECONDS,
+    validate_actor, Author, AuthorKind, EditOp, ErrorCode, GeneratorSpec, MaskOutline,
+    PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness, ProposalStatus,
+    ProposalVersion, RateSpec, RenderCodec, RenderJob, RenderQuality, RenderRange, RenderStatus,
+    RequestEnvelope, RuntimeError, RuntimeRequest, RuntimeResponse, StartRenderOptions,
+    StateSnapshot, TimelineView, TrimSide, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    MAX_PROPOSALS, MAX_RENDER_RANGE_SECONDS,
 };
 pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, RATE_NEEDS_EMPTY};
 pub use render::{render_cancel_path, run_render_job};

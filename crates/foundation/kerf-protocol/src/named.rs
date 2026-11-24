@@ -1,5 +1,5 @@
-//! Values kerfd writes as names: a refusal's code, and where a proposal, a render or the
-//! project file stands.
+//! Values kerfd writes as names: a refusal's code, where a proposal, a render or the
+//! project file stands, what a render is asked for, and what staged a proposal.
 //!
 //! A kerfd and its clients may be of different builds, and what kerfd keeps on disk outlives
 //! the build that wrote it. So each such value is an enum of the names this build knows, and

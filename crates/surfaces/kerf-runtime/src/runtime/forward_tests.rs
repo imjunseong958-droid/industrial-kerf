@@ -38,7 +38,7 @@ impl Drop for Project {
 fn cursor() -> Author {
     Author {
         role: Some("MCP".into()),
-        ..Author::new("mcp", "Cursor")
+        ..Author::new(crate::AuthorKind::Mcp, "Cursor")
     }
 }
 

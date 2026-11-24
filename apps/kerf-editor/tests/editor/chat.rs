@@ -654,7 +654,7 @@ fn a_proposal_from_outside_says_who_made_it() {
         author: serde_json::from_value(author).unwrap_or_default(),
         ..Proposal::default()
     };
-    // The author as kerf-mcp stages it (kerf-runtime's `Author::new("mcp", …)`).
+    // The author as kerf-mcp stages it (kerf-runtime's `Author::new(AuthorKind::Mcp, …)`).
     assert_eq!(
         strays_note(&[proposal(
             json!({"kind": "mcp", "name": "stage", "id": "stage-client"})

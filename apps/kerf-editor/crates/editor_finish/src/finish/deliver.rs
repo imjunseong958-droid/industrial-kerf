@@ -52,7 +52,10 @@ pub fn deliver_said(
         }
     }
     let master = place(&editor_state::delivery::master_request(project, kept));
-    let review = place(&editor_state::delivery::export_request(project, "review"));
+    let review = place(&editor_state::delivery::export_request(
+        project,
+        RenderQuality::Review,
+    ));
     if master == review {
         return format!(
             "The master and a review copy go {}, numbered when one is there already.",
@@ -80,12 +83,12 @@ impl FinishView {
             .filter(|name| !name.trim().is_empty())
     }
 
-    /// Renders the master (`master`) where the project keeps it to go
-    /// (deliveries/ unless its settings say otherwise), or a review copy
-    /// (`review`) into deliveries/, named after the project.
-    fn deliver(&mut self, quality: &'static str, cx: &mut Context<Self>) {
+    /// Renders the master where the project keeps it to go (deliveries/
+    /// unless its settings say otherwise), or a review copy into
+    /// deliveries/, named after the project.
+    fn deliver(&mut self, quality: RenderQuality, cx: &mut Context<Self>) {
         self.session.update(cx, |session, _| {
-            if quality == "master" {
+            if quality == RenderQuality::Master {
                 crate::export::render_master(session);
             } else {
                 session.deliver(quality);
@@ -139,11 +142,11 @@ impl FinishView {
             .primary()
             .icon(Icon::Export)
             .disabled(!enabled)
-            .on_click(cx.listener(|this, _, _, cx| this.deliver("master", cx)))
+            .on_click(cx.listener(|this, _, _, cx| this.deliver(RenderQuality::Master, cx)))
             .into_any_element();
         let review = ui::button("finish-review", "Export Review Copy")
             .disabled(!enabled)
-            .on_click(cx.listener(|this, _, _, cx| this.deliver("review", cx)))
+            .on_click(cx.listener(|this, _, _, cx| this.deliver(RenderQuality::Review, cx)))
             .into_any_element();
         let card = div()
             .flex()

@@ -567,7 +567,11 @@ impl KerfMcpRouter {
     fn place_take(&self, media: &str, stored: &str) -> Result<u64, McpError> {
         let revision = self.runtime.get_state()?.revision;
         let author = self.author();
-        let actor = if author.kind == "mcp" { "mcp" } else { "agent" };
+        let actor = if author.kind == kerf_runtime::AuthorKind::Mcp {
+            "mcp"
+        } else {
+            "agent"
+        };
         let state = self.runtime.replace_media_request(
             actor,
             &operation_key("agent-make"),
