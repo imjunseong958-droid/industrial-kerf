@@ -56,10 +56,10 @@ impl Content {
 }
 
 /// A block of a message: of a reply (its text, thinking and tool calls), or of what went back
-/// to the model (a tool's result). The fields Kerf reads each read on their own
-/// ([`as_said`]); the rest stay as said in `rest`, and a block of another kind, or one that is
-/// not an object, stays whole ([`Block::Other`]). A reply's blocks go back to Anthropic in
-/// the transcript, so whatever the API put on them is kept.
+/// to the model (a tool's result). A reply's blocks go back to Anthropic in the transcript,
+/// so whatever else the API put on them stays as said in `rest`, and a block of another kind
+/// stays whole ([`Block::Other`]). The fields Kerf reads each read on their own
+/// ([`as_said`]): one said otherwise reads, and is written again, as its default.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(super) enum Block {
@@ -110,11 +110,12 @@ pub(super) enum Block {
 }
 
 impl Block {
-    /// A block as said; one that is not an object (which serde would read field by field
-    /// from a list) stays whole.
+    /// A block as said. One whose kind is not said as text stays whole, and so does one
+    /// that is not an object: serde would read a list field by field, and a number in
+    /// `type` as the kind of that place in the list of kinds.
     pub fn read(said: &Value) -> Self {
         match said {
-            Value::Object(_) => {
+            Value::Object(fields) if fields.get("type").is_some_and(Value::is_string) => {
                 Self::deserialize(said).unwrap_or_else(|_| Self::Other(said.clone()))
             }
             _ => Self::Other(said.clone()),

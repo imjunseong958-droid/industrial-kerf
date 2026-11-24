@@ -255,4 +255,25 @@ fn a_field_said_otherwise_than_its_api_says_it_costs_only_itself() {
             content: vec![json!({"type": "tool_use", "id": "call_1", "name": "", "input": {}})],
         }]
     );
+    // A block whose kind is not said as text is of no kind that is read, in a reply or in
+    // the transcript, and stays as it was said.
+    let numbered = vec![
+        json!({"type": 0, "text": "zero"}),
+        json!({"type": 2, "id": "t", "name": "n", "input": {}}),
+    ];
+    let chunks = read(
+        Api::Anthropic,
+        vec![json!({"content": numbered, "stop_reason": "end_turn"})],
+    );
+    assert_eq!(
+        chunks,
+        [ProviderChunk::MessageEnd {
+            stop_reason: "end_turn".into(),
+            content: numbered.clone(),
+        }]
+    );
+    assert_eq!(
+        kerf_agent::to_openai_messages(&[json!({"role": "assistant", "content": numbered})]),
+        [json!({"role": "assistant", "content": null})]
+    );
 }
