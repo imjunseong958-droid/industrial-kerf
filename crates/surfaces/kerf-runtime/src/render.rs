@@ -367,9 +367,12 @@ pub fn render_cancel_path(directory: &Path, job_id: &str) -> PathBuf {
     directory.join(format!("{RENDER_CANCEL_FILE_PREFIX}{job_id}.cancel"))
 }
 
+/// What a cancelled render job says of itself, with kerfd and to whoever ran it.
+pub(crate) const RENDER_CANCELLED: &str = "render job was cancelled";
+
 /// Run a queued render job in-process and record with kerfd how it ended:
-/// running, then completed with its output, or failed unless it was
-/// cancelled. `document` is the `.kerf` text the job carries; the job's
+/// running, then completed with its output, failed, or cancelled when the
+/// file [`render_cancel_path`] names for it appeared. `document` is the `.kerf` text the job carries; the job's
 /// sequence, or the first, is rendered, encoded as the job's quality and
 /// codec say (ProRes 422 HQ in QuickTime for `prores_hq`, the review preset
 /// for `review`). `draft` renders a standard job from proxies; a job with
@@ -410,7 +413,15 @@ pub fn run_render_job(
             None,
             Some(output.to_string_lossy().into_owned()),
         ),
-        Err(error) if error.code == ErrorCode::Cancelled => Ok(()),
+        // kerfd, asked to cancel, writes the marker and has the job cancelled already: telling
+        // it again changes nothing. Whoever else writes it (an editor closing the project the
+        // job renders) leaves kerfd to be told here, or the job would read as running on.
+        Err(error) if error.code == ErrorCode::Cancelled => client.update_job(
+            &job.job_id,
+            RenderStatus::Cancelled,
+            Some(RENDER_CANCELLED.into()),
+            None,
+        ),
         Err(error) => client.update_job(
             &job.job_id,
             RenderStatus::Failed,
@@ -480,10 +491,9 @@ fn render(
             ErrorCode::EngineError,
             format!("render completed without producing {}", output.display()),
         )),
-        Err(kerf_engine::EngineError::Cancelled) => Err(RuntimeError::new(
-            ErrorCode::Cancelled,
-            "render job was cancelled",
-        )),
+        Err(kerf_engine::EngineError::Cancelled) => {
+            Err(RuntimeError::new(ErrorCode::Cancelled, RENDER_CANCELLED))
+        }
         Err(error) => Err(RuntimeError::new(ErrorCode::EngineError, error.to_string())),
     }
 }

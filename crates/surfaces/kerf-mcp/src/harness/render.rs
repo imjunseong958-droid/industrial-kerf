@@ -3,7 +3,7 @@
 
 use super::tools::{input, RenderInput};
 use super::{program, program_position};
-use crate::{KerfMcpRouter, McpCode, McpError};
+use crate::{Begins, KerfMcpRouter, McpCode, McpError};
 use kerf_model::Time;
 use kerf_runtime::{ErrorCode, RenderJob, RenderQuality, RenderRange, RenderStatus};
 use serde_json::{json, Value};
@@ -33,10 +33,29 @@ impl KerfMcpRouter {
                 sequence,
             )
             .map_err(McpError::from)?;
+        // The host this runs in lets the render begin, or it is not begun: kerfd is told the
+        // job is off.
+        let drawing = match self.begin_drawing(Begins::Render(&job.job_id)) {
+            Ok(drawing) => drawing,
+            Err(refused) => {
+                if let Err(error) = self.runtime.cancel_render(&job.job_id) {
+                    log::warn!(
+                        "render {} stays queued with kerfd, with nobody to render it: {}",
+                        job.job_id,
+                        error.message
+                    );
+                }
+                // kerfd wrote the job's marker for a render to stop on; none will.
+                let marker =
+                    kerf_runtime::render_cancel_path(self.runtime.directory(), &job.job_id);
+                let _ = std::fs::remove_file(marker);
+                return Err(refused);
+            }
+        };
         let runtime = self.runtime.clone();
         let worker_job = job.clone();
         let worker_output = output.clone();
-        self.spawn_render(job.job_id.clone(), move || {
+        self.spawn_render(job.job_id.clone(), drawing, move || {
             let mut last_progress = -1.0_f64;
             let rendered = kerf_runtime::run_render_job(
                 &runtime,
