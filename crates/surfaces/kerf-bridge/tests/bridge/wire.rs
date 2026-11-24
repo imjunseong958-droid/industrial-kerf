@@ -6,12 +6,13 @@ use kerf_bridge::event::workflow::{
     Blank, By, Described, DescribedInput, DescribedNode, OriginKind, Shown,
 };
 use kerf_bridge::event::{
-    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
-    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
-    InspectedMade, InspectedSlot, Kept, LoudnessEvent, MeterReading, PresetInspection, PresetLook,
-    Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus,
-    SlotClip, SlotFit, Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead, TimelineView,
-    ToolState, ViewParamDef,
+    AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CloudAccess,
+    CloudAccount, CloudStatus, CollabSync, ConnectionStatus, ConversationSummary, ErrorCode,
+    ErrorEvent, Export, ExportStatus, InspectedMade, InspectedSlot, Kept, ListedModel,
+    LoudnessEvent, MeterReading, PresetInspection, PresetLook, Preview, PreviewStatus,
+    QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus, SlotClip, SlotFit,
+    Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead, TimelineView, ToolState,
+    ViewParamDef,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -29,13 +30,15 @@ use serde_json::json;
 /// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
 /// way before their report was a type: one that brought a commit in, a new branch, a commit
 /// with nothing to commit, and a first sync that committed and pushed with nothing to merge,
-/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The one
-/// after those is what a preset file holds (`preset_inspect`), with a slot that a made media
-/// reads and texts, written the same way before it was a type; its folder is made neutral.
-/// The recorded `state`'s timeline carries the catalog's definitions as kerfd writes them
-/// (`properties`, `maskProperties`, `generators`), which were JSON passed on unread too and
-/// are `ViewParamDef`s now. The last is a `state` with a proposal open, its timeline and the
-/// proposal's (which the bridge makes itself) as the bridge wrote them while those
+/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The two
+/// after those were written the same way: the person's models as `look` lists them (one with
+/// what its file says under names of its own), and a signed-in Kerf account out of requests.
+/// The one after those is what a preset file holds (`preset_inspect`), with a slot that a
+/// made media reads and texts, written the same way before it was a type; its folder is made
+/// neutral. The recorded `state`'s timeline carries the catalog's definitions as kerfd writes
+/// them (`properties`, `maskProperties`, `generators`), which were JSON passed on unread too
+/// and are `ViewParamDef`s now. The last is a `state` with a proposal open, its timeline and
+/// the proposal's (which the bridge makes itself) as the bridge wrote them while those
 /// definitions were JSON.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
@@ -166,6 +169,8 @@ fn event() -> impl Strategy<Value = Event> {
         workflow(),
         preset_inspect(),
         state(),
+        cloud(),
+        models(),
     ]
 }
 
@@ -309,6 +314,85 @@ fn state() -> impl Strategy<Value = Event> {
                 ..Snapshot::default()
             }),
         })
+}
+
+/// Where the Kerf Cloud account stands, with an account and a message or without.
+fn cloud() -> impl Strategy<Value = Event> {
+    let account = (text(), text(), any::<bool>(), option::of(any::<u64>())).prop_map(
+        |(email, plan, ai, credits)| CloudAccount {
+            email,
+            plan,
+            ai,
+            credits,
+        },
+    );
+    (
+        select(vec![
+            CloudAccess::Ready,
+            CloudAccess::Unavailable,
+            CloudAccess::SignedOut,
+            CloudAccess::Unreachable,
+            CloudAccess::NotIncluded,
+            CloudAccess::OutOfCredits,
+        ]),
+        option::of(account),
+        some_text(),
+    )
+        .prop_map(|(access, account, message)| {
+            Event::Cloud(CloudStatus {
+                access,
+                account,
+                message,
+            })
+        })
+}
+
+/// Values under names of `names`, as a models file says them.
+fn said(
+    names: Vec<&'static str>,
+) -> impl Strategy<Value = serde_json::Map<String, serde_json::Value>> {
+    btree_map(
+        select(names),
+        text().prop_map(serde_json::Value::from),
+        0..3,
+    )
+    .prop_map(|said| {
+        said.into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect()
+    })
+}
+
+/// The person's models as `look` lists them, with what their file says of each under names
+/// of its own (none of them one the listing names itself).
+fn models() -> impl Strategy<Value = Event> {
+    let model = (
+        (text(), some_text(), some_text()),
+        (option::of(number()), option::of(number())),
+        (option::of(vec(text(), 0..3)), said(vec!["steps", "cfg"])),
+        (said(vec!["style", "seed", "license"]), some_text()),
+    )
+        .prop_map(
+            |((name, about, size), (rate, seconds), (reads, more), (other, guide))| ListedModel {
+                name,
+                about,
+                size,
+                rate,
+                seconds,
+                reads,
+                more,
+                other,
+                guide,
+            },
+        );
+    (text(), any::<bool>(), vec(model, 0..3), some_text()).prop_map(
+        |(file, exists, models, error)| Event::Models {
+            file,
+            exists,
+            models,
+            error,
+        },
+    )
 }
 
 /// One input of a workflow's node: a link, with what it takes where a server has said, or

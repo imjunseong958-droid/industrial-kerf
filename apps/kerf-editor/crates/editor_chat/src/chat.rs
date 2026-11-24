@@ -385,13 +385,10 @@ impl ChatView {
                 self.fixes = check_suggestions(summary, fps);
                 cx.notify();
             }
-            Event::Cloud { .. } => {
+            Event::Cloud(status) => {
                 // Kerf's account, as every window keeps it, says whether
                 // Kerf can be asked.
-                editor_session::session::hear_cloud(
-                    &serde_json::to_value(&event.0).unwrap_or_default(),
-                    cx,
-                );
+                editor_session::session::hear_cloud(status, cx);
                 self.access = None;
                 self.refresh_placeholder(cx);
                 cx.notify();

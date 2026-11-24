@@ -22,8 +22,7 @@ use gpui::{
     PromptHandle, PromptLevel, PromptResponse, RenderablePromptHandle, TitlebarOptions, WeakEntity,
     Window, WindowBounds, WindowHandle, WindowOptions,
 };
-use kerf_bridge::Event;
-use serde_json::Value;
+use kerf_bridge::{CrashReport, Event, UpdateCheck};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -828,8 +827,8 @@ fn open_at(
         let session = Session::open(Some(project.clone()), kerfd, prefs, window, cx);
         // The account is the person's, whichever window heard of it.
         cx.subscribe(&session, |_, event: &BridgeEvent, cx| {
-            if let Event::Cloud { .. } = &*event.0 {
-                hear_cloud(&serde_json::to_value(&event.0).unwrap_or_default(), cx);
+            if let Event::Cloud(status) = &*event.0 {
+                hear_cloud(status, cx);
             }
         })
         .detach();
@@ -1054,12 +1053,11 @@ fn say_when_up(session: &Entity<Session>, warnings: Vec<String>, cx: &mut App) {
 // ---------------------------------------------------------------- at launch
 
 /// What the crash notice says of `reports` (unseen, newest first).
-pub fn crash_notice_text(reports: &[Value]) -> String {
+pub fn crash_notice_text(reports: &[CrashReport]) -> String {
     let Some(latest) = reports.first() else {
         return String::new();
     };
-    let component =
-        editor_launcher::settings::component_name(latest["component"].as_str().unwrap_or("editor"));
+    let component = editor_launcher::settings::component_name(&latest.component);
     let mut text = if reports.len() == 1 {
         format!("Kerf stopped unexpectedly: {component} hit an error it could not recover from.")
     } else {
@@ -1068,9 +1066,10 @@ pub fn crash_notice_text(reports: &[Value]) -> String {
             reports.len()
         )
     };
-    if let Some(message) = latest["message"]
-        .as_str()
-        .and_then(|message| message.lines().next())
+    if let Some(message) = latest
+        .message
+        .lines()
+        .next()
         .filter(|message| !message.trim().is_empty())
     {
         text.push_str(&format!("\n\n“{}”", message.trim()));
@@ -1165,7 +1164,7 @@ fn crash_notice(
     if unseen.is_empty() {
         return None;
     }
-    let folder = PathBuf::from(listed["folder"].as_str()?);
+    let folder = listed.folder.clone()?;
     let window = front_window(cx)?;
     prefs.saw_crashes(&unseen);
     prefs.save();
@@ -1191,7 +1190,7 @@ fn crash_notice(
 /// Offers the release `answer` names when it is newer and not skipped:
 /// Download (0), Skip This Version (1) or Not Now (2).
 fn offer_update(
-    answer: &Value,
+    answer: &Result<UpdateCheck, String>,
     cx: &mut App,
 ) -> Option<(
     impl std::future::Future<Output = Result<usize, impl Sized + use<>>> + use<>,

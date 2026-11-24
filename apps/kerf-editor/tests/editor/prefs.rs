@@ -1,5 +1,6 @@
 //! What the editor keeps in its settings file, and how it reads an older one.
 
+use kerf_bridge::UpdateCheck;
 use kerf_editor::making::{placement_key, workflow_key};
 use kerf_editor::prefs::{
     default_provider, merge, migrate, project_key, ApiMode, Keymap, MasterOutput, Prefs, Provider,
@@ -380,8 +381,12 @@ fn update_notices_ask_at_most_every_20_hours_and_never_offer_a_skipped_release()
     assert!(prefs.update_due(1_000 + UPDATE_EVERY_MS));
     prefs.check_updates = false;
     assert!(!prefs.update_due(u64::MAX), "off, it never asks");
-    let newer =
-        json!({"current": "0.1.4", "latest": "0.2.0", "newer": true, "url": "https://r/0.2.0"});
+    let newer = Ok(UpdateCheck {
+        current: "0.1.4".into(),
+        latest: Some("0.2.0".into()),
+        newer: true,
+        url: Some("https://r/0.2.0".into()),
+    });
     assert_eq!(
         prefs.update_offer(&newer),
         Some(("0.2.0".to_owned(), "https://r/0.2.0".to_owned()))
@@ -389,10 +394,13 @@ fn update_notices_ask_at_most_every_20_hours_and_never_offer_a_skipped_release()
     prefs.update_skipped = "0.2.0".into();
     assert_eq!(prefs.update_offer(&newer), None);
     assert_eq!(
-        prefs.update_offer(&json!({"current": "0.2.0", "newer": false})),
+        prefs.update_offer(&Ok(UpdateCheck {
+            current: "0.2.0".into(),
+            ..UpdateCheck::default()
+        })),
         None
     );
-    assert_eq!(prefs.update_offer(&json!({"error": "offline"})), None);
+    assert_eq!(prefs.update_offer(&Err("offline".into())), None);
 }
 
 proptest! {

@@ -14,6 +14,7 @@
 //! now ([`merge`]), so one window's save never undoes another's change.
 
 use crate::tokens::{Face, ReadingFace};
+use kerf_bridge::{CrashReport, CrashReports, UpdateCheck};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -665,24 +666,21 @@ impl Prefs {
 
     /// The release to offer from `kerf_bridge::update_check`'s answer, as
     /// (version, page): a newer one not skipped.
-    pub fn update_offer(&self, answer: &Value) -> Option<(String, String)> {
-        if answer["newer"].as_bool() != Some(true) {
-            return None;
-        }
-        let latest = answer["latest"].as_str()?.trim();
-        let url = answer["url"].as_str()?.trim();
+    pub fn update_offer(&self, answer: &Result<UpdateCheck, String>) -> Option<(String, String)> {
+        let answer = answer.as_ref().ok().filter(|answer| answer.newer)?;
+        let latest = answer.latest.as_deref()?.trim();
+        let url = answer.url.as_deref()?.trim();
         (!latest.is_empty() && !url.is_empty() && latest != self.update_skipped.trim())
             .then(|| (latest.to_owned(), url.to_owned()))
     }
 
     /// The crash reports of `kerf_bridge::crash_reports` the person has not
     /// been told of, newest first.
-    pub fn unseen_crashes(&self, listed: &Value) -> Vec<Value> {
-        listed["reports"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|report| report["atMs"].as_f64().unwrap_or(0.0) > self.crashes_seen_ms as f64)
+    pub fn unseen_crashes(&self, listed: &CrashReports) -> Vec<CrashReport> {
+        listed
+            .reports
+            .iter()
+            .filter(|report| report.at_ms > u128::from(self.crashes_seen_ms))
             .cloned()
             .collect()
     }
@@ -778,12 +776,12 @@ impl Prefs {
     }
 
     /// Remembers that the person has been told of `reports`.
-    pub fn saw_crashes(&mut self, reports: &[Value]) {
+    pub fn saw_crashes(&mut self, reports: &[CrashReport]) {
         let newest = reports
             .iter()
-            .filter_map(|report| report["atMs"].as_f64())
-            .fold(self.crashes_seen_ms as f64, f64::max);
-        self.crashes_seen_ms = newest.max(0.0) as u64;
+            .map(|report| u64::try_from(report.at_ms).unwrap_or(u64::MAX))
+            .fold(self.crashes_seen_ms, u64::max);
+        self.crashes_seen_ms = newest;
     }
 }
 

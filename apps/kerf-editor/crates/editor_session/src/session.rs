@@ -10,7 +10,9 @@ use editor_state::prefs::{Prefs, Provider};
 use editor_state::store::{Change, EditorState};
 use editor_ui::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, RenderImage, Task, Window};
-use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus, RenderQuality};
+use kerf_bridge::event::{
+    AgentUpdate, CloudAccess, CloudStatus, Export, ExportStatus, PreviewStatus, RenderQuality,
+};
 use kerf_bridge::{
     AgentSettings, ChatProvider, Command, ConversationsRequest, Event, Focus, FocusScope,
 };
@@ -2152,14 +2154,18 @@ impl Session {
     /// kept and none in the environment, Kerf's account standing (`cloud`,
     /// the last `cloud` event's `access`, `unavailable` until one is
     /// heard). None when it can.
-    pub fn ai_access(&self, cloud: Option<&Value>) -> Option<String> {
+    pub fn ai_access(&self, cloud: Option<&CloudStatus>) -> Option<String> {
         match self.prefs.provider {
             Provider::ClaudeCode => None,
             Provider::Cloud => {
-                let access = cloud
-                    .and_then(|cloud| cloud["access"].as_str())
-                    .unwrap_or("unavailable");
-                (access != "ready").then(|| access.to_owned())
+                let access = cloud.map_or(CloudAccess::Unavailable, |cloud| cloud.access);
+                if access == CloudAccess::Ready {
+                    return None;
+                }
+                // The registry takes it by its own word (`signedOut`).
+                serde_json::to_value(access)
+                    .ok()
+                    .and_then(|word| word.as_str().map(str::to_owned))
             }
             provider => self.api_key(provider).is_none().then(|| "noKey".into()),
         }
@@ -2168,7 +2174,7 @@ impl Session {
     /// Each registry command's id with why it is unavailable now, or null
     /// when it is (`kerf_bridge::commands_states`). `cloud` is the last
     /// `cloud` event heard, for Ask's reason.
-    pub fn command_states(&self, cloud: Option<&Value>) -> Value {
+    pub fn command_states(&self, cloud: Option<&CloudStatus>) -> Value {
         let mut context = self.command_context();
         if let Some(access) = self.ai_access(cloud) {
             context["aiAccess"] = json!(access);
@@ -2861,19 +2867,19 @@ pub fn started_kerfd(cx: &App) -> Option<PathBuf> {
 }
 
 /// The last `cloud` event any window heard: the person's Kerf account.
-struct Cloud(Value);
+struct Cloud(CloudStatus);
 
 impl Global for Cloud {}
 
-/// What was last heard of the person's Kerf account (`cloud {access,
-/// account?, message?}`); None before anything is.
-pub fn cloud(cx: &App) -> Option<&Value> {
+/// What was last heard of the person's Kerf account; None before anything
+/// is.
+pub fn cloud(cx: &App) -> Option<&CloudStatus> {
     cx.try_global::<Cloud>().map(|cloud| &cloud.0)
 }
 
-/// Keeps a `cloud` event for every window.
-pub fn hear_cloud(event: &Value, cx: &mut App) {
-    cx.set_global(Cloud(event.clone()));
+/// Keeps what a `cloud` event said for every window.
+pub fn hear_cloud(status: &CloudStatus, cx: &mut App) {
+    cx.set_global(Cloud(status.clone()));
 }
 
 /// At most `most` bytes of `text`, cut at a character boundary.

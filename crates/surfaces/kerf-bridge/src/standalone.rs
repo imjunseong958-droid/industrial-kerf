@@ -4,7 +4,9 @@
 
 use crate::event::{ViewFxDef, ViewParamDef};
 use crate::tasks::{PresetCheck, ProjectInfo};
+use crate::updates::UpdateCheck;
 use crate::{secrets, tasks, updates, SERVE_MCP};
+pub use kerf_runtime::crash::Report as CrashReport;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,20 +16,29 @@ use std::path::{Path, PathBuf};
 /// Where Kerf's source and releases are.
 pub const REPOSITORY: &str = "https://github.com/imjunseong958-droid/industrial-kerf";
 
-/// `{name, version, license, repository}`: what Help > About Kerf shows.
-pub fn about() -> Value {
-    json!({
-        "name": "Industrial Kerf",
-        "version": env!("CARGO_PKG_VERSION"),
-        "license": env!("CARGO_PKG_LICENSE"),
-        "repository": REPOSITORY,
-    })
+/// What Help > About Kerf shows: Kerf's name, version and license, and where its source is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct About {
+    pub name: &'static str,
+    pub version: &'static str,
+    pub license: &'static str,
+    pub repository: &'static str,
 }
 
-/// Whether a newer Kerf is released on GitHub: `{current, latest?, newer, url?}` or `{error}`
+/// What Help > About Kerf shows.
+pub fn about() -> About {
+    About {
+        name: "Industrial Kerf",
+        version: env!("CARGO_PKG_VERSION"),
+        license: env!("CARGO_PKG_LICENSE"),
+        repository: REPOSITORY,
+    }
+}
+
+/// Whether a newer Kerf is released on GitHub, or why GitHub could not be asked
 /// (`KERF_UPDATE_CHECK=off` asks nothing). It asks the network and may block for up to
 /// 10 s, so call it off the UI thread.
-pub fn update_check() -> Value {
+pub fn update_check() -> Result<UpdateCheck, String> {
     updates::check()
 }
 
@@ -87,29 +98,25 @@ pub fn crash_install() {
     kerf_runtime::crash::install("editor");
 }
 
-/// The crash folder's reports: `{folder, reports: [{path, component (editor|kerfd|kerf),
-/// atMs, message}]}`, newest first; `folder` is null when there is nowhere to keep them.
-pub fn crash_reports() -> Value {
-    crash_reports_json(kerf_runtime::crash::folder())
+/// The crash folder, where there is one to keep reports in, and its reports.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CrashReports {
+    /// None when there is nowhere to keep them.
+    pub folder: Option<PathBuf>,
+    /// Newest first.
+    pub reports: Vec<CrashReport>,
 }
 
-fn crash_reports_json(folder: Option<PathBuf>) -> Value {
-    let reports: Vec<Value> = folder
-        .as_deref()
-        .map(kerf_runtime::crash::reports)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|report| {
-            json!({
-                "path": report.path,
-                "component": report.component,
-                // Milliseconds fit an f64 exactly until the year 287,396.
-                "atMs": report.at_ms as f64,
-                "message": report.message,
-            })
-        })
-        .collect();
-    json!({"folder": folder, "reports": reports})
+/// The crash folder's reports, newest first.
+pub fn crash_reports() -> CrashReports {
+    let folder = kerf_runtime::crash::folder();
+    CrashReports {
+        reports: folder
+            .as_deref()
+            .map(kerf_runtime::crash::reports)
+            .unwrap_or_default(),
+        folder,
+    }
 }
 
 /// The system keychain: `{op: get|set|delete, name, value?}` -> `{ok: true, value?}` (`value`

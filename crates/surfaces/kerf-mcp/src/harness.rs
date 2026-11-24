@@ -20,7 +20,7 @@ mod shots;
 mod tools;
 mod track;
 
-pub use project::models_listed;
+pub use project::{models_listed, ListedModel};
 pub use tools::system_prompt;
 pub(crate) use tools::{input, metadata};
 

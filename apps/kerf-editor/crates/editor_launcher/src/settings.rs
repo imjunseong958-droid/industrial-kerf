@@ -24,7 +24,8 @@ use gpui::{
     Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable, FontWeight, KeyBinding,
     Keystroke, MouseButton, ScrollHandle, SharedString, Subscription, Task, Window,
 };
-use kerf_bridge::{Command, Event};
+use kerf_bridge::event::{CloudAccess, CloudStatus, ListedModel};
+use kerf_bridge::{About, Command, CrashReports, Event, UpdateCheck};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -149,7 +150,7 @@ enum Update {
     Checking {
         _asking: Task<()>,
     },
-    Answered(Value),
+    Answered(Result<UpdateCheck, String>),
 }
 
 pub struct SettingsView {
@@ -183,8 +184,8 @@ pub struct SettingsView {
     /// The registry's commands in the keymap chosen.
     catalog: (Keymap, Vec<commands::Command>),
     update: Update,
-    crashes: Value,
-    about: Value,
+    crashes: CrashReports,
+    about: About,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -351,11 +352,8 @@ impl SettingsView {
 
     fn bridge_event(&mut self, event: &Event, cx: &mut Context<Self>) {
         match event {
-            Event::Cloud { .. } => {
-                editor_session::session::hear_cloud(
-                    &serde_json::to_value(event).unwrap_or_default(),
-                    cx,
-                );
+            Event::Cloud(status) => {
+                editor_session::session::hear_cloud(status, cx);
                 self.signing = false;
                 cx.notify();
             }
@@ -846,9 +844,7 @@ impl SettingsView {
         let exists = heard
             .map(|(_, exists, ..)| exists)
             .unwrap_or_else(|| file.is_file());
-        let listed: Vec<Value> = heard
-            .map(|(_, _, models, _)| models.to_vec())
-            .unwrap_or_default();
+        let listed: &[ListedModel] = heard.map_or(&[], |(_, _, models, _)| models);
         let error = heard.and_then(|(.., error)| error);
         let mut below: Vec<AnyElement> = Vec::new();
         let note: Option<(String, bool)> = if let Some(error) = error {
@@ -878,7 +874,7 @@ impl SettingsView {
             );
         }
         below.extend(listed.iter().map(|model| {
-            let name = model["name"].as_str().unwrap_or("model").to_owned();
+            let name = model.name.clone();
             div()
                 .flex()
                 .flex_col()
@@ -897,13 +893,13 @@ impl SettingsView {
                         )),
                 )
                 .when_some(
-                    model["about"].as_str().filter(|about| !about.is_empty()),
+                    model.about.as_deref().filter(|about| !about.is_empty()),
                     |column, about| {
                         column.child(ui::label(about.to_owned(), text::CONTROL, theme::ink3()))
                     },
                 )
                 .when_some(
-                    model["guide"].as_str().filter(|guide| !guide.is_empty()),
+                    model.guide.as_deref().filter(|guide| !guide.is_empty()),
                     |column, guide| {
                         column.child(ui::label(
                             format!("Guide: {guide}"),
@@ -1495,17 +1491,13 @@ impl SettingsView {
 
     fn about_page(&self, cx: &Context<Self>) -> Vec<AnyElement> {
         let prefs = &self.session.read(cx).prefs;
-        let about = &self.about;
-        let name = about["name"]
-            .as_str()
-            .unwrap_or("Industrial Kerf")
-            .to_owned();
-        let version = about["version"].as_str().unwrap_or_default().to_owned();
-        let license = about["license"].as_str().unwrap_or_default().to_owned();
-        let repository = about["repository"]
-            .as_str()
-            .unwrap_or(kerf_bridge::REPOSITORY)
-            .to_owned();
+        let About {
+            name,
+            version,
+            license,
+            repository,
+        } = self.about;
+        let repository = repository.to_owned();
         let link = repository.clone();
         let releases = releases_url(&repository);
         let releases_link = releases.clone();
@@ -1570,11 +1562,8 @@ impl SettingsView {
             }
             Update::Answered(answer) => Some(update_answer(answer)),
         };
-        let reports = self.crashes["reports"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        let folder = self.crashes["folder"].as_str().map(PathBuf::from);
+        let reports = &self.crashes.reports;
+        let folder = self.crashes.folder.clone();
         let crash_hint: SharedString = match (reports.len(), &folder) {
             (_, None) => "There is nowhere to keep them on this computer".into(),
             (0, Some(folder)) => {
@@ -1588,22 +1577,10 @@ impl SettingsView {
             .iter()
             .take(3)
             .map(|report| {
-                let component = capitalized(component_name(
-                    report["component"].as_str().unwrap_or("editor"),
-                ));
-                let when = report["atMs"]
-                    .as_f64()
-                    .map(
-                        |ms| ago(std::time::UNIX_EPOCH + Duration::from_millis(ms.max(0.0) as u64)),
-                    )
-                    .unwrap_or_default();
-                let message = report["message"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
+                let component = capitalized(component_name(&report.component));
+                let when = ago(std::time::UNIX_EPOCH
+                    + Duration::from_millis(u64::try_from(report.at_ms).unwrap_or(u64::MAX)));
+                let message = report.message.lines().next().unwrap_or_default().to_owned();
                 div()
                     .flex()
                     .flex_col()
@@ -2004,22 +1981,25 @@ fn prose_step_label(step: i32) -> String {
 }
 
 /// What GitHub said of the newest release.
-fn update_answer(answer: &Value) -> AnyElement {
-    if let Some(error) = answer["error"].as_str() {
-        return ui::label(
-            format!("Could not check: {error}"),
-            text::CONTROL,
-            theme::neg(),
-        )
-        .into_any_element();
-    }
-    let current = answer["current"].as_str().unwrap_or_default();
+fn update_answer(answer: &Result<UpdateCheck, String>) -> AnyElement {
+    let answer = match answer {
+        Ok(answer) => answer,
+        Err(error) => {
+            return ui::label(
+                format!("Could not check: {error}"),
+                text::CONTROL,
+                theme::neg(),
+            )
+            .into_any_element()
+        }
+    };
+    let current = &answer.current;
     match (
-        answer["newer"].as_bool(),
-        answer["latest"].as_str(),
-        answer["url"].as_str(),
+        answer.newer,
+        answer.latest.as_deref(),
+        answer.url.as_deref(),
     ) {
-        (Some(true), Some(latest), Some(url)) => {
+        (true, Some(latest), Some(url)) => {
             let url = url.to_owned();
             div()
                 .flex()
@@ -2136,47 +2116,47 @@ pub struct AccountStatus {
     pub sign_out: bool,
 }
 
-/// What the last `cloud {access, account?, message?}` event says of the
-/// account; None before one is heard.
-pub fn account_status(cloud: Option<&Value>) -> AccountStatus {
-    let access = cloud
-        .and_then(|cloud| cloud["access"].as_str())
-        .unwrap_or("");
-    let account = cloud.map(|cloud| &cloud["account"]);
-    let email = account
-        .and_then(|account| account["email"].as_str())
-        .unwrap_or("");
-    let available = !access.is_empty() && access != "unavailable";
-    let signed_in = available && !email.is_empty() && access != "signedOut";
+/// What the last `cloud` event says of the account; None before one is
+/// heard.
+pub fn account_status(cloud: Option<&CloudStatus>) -> AccountStatus {
+    let access = cloud.map(|cloud| cloud.access);
+    let account = cloud.and_then(|cloud| cloud.account.as_ref());
+    let email = account.map_or("", |account| account.email.as_str());
+    let available = access.is_some_and(|access| access != CloudAccess::Unavailable);
+    let signed_in = available && !email.is_empty() && access != Some(CloudAccess::SignedOut);
     let mut words = if !available {
         "Not available yet. Chat can run on your own API key or Claude Code".to_owned()
     } else if !signed_in {
-        if access == "unreachable" {
+        if access == Some(CloudAccess::Unreachable) {
             "Kerf can't be reached right now".to_owned()
         } else {
             "Signed out. Paste your Kerf sign-in token to sign in".to_owned()
         }
     } else {
         let plan = account
-            .and_then(|account| account["plan"].as_str())
+            .map(|account| account.plan.as_str())
             .filter(|plan| !plan.is_empty())
             .unwrap_or("Kerf");
         let mut words = format!("Signed in as {email} · {plan} plan");
-        if let Some(credits) = account.and_then(|account| account["credits"].as_u64()) {
+        if let Some(credits) = account.and_then(|account| account.credits) {
             words.push_str(&format!(
                 " · {credits} request{} left",
                 if credits == 1 { "" } else { "s" }
             ));
         }
         match access {
-            "notIncluded" => words.push_str("\nThis plan doesn't include requests to Kerf"),
-            "outOfCredits" => words.push_str("\nYou've used this period's requests"),
+            Some(CloudAccess::NotIncluded) => {
+                words.push_str("\nThis plan doesn't include requests to Kerf")
+            }
+            Some(CloudAccess::OutOfCredits) => {
+                words.push_str("\nYou've used this period's requests")
+            }
             _ => {}
         }
         words
     };
     if let Some(message) = cloud
-        .and_then(|cloud| cloud["message"].as_str())
+        .and_then(|cloud| cloud.message.as_deref())
         .filter(|message| !message.trim().is_empty())
     {
         words.push('\n');
@@ -2191,27 +2171,22 @@ pub fn account_status(cloud: Option<&Value>) -> AccountStatus {
 
 /// A model of the models event in a line: "832x480 · 16 fps · up to 5 s ·
 /// reads guide, ref".
-pub fn model_summary(model: &Value) -> String {
+pub fn model_summary(model: &ListedModel) -> String {
     let number = |value: f64| {
         let text = format!("{value:.3}");
         text.trim_end_matches('0').trim_end_matches('.').to_owned()
     };
     let mut said = Vec::new();
-    if let Some(size) = model["size"].as_str().filter(|size| !size.is_empty()) {
+    if let Some(size) = model.size.as_deref().filter(|size| !size.is_empty()) {
         said.push(size.to_owned());
     }
-    if let Some(rate) = model["rate"].as_f64().filter(|rate| *rate > 0.0) {
+    if let Some(rate) = model.rate.filter(|rate| *rate > 0.0) {
         said.push(format!("{} fps", number(rate)));
     }
-    if let Some(seconds) = model["seconds"].as_f64().filter(|seconds| *seconds > 0.0) {
+    if let Some(seconds) = model.seconds.filter(|seconds| *seconds > 0.0) {
         said.push(format!("up to {} s", number(seconds)));
     }
-    let reads: Vec<&str> = model["reads"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
+    let reads = model.reads.as_deref().unwrap_or_default();
     if !reads.is_empty() {
         said.push(format!("reads {}", reads.join(", ")));
     }

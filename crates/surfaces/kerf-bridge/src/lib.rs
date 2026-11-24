@@ -136,16 +136,17 @@ pub use recipes::Edit as RecipeEdit;
 pub use standalone::{
     about, clip_properties, commands_catalog, commands_run, commands_states, crash_install,
     crash_reports, ffmpeg_bin, fx_catalog_all, keychain_off, preset_inspect, project_inspect,
-    secret, serve_mcp, update_check, REPOSITORY,
+    secret, serve_mcp, update_check, About, CrashReport, CrashReports, REPOSITORY,
 };
 pub use tasks::{CheckedFile, PresetCheck, ProjectInfo, Task, TaskDone, TaskStatus};
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};
+pub use updates::UpdateCheck;
 pub use wake::Wake;
 pub use workers::Workers;
 pub use workflows::Edit as WorkflowEdit;
 
 use agent::{agent_worker, permission_mode, Agent};
-use event::{CloudAccess, ErrorEvent};
+use event::{CloudAccess, CloudStatus, ErrorEvent};
 use kerf_mcp::permissions::Mode;
 use kerf_model::Project;
 use runtime::runtime_worker;
@@ -304,11 +305,11 @@ fn cloud_status(tx: &Outbox, command: Option<Command>) {
     let Some(path) = kerf_cloud::Store::default_path() else {
         emit(
             tx,
-            Event::Cloud {
+            Event::Cloud(CloudStatus {
                 access: CloudAccess::Unavailable,
                 account: None,
                 message: None,
-            },
+            }),
         );
         return;
     };
@@ -347,11 +348,11 @@ fn cloud_status(tx: &Outbox, command: Option<Command>) {
     };
     emit(
         tx,
-        Event::Cloud {
+        Event::Cloud(CloudStatus {
             access,
             account,
             message,
-        },
+        }),
     );
 }
 

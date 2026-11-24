@@ -219,11 +219,8 @@ impl SidebarView {
             }),
             // Kerf's account, as the foot says it.
             cx.subscribe(&session, |_, _, event: &BridgeEvent, cx| {
-                if let Event::Cloud { .. } = &*event.0 {
-                    editor_session::session::hear_cloud(
-                        &serde_json::to_value(&event.0).unwrap_or_default(),
-                        cx,
-                    );
+                if let Event::Cloud(status) = &*event.0 {
+                    editor_session::session::hear_cloud(status, cx);
                     cx.notify();
                 }
             }),
