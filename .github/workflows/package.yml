@@ -110,7 +110,7 @@ jobs:
       # GitHub's release downloads have answered 504 for an hour at a time, so the
       # pinned archive is kept in the Actions cache and fetched, with retries over
       # several minutes, only when it is not there.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
           key: ${{ env.FFMPEG_NAME }}
@@ -278,7 +278,7 @@ jobs:
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
           key: ${{ env.LINUX_FFMPEG_NAME }}

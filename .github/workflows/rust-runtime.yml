@@ -266,7 +266,7 @@ jobs:
       # Windows package carries (package.yml), so that is what is tested.
       # Kept in the Actions cache, as on Linux, and fetched with retries over
       # several minutes only when it is not there.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
           key: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
