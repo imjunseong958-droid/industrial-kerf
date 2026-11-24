@@ -42,7 +42,8 @@ updates:
     open-pull-requests-limit: 3
     groups:
       # The editor builds kerf-text too, by path, so its lock moves the three
-      # together for the same reason.
+      # together as well. gpui's swash keeps an older skrifa and read-fonts of
+      # its own beside them; moving the three together keeps that at two copies.
       editor-fonts:
         applies-to: version-updates
         patterns: ["skrifa", "harfrust", "read-fonts"]
