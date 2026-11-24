@@ -392,14 +392,29 @@ pub trait SnapshotShow {
 
 impl SnapshotShow for Snapshot {
     fn from_value(value: &Value) -> Self {
+        let mut fields = value.as_object().cloned().unwrap_or_default();
+        // Two things this reader takes that the bridge's type refuses: the
+        // texts among import warnings that hold something else, and the
+        // proposal's timeline under its old name, which counts where the
+        // new one holds no timeline (the type takes the two names as one
+        // field said twice).
+        if let Some(Value::Array(warnings)) = fields.get_mut("importWarnings") {
+            warnings.retain(Value::is_string);
+        }
+        if let Some(old) = fields.remove("pendingTimeline")
+            && old.is_object()
+            && !fields.get("proposalTimeline").is_some_and(Value::is_object)
+        {
+            fields.insert("proposalTimeline".into(), old);
+        }
         // Each field as the bridge's reader reads it (its proposals and
         // timelines leniently already), kept only while the snapshot still
         // reads with it: one that does not is left at its default.
         let mut taken = Map::new();
-        for (name, field) in value.as_object().into_iter().flatten() {
-            taken.insert(name.clone(), field.clone());
+        for (name, field) in fields {
+            taken.insert(name.clone(), field);
             if serde_json::from_value::<Self>(Value::Object(taken.clone())).is_err() {
-                taken.remove(name);
+                taken.remove(&name);
             }
         }
         let mut snapshot: Self = serde_json::from_value(Value::Object(taken)).unwrap_or_default();
