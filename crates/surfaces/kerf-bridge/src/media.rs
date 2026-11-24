@@ -16,7 +16,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::SyncSender;
 use std::sync::Arc;
-use std::thread;
 
 /// Copy the file at `path` into the project's `media/` folder on its own
 /// thread, then hand the runtime worker `then(copy)`, which names the copy
@@ -35,7 +34,7 @@ pub(crate) fn copy_then(
     let source = absolute(&shared.directory, Path::new(path));
     let copying = Copying::start(shared);
     let (commands, tx) = (commands.clone(), tx.clone());
-    thread::spawn(move || {
+    shared.workers.spawn("bridge:copy", move || {
         if let Err(error) = probe(&source) {
             drop(copying);
             crate::error(&tx, format!("cannot import: {error}"));
@@ -127,7 +126,7 @@ pub(crate) fn make(
     }
     crate::emit(tx, making(id, plan.take, ""));
     let (shared, commands, tx, id) = (shared.clone(), commands.clone(), tx.clone(), id.to_owned());
-    thread::spawn(move || {
+    shared.workers.clone().spawn("bridge:making", move || {
         // A making draws in this process (the guide a model follows), so it begins on the
         // bridge's drawers and holds them until it is over: a bridge let go asks its program
         // to end, and what is about to exit waits for it to have ended. Held to the end of

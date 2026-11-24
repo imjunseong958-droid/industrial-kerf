@@ -193,7 +193,7 @@ fn ask_taken(
     };
     let (directory, id, tx) = (shared.directory.clone(), id.to_owned(), tx.clone());
     let said = shared.workflows.clone();
-    std::thread::spawn(move || {
+    shared.workers.spawn("bridge:workflow", move || {
         let Ok(models) = Models::load() else {
             return;
         };

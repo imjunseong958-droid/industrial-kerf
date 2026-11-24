@@ -13,6 +13,8 @@
 //! viewer preview rendering, the QC check, the makings it started, the render queue's jobs
 //! and the renders its agent's tools started are stopped. A making another program runs on
 //! the project goes on.
+//! The threads it starts itself are named for what they do and counted
+//! ([`Bridge::workers`]), so that whoever let it go can find out that they are done.
 //!
 //! One thing an editor waits for, just before its process exits, with [`drawing_settled`]:
 //! the frames a closed bridge was still drawing, and the GPU a frame had begun to bring up.
@@ -112,6 +114,7 @@ mod tracks;
 mod updates;
 mod viewer;
 mod wake;
+mod workers;
 mod workflows;
 
 pub use claude_code::SERVE_MCP;
@@ -135,6 +138,7 @@ pub use standalone::{
 pub use tasks::Task;
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};
 pub use wake::Wake;
+pub use workers::Workers;
 pub use workflows::Edit as WorkflowEdit;
 
 use agent::{agent_worker, permission_mode, Agent};
@@ -147,7 +151,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use viewer::media_worker;
 use viewer::preview::{cancel_preview, discard_previews, exit_preview, stop_preview};
 use wake::Outbox;
@@ -215,6 +218,8 @@ struct Shared {
     renders: queue::Queue,
     /// The renders Kerf's own tools started in this process and are still on.
     tool_renders: tools::Renders,
+    /// The threads the bridge started itself and whose work is not over.
+    workers: Workers,
     /// Loudness, media info and media index work.
     analysis: analysis::Analysis,
     /// The workflow last said of each step a graph has open.
@@ -412,10 +417,12 @@ impl Bridge {
             others_makings: Mutex::new(std::collections::BTreeMap::new()),
             renders: queue::Queue::default(),
             tool_renders: Default::default(),
+            workers: Workers::new(),
             analysis: analysis::Analysis::default(),
             workflows: Default::default(),
             drawers: Default::default(),
         });
+        let workers = shared.workers.clone();
         {
             let directory = directory.clone();
             let binary = binary.clone();
@@ -423,7 +430,7 @@ impl Bridge {
             let media = media.clone();
             let tx = emit.clone();
             let shared = shared.clone();
-            thread::spawn(move || {
+            workers.spawn("bridge:runtime", move || {
                 runtime_worker(directory, binary, rx, commands, media, tx, shared)
             });
         }
@@ -433,34 +440,38 @@ impl Bridge {
             let runtime = commands.clone();
             let tx = emit.clone();
             let shared = shared.clone();
-            thread::spawn(move || collab::run(directory, binary, collab_rx, runtime, tx, shared));
+            workers.spawn("bridge:collab", move || {
+                collab::run(directory, binary, collab_rx, runtime, tx, shared)
+            });
         }
         {
             let tx = emit.clone();
             let shared = shared.clone();
-            thread::spawn(move || media_worker(media_rx, tx, shared));
+            workers.spawn("bridge:media", move || media_worker(media_rx, tx, shared));
         }
         {
             let tx = emit.clone();
             let shared = shared.clone();
-            thread::spawn(move || queue::worker(shared, tx));
+            workers.spawn("bridge:renders", move || queue::worker(shared, tx));
         }
         {
             let tx = emit.clone();
             let shared = shared.clone();
             let commands = commands.clone();
-            thread::spawn(move || agent_worker(directory, binary, prompt_rx, commands, tx, shared));
+            workers.spawn("bridge:agent", move || {
+                agent_worker(directory, binary, prompt_rx, commands, tx, shared)
+            });
         }
         {
             let tx = emit.clone();
-            thread::spawn(move || cloud_status(&tx, None));
+            workers.spawn("bridge:cloud", move || cloud_status(&tx, None));
         }
         {
             // Their events wait for room in the event queue here, never on
             // the caller's thread, which is the one that empties it.
             let tx = emit.clone();
             let store = conversations::Store::of(&project_folder);
-            thread::spawn(move || {
+            workers.spawn("bridge:chats", move || {
                 for request in conversations_rx {
                     conversations::command(&store, request, &tx);
                 }
@@ -524,7 +535,7 @@ impl Bridge {
                 let generation = self.shared.previews.fetch_add(1, Ordering::SeqCst) + 1;
                 let shared = self.shared.clone();
                 let tx = self.events_tx.clone();
-                thread::spawn(move || {
+                self.shared.workers.spawn("bridge:effects", move || {
                     if let Err(message) = previews::run(&shared, generation, &request, &tx) {
                         error(&tx, message);
                     }
@@ -541,12 +552,16 @@ impl Bridge {
             Command::MediaMakeCancel { media } => {
                 let shared = self.shared.clone();
                 let tx = self.events_tx.clone();
-                thread::spawn(move || media::cancel_make(&shared, &media, &tx));
+                self.shared.workers.spawn("bridge:unmake", move || {
+                    media::cancel_make(&shared, &media, &tx)
+                });
                 true
             }
             Command::Models => {
                 let tx = self.events_tx.clone();
-                thread::spawn(move || emit(&tx, models_event()));
+                self.shared
+                    .workers
+                    .spawn("bridge:models", move || emit(&tx, models_event()));
                 true
             }
             Command::Loudness { sequence } => {
@@ -567,7 +582,9 @@ impl Bridge {
             }
             Command::CloudSignIn { .. } | Command::CloudSignOut | Command::CloudRefresh => {
                 let tx = self.events_tx.clone();
-                thread::spawn(move || cloud_status(&tx, Some(command)));
+                self.shared
+                    .workers
+                    .spawn("bridge:cloud", move || cloud_status(&tx, Some(command)));
                 true
             }
             // A preview is counted as it is sent, and a stop or an exit acts
@@ -590,7 +607,9 @@ impl Bridge {
             Command::PresetLibrary => {
                 let directory = self.shared.directory.clone();
                 let tx = self.events_tx.clone();
-                thread::spawn(move || emit(&tx, presets::library(&directory)));
+                self.shared.workers.spawn("bridge:presets", move || {
+                    emit(&tx, presets::library(&directory))
+                });
                 true
             }
             Command::CollabStatus
@@ -720,6 +739,12 @@ impl Bridge {
     /// The project folder the bridge was opened on.
     pub fn directory(&self) -> &Path {
         &self.directory
+    }
+
+    /// The threads the bridge started itself, which go on being counted once it is let go:
+    /// for finding out that they are done.
+    pub fn workers(&self) -> Workers {
+        self.shared.workers.clone()
     }
 }
 
