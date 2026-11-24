@@ -9,8 +9,9 @@ use crate::media::derivatives::{CacheEntry, DerivativeCache, SourceIdentity};
 use crate::media::probe::info;
 use crate::process::ffmpeg::resolve_ffmpeg_bin;
 use crate::process::sidecar::{self, CancellationToken};
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use crate::said;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -188,7 +189,7 @@ struct WhisperConfig {
     binary: PathBuf,
     model: PathBuf,
     model_identity: SourceIdentity,
-    binary_identity: Value,
+    binary_identity: BinaryIdentity,
     backend_version: String,
     model_version: String,
     /// The alignment heads whisper.cpp has for the model, when it and the
@@ -212,8 +213,144 @@ struct Alignment {
 /// timestamps, or millisecond offsets depending on the CLI flags and version.
 /// The parser accepts all of those forms and normalizes them to source seconds.
 pub fn parse_whisper_json(output: &str, range: TimeRange) -> Result<Transcript> {
-    let value: Value = serde_json::from_str(output)?;
-    parse_whisper_value(&value, range)
+    Ok(transcript_of(
+        said::object_of(serde_json::from_str(output)?),
+        range,
+    ))
+}
+
+/// What whisper.cpp writes, in the shapes its versions and flags give: a language, at the top or
+/// in `result`, and segments under one of three names, each with its words, or its tokens, or
+/// neither; or text alone. Read as [`said`] reads.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperOutput {
+    #[serde(deserialize_with = "said::object")]
+    result: WhisperResult,
+    #[serde(deserialize_with = "said::as_said")]
+    language: Option<String>,
+    #[serde(deserialize_with = "said::objects")]
+    transcription: Option<Vec<WhisperSegment>>,
+    #[serde(deserialize_with = "said::objects")]
+    segments: Option<Vec<WhisperSegment>>,
+    #[serde(deserialize_with = "said::objects")]
+    cues: Option<Vec<WhisperSegment>>,
+    #[serde(deserialize_with = "said::as_said")]
+    text: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperResult {
+    /// Said here at all, the language is this, none where it is not text: the one at the top
+    /// is not read in its place.
+    #[serde(deserialize_with = "said::present")]
+    language: Option<Option<String>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperSegment {
+    #[serde(flatten)]
+    times: WhisperTimes,
+    #[serde(deserialize_with = "said::as_said")]
+    text: Option<String>,
+    #[serde(deserialize_with = "said::objects")]
+    words: Option<Vec<WhisperWord>>,
+    #[serde(deserialize_with = "said::objects")]
+    tokens: Option<Vec<WhisperToken>>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperWord {
+    #[serde(flatten)]
+    times: WhisperTimes,
+    #[serde(flatten)]
+    sure: WhisperSureness,
+    /// Said at all, the word's text is this, none where it is not text: `text` is not read in
+    /// its place.
+    #[serde(deserialize_with = "said::present")]
+    word: Option<Option<String>>,
+    #[serde(deserialize_with = "said::as_said")]
+    text: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperToken {
+    #[serde(flatten)]
+    times: WhisperTimes,
+    #[serde(flatten)]
+    sure: WhisperSureness,
+    #[serde(deserialize_with = "said::as_said")]
+    text: Option<String>,
+    #[serde(deserialize_with = "said::as_said")]
+    t_dtw: Option<f64>,
+}
+
+/// When a segment, a word or a token is, in one of three forms: `timestamps` (`from` and `to`,
+/// or `start` and `end`), `offsets` in milliseconds, or `start` and `end` beside its text. The
+/// first of them it has is the one read, whether or not it reads.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperTimes {
+    #[serde(deserialize_with = "said::object")]
+    timestamps: Option<WhisperStamps>,
+    #[serde(deserialize_with = "said::object")]
+    offsets: Option<WhisperOffsets>,
+    start: Stamp,
+    end: Stamp,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperStamps {
+    /// Said at all, `from` is read and `start` is not, and so for `to` and `end`.
+    #[serde(deserialize_with = "said::present")]
+    from: Option<Stamp>,
+    #[serde(deserialize_with = "said::present")]
+    start: Option<Stamp>,
+    #[serde(deserialize_with = "said::present")]
+    to: Option<Stamp>,
+    #[serde(deserialize_with = "said::present")]
+    end: Option<Stamp>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperOffsets {
+    #[serde(deserialize_with = "said::as_said")]
+    from: Option<f64>,
+    #[serde(deserialize_with = "said::as_said")]
+    to: Option<f64>,
+}
+
+/// How sure whisper is of a word or a token, by the first of these names it says as a number.
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WhisperSureness {
+    #[serde(deserialize_with = "said::as_said")]
+    confidence: Option<f64>,
+    #[serde(deserialize_with = "said::as_said")]
+    probability: Option<f64>,
+    #[serde(deserialize_with = "said::as_said")]
+    p: Option<f64>,
+}
+
+/// A time as whisper writes one: seconds, or a timestamp such as `00:00:01,500`. Anything else
+/// is no time.
+#[derive(Clone, Copy, Default)]
+struct Stamp(Option<f64>);
+
+impl<'de> Deserialize<'de> for Stamp {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        Ok(Self(match Value::deserialize(deserializer)? {
+            Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
+            Value::String(value) => parse_timestamp(&value),
+            _ => None,
+        }))
+    }
 }
 
 /// Transcribe a bounded range with the configured local whisper.cpp backend.
@@ -297,7 +434,9 @@ pub fn transcription_available() -> Result<()> {
     resolve_whisper_config(&TranscriptionOptions::new(range)).map(drop)
 }
 
-/// The options a transcript was made with, but for its range.
+/// The options a transcript was made with, but for its range. JSON, as the cache keeps each
+/// entry's: compared whole, a key that is not a [`TranscriptionKey`]'s, from another build of
+/// Kerf, keeps a transcript apart from these, where reading it as one would drop the key.
 fn options_but_range(options: &Value) -> Value {
     let mut options = options.clone();
     if let Some(options) = options.as_object_mut() {
@@ -1294,44 +1433,83 @@ fn configured_value(explicit: Option<&str>, variable: &str, fallback: &str) -> S
         .unwrap_or_else(|| fallback.to_owned())
 }
 
+/// What a transcript is made with, as the cache keeps it: all that changes its words.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TranscriptionKey<'a> {
+    schema_version: u8,
+    backend: &'static str,
+    backend_version: &'a str,
+    binary: &'a BinaryIdentity,
+    model: &'a SourceIdentity,
+    model_version: &'a str,
+    /// `auto` where none is asked for.
+    language: &'a str,
+    range: TimeRange,
+    audio: AudioKey,
+    /// Words timed by alignment are not the words timed without: a
+    /// transcript made before is not one of these.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    word_times: Option<WordTimes>,
+}
+
+/// The sound whisper is given.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AudioKey {
+    channels: u8,
+    sample_rate: u32,
+    codec: &'static str,
+}
+
+#[derive(Serialize)]
+struct WordTimes {
+    /// The alignment heads, as `-dtw` names them.
+    alignment: &'static str,
+}
+
+/// The whisper.cpp program as a transcript's key names it: where it is, its size (0 where it
+/// cannot be read), and when it was changed, `null` where that is not known.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BinaryIdentity {
+    path: String,
+    size: u64,
+    modified_ns: Option<u64>,
+}
+
+/// The cache's options for a transcript: its [`TranscriptionKey`].
 fn cache_options(options: &TranscriptionOptions, config: &WhisperConfig) -> Result<Value> {
-    let mut key = cache_key(options, config)?;
-    // Words timed by alignment are not the words timed without: a
-    // transcript made before is not one of these.
-    if let Some(alignment) = config.alignment {
-        key["wordTimes"] = json!({ "alignment": alignment.preset });
-    }
-    Ok(key)
+    Ok(serde_json::to_value(TranscriptionKey {
+        schema_version: TRANSCRIPTION_SCHEMA_VERSION,
+        backend: "whisper.cpp",
+        backend_version: &config.backend_version,
+        binary: &config.binary_identity,
+        model: &config.model_identity,
+        model_version: &config.model_version,
+        language: options.language.as_deref().unwrap_or("auto"),
+        range: options.range,
+        audio: AudioKey {
+            channels: 1,
+            sample_rate: TRANSCRIPTION_SAMPLE_RATE,
+            codec: "pcm_s16le",
+        },
+        word_times: config.alignment.map(|alignment| WordTimes {
+            alignment: alignment.preset,
+        }),
+    })?)
 }
 
-fn cache_key(options: &TranscriptionOptions, config: &WhisperConfig) -> Result<Value> {
-    Ok(json!({
-        "schemaVersion": TRANSCRIPTION_SCHEMA_VERSION,
-        "backend": "whisper.cpp",
-        "backendVersion": config.backend_version,
-        "binary": config.binary_identity,
-        "model": serde_json::to_value(&config.model_identity)?,
-        "modelVersion": config.model_version,
-        "language": options.language.as_deref().unwrap_or("auto"),
-        "range": options.range,
-        "audio": {
-            "channels": 1,
-            "sampleRate": TRANSCRIPTION_SAMPLE_RATE,
-            "codec": "pcm_s16le"
-        }
-    }))
-}
-
-fn binary_identity(binary: &Path) -> Value {
+fn binary_identity(binary: &Path) -> BinaryIdentity {
     let metadata = fs::metadata(binary).ok();
-    json!({
-        "path": binary.to_string_lossy(),
-        "size": metadata.as_ref().map_or(0, fs::Metadata::len),
-        "modifiedNs": metadata
+    BinaryIdentity {
+        path: binary.to_string_lossy().into_owned(),
+        size: metadata.as_ref().map_or(0, fs::Metadata::len),
+        modified_ns: metadata
             .and_then(|metadata| metadata.modified().ok())
             .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
-            .and_then(|duration| u64::try_from(duration.as_nanos()).ok())
-    })
+            .and_then(|duration| u64::try_from(duration.as_nanos()).ok()),
+    }
 }
 
 fn discover_whisper_binary() -> Option<PathBuf> {
@@ -1554,16 +1732,9 @@ fn read_cached_transcript(entry: &CacheEntry, range: TimeRange) -> Result<Transc
     Ok(transcript)
 }
 
-fn parse_whisper_value(value: &Value, range: TimeRange) -> Result<Transcript> {
-    let language = value
-        .get("result")
-        .and_then(|result| result.get("language"))
-        .or_else(|| value.get("language"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let segments = ["transcription", "segments", "cues"]
-        .into_iter()
-        .find_map(|key| value.get(key).and_then(Value::as_array));
+fn transcript_of(output: WhisperOutput, range: TimeRange) -> Transcript {
+    let language = output.result.language.unwrap_or(output.language);
+    let segments = output.transcription.or(output.segments).or(output.cues);
     let mut cues = segments
         .map(|segments| {
             segments
@@ -1578,7 +1749,7 @@ fn parse_whisper_value(value: &Value, range: TimeRange) -> Result<Transcript> {
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     if cues.is_empty()
-        && let Some(text) = value.get("text").and_then(Value::as_str).map(str::trim)
+        && let Some(text) = output.text.as_deref().map(str::trim)
         && !text.is_empty()
     {
         cues.push(TranscriptCue {
@@ -1598,27 +1769,22 @@ fn parse_whisper_value(value: &Value, range: TimeRange) -> Result<Transcript> {
         .map(|cue| cue.text.as_str())
         .collect::<Vec<_>>()
         .join(" ");
-    Ok(Transcript {
+    Transcript {
         schema_version: TRANSCRIPTION_SCHEMA_VERSION,
         range,
         language,
         text,
         cues,
-    })
+    }
 }
 
-fn parse_segment(value: &Value, range: TimeRange) -> Option<TranscriptCue> {
-    let object = value.as_object()?;
-    let (start, end) = shift_range(timestamp_pair(object)?, range);
+fn parse_segment(segment: &WhisperSegment, range: TimeRange) -> Option<TranscriptCue> {
+    let (start, end) = shift_range(segment.times.pair()?, range);
     let (start, end) = clamp_range(start, end, range)?;
-    let segment_text = object
-        .get("text")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
-    let words = if let Some(words) = object.get("words").and_then(Value::as_array) {
+    let segment_text = segment.text.as_deref().map(str::trim).unwrap_or_default();
+    let words = if let Some(words) = &segment.words {
         parse_word_array(words, (start, end), range)
-    } else if let Some(tokens) = object.get("tokens").and_then(Value::as_array) {
+    } else if let Some(tokens) = &segment.tokens {
         parse_token_words(tokens, (start, end), range)
     } else {
         Vec::new()
@@ -1654,21 +1820,22 @@ fn parse_segment(value: &Value, range: TimeRange) -> Option<TranscriptCue> {
 }
 
 fn parse_word_array(
-    values: &[Value],
+    words: &[WhisperWord],
     fallback: (f64, f64),
     range: TimeRange,
 ) -> Vec<TranscriptWord> {
-    values
+    words
         .iter()
-        .filter_map(|value| {
-            let object = value.as_object()?;
-            let text = object
-                .get("word")
-                .or_else(|| object.get("text"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|text| !text.is_empty())?;
-            let (start, end) = timestamp_pair(object)
+        .filter_map(|word| {
+            let text = match &word.word {
+                Some(said) => said.as_deref(),
+                None => word.text.as_deref(),
+            }
+            .map(str::trim)
+            .filter(|text| !text.is_empty())?;
+            let (start, end) = word
+                .times
+                .pair()
                 .map(|pair| shift_range(pair, range))
                 .unwrap_or(fallback);
             let (start, end) = clamp_range(start, end, range)?;
@@ -1676,14 +1843,14 @@ fn parse_word_array(
                 start,
                 end,
                 text: text.into(),
-                confidence: confidence(object),
+                confidence: word.sure.confidence(),
             })
         })
         .collect()
 }
 
 fn parse_token_words(
-    values: &[Value],
+    tokens: &[WhisperToken],
     fallback: (f64, f64),
     range: TimeRange,
 ) -> Vec<TranscriptWord> {
@@ -1716,11 +1883,8 @@ fn parse_token_words(
         words.push(word);
     };
     let mut current: Option<Reading> = None;
-    for value in values {
-        let Some(object) = value.as_object() else {
-            continue;
-        };
-        let Some(raw_text) = object.get("text").and_then(Value::as_str) else {
+    for token in tokens {
+        let Some(raw_text) = token.text.as_deref() else {
             continue;
         };
         if is_special_token(raw_text) {
@@ -1730,7 +1894,9 @@ fn parse_token_words(
         if raw_text.trim().is_empty() {
             continue;
         }
-        let (start, end) = timestamp_pair(object)
+        let (start, end) = token
+            .times
+            .pair()
             .map(|pair| shift_range(pair, range))
             .unwrap_or(fallback);
         // whisper.cpp times some tokens as an instant; that is where the
@@ -1744,9 +1910,8 @@ fn parse_token_words(
             .unwrap_or(fallback);
         // Where alignment ends the token, in hundredths of a second of the
         // sound whisper was given: -1 without it.
-        let ends = object
-            .get("t_dtw")
-            .and_then(Value::as_f64)
+        let ends = token
+            .t_dtw
             .filter(|at| *at >= 0.0)
             .map(|at| (at / 100.0 + range.start).clamp(range.start, range.end));
         let starts_new = current.is_some()
@@ -1776,7 +1941,7 @@ fn parse_token_words(
             reading.said = ends.or(reading.said);
         }
         reading.marked = ends.or(reading.marked);
-        if let Some(value) = confidence(object) {
+        if let Some(value) = token.sure.confidence() {
             reading.confidence_sum += value;
             reading.confidence_count += 1;
         }
@@ -1830,40 +1995,33 @@ fn is_special_token(text: &str) -> bool {
     text.starts_with("<|") || (text.starts_with('[') && text.ends_with(']'))
 }
 
-fn confidence(object: &Map<String, Value>) -> Option<f64> {
-    ["confidence", "probability", "p"]
-        .into_iter()
-        .find_map(|key| object.get(key).and_then(Value::as_f64))
-        .filter(|value| value.is_finite())
-        .map(|value| value.clamp(0.0, 1.0))
+impl WhisperSureness {
+    fn confidence(&self) -> Option<f64> {
+        self.confidence
+            .or(self.probability)
+            .or(self.p)
+            .filter(|value| value.is_finite())
+            .map(|value| value.clamp(0.0, 1.0))
+    }
 }
 
-fn timestamp_pair(object: &Map<String, Value>) -> Option<(f64, f64)> {
-    if let Some(timestamps) = object.get("timestamps").and_then(Value::as_object) {
-        let start = timestamp_value(timestamps.get("from").or_else(|| timestamps.get("start"))?)?;
-        let end = timestamp_value(timestamps.get("to").or_else(|| timestamps.get("end"))?)?;
-        return Some((start, end));
+impl WhisperTimes {
+    /// Its start and end, in seconds of the sound whisper was given.
+    fn pair(&self) -> Option<(f64, f64)> {
+        if let Some(timestamps) = &self.timestamps {
+            let start = timestamps.from.or(timestamps.start)?.0?;
+            let end = timestamps.to.or(timestamps.end)?.0?;
+            return Some((start, end));
+        }
+        if let Some(offsets) = &self.offsets {
+            return Some((offsets.from? / 1000.0, offsets.to? / 1000.0));
+        }
+        Some((self.start.0?, self.end.0?))
     }
-    if let Some(offsets) = object.get("offsets").and_then(Value::as_object) {
-        let start = offsets.get("from").and_then(Value::as_f64)? / 1000.0;
-        let end = offsets.get("to").and_then(Value::as_f64)? / 1000.0;
-        return Some((start, end));
-    }
-    let start = timestamp_value(object.get("start")?)?;
-    let end = timestamp_value(object.get("end")?)?;
-    Some((start, end))
 }
 
 fn shift_range((start, end): (f64, f64), source_range: TimeRange) -> (f64, f64) {
     (start + source_range.start, end + source_range.start)
-}
-
-fn timestamp_value(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
-        Value::String(value) => parse_timestamp(value),
-        _ => None,
-    }
 }
 
 fn parse_timestamp(value: &str) -> Option<f64> {

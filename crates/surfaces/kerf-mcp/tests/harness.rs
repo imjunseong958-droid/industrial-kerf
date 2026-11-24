@@ -1,7 +1,7 @@
 //! `look`, `edit`, `render`, and `note` against a real kerfd and real
 //! footage.
 
-use kerf_mcp::{KerfMcpRouter, McpServer};
+use kerf_mcp::{KerfMcpRouter, McpCode, McpServer, PresetInspection, ToolError};
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -185,9 +185,21 @@ fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
         Some("00:00:00:00")
     );
     assert!(!inspected["document"].as_str().unwrap().contains("shot.mp4"));
+    // A host in this process has the same answer as its type, and a refusal with its code.
+    let typed: PresetInspection = destination
+        .call_as("look", json!({"preset":"style.kerfpreset"}))
+        .unwrap();
+    assert_eq!(json!(typed), inspected);
     let before = destination.runtime().get_document(false).unwrap();
     let missing = error(&destination, "edit", json!({"preset":"style.kerfpreset"}));
     assert_eq!(missing["code"], "INVALID_PRESET");
+    match destination.call_as::<Value>("edit", json!({"preset":"style.kerfpreset"})) {
+        Err(ToolError::Refused(refusal)) => {
+            assert_eq!(refusal.code, McpCode::InvalidPreset);
+            assert_eq!(json!(refusal.message), missing["message"]);
+        }
+        other => panic!("{other:?}"),
+    }
     let short = error(
         &destination,
         "edit",
