@@ -12,6 +12,7 @@
 //! a take's depth holds wants the depth read back by a model first, which
 //! is an agent's `look` with `held`.
 
+use crate::ShotError;
 use kerf_engine::recipe::takes::Take;
 use kerf_engine::recipe::{Recipe, Step};
 use kerf_model::Project;
@@ -30,9 +31,9 @@ pub struct Guide {
 /// last `generate` step names with `moves=`, in the sequence that holds
 /// them. Steps that name none have nothing to hold a take to, and are
 /// refused with that said.
-pub fn guide(project: &Project, id: &str) -> Result<Guide, String> {
+pub fn guide(project: &Project, id: &str) -> Result<Guide, ShotError> {
     let text = crate::graph::written(project, id)?;
-    let recipe = Recipe::parse(&text).map_err(|error| error.to_string())?;
+    let recipe = Recipe::parse(&text).map_err(ShotError::from)?;
     let clips = recipe
         .steps
         .iter()
@@ -47,7 +48,7 @@ pub fn guide(project: &Project, id: &str) -> Result<Guide, String> {
     })?;
     let at = project
         .locate(first)
-        .ok_or_else(|| project.no_clip(first))?;
+        .ok_or_else(|| ShotError::NoClip(project.no_clip(first)))?;
     Ok(Guide {
         sequence: project.sequences[at.sequence].id.to_string(),
         clips,
@@ -148,11 +149,11 @@ pub fn read(project: &Project, directory: &Path, id: &str, take: &Take, guide: &
 }
 
 /// The takes of media `id`, in the order they were made.
-pub fn takes(project: &Project, directory: &Path, id: &str) -> Result<Vec<Take>, String> {
+pub fn takes(project: &Project, directory: &Path, id: &str) -> Result<Vec<Take>, ShotError> {
     let media = project
         .media(id)
-        .ok_or_else(|| format!("no media `{id}` in this project"))?;
-    kerf_engine::recipe::takes(project, directory, media).map_err(|error| error.to_string())
+        .ok_or_else(|| ShotError::NoMedia(id.to_owned()))?;
+    kerf_engine::recipe::takes(project, directory, media).map_err(ShotError::from)
 }
 
 /// What going back to a take would write: the recipe as that take was made from it, and
@@ -182,11 +183,11 @@ pub fn restored(
     directory: &Path,
     id: &str,
     take: u32,
-) -> Result<Restored, String> {
+) -> Result<Restored, ShotError> {
     use kerf_engine::recipe::text::{self, Change};
     let media = project
         .media(id)
-        .ok_or_else(|| format!("no media `{id}` in this project"))?;
+        .ok_or_else(|| ShotError::NoMedia(id.to_owned()))?;
     crate::graph::written(project, id)?;
     let kept = kerf_engine::recipe::takes::kept(directory, media, take).ok_or_else(|| {
         format!("take {take} keeps nothing of the steps it was made from: a take made before takes kept theirs, or one whose working folder is gone, has only what it is")
@@ -194,8 +195,8 @@ pub fn restored(
     let mut now = kept.recipe.clone();
     let mut files = Vec::new();
     for (named, held) in &kept.files {
-        let (file, stored) = kerf_engine::recipe::beside(project, directory, id, named)
-            .map_err(|error| error.to_string())?;
+        let (file, stored) =
+            kerf_engine::recipe::beside(project, directory, id, named).map_err(ShotError::from)?;
         match std::fs::read_to_string(&file) {
             Ok(there) if there == *held => {}
             Err(_) => files.push((file, stored, held.clone())),
@@ -225,9 +226,7 @@ pub fn restored(
                     files.push((file, stored, held.clone()));
                 }
                 // Each line that named it names the take's own.
-                let steps = Recipe::parse(&now)
-                    .map_err(|error| error.to_string())?
-                    .steps;
+                let steps = Recipe::parse(&now).map_err(ShotError::from)?.steps;
                 for (line, step) in text::step_lines(&now.clone()).into_iter().zip(steps) {
                     let names_it = matches!(
                         &step,
@@ -243,7 +242,7 @@ pub fn restored(
                                 value: &own,
                             },
                         )
-                        .map_err(|error| error.to_string())?;
+                        .map_err(ShotError::from)?;
                     }
                 }
             }

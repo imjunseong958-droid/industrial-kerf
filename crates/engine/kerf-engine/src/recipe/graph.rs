@@ -877,7 +877,7 @@ const POINTS: usize = 512;
 pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> Result<Graph> {
     let media = project
         .media(id)
-        .ok_or_else(|| EngineError::msg(format!("no media `{id}` in this project")))?;
+        .ok_or_else(|| EngineError::NoMedia(id.to_string()))?;
     let text = super::written(project, id)?;
     let mut graph = Graph {
         media: id.to_owned(),

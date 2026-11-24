@@ -8,6 +8,7 @@
 //! An agent follows the same with `look` (`track`) and runs the line it is
 //! given with `edit`. Both write the keys the one way, here.
 
+use crate::ShotError;
 use kerf_engine::render::still::Frame;
 use kerf_model::{ClipAt, Project};
 use kerf_track::{Followed, FollowedObject, Hints};
@@ -188,8 +189,10 @@ impl<'a, G> Seen<'a, G> {
         clip: &str,
         what: For,
         drawing: &'a dyn Fn() -> Option<G>,
-    ) -> Result<Self, String> {
-        let at = project.locate(clip).ok_or_else(|| project.no_clip(clip))?;
+    ) -> Result<Self, ShotError> {
+        let at = project
+            .locate(clip)
+            .ok_or_else(|| ShotError::NoClip(project.no_clip(clip)))?;
         let mut seen = project.clone();
         let found = seen.clip_at_mut(at);
         match what {
@@ -217,10 +220,10 @@ impl<'a, G> Seen<'a, G> {
         if count > MOST_FRAMES {
             return Err(format!(
                 "`{clip}` runs for {count} frames, and at most {MOST_FRAMES} are followed at a time: cut it where the shot ends"
-            ));
+            ).into());
         }
         let drawer = kerf_engine::render::still::drawer(&seen, Some(sequence.id.as_str()))
-            .map_err(|error| error.to_string())?;
+            .map_err(ShotError::from)?;
         Ok(Self {
             drawer,
             at,
@@ -269,11 +272,11 @@ impl<'a, G> Seen<'a, G> {
 /// The picture a person points at for `what`: the sequence of `clip` on the clip's first frame,
 /// as it is followed. It is one frame, drawn before this returns: whoever keeps frames from
 /// being drawn does so around the call.
-pub fn picture(project: &Project, clip: &str, what: For) -> Result<Frame, String> {
+pub fn picture(project: &Project, clip: &str, what: For) -> Result<Frame, ShotError> {
     Ok(Seen::of(project, clip, what, &|| Some(()))?.draw(0))
 }
 
-fn within(points: &[[f64; 2]]) -> Result<(), String> {
+fn within(points: &[[f64; 2]]) -> Result<(), ShotError> {
     if points
         .iter()
         .flatten()
@@ -281,7 +284,7 @@ fn within(points: &[[f64; 2]]) -> Result<(), String> {
     {
         Ok(())
     } else {
-        Err("a point runs 0 to 1 across the frame and down it".to_owned())
+        Err("a point runs 0 to 1 across the frame and down it".into())
     }
 }
 
@@ -298,7 +301,7 @@ pub fn moves<G>(
     clip: &str,
     point: [f64; 2],
     drawing: impl Fn() -> Option<G>,
-) -> Result<Option<Read>, String> {
+) -> Result<Option<Read>, ShotError> {
     within(&[point])?;
     let seen = Seen::of(project, clip, For::Moves, &drawing)?;
     let mut followed = kerf_track::follow(seen.count, point, seen.read());
@@ -333,7 +336,7 @@ pub fn moves<G>(
         return Err(format!(
             "nothing to follow at {:.3}, {:.3} on the first frame of `{clip}`: point at something with detail, such as a corner or a mark, or at a thing that stands out from what is behind it",
             point[0], point[1]
-        ));
+        ).into());
     }
     let (kept, x, y) = point_keys(&followed, 0, seen.width(project));
     Ok(Some(Read {
@@ -395,9 +398,9 @@ pub fn matte<G>(
     inside: &[[f64; 2]],
     outside: &[[f64; 2]],
     drawing: impl Fn() -> Option<G>,
-) -> Result<Option<Read>, String> {
+) -> Result<Option<Read>, ShotError> {
     if inside.is_empty() {
-        return Err("point at what to cut out: at least one point on it".to_owned());
+        return Err("point at what to cut out: at least one point on it".into());
     }
     within(inside)?;
     within(outside)?;
@@ -414,7 +417,7 @@ pub fn matte<G>(
     if followed.outlines.is_empty() {
         return Err(format!(
             "nothing was cut out at those points on the first frame of `{clip}`: point at the thing itself, and off it at what is taken for it"
-        ));
+        ).into());
     }
     let cut = outline(
         &followed,

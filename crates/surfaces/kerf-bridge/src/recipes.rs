@@ -11,11 +11,12 @@
 //! Nothing here runs a step. A making is `media_make`, which shows what
 //! would run and asks first.
 
-use crate::event::{ErrorEvent, Event, Recipe};
+use crate::event::{ErrorCode, ErrorEvent, Event, Recipe};
 use crate::wake::Outbox;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
+use kerf_shots::ShotError;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -68,7 +69,7 @@ pub(crate) fn event(
     id: &str,
     models: &Models,
     models_error: Option<String>,
-) -> Result<Recipe, String> {
+) -> Result<Recipe, ShotError> {
     let graph = kerf_shots::graph::shown(project, directory, id, models)?;
     Ok(Recipe {
         graph,
@@ -94,21 +95,20 @@ fn change(
     directory: &Path,
     edit: &Edit,
     models: &Models,
-) -> Result<Changed, String> {
+) -> Result<Changed, ShotError> {
     let there = kerf_shots::graph::written(project, &edit.media)?;
     // What the editor read is what the document has: steps changed since are left alone.
     if there != edit.was {
         return Err(format!(
             "the steps of `{}` were changed since they were read; they are left as that left them",
             edit.media
-        ));
+        )
+        .into());
     }
     if let Some(take) = edit.restore {
         let restored = kerf_shots::takes::restored(project, directory, &edit.media, take)?;
         if restored.text == edit.was && restored.files.is_empty() {
-            return Err(format!(
-                "the steps are as take {take} was made from them already"
-            ));
+            return Err(format!("the steps are as take {take} was made from them already").into());
         }
         for (file, _, held) in &restored.files {
             kerf_shots::workflow::write(file, held)?;
@@ -234,13 +234,24 @@ fn project(client: &kerf_runtime::RuntimeClient) -> Result<Project, String> {
         .map_err(|error| error.message)
 }
 
+/// The code an `error` says a refusal by, for the ones the editor does something about:
+/// steps still in a recipe file, which it offers to carry.
+pub(crate) fn code(why: &ShotError) -> Option<ErrorCode> {
+    match why {
+        ShotError::NotCarried { .. } => Some(ErrorCode::StepsNotCarried),
+        _ => None,
+    }
+}
+
 /// What cannot be shown or changed of media `id`'s recipe: an `error` that
 /// names the media, so that what shows its graph can say so there.
-fn failed(tx: &Outbox, id: &str, why: String) {
+fn failed(tx: &Outbox, id: &str, why: impl Into<ShotError>) {
+    let why = why.into();
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
-            message: why,
+            message: why.to_string(),
+            code: code(&why),
             command: Some("recipe".to_owned()),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
@@ -252,6 +263,7 @@ fn failed(tx: &Outbox, id: &str, why: String) {
 pub(crate) fn get(shared: &Shared, client: &kerf_runtime::RuntimeClient, id: &str, tx: &Outbox) {
     let (models, models_error) = models();
     match project(client)
+        .map_err(ShotError::from)
         .and_then(|project| event(&project, &shared.directory, id, &models, models_error))
     {
         Ok(event) => crate::emit(tx, Event::Recipe(event)),
@@ -276,7 +288,7 @@ pub(crate) fn edit(
     // Steps the document holds change by an edit, which kerfd applies: the graph shown
     // after is of the project as that left it.
     let changed = change(&project, &shared.directory, edit, &models)
-        .and_then(|changed| apply(client, &changed.script).map(|()| changed));
+        .and_then(|changed| Ok(apply(client, &changed.script).map(|()| changed)?));
     let project = match &changed {
         Ok(changed) if !changed.script.is_empty() => match self::project(client) {
             Ok(project) => project,

@@ -361,11 +361,7 @@ impl ShotGraph {
             // A press on what it says, or its button, is not one on the canvas.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(said);
-        if self
-            .refused
-            .as_deref()
-            .is_some_and(|why| why.contains("recipe file") || why.contains("kerf carry"))
-        {
+        if self.refused.is_some() && self.uncarried {
             column = column.child(
                 ui::button("graph-carry", "Carry Steps into the Document…")
                     .on_click(cx.listener(|this, _, window, cx| this.open_plan(1, window, cx))),
