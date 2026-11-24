@@ -32,7 +32,10 @@ off. The next request starts it again.
 
 A crate's folder under `crates/` says what it may depend on, and the areas may
 not depend on each other, so each can be rewritten alone; `tools/kerf-layers`
-fails the tests otherwise.
+fails the tests otherwise. The crates of `surfaces` keep an order among
+themselves there as well: `kerfd` and the services know none of the others,
+and the editor's bridge and the `kerf` command, which gather them all, come
+last.
 
 Renders, previews, and playback all draw from the same document, with media
 paths resolved against the project, and sound crossfades play across their cuts
