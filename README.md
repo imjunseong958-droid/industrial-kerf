@@ -466,7 +466,7 @@ installed and fetches the advisories each time:
 
 ```bash
 cargo deny check
-cargo deny --manifest-path apps/kerf-editor/Cargo.toml --workspace --config deny.toml check
+cargo deny --manifest-path apps/kerf-editor/Cargo.toml --workspace check
 ```
 
 The release gate also includes a manual window check: open a project, edit

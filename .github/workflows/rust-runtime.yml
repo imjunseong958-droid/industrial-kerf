@@ -168,12 +168,14 @@ jobs:
       - name: Check the workspace's dependencies
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          arguments: --all-features --workspace --config deny.toml
+          arguments: --workspace
+      # Whatever the workspace's check found, the editor's is still to be seen.
       - name: Check the editor's dependencies
+        if: ${{ !cancelled() }}
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           manifest-path: apps/kerf-editor/Cargo.toml
-          arguments: --all-features --workspace --config deny.toml
+          arguments: --workspace
 
   # The editor: a workspace of its own (its manifest says why), so its lint
   # and tests run here, not in the workspace's above. Before them it is

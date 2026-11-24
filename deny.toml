@@ -1,18 +1,29 @@
 # What cargo-deny holds both workspaces' dependencies to:
 #
 #   cargo deny check
-#   cargo deny --manifest-path apps/kerf-editor/Cargo.toml --workspace --config deny.toml check
+#   cargo deny --manifest-path apps/kerf-editor/Cargo.toml --workspace check
 #
 # CI runs both (Rust runtime > deny).
 
+[graph]
+# Every feature's dependencies, here and in CI alike.
+all-features = true
+
 [advisories]
-# A crate with a known vulnerability, and one whose release was withdrawn, fail the check.
+# A crate with a known vulnerability fails the check wherever it is in the tree, and so
+# does one whose release was withdrawn.
 yanked = "deny"
+# An unmaintained crate, and one found unsound, fail it where a Kerf crate names the
+# crate itself. Deeper ones are another crate's to replace (GPUI's, keyring's), and
+# `cargo deny check` says nothing of them. These are cargo-deny 0.22's own defaults,
+# written out because an older cargo-deny takes "all" for the first.
+unmaintained = "workspace"
+unsound = "workspace"
 
 [licenses]
 # Every license a dependency is under today. Kerf is MIT; these are the
-# permissive licenses, and two that ask for more of whoever passes the code on:
-# MPL-2.0 (a changed file of the crate stays under it) and NCSA.
+# permissive licenses, and one that asks more of whoever passes the code on:
+# MPL-2.0 (a changed file of the crate stays under it).
 allow = [
     "MIT",
     "Apache-2.0",
@@ -29,7 +40,8 @@ allow = [
     "WTFPL",
 ]
 confidence-threshold = 0.9
-# One file for two workspaces: the repository's own meets fewer of these than the editor's.
+# One file for two workspaces: the repository's own meets fewer of these than the
+# editor's, so a license neither meets any more stays here unsaid until it is taken out.
 unused-allowed-license = "allow"
 
 [bans]
