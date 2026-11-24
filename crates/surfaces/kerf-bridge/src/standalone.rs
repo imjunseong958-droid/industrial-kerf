@@ -3,7 +3,7 @@
 //! project launcher, the command registry and the catalog.
 
 use crate::event::{ViewFxDef, ViewParamDef};
-use crate::tasks::PresetCheck;
+use crate::tasks::{PresetCheck, ProjectInfo};
 use crate::{secrets, tasks, updates, SERVE_MCP};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -128,11 +128,10 @@ pub fn keychain_off() {
 
 // ---- project launcher ------------------------------------------------------------
 
-/// What the launcher shows of a project folder, before any bridge exists; synchronous and
-/// local: `{path}` -> `{path, exists, project (has project.kerf), name, repository, branch,
-/// remote, modified (ISO 8601 of project.kerf), presets (how many)}`.
-pub fn project_inspect(request: &Value) -> Value {
-    tasks::inspect_project(request)
+/// What the launcher shows of the project folder at `path`, before any bridge exists;
+/// synchronous and local.
+pub fn project_inspect(path: &Path) -> ProjectInfo {
+    tasks::inspect_project(path)
 }
 
 /// The preset file at `path`, its slots and texts, and how each of `files` would fill them;

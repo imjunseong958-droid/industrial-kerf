@@ -6,14 +6,15 @@ use crate::collab::{git_text, program_path};
 use crate::event::{PresetMade, PresetSlot};
 use crate::{key, media, presets};
 use kerf_collab::git;
-use kerf_collab::scaffold::{self, NewProject, PRESETS_DIR};
+use kerf_collab::git::Tools as GitTools;
+use kerf_collab::scaffold::{self, Created, NewProject, PRESETS_DIR};
 use kerf_engine::ProbeInfo;
 use kerf_lang::preset::{self, Binding, Preset};
 use kerf_lang::Clock;
 use kerf_model::{AudioInfo, Catalog, Id, Media, Rate, Time};
 use kerf_runtime::RuntimeClient;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::panic::{self, AssertUnwindSafe};
@@ -27,31 +28,47 @@ const COMMIT_TIMEOUT: Duration = Duration::from_secs(60);
 
 // ---- project folders -------------------------------------------------------------
 
-/// `{path}` -> what the launcher shows of that folder: `{path, exists,
-/// project, name, repository, branch, remote, modified, presets}`.
-pub(crate) fn inspect_project(request: &Value) -> Value {
-    let Some(path) = request["path"]
-        .as_str()
-        .filter(|path| !path.trim().is_empty())
-    else {
-        return json!({"error": "path is required"});
-    };
-    let directory = PathBuf::from(path);
+/// What the launcher shows of a project folder: whether it is there and has a
+/// `project.kerf`, its document's name (else the folder's), whether it is a Git repository
+/// and on which branch, pushed where, when its document last changed (ISO 8601), and how
+/// many presets its library holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectInfo {
+    pub path: PathBuf,
+    pub exists: bool,
+    pub project: bool,
+    pub name: String,
+    pub repository: bool,
+    pub branch: Option<String>,
+    pub remote: Option<String>,
+    pub modified: Option<String>,
+    pub presets: usize,
+}
+
+/// What the launcher shows of the folder at `directory`; nothing of an empty path, which
+/// names no folder (and would otherwise read as the process's own).
+pub(crate) fn inspect_project(directory: &Path) -> ProjectInfo {
+    if directory.as_os_str().to_string_lossy().trim().is_empty() {
+        return ProjectInfo {
+            path: directory.to_path_buf(),
+            ..ProjectInfo::default()
+        };
+    }
     let document = directory.join(git::PROJECT_FILE);
     let exists = directory.is_dir();
     let folder = directory
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_owned());
+        .unwrap_or_else(|| directory.to_string_lossy().into_owned());
     let name = fs::read_to_string(&document)
         .ok()
         .and_then(|text| document_name(&text))
         .unwrap_or(folder);
-    let repository = exists && git::is_repository(&directory);
+    let repository = exists && git::is_repository(directory);
     let (branch, remote) = if repository {
-        let remote = git::remote_name(&directory)
-            .and_then(|name| git_text(&directory, &["remote", "get-url", &name]));
-        (git::branch(&directory), remote)
+        let remote = git::remote_name(directory)
+            .and_then(|name| git_text(directory, &["remote", "get-url", &name]));
+        (git::branch(directory), remote)
     } else {
         (None, None)
     };
@@ -59,9 +76,17 @@ pub(crate) fn inspect_project(request: &Value) -> Value {
         .and_then(|metadata| metadata.modified())
         .ok()
         .map(iso8601);
-    json!({"path": path, "exists": exists, "project": document.is_file(), "name": name,
-        "repository": repository, "branch": branch, "remote": remote, "modified": modified,
-        "presets": presets::library_files(&directory).len()})
+    ProjectInfo {
+        path: directory.to_path_buf(),
+        exists,
+        project: document.is_file(),
+        name,
+        repository,
+        branch,
+        remote,
+        modified,
+        presets: presets::library_files(directory).len(),
+    }
 }
 
 /// The name a project document gives itself on its `project` line.
@@ -259,39 +284,63 @@ pub(crate) fn probed_media(path: &Path, info: &ProbeInfo) -> Result<Media, Strin
 
 /// A project task running on its own thread; its status is polled.
 pub struct Task {
-    status: Arc<Mutex<Value>>,
+    status: Arc<Mutex<TaskStatus>>,
+}
+
+/// How a project task stands.
+#[derive(Clone, Debug)]
+pub enum TaskStatus {
+    /// Under way, and what it is doing where it says.
+    Running { message: Option<String> },
+    /// Finished, with what it made or found.
+    Done(TaskDone),
+    /// Stopped, and why.
+    Failed { error: String },
+}
+
+/// What a finished project task came to.
+#[derive(Clone, Debug)]
+pub enum TaskDone {
+    /// `create` and `clone`: the project's folder, the remote it was published to, and what
+    /// to tell the person (a clone says neither), as a
+    /// [`CreatedProject`](crate::CreatedProject).
+    Project(Created),
+    /// `tools`: what there is to share a project with.
+    Tools(GitTools),
 }
 
 impl Task {
     /// Start the task `request` describes.
     pub fn start(request: Value) -> Self {
-        let status = Arc::new(Mutex::new(json!({"status": "running"})));
+        let status = Arc::new(Mutex::new(TaskStatus::Running { message: None }));
         let shared = status.clone();
         thread::spawn(move || {
-            let set = |value: Value| {
+            let set = |value: TaskStatus| {
                 if let Ok(mut status) = shared.lock() {
                     *status = value;
                 }
             };
-            let progress = |message: &str| set(json!({"status": "running", "message": message}));
+            let progress = |message: &str| {
+                set(TaskStatus::Running {
+                    message: Some(message.to_owned()),
+                })
+            };
             let result = panic::catch_unwind(AssertUnwindSafe(|| run(request, &progress)))
                 .unwrap_or_else(|_| Err("the task stopped unexpectedly".into()));
             set(match result {
-                Ok(mut done) => {
-                    done["status"] = json!("done");
-                    done
-                }
-                Err(error) => json!({"status": "failed", "error": error}),
+                Ok(done) => TaskStatus::Done(done),
+                Err(error) => TaskStatus::Failed { error },
             });
         });
         Self { status }
     }
 
-    /// `{status: running, message?}`, `{status: done, ...}`, or `{status:
-    /// failed, error}`.
-    pub fn status(&self) -> Value {
+    /// How it stands now.
+    pub fn status(&self) -> TaskStatus {
         self.status.lock().map_or_else(
-            |_| json!({"status": "failed", "error": "the task stopped unexpectedly"}),
+            |_| TaskStatus::Failed {
+                error: "the task stopped unexpectedly".into(),
+            },
             |status| status.clone(),
         )
     }
@@ -334,17 +383,20 @@ struct SlotFile {
     from: Option<String>,
 }
 
-fn run(request: Value, progress: &dyn Fn(&str)) -> Result<Value, String> {
+fn run(request: Value, progress: &dyn Fn(&str)) -> Result<TaskDone, String> {
     let request: TaskRequest =
         serde_json::from_value(request).map_err(|error| format!("invalid task: {error}"))?;
     match request {
-        TaskRequest::Create(request) => create(request, progress),
+        TaskRequest::Create(request) => create(request, progress).map(TaskDone::Project),
         TaskRequest::Clone { url, location } => {
             progress("Cloning…");
             let path = git::clone(url.trim(), &location).map_err(|error| error.message)?;
-            Ok(json!({"path": path}))
+            Ok(TaskDone::Project(Created {
+                path,
+                ..Created::default()
+            }))
         }
-        TaskRequest::Tools => Ok(serde_json::to_value(git::tools()).unwrap_or_default()),
+        TaskRequest::Tools => Ok(TaskDone::Tools(git::tools())),
     }
 }
 
@@ -361,7 +413,7 @@ struct Prepared {
     texts: BTreeMap<String, String>,
 }
 
-fn create(request: CreateRequest, progress: &dyn Fn(&str)) -> Result<Value, String> {
+fn create(request: CreateRequest, progress: &dyn Fn(&str)) -> Result<Created, String> {
     let prepared = match &request.preset {
         Some(preset) => {
             progress("Checking the preset and its media…");
@@ -387,7 +439,10 @@ fn create(request: CreateRequest, progress: &dyn Fn(&str)) -> Result<Value, Stri
             })?;
         warnings.extend(more);
     }
-    Ok(json!({"path": created.path, "remote": created.remote, "warnings": warnings}))
+    Ok(Created {
+        warnings,
+        ..created
+    })
 }
 
 /// Read the preset and check that every slot has a file long enough, with

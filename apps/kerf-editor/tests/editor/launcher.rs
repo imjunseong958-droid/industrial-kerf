@@ -2,7 +2,7 @@
 
 use crate::support::{event, EXISTS};
 use kerf_bridge::event::{InspectedSlot, PresetMade, PresetSlot, SlotClip};
-use kerf_bridge::{CheckedFile, PresetCheck};
+use kerf_bridge::{CheckedFile, GitTools, PresetCheck};
 use kerf_editor::folders::needs_start;
 use kerf_editor::launcher::{
     clone_problem, details_problem, git_address, github_account, launcher_escape, tools_hint,
@@ -401,22 +401,29 @@ fn the_sharing_hint_says_what_is_missing() {
         tools_hint(None, Some("boom")),
         "Kerf could not look for Git and the GitHub CLI: boom"
     );
-    assert!(
-        tools_hint(Some(&json!({"git": false})), None).starts_with("Install Git to share projects")
-    );
-    let signed_in = json!({"git": true, "gitLfs": true, "gh": true, "ghUser": "kerf-tester"});
+    // What the bridge found: Git, Git LFS, the GitHub CLI and who it is signed in as.
+    let tools = |git, git_lfs, gh, user: Option<&str>| GitTools {
+        git,
+        git_lfs,
+        gh,
+        gh_user: user.map(str::to_owned),
+        ..GitTools::default()
+    };
+    assert!(tools_hint(Some(&tools(false, false, false, None)), None)
+        .starts_with("Install Git to share projects"));
+    let signed_in = tools(true, true, true, Some("kerf-tester"));
     assert_eq!(
         tools_hint(Some(&signed_in), None),
         "Signed in to GitHub as @kerf-tester."
     );
     assert_eq!(github_account(&signed_in), Some("kerf-tester"));
-    let signed_out = json!({"git": true, "gitLfs": false, "gh": true, "ghUser": null});
+    let signed_out = tools(true, false, true, None);
     assert_eq!(
         tools_hint(Some(&signed_out), None),
         "Sign in with `gh auth login` to create a GitHub repository here. Git LFS is not installed: media of 100 MB or more cannot be shared."
     );
     assert_eq!(github_account(&signed_out), None);
-    let no_gh = json!({"git": true, "gitLfs": true, "gh": false, "ghUser": "stale"});
+    let no_gh = tools(true, true, false, Some("stale"));
     assert!(tools_hint(Some(&no_gh), None).starts_with("Install the GitHub CLI"));
     assert_eq!(github_account(&no_gh), None);
 }
