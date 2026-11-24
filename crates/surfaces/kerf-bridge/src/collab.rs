@@ -16,7 +16,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as Process;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -170,7 +170,10 @@ struct Collab {
     shared: Arc<Shared>,
     /// kerfd, with time for merges; made when first needed.
     client: Option<RuntimeClient>,
+    /// gh is installed and signed in: `false` until it has answered.
     gh: bool,
+    /// Where gh's answer comes, until it has.
+    gh_answer: Option<Receiver<bool>>,
     live: bool,
     interval: Duration,
     next_cycle: Instant,
@@ -204,8 +207,15 @@ pub(crate) fn run(
     let mut collab = git::diag_timed("collab: Collab::new", || {
         Collab::new(directory, &binary, runtime, tx, shared)
     });
-    let tools = git::diag_timed("collab: local_tools", git::local_tools);
-    collab.gh = tools.gh && tools.gh_signed_in;
+    // gh can take seconds to answer, so it answers on a thread of its own and the status
+    // shows it once it has: the first status, and every command, go on without it.
+    let (answer, gh_answer) = mpsc::sync_channel(1);
+    collab.shared.workers.spawn("bridge:gh", move || {
+        let tools = git::diag_timed("collab: local_tools, on its own thread", git::local_tools);
+        // Nobody takes it once the bridge has closed.
+        let _ = answer.send(tools.gh && tools.gh_signed_in);
+    });
+    collab.gh_answer = Some(gh_answer);
     if git::diag_timed("collab: is_repository", || {
         git::is_repository(&collab.directory)
     }) {
@@ -247,6 +257,7 @@ impl Collab {
             shared,
             client: None,
             gh: false,
+            gh_answer: None,
             live: false,
             interval: DEFAULT_INTERVAL,
             next_cycle: Instant::now() + DEFAULT_INTERVAL,
@@ -292,8 +303,9 @@ impl Collab {
         }
     }
 
-    /// Between commands: follow edits, and run live sync when it is due.
+    /// Between commands: take gh's answer, follow edits, and run live sync when it is due.
     fn tick(&mut self) {
+        self.take_gh_answer();
         let now = Instant::now();
         let generation = self.shared.revision.load(Ordering::SeqCst);
         if generation != self.generation {
@@ -315,6 +327,25 @@ impl Collab {
         } else if edit_due {
             // Without live sync, still show that there is something to commit.
             self.edited = None;
+            self.emit_status(false);
+        }
+    }
+
+    /// Show gh's answer once it has come.
+    fn take_gh_answer(&mut self) {
+        let Some(answer) = &self.gh_answer else {
+            return;
+        };
+        let gh = match answer.try_recv() {
+            Ok(gh) => gh,
+            Err(TryRecvError::Empty) => return,
+            // Its thread ended without answering.
+            Err(TryRecvError::Disconnected) => false,
+        };
+        git::diag_line(&format!("collab: gh answered {gh}"));
+        self.gh_answer = None;
+        if gh != self.gh {
+            self.gh = gh;
             self.emit_status(false);
         }
     }

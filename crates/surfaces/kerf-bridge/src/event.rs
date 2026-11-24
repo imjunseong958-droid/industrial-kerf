@@ -1347,8 +1347,9 @@ pub struct CastToMake {
 
 /// Where the project stands against its repository ([`GitStatus`]: `branches` lists every
 /// local and remote-tracking branch in a repository), the repository it sits inside when it
-/// is not one (left out otherwise), whether gh is installed and signed in, whether live
-/// sync is on, and whether a collaboration command is running.
+/// is not one (left out otherwise), whether gh is installed and signed in (`false` until gh
+/// has answered, which can take seconds: another status follows when it says `true`),
+/// whether live sync is on, and whether a collaboration command is running.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CollabStatus {

@@ -13,6 +13,7 @@ use kerf_model::Catalog;
 use kerf_runtime::RuntimeClient;
 use serde_json::{json, Value};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -427,6 +428,68 @@ fn two_editors_share_a_project_by_hand_and_live() {
         assert_eq!(report["pushed"], true, "{report}");
         assert!(sh(&remote, &["ls-tree", "-r", "--name-only", "alice/color"]).contains(copy));
     }
+}
+
+/// gh can take seconds to say whether it is signed in (with no account set up, it asks the
+/// system keychain), and the status does not wait for it: it comes at once, and again with
+/// gh's answer once that has come.
+#[test]
+fn the_status_comes_before_gh_has_answered() {
+    if !hermetic("the_status_comes_before_gh_has_answered") {
+        return;
+    }
+    let root = Root::new("gh");
+    let directory = scaffold::create(
+        &NewProject {
+            name: "Film".into(),
+            location: root.0.join("a"),
+            template: Template::Standard,
+            rate: Some("24".into()),
+            git: true,
+            remote: None,
+            github: None,
+        },
+        Catalog::builtin(),
+    )
+    .unwrap()
+    .path;
+    // A gh that says it is signed in once `answer` is there, and gives up once the test's
+    // folder is gone.
+    let bin = root.0.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let answer = root.0.join("answer");
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = auth ]; then\n  \
+             while [ -d '{}' ] && [ ! -e '{}' ]; do sleep 0.05; done\nfi\n",
+            root.0.display(),
+            answer.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path =
+        std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&path))).unwrap();
+    git::set_env("PATH", path);
+
+    let mut editor = Editor::open(&directory);
+    editor.send(json!({"type": "collab_status"}));
+    let status = editor.expect(
+        "the status, before gh has answered",
+        Duration::from_secs(10),
+        |event| event["type"] == "collab",
+    );
+    assert_eq!(status["status"]["repository"], true, "{status}");
+    assert_eq!(status["status"]["gh"], false, "{status}");
+    fs::write(&answer, "").unwrap();
+    editor.expect(
+        "the status with gh's answer",
+        Duration::from_secs(10),
+        |event| event["type"] == "collab" && event["status"]["gh"] == true,
+    );
 }
 
 #[test]
