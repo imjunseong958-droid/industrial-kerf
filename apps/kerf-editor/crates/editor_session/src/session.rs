@@ -11,7 +11,9 @@ use editor_state::store::{Change, EditorState};
 use editor_ui::theme::motion;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, RenderImage, Task, Window};
 use kerf_bridge::event::{AgentUpdate, Export, ExportStatus, PreviewStatus, RenderQuality};
-use kerf_bridge::{AgentSettings, ChatProvider, Command, ConversationsRequest, Event};
+use kerf_bridge::{
+    AgentSettings, ChatProvider, Command, ConversationsRequest, Event, Focus, FocusScope,
+};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::future::{self, Future};
@@ -1840,7 +1842,7 @@ impl Session {
         let at = self.state.position;
         let focus = ask_focus(timeline, clip.as_deref(), scope, at);
         let label = ask_label(timeline, clip.as_deref(), scope, at);
-        let from = focus["fromFrame"].as_f64().unwrap_or(0.0) / timeline.rate();
+        let from = focus.from_frame as f64 / timeline.rate();
         self.ask_with(text, focus, &label, Some(from))
     }
 
@@ -1872,21 +1874,16 @@ impl Session {
 
     /// Sends an agent turn about `focus`, stamped `stamp`; the work row says
     /// `label` until Kerf says what it is doing.
-    fn ask_with(&mut self, text: &str, focus: Value, label: &str, stamp: Option<f64>) -> bool {
+    fn ask_with(&mut self, text: &str, focus: Focus, label: &str, stamp: Option<f64>) -> bool {
         let text = text.trim();
         if text.is_empty() || self.state.work.busy() {
             return false;
         }
         // What another window chose since, as the person last left it.
         self.prefs.refresh();
-        // The focus as written ([`ask_focus`]); one that does not read as a
-        // focus is refused, as the bridge refused it.
-        let Ok(read) = serde_json::from_value::<Option<kerf_bridge::Focus>>(focus.clone()) else {
-            return self.may_send("agent") && self.refused();
-        };
         let command = Command::Agent {
             text: text.to_owned(),
-            focus: read,
+            focus: Some(focus.clone()),
             conversation: self.conversation.clone(),
             at: stamp.filter(|at| at.is_finite()),
             permissions: Some(self.prefs.permissions.wire().to_owned()),
@@ -2381,10 +2378,11 @@ pub enum AskScope {
 }
 
 impl AskScope {
-    pub fn wire(self) -> &'static str {
+    /// The scope of a request's focus.
+    pub fn focus_scope(self) -> FocusScope {
         match self {
-            AskScope::Clip => "clip",
-            AskScope::Sequence => "sequence",
+            AskScope::Clip => FocusScope::Clip,
+            AskScope::Sequence => FocusScope::Sequence,
         }
     }
 }
@@ -2392,17 +2390,22 @@ impl AskScope {
 /// A request's `focus`: with `clip` (one on `timeline`), its span, as the
 /// clip (`Clip`) or the sequence around it (`Sequence`); without, the
 /// sequence at `playhead`, which `Clip` cannot be.
-pub fn ask_focus(timeline: &Timeline, clip: Option<&str>, scope: AskScope, playhead: f64) -> Value {
+pub fn ask_focus(timeline: &Timeline, clip: Option<&str>, scope: AskScope, playhead: f64) -> Focus {
     if let Some((_, clip)) = clip.and_then(|id| timeline.clip(id)) {
-        return json!({
-            "scope": scope.wire(),
-            "clip": clip.id,
-            "fromFrame": clip.start_frame,
-            "toFrame": clip.end_frame(),
-        });
+        return Focus {
+            scope: scope.focus_scope(),
+            clip: Some(clip.id.clone()),
+            from_frame: clip.start_frame,
+            to_frame: clip.end_frame(),
+        };
     }
     let frame = timeline.frame_at(playhead.max(0.0));
-    json!({"scope": "sequence", "fromFrame": frame, "toFrame": frame})
+    Focus {
+        scope: FocusScope::Sequence,
+        clip: None,
+        from_frame: frame,
+        to_frame: frame,
+    }
 }
 
 /// What the work row says a request is about until Kerf says what it is
@@ -2428,7 +2431,7 @@ pub fn ask_label(
 /// stamped with.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Focused {
-    pub focus: Value,
+    pub focus: Focus,
     pub label: String,
     pub stamp: Option<f64>,
 }
