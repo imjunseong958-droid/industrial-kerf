@@ -3,12 +3,12 @@
 //! the playhead, its keyframes worked out as kerf-model works them out.
 
 use super::catalog::{catalog, Param};
-use super::values::{channels, hex, humanize};
-use editor_state::model::{Timeline, TrackKind};
-use editor_ui::motion;
+use super::values::humanize;
+use editor_state::model::{Timeline, TrackKind, ViewParam};
 use gpui::ElementId;
 use kerf_bridge::event::{ViewEffect, ViewMask};
 use serde_json::{json, Map, Value};
+use std::collections::BTreeMap;
 
 /// Whose parameter a field sets: the clip's own (its properties, and a
 /// generator's parameters, which share them), or an effect's in its stack.
@@ -75,7 +75,7 @@ pub(super) struct Inspected {
     pub(super) domain: Option<String>,
     pub(super) generator: Option<String>,
     pub(super) caption: Option<String>,
-    pub(super) props: Map<String, Value>,
+    pub(super) props: BTreeMap<String, ViewParam>,
     pub(super) effects: Vec<ViewEffect>,
     pub(super) masks: Vec<ViewMask>,
     /// How many more clips are chosen.
@@ -152,7 +152,7 @@ impl Inspected {
 
     /// Every parameter it has a field for: its generator's, its properties,
     /// and each effect's, with what it sets.
-    pub(super) fn fields(&self) -> Vec<(Field, &'static Param, Option<Value>)> {
+    pub(super) fn fields(&self) -> Vec<(Field, &'static Param, Option<ViewParam>)> {
         let catalog = catalog();
         let generator = self
             .generator
@@ -190,7 +190,7 @@ impl Inspected {
     }
 
     /// The definition of `field`, and what the clip sets it to.
-    pub(super) fn lookup(&self, field: &Field) -> Option<(&'static Param, Option<Value>)> {
+    pub(super) fn lookup(&self, field: &Field) -> Option<(&'static Param, Option<ViewParam>)> {
         self.fields()
             .into_iter()
             .find(|(candidate, ..)| candidate == field)
@@ -214,14 +214,14 @@ pub(super) struct Held {
     pub(super) changed: bool,
 }
 
-pub(super) fn held(param: &Param, set: Option<&Value>, at: f64) -> Held {
+pub(super) fn held(param: &Param, set: Option<&ViewParam>, at: f64) -> Held {
     match set {
-        Some(Value::Array(keys)) => Held {
-            value: keyed_value(keys, at),
+        Some(keyed @ ViewParam::Keyed(_)) => Held {
+            value: keyed.value_at(at),
             keyed: true,
             changed: true,
         },
-        Some(value) if !value.is_null() => Held {
+        Some(ViewParam::Value(value)) if !value.is_null() => Held {
             value: value.clone(),
             keyed: false,
             changed: !same_value(value, &param.default),
@@ -240,68 +240,4 @@ pub(super) fn same_value(a: &Value, b: &Value) -> bool {
         (.., Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
         _ => a == b,
     }
-}
-
-/// What keyframes `[{at (seconds from the clip's first frame), value,
-/// interp}]` come to at `at`, as kerf-model's `Param::value_at` works it
-/// out: each key's curve takes it to the next.
-pub(super) fn keyed_value(keys: &[Value], at: f64) -> Value {
-    let keys: Vec<(f64, &Value, &str)> = keys
-        .iter()
-        .filter_map(|key| {
-            Some((
-                key["at"].as_f64()?,
-                &key["value"],
-                key["interp"].as_str().unwrap_or("linear"),
-            ))
-        })
-        .collect();
-    let next = keys.partition_point(|key| key.0 <= at);
-    match (next.checked_sub(1).map(|index| keys[index]), keys.get(next)) {
-        (None, Some(first)) => first.1.clone(),
-        (Some(last), None) => last.1.clone(),
-        (Some(left), Some(right)) => {
-            let span = right.0 - left.0;
-            let t = if span > 0.0 {
-                ((at - left.0) / span).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            interpolate(left.1, right.1, curve(left.2, t))
-        }
-        (None, None) => Value::Null,
-    }
-}
-
-/// How far from a key to the next a value is, `t` of the way across.
-fn curve(interp: &str, t: f64) -> f64 {
-    match interp {
-        "linear" => t,
-        "hold" => 0.0,
-        "ease-in" => t * t,
-        "ease-out" => 1.0 - (1.0 - t) * (1.0 - t),
-        "ease" => t * t * (3.0 - 2.0 * t),
-        bezier => {
-            let numbers: Vec<f32> = bezier
-                .split(',')
-                .filter_map(|number| number.trim().parse().ok())
-                .collect();
-            match numbers[..] {
-                [x1, y1, x2, y2] => f64::from(motion::cubic_bezier(x1, y1, x2, y2, t as f32)),
-                _ => t,
-            }
-        }
-    }
-}
-
-fn interpolate(a: &Value, b: &Value, t: f64) -> Value {
-    if let (Some(a), Some(b)) = (a.as_f64(), b.as_f64()) {
-        return json!(a + (b - a) * t);
-    }
-    if let (Some(a), Some(b)) = (a.as_str().and_then(channels), b.as_str().and_then(channels)) {
-        let mix = |x: u8, y: u8| (f64::from(x) + (f64::from(y) - f64::from(x)) * t).round() as u8;
-        let [r, g, b, alpha] = [0, 1, 2, 3].map(|index| mix(a[index], b[index]));
-        return json!(hex(r, g, b, alpha));
-    }
-    a.clone()
 }

@@ -8,13 +8,14 @@ use super::clip::{held, same_value, Field, Inspected};
 use super::sections::LABEL;
 use super::values::{humanize, parse_hex, swatch_color};
 use super::{field_frame, InspectorView};
+use editor_state::model::ViewParam;
 use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::{self, height, radius, space, text};
 use editor_ui::ui;
 use gpui::{
     div, prelude::*, px, AnyElement, ClickEvent, Context, Entity, Focusable, Subscription, Window,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashSet;
 
 /// A colour's swatch.
@@ -91,7 +92,7 @@ impl InspectorView {
         let mut wanted = HashSet::new();
         for (field, param, set) in clip.fields() {
             if !matches!(param.kind, Kind::Text | Kind::Color)
-                || matches!(set, Some(Value::Array(_)))
+                || matches!(set, Some(ViewParam::Keyed(_)))
             {
                 continue;
             }

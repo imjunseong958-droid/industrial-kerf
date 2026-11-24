@@ -72,7 +72,9 @@ impl Value {
         }
     }
 
-    fn interpolate(&self, other: &Self, t: f64) -> Self {
+    /// It `t` of the way to `other`, `t` already eased: numbers and colors move, anything else
+    /// holds at this one.
+    pub fn interpolate(&self, other: &Self, t: f64) -> Self {
         match (self, other) {
             (Self::Number(a), Self::Number(b)) => Self::Number(a + (b - a) * t),
             (Self::Color(a), Self::Color(b)) => Self::Color(a.lerp(*b, t)),

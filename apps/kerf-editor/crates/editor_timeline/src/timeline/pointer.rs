@@ -153,7 +153,7 @@ impl TimelineView {
         if self.tool == Tool::Selection
             && let Some(key) = self.band_at(row, index, x, y)
         {
-            let (mut keys, mut keyed) = clip.clip.gain_keys(lanes.fps);
+            let (mut keys, mut keyed) = clip.clip.gain_keys();
             let mut key = key;
             if modifiers.alt && key.is_none() {
                 // Option-click on the line adds a key there, at the level it reads.

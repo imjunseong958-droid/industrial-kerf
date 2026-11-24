@@ -8,6 +8,7 @@ use super::clip::{held, name_id, Field, Held, Inspected, Target};
 use super::fields::SWATCH;
 use super::values::{humanize, swatch_color, value_words};
 use super::{field_frame, InspectorView};
+use editor_state::model::ViewParam;
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, height, radius, space, text};
 use editor_ui::ui;
@@ -15,7 +16,8 @@ use gpui::{
     div, prelude::*, px, AnyElement, ClickEvent, Context, ElementId, Focusable, MouseButton,
     MouseDownEvent, Window,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
 
 /// A row's label.
 pub(super) const LABEL: f32 = 84.0;
@@ -247,7 +249,7 @@ impl InspectorView {
         target: Target,
         params: &[Param],
         groups: &[Group],
-        values: &Map<String, Value>,
+        values: &BTreeMap<String, ViewParam>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
@@ -257,7 +259,7 @@ impl InspectorView {
             let any_set = members.iter().any(|param| {
                 values
                     .get(&param.name)
-                    .is_some_and(|value| !value.is_null())
+                    .is_some_and(|value| !matches!(value, ViewParam::Value(Value::Null)))
             });
             let open = name.is_empty()
                 || self
@@ -325,7 +327,7 @@ impl InspectorView {
         clip: &Inspected,
         field: &Field,
         param: &Param,
-        set: Option<&Value>,
+        set: Option<&ViewParam>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
