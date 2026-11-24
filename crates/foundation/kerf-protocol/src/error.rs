@@ -54,6 +54,10 @@ named! {
     /// given, and a name this build does not know still reads, as [`ErrorCode::Other`]: one
     /// a kerfd of another build answered with, or one kerfd passes on as git and GitHub said
     /// it (kerf-collab's `CollabCode`).
+    ///
+    /// Not every code is kerfd's to answer with: the editor's bridge says a refusal of its
+    /// own by a name here too (`STEPS_NOT_CARRIED`), so that what reads its `error` events
+    /// decides by one kind of name.
     pub enum ErrorCode {
         // The request, before anything is asked of the project.
         InvalidJson = "INVALID_JSON",
@@ -94,6 +98,10 @@ named! {
         MediaUnreadable = "MEDIA_UNREADABLE",
         MediaNotDownloaded = "MEDIA_NOT_DOWNLOADED",
         MediaDoesNotFit = "MEDIA_DOES_NOT_FIT",
+        /// A media's steps are still in the recipe file it names, where a making does not
+        /// read them: carried into the document, they are made from. The bridge's, of a
+        /// making or a shot's graph it refuses; kerfd makes nothing.
+        StepsNotCarried = "STEPS_NOT_CARRIED",
 
         // Proposals.
         ProposalNotFound = "PROPOSAL_NOT_FOUND",

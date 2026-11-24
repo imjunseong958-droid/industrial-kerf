@@ -20,6 +20,7 @@
 //! nothing of one. Which program runs a model is read from the person's own
 //! models file and from nothing in the project.
 
+use crate::ShotError;
 use kerf_engine::recipe::model::{Ask, Models, Source};
 use kerf_engine::recipe::text::{self, Change};
 use kerf_engine::recipe::{Recipe, Step};
@@ -87,7 +88,7 @@ pub fn read(
     id: &str,
     line: usize,
     models: &Models,
-) -> Result<Read, String> {
+) -> Result<Read, ShotError> {
     let recipe = crate::graph::written(project, id)?;
     read_of(project, directory, id, line, models, recipe)
 }
@@ -101,8 +102,8 @@ pub fn read_of(
     line: usize,
     models: &Models,
     recipe: String,
-) -> Result<Read, String> {
-    let wrong = |error: kerf_engine::EngineError| error.to_string();
+) -> Result<Read, ShotError> {
+    let wrong = ShotError::from;
     let steps = Recipe::parse(&recipe).map_err(wrong)?.steps;
     let ask = text::step_lines(&recipe)
         .into_iter()
@@ -129,7 +130,7 @@ pub fn read_of(
         Some(Source::Made(made)) => {
             return Err(format!(
                 "the line's workflow is `{{{made}}}`, a file a step makes: it is there only while the shot is made"
-            ))
+            ).into())
         }
         None if Path::new(named).is_file() => (
             Origin::File,
@@ -250,7 +251,7 @@ pub struct Shown {
 /// The workflow of one step as an editor shows it and an agent reads it:
 /// what it makes, every node with every input, and of each blank what fills
 /// it and what the line gives for it now (`given`).
-pub fn shown(id: &str, line: usize, read: &Read) -> Result<Shown, String> {
+pub fn shown(id: &str, line: usize, read: &Read) -> Result<Shown, ShotError> {
     let mut described = kerf_workflow::detail::described(&read.text)?;
     // Beside what fills each blank, what the line gives for it now.
     for (name, blank) in &mut described.blanks {
@@ -303,13 +304,13 @@ fn copy_name(folder: &Path, shot: &str, model: &str, taken: &[PathBuf]) -> Strin
 }
 
 /// Write `text` to `file` whole: beside it first, then moved into place.
-pub fn write(file: &Path, text: &str) -> Result<(), String> {
+pub fn write(file: &Path, text: &str) -> Result<(), ShotError> {
     let beside = file.with_extension(format!("{}.writing", std::process::id()));
     std::fs::write(&beside, text)
         .and_then(|()| std::fs::rename(&beside, file))
         .map_err(|error| {
             let _ = std::fs::remove_file(&beside);
-            format!("cannot write the workflow {}: {error}", file.display())
+            format!("cannot write the workflow {}: {error}", file.display()).into()
         })
 }
 
@@ -321,10 +322,8 @@ pub fn write(file: &Path, text: &str) -> Result<(), String> {
 /// asked again the next time.
 ///
 /// Kerf asks no server itself: this runs the model's own program, as a making does.
-pub fn taken(models: &Models, read: &Read) -> Result<Value, String> {
-    let command = models
-        .command(&read.ask.model)
-        .map_err(|error| error.to_string())?;
+pub fn taken(models: &Models, read: &Read) -> Result<Value, ShotError> {
+    let command = models.command(&read.ask.model).map_err(ShotError::from)?;
     let program = command.first().ok_or("the model's entry runs no program")?;
     let named = match &read.origin {
         Origin::Own(_, file) => file.to_string_lossy().into_owned(),
@@ -376,7 +375,7 @@ fn taken_kept() -> &'static Taken {
 const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Run `program --workflow <named> --inputs` and read what it prints.
-fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
+fn asked_inputs(program: &str, named: &str) -> Result<Value, ShotError> {
     use std::process::Stdio;
     let mut child = kerf_engine::recipe::model::program(program)
         .args([FLAG, named, "--inputs"])
@@ -398,7 +397,8 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
                 return Err(format!(
                     "{PROGRAM} did not say what the server takes within {} s",
                     ASKING.as_secs()
-                ));
+                )
+                .into());
             }
         }
     }
@@ -407,10 +407,10 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, String> {
         .map_err(|error| error.to_string())?;
     if !said.status.success() {
         let why = String::from_utf8_lossy(&said.stderr);
-        return Err(why.trim().trim_start_matches("kerf-comfy: ").to_owned());
+        return Err(why.trim().trim_start_matches("kerf-comfy: ").into());
     }
     serde_json::from_slice(&said.stdout).map_err(|error| {
-        format!("{PROGRAM} said something that is not what its inputs take: {error}")
+        format!("{PROGRAM} said something that is not what its inputs take: {error}").into()
     })
 }
 
@@ -452,7 +452,7 @@ pub fn with_taken(shown: &mut Shown, taken: &Value) {
 ///
 /// Asked by [`with`], of sets the workflow itself has taken: what a server lists for an
 /// input says nothing of whether the input is the workflow's to set.
-fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
+fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), ShotError> {
     let described = kerf_workflow::detail::described(&read.text)?;
     let class_of = |id: &str| {
         described
@@ -475,13 +475,13 @@ fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
                         return Err(format!(
                             "`{}` of node {} takes a {wanted}, and output {output} of node {from}, a {from_class}, is a {given}",
                             set.input, set.node
-                        ))
+                        ).into())
                     }
                     None => {
                         return Err(format!(
                             "node {from}, a {from_class}, has {} outputs, and none is its output {output}",
                             outputs.len()
-                        ))
+                        ).into())
                     }
                 }
             }
@@ -509,7 +509,8 @@ fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
                     String::new()
                 },
                 set.value
-            ));
+            )
+            .into());
         }
         if let Some(value) = set.value.as_f64() {
             let (least, most) = (takes["min"].as_f64(), takes["max"].as_f64());
@@ -517,7 +518,8 @@ fn check(read: &Read, sets: &[Set], taken: &Value) -> Result<(), String> {
                 return Err(format!(
                     "`{}` of node {} takes a number from {} to {}, not {}",
                     set.input, set.node, takes["min"], takes["max"], set.value
-                ));
+                )
+                .into());
             }
         }
     }
@@ -579,7 +581,7 @@ pub struct Copy {
 /// link the graph's shape whatever a server lists for the input, and the refusal says
 /// where each is set. The server's list is no answer there: it sends whoever set the
 /// value to one that is on the list, which is refused all the same.
-pub fn with(read: &Read, sets: &[Set], taken: Option<&Value>) -> Result<String, String> {
+pub fn with(read: &Read, sets: &[Set], taken: Option<&Value>) -> Result<String, ShotError> {
     let now = sets
         .iter()
         .try_fold(read.text.clone(), |text, set| match set.link {
@@ -605,11 +607,11 @@ pub fn copied(
     read: &Read,
     now: &str,
     taken: &[PathBuf],
-) -> Result<Copy, String> {
+) -> Result<Copy, ShotError> {
     let media = project
         .media(id)
-        .ok_or_else(|| format!("no media `{id}` in this project"))?;
-    let wrong = |error: kerf_engine::EngineError| error.to_string();
+        .ok_or_else(|| ShotError::NoMedia(id.to_owned()))?;
+    let wrong = ShotError::from;
     // Beside the shot: in the folder its takes' folder is in, by a name no file there has.
     let folder = kerf_engine::recipe::shot_folder(directory, media).map_err(wrong)?;
     let name = copy_name(&directory.join(&folder), id, &read.ask.model, taken);
@@ -664,10 +666,10 @@ pub fn set(
     was: &str,
     set: Set,
     models: &Models,
-) -> Result<Named, String> {
+) -> Result<Named, ShotError> {
     let read = read(project, directory, id, line, models)?;
     if read.text != was {
-        return Err("the workflow was changed by another program since it was read; it is left as that left it".to_owned());
+        return Err("the workflow was changed by another program since it was read; it is left as that left it".into());
     }
     // Held to what the server takes there, where that has been asked.
     let now = with(&read, &[set], taken_before(models, &read).as_ref())?;
@@ -678,7 +680,7 @@ pub fn set(
     let copy = copied(project, directory, id, line, &read, &now, &[])?;
     write(&copy.file, &copy.text)?;
     // The step does not name it yet, so nothing would run it: it is not left lying there.
-    let unnamed = |why: String| {
+    let unnamed = |why: ShotError| {
         let _ = std::fs::remove_file(&copy.file);
         why
     };

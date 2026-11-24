@@ -15,7 +15,7 @@ use gpui::{
     div, prelude::*, px, AnyElement, Context, DismissEvent, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, Rgba, SharedString, Subscription, Window,
 };
-use kerf_bridge::event::MediaMakePlan;
+use kerf_bridge::event::{ErrorCode, ErrorEvent, MediaMakePlan};
 use kerf_bridge::{Command, Event};
 
 /// What a making would run, as the bridge says it before anything runs
@@ -206,6 +206,13 @@ pub(super) fn notes_block_in(
 
 /// The message of a refused making without the "cannot make m1: " the
 /// bridge puts first, which the panel's title says already.
+/// Whether what refused a making or a shot's graph is its media's steps being still in a
+/// recipe file, which Carry Steps into the Document mends: the bridge says so by the
+/// error's code. Its words are for the person, and are not read for this.
+pub fn wants_carrying(error: &ErrorEvent) -> bool {
+    error.code == Some(ErrorCode::StepsNotCarried)
+}
+
 pub(super) fn refusal(message: &str, media: &str) -> String {
     let said = message
         .strip_prefix(&format!("cannot make {media}: "))
@@ -228,8 +235,12 @@ enum Stage {
     /// The plan is asked for.
     Asking,
     Plan(Plan),
-    /// It cannot be made as things stand: why.
-    Refused(String),
+    /// It cannot be made as things stand: why, and whether that is its steps being still
+    /// in a recipe file, which are carried first.
+    Refused {
+        why: String,
+        uncarried: bool,
+    },
     /// What carrying its steps into the document would write is asked for.
     Carrying,
     CarryPlan {
@@ -302,7 +313,10 @@ impl MakePlan {
         self.stage = Stage::Asking;
         let sent = self.session.update(cx, |session, _| session.send(command));
         if !sent {
-            self.stage = Stage::Refused("Kerf is not connected.".into());
+            self.stage = Stage::Refused {
+                why: "Kerf is not connected.".into(),
+                uncarried: false,
+            };
         }
         cx.notify();
     }
@@ -341,7 +355,10 @@ impl MakePlan {
                 if error.command.as_deref() == Some("media_make")
                     && matches!(self.stage, Stage::Asking) =>
             {
-                self.stage = Stage::Refused(refusal(&error.message, &self.media));
+                self.stage = Stage::Refused {
+                    why: refusal(&error.message, &self.media),
+                    uncarried: wants_carrying(error),
+                };
             }
             Event::MediaCarryPlan {
                 recipe,
@@ -473,7 +490,7 @@ impl MakePlan {
                     .into_any_element();
                 (make_title, body, vec![not_now(), make])
             }
-            Stage::Refused(why) => {
+            Stage::Refused { why, uncarried } => {
                 body = body.child(ui::label(
                     "It cannot be made as things stand.",
                     text::BODY_NAME,
@@ -482,7 +499,7 @@ impl MakePlan {
                 body = body.child(ui::label(why.clone(), text::CONTROL, theme::neg()));
                 let mut buttons = vec![];
                 // A media whose steps are still in a recipe file is carried first.
-                if why.contains("recipe file") || why.contains("kerf carry") {
+                if *uncarried {
                     buttons.push(
                         ui::button("plan-carry-ask", "Carry Steps into the Document…")
                             .on_click(cx.listener(|this, _, _, cx| this.ask_carry(cx)))

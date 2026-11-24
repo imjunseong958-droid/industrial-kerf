@@ -29,7 +29,6 @@ use kerf_bridge::event::{CollabStatus, CollabSync};
 use kerf_bridge::{Command, Event};
 use question::{Prompt, BODY_MOST};
 use said::summary;
-use serde_json::Value;
 use std::time::Instant;
 
 /// The chip's menu, and a question asked in its place that holds no more
@@ -274,7 +273,6 @@ impl Collab {
                         cx.emit(CollabEvent::SyncCleared);
                     }
                     self.failure.done();
-                    let report = &Value::Object(report.clone());
                     let lines = sync_lines(report);
                     if !lines.is_empty() {
                         self.session.update(cx, |session, _| {
