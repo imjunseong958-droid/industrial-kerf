@@ -1381,17 +1381,18 @@ pub struct SyncReport {
     #[serde(deserialize_with = "as_said")]
     pub committed: Option<String>,
     /// The commits it brought in.
-    #[serde(deserialize_with = "as_said")]
+    #[serde(deserialize_with = "each_said")]
     pub incoming: Vec<SyncCommit>,
     #[serde(deserialize_with = "as_said")]
     pub fast_forward: bool,
     #[serde(deserialize_with = "as_said")]
     pub pushed: bool,
     /// What collided, and whose version the merged project keeps.
-    #[serde(deserialize_with = "as_said")]
+    #[serde(deserialize_with = "each_said")]
     pub conflicts: Vec<SyncConflict>,
-    /// What both sides added under one id, so that the other side's was given a new one
-    /// (media, a sequence, a track, a marker, a clip, a transition): each from, to.
+    /// What the other side added under an id this side also added, or had retired, and so
+    /// was given a new one (media, a sequence, a track, a marker, a clip, a transition, a
+    /// link group): each from, to.
     #[serde(deserialize_with = "pairs")]
     pub renamed: Vec<(String, String)>,
     /// What it did, a line each, where the command says so itself.
@@ -1545,6 +1546,20 @@ fn as_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     deserializer: D,
 ) -> Result<T, D::Error> {
     Ok(serde_json::from_value(Value::deserialize(deserializer)?).unwrap_or_default())
+}
+
+/// A list, each item read on its own as [`as_said`] reads a field: one said otherwise is
+/// still an item, of its default. What is not a list is empty.
+fn each_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Array(items) => items
+            .into_iter()
+            .map(|item| serde_json::from_value(item).unwrap_or_default())
+            .collect(),
+        _ => Vec::new(),
+    })
 }
 
 /// Pairs of texts, `[[from, to]]`: a side a pair does not say as text reads as empty.

@@ -35,7 +35,7 @@ pub fn pull_request_said(url: &str, created: bool) -> String {
 
 /// The lines a finished sync's `report` leaves in Activity: each commit it
 /// brought in ("jun · Trimmed c3"), each conflict it settled ("Kept yours ·
-/// project.kerf: what"), each clip renumbered ("Renumbered · c4 → c7").
+/// s1/V1/c3: what"), each id renumbered ("Renumbered · c4 → c7").
 pub fn sync_lines(report: &SyncReport) -> Vec<String> {
     let mut lines = Vec::new();
     for commit in &report.incoming {

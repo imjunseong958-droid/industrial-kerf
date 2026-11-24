@@ -1559,6 +1559,15 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
         sync_said(&askew, false).as_deref(),
         Some("Synced: 1 commit in, 1 change kept yours")
     );
+    // A list reads item by item: an item said askew is still counted.
+    let gapped = read(json!({
+        "incoming": [{"author": "jun", "subject": "Trimmed c3"}, null],
+        "conflicts": [null],
+    }));
+    assert_eq!(
+        sync_said(&gapped, false).as_deref(),
+        Some("Synced: 2 commits in, 1 change kept yours")
+    );
 }
 
 // ---------------------------------------------------------------- Preflight
