@@ -14,7 +14,8 @@ updates:
   # it counts 1.x to 2.0. Most crates Kerf names are 0.x, so only patch releases,
   # which Cargo counts as compatible either way, are grouped: one pull request a
   # week for each workspace. Every other release comes alone, to be taken or
-  # closed on its own, but for the font crates, which come as one (below).
+  # closed on its own. The font crates are the exception: each of their
+  # releases, patch or not, comes in a group of their own (below).
   - package-ecosystem: cargo
     directory: /
     schedule:
@@ -79,7 +80,7 @@ updates:
       # libc is named by Kerf crates the editor builds by path (kerf-engine,
       # kerf-mcp, kerf-runtime), and gpui 0.2.2's tree holds it back: gpui
       # takes xattr 0.2.3 through zed-async-tar, and xattr 0.2.3 names
-      # libc::ENOATTR, which libc took off Linux in 0.2.191, so a newer libc
+      # libc::ENOATTR, which libc took off Linux in 0.2.190, so a newer libc
       # stops the editor building on Linux. Patches included, then, until a
       # gpui release moves past that xattr.
       - dependency-name: libc
