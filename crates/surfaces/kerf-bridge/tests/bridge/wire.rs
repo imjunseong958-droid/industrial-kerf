@@ -9,7 +9,8 @@ use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
     ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, Kept,
     LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, SyncCommit, SyncConflict, SyncReport, TakeRead, ToolState,
+    RenderQuality, RenderStatus, Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead,
+    TimelineView, ToolState, ViewParamDef,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -27,7 +28,12 @@ use serde_json::json;
 /// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
 /// way before their report was a type: one that brought a commit in, a new branch, a commit
 /// with nothing to commit, and a first sync that committed and pushed with nothing to merge,
-/// so no commit to go back to (`"previous": null`); the commits' ids are made up.
+/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The
+/// recorded `state`'s timeline carries the catalog's definitions as kerfd writes them
+/// (`properties`, `maskProperties`, `generators`), which were JSON passed on unread too and
+/// are `ViewParamDef`s now. The last is a `state` with a proposal open, its timeline and the
+/// proposal's (which the bridge makes itself) as the bridge wrote them while those
+/// definitions were JSON.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -53,6 +59,32 @@ fn an_event_this_build_does_not_know_reads_as_one_to_ignore() {
             "{newer}"
         );
     }
+}
+
+#[test]
+fn a_definition_this_build_cannot_read_is_left_out_and_the_timeline_still_reads() {
+    let number =
+        json!({"name": "x", "type": "number", "default": 0.0, "animatable": true, "doc": ""});
+    // Choices with labels, as a newer kerfd might write them.
+    let newer = json!({"name": "mode", "type": "enum", "default": "a", "animatable": false,
+        "doc": "", "options": [{"value": "a", "label": "A"}]});
+    let event = json!({"type": "state", "snapshot": {"timeline": {
+        "tracks": [{"id": "V1", "type": "video"}],
+        "properties": {"video": [number, newer]},
+        "maskProperties": [newer, number],
+        "generators": {"title": [newer], "solid": [number], "light": {"x": number}},
+    }}});
+    let Event::State { snapshot } = serde_json::from_value(event).unwrap() else {
+        panic!("not a state");
+    };
+    let timeline = snapshot.timeline;
+    let names = |defs: &[ViewParamDef]| defs.iter().map(|def| def.name.clone()).collect::<Vec<_>>();
+    assert_eq!(timeline.tracks.len(), 1);
+    assert_eq!(names(&timeline.properties["video"]), ["x"]);
+    assert_eq!(names(&timeline.mask_properties), ["x"]);
+    assert_eq!(names(&timeline.generators["solid"]), ["x"]);
+    assert!(timeline.generators["title"].is_empty());
+    assert!(timeline.generators["light"].is_empty());
 }
 
 proptest! {
@@ -129,7 +161,68 @@ fn event() -> impl Strategy<Value = Event> {
         collab_sync(),
         take_read(),
         workflow(),
+        state(),
     ]
+}
+
+/// A parameter's definition: a type this build may not know, a default of each kind a
+/// parameter value is, and each limit, the unit, the choices and the extensions there or
+/// left out (a list of none being there).
+fn param_def() -> impl Strategy<Value = ViewParamDef> {
+    let default = prop_oneof![
+        number().prop_map(serde_json::Value::from),
+        any::<bool>().prop_map(serde_json::Value::from),
+        text().prop_map(serde_json::Value::from),
+    ];
+    let names = || option::of(vec(text(), 0..3));
+    (
+        (text(), text(), default, any::<bool>(), text()),
+        (
+            option::of(number()),
+            option::of(number()),
+            some_text(),
+            names(),
+            names(),
+        ),
+    )
+        .prop_map(
+            |((name, kind, default, animatable, doc), (min, max, unit, options, extensions))| {
+                ViewParamDef {
+                    name,
+                    kind,
+                    default,
+                    animatable,
+                    doc,
+                    min,
+                    max,
+                    unit,
+                    options,
+                    extensions,
+                }
+            },
+        )
+}
+
+/// A snapshot whose timeline carries the catalog's definitions: the clip properties and the
+/// generators' parameters by name, and the mask properties.
+fn state() -> impl Strategy<Value = Event> {
+    let defs = || vec(param_def(), 0..3);
+    (
+        btree_map(text(), defs(), 0..3),
+        defs(),
+        btree_map(text(), defs(), 0..3),
+    )
+        .prop_map(|(properties, mask_properties, generators)| Event::State {
+            snapshot: Box::new(Snapshot {
+                timeline: TimelineView {
+                    properties,
+                    mask_properties,
+                    generators,
+                    ..TimelineView::default()
+                },
+                ..Snapshot::default()
+            }),
+        })
 }
 
 /// One input of a workflow's node: a link, with what it takes where a server has said, or
