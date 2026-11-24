@@ -9,9 +9,9 @@ use kerf_editor::making::{
     draws_curve, extent, fitted_in, graph_start, in_port, input_kind, link_output, nearest_toward,
     one_line, out_port, output_within, part_id, part_number, placed_over, point_on, port_says,
     ports_for, reading_lines, reads_port, settle, shown_value, signal_keys, signal_line,
-    signal_under, take_tip, value_of, wire_nth, zoom_about, Camera, CardState, GraphEdge,
-    GraphNode, GraphStart, Holds, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow,
-    ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
+    signal_under, take_tip, value_of, wants_carrying, wire_nth, zoom_about, Camera, CardState,
+    GraphEdge, GraphNode, GraphStart, Holds, InputKind, PictureQueue, Progress, Recipe, Toward,
+    Workflow, ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
 };
 use kerf_editor::model::Ask;
 use kerf_editor::store::Making;
@@ -93,6 +93,29 @@ fn a_cast_that_does_not_read_cannot_be_saved_over() {
     // Another command's error is not the dialog's.
     let other = event(json!({"type": "error", "command": "media_make", "message": "no"}));
     assert_eq!(heard(Stage::Reading, &other), Heard::Nothing);
+}
+
+/// Carry Steps into the Document is offered by what the bridge says a refusal is, its code,
+/// and not by what the refusal says in words.
+#[test]
+fn a_refusal_wants_carrying_by_its_code_and_not_by_its_words() {
+    let words = "cannot make m1: the steps of media `m1` are in the recipe file `shots/open.kerfrecipe`, and a media is made from the steps under its line: `kerf carry m1` writes them there";
+    let refused = |written: Value| match event(written) {
+        kerf_bridge::Event::Error(error) => error,
+        other => panic!("{other:?}"),
+    };
+    assert!(wants_carrying(&refused(json!({
+        "type": "error", "command": "media_make", "media": "m1",
+        "code": "STEPS_NOT_CARRIED", "message": words,
+    }))));
+    // The same words under no code, or under another, do not.
+    assert!(!wants_carrying(&refused(json!({
+        "type": "error", "command": "media_make", "media": "m1", "message": words,
+    }))));
+    assert!(!wants_carrying(&refused(json!({
+        "type": "error", "command": "recipe", "media": "m1",
+        "code": "UNKNOWN_MEDIA", "message": words,
+    }))));
 }
 
 /// The dialog's stage after each event, as `CastView::heard` moves it.

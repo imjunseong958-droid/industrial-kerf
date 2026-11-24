@@ -95,21 +95,20 @@ fn change(
     directory: &Path,
     edit: &Edit,
     models: &Models,
-) -> Result<Changed, String> {
+) -> Result<Changed, ShotError> {
     let there = kerf_shots::graph::written(project, &edit.media)?;
     // What the editor read is what the document has: steps changed since are left alone.
     if there != edit.was {
         return Err(format!(
             "the steps of `{}` were changed since they were read; they are left as that left them",
             edit.media
-        ));
+        )
+        .into());
     }
     if let Some(take) = edit.restore {
         let restored = kerf_shots::takes::restored(project, directory, &edit.media, take)?;
         if restored.text == edit.was && restored.files.is_empty() {
-            return Err(format!(
-                "the steps are as take {take} was made from them already"
-            ));
+            return Err(format!("the steps are as take {take} was made from them already").into());
         }
         for (file, _, held) in &restored.files {
             kerf_shots::workflow::write(file, held)?;
@@ -289,7 +288,7 @@ pub(crate) fn edit(
     // Steps the document holds change by an edit, which kerfd applies: the graph shown
     // after is of the project as that left it.
     let changed = change(&project, &shared.directory, edit, &models)
-        .and_then(|changed| apply(client, &changed.script).map(|()| changed));
+        .and_then(|changed| Ok(apply(client, &changed.script).map(|()| changed)?));
     let project = match &changed {
         Ok(changed) if !changed.script.is_empty() => match self::project(client) {
             Ok(project) => project,

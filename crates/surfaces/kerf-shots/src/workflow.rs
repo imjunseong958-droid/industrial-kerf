@@ -103,7 +103,7 @@ pub fn read_of(
     models: &Models,
     recipe: String,
 ) -> Result<Read, ShotError> {
-    let wrong = |error: kerf_engine::EngineError| error.to_string();
+    let wrong = ShotError::from;
     let steps = Recipe::parse(&recipe).map_err(wrong)?.steps;
     let ask = text::step_lines(&recipe)
         .into_iter()
@@ -611,7 +611,7 @@ pub fn copied(
     let media = project
         .media(id)
         .ok_or_else(|| ShotError::NoMedia(id.to_owned()))?;
-    let wrong = |error: kerf_engine::EngineError| error.to_string();
+    let wrong = ShotError::from;
     // Beside the shot: in the folder its takes' folder is in, by a name no file there has.
     let folder = kerf_engine::recipe::shot_folder(directory, media).map_err(wrong)?;
     let name = copy_name(&directory.join(&folder), id, &read.ask.model, taken);

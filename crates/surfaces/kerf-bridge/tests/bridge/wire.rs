@@ -305,7 +305,7 @@ fn meter() -> impl Strategy<Value = Event> {
         })
 }
 
-/// A refusal's code: one of kerfd's own, or any other name (a newer kerfd's).
+/// A refusal's code: one of the names this build has, or any other (a newer kerfd's).
 fn code() -> impl Strategy<Value = ErrorCode> {
     prop_oneof![
         select(vec![

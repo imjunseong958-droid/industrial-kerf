@@ -15,7 +15,7 @@ use gpui::{
     div, prelude::*, px, AnyElement, Context, DismissEvent, ElementId, Entity, EventEmitter,
     FocusHandle, Focusable, Rgba, SharedString, Subscription, Window,
 };
-use kerf_bridge::event::{ErrorCode, MediaMakePlan};
+use kerf_bridge::event::{ErrorCode, ErrorEvent, MediaMakePlan};
 use kerf_bridge::{Command, Event};
 
 /// What a making would run, as the bridge says it before anything runs
@@ -206,6 +206,13 @@ pub(super) fn notes_block_in(
 
 /// The message of a refused making without the "cannot make m1: " the
 /// bridge puts first, which the panel's title says already.
+/// Whether what refused a making or a shot's graph is its media's steps being still in a
+/// recipe file, which Carry Steps into the Document mends: the bridge says so by the
+/// error's code. Its words are for the person, and are not read for this.
+pub fn wants_carrying(error: &ErrorEvent) -> bool {
+    error.code == Some(ErrorCode::StepsNotCarried)
+}
+
 pub(super) fn refusal(message: &str, media: &str) -> String {
     let said = message
         .strip_prefix(&format!("cannot make {media}: "))
@@ -350,7 +357,7 @@ impl MakePlan {
             {
                 self.stage = Stage::Refused {
                     why: refusal(&error.message, &self.media),
-                    uncarried: error.code == Some(ErrorCode::StepsNotCarried),
+                    uncarried: wants_carrying(error),
                 };
             }
             Event::MediaCarryPlan {

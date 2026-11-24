@@ -401,6 +401,12 @@ fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
         event["type"] == "error" && event["command"] == "recipe"
     });
     assert_eq!(unread["code"], "STEPS_NOT_CARRIED", "{unread}");
+    // So is a change asked of its steps, in the first thing said of it.
+    editor.send(json!({"type": "recipe_edit", "media": "m1", "was": "", "line": 1, "key": "prompt", "value": "x"}));
+    let unchanged = editor.expect("an error", |event| {
+        event["type"] == "error" && event["command"] == "recipe"
+    });
+    assert_eq!(unchanged["code"], "STEPS_NOT_CARRIED", "{unchanged}");
     // A refusal that is not that one does not say it is.
     editor.send(json!({"type": "recipe_get", "media": "nowhere"}));
     let missing = editor.expect("an error", |event| {

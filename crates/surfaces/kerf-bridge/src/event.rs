@@ -554,7 +554,8 @@ pub enum ConnectionStatus {
 #[serde(default, rename_all = "camelCase")]
 pub struct ErrorEvent {
     pub message: String,
-    /// kerfd's code for a refusal (`INVALID_RENDER_OUTPUT`, `REVISION_CONFLICT`, ...).
+    /// Which refusal it is, where it has a code: kerfd's (`INVALID_RENDER_OUTPUT`,
+    /// `REVISION_CONFLICT`, ...), or the bridge's own for a making (`STEPS_NOT_CARRIED`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<ErrorCode>,
     /// The command refused, by its `type` (`export`, `media_make`, `look_save`, ...), or

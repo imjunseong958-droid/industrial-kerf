@@ -13,7 +13,7 @@ use gpui::{
     DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent, MouseButton,
     MouseDownEvent, Pixels, Point, SharedString, Subscription, Window,
 };
-use kerf_bridge::event::{ErrorCode, Recipe as RecipeEvent, TakeRead};
+use kerf_bridge::event::{Recipe as RecipeEvent, TakeRead};
 use kerf_bridge::{Command, Event, RecipeEdit};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -288,7 +288,7 @@ impl ShotGraph {
                             self.said = Some(message);
                         } else {
                             self.refused = Some(message);
-                            self.uncarried = error.code == Some(ErrorCode::StepsNotCarried);
+                            self.uncarried = super::plan::wants_carrying(error);
                         }
                     }
                     "takes_read" if ours => self.reading = Holding::Failed(message),

@@ -3,18 +3,17 @@
 use kerf_engine::EngineError;
 
 /// Why a shot could not be read or changed. What a caller does something about has a kind
-/// of its own, so that nobody has to read the words to tell; the rest is only said.
+/// of its own, so that nobody has to read the words to tell; the rest is only said. A kind
+/// the engine has too is said in the engine's words, which are written there alone.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ShotError {
     /// The project has no media by this id. An agent is told where it may be instead: in a
     /// proposal not built on.
-    #[error("no media `{0}` in this project")]
+    #[error("{}", EngineError::NoMedia(.0.clone()))]
     NoMedia(String),
     /// The media's steps are still in the recipe file it names. The editor offers to carry
     /// them into the document.
-    #[error(
-        "the steps of media `{media}` are in the recipe file `{recipe}`, and a media is made from the steps under its line: `kerf carry {media}`, or an agent's `edit` with `carry: [\"{media}\"]`, writes them there"
-    )]
+    #[error("{}", EngineError::NotCarried { media: media.clone(), recipe: recipe.clone() })]
     NotCarried { media: String, recipe: String },
     /// The project has no clip by the id asked for: what [`kerf_model::Project::no_clip`]
     /// says of it.
