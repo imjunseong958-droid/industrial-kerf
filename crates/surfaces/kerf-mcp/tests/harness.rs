@@ -3547,11 +3547,21 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
     // The same when it looks. A model that is not set up, without where the person keeps
     // their models:
     step("generate model=dawn prompt=\"a boat\"");
+    let said = "no model `dawn` is set up: none is; a person sets one up in their own models file";
     let looked = ok(&router, "look", json!({}));
-    assert_eq!(
-        looked["toMake"][0]["cannot"],
-        "no model `dawn` is set up: none is; a person sets one up in their own models file"
+    assert_eq!(looked["toMake"][0]["cannot"], said);
+    // So it is where the graph of how it is made says it, where the workflow its model is run
+    // with is asked for, and where it is asked to be made.
+    let graph = ok(&router, "look", json!({"graph": "m9"}));
+    assert_eq!(graph["cannot"], said, "{graph}");
+    let workflow = error(
+        &router,
+        "look",
+        json!({"workflow": {"media": "m9", "line": 1}}),
     );
+    assert_eq!(message(&workflow), said, "{workflow}");
+    let make = error(&router, "make", json!({"media": "m9"}));
+    assert_eq!(message(&make), said, "{make}");
     // Mended, it can be made, and a person is asked to.
     step("render s1 {out}");
     let looked = ok(&router, "look", json!({}));
