@@ -33,7 +33,7 @@ runs:
           echo "prefix=apt-ubuntu-$release-"
           echo "key=apt-ubuntu-$release-$(awk '{ print $2, $4 }' "$RUNNER_TEMP/apt-uris.txt" | sort | sha256sum | cut -c1-16)"
         } >> "$GITHUB_OUTPUT"
-    - uses: actions/cache/restore@v4
+    - uses: actions/cache/restore@v6
       id: debs
       with:
         path: ${{ runner.temp }}/apt-archives
@@ -54,7 +54,7 @@ runs:
         rm -rf "$kept" && mkdir -p "$kept"
         while read -r name; do cp "/var/cache/apt/archives/$name" "$kept/"; done < "$RUNNER_TEMP/apt-debs.txt"
         sudo apt-get install -y --no-install-recommends ${{ steps.apt.outputs.packages }}
-    - uses: actions/cache/save@v4
+    - uses: actions/cache/save@v6
       if: ${{ steps.debs.outputs.cache-hit != 'true' && (github.ref == 'refs/heads/main' || steps.debs.outputs.cache-matched-key == '') }}
       with:
         path: ${{ runner.temp }}/apt-archives
@@ -67,7 +67,7 @@ runs:
     # GitHub's release downloads have answered 504 for an hour at a time
     # (2026-11-09), so the pinned archive is kept in the Actions cache and
     # fetched only when it is not there, with retries over several minutes.
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       with:
         path: ${{ runner.temp }}/ffmpeg-archive
         key: ffmpeg-n9.0.2-17-g2a571b6068-linux64-gpl-shared-9.0
