@@ -71,7 +71,7 @@ ffmpeg-next = { version = "9.0", default-features = false }
 hex = "0.4"
 kurbo = "0.13"
 libc = "0.2"
-linesweeper = "0.4"
+linesweeper = "0.5"
 log = "0.4"
 proptest = "1"
 rayon = "1"
