@@ -393,6 +393,26 @@ fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
             .is_some_and(|message| message.contains("`kerf carry m1`")),
         "{refused}"
     );
+    // And which refusal it is, by its code: what the editor offers to carry the steps by.
+    assert_eq!(refused["code"], "STEPS_NOT_CARRIED", "{refused}");
+    // How it is made is refused the same way, and by the same code.
+    editor.send(json!({"type": "recipe_get", "media": "m1"}));
+    let unread = editor.expect("an error", |event| {
+        event["type"] == "error" && event["command"] == "recipe"
+    });
+    assert_eq!(unread["code"], "STEPS_NOT_CARRIED", "{unread}");
+    // So is a change asked of its steps, in the first thing said of it.
+    editor.send(json!({"type": "recipe_edit", "media": "m1", "was": "", "line": 1, "key": "prompt", "value": "x"}));
+    let unchanged = editor.expect("an error", |event| {
+        event["type"] == "error" && event["command"] == "recipe"
+    });
+    assert_eq!(unchanged["code"], "STEPS_NOT_CARRIED", "{unchanged}");
+    // A refusal that is not that one does not say it is.
+    editor.send(json!({"type": "recipe_get", "media": "nowhere"}));
+    let missing = editor.expect("an error", |event| {
+        event["type"] == "error" && event["media"] == "nowhere"
+    });
+    assert!(missing.get("code").is_none(), "{missing}");
 
     // Asked for plainly, what would be written is shown and nothing is.
     editor.send(json!({"type": "media_carry", "media": "m1"}));
