@@ -458,6 +458,17 @@ cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
 `.claude/verify.sh` runs these in this order, and CI runs them on Linux. The Rust
 release is the one `rust-toolchain.toml` names, which rustup installs on first use.
 
+CI also holds both workspaces' dependencies to `deny.toml`, with
+[cargo-deny](https://github.com/EmbarkStudios/cargo-deny): none with a known
+vulnerability or a withdrawn release, each under a license the file names, all
+from crates.io. It is not in `.claude/verify.sh`, since it wants cargo-deny
+installed and fetches the advisories each time:
+
+```bash
+cargo deny check
+cargo deny --manifest-path apps/kerf-editor/Cargo.toml --workspace --config deny.toml check
+```
+
 The release gate also includes a manual window check: open a project, edit
 it, restart it, enter Korean text, play/seek media, verify captions/mute, and
 accept or reject an agent proposal.

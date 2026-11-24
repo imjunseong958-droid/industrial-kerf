@@ -20,6 +20,7 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "deny.toml"
       - "rust-toolchain.toml"
       - "rustfmt.toml"
       - ".cargo/**"
@@ -33,6 +34,7 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "deny.toml"
       - "rust-toolchain.toml"
       - "rustfmt.toml"
       - ".cargo/**"
@@ -150,6 +152,28 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Lint workspace
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+
+  # What deny.toml holds both workspaces' dependencies to: none with a known
+  # vulnerability or a withdrawn release, each under a license it names, all
+  # from crates.io. It builds nothing, so it waits on nothing. The advisories
+  # are fetched each run: one published since the last run fails this job on
+  # whatever pull request runs next, and on main's weekly run, with no change
+  # to the code. `cargo update -p <crate>` in the workspace it names is the
+  # usual mend.
+  deny:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the workspace's dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --all-features --workspace --config deny.toml
+      - name: Check the editor's dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: apps/kerf-editor/Cargo.toml
+          arguments: --all-features --workspace --config deny.toml
 
   # The editor: a workspace of its own (its manifest says why), so its lint
   # and tests run here, not in the workspace's above. Before them it is
