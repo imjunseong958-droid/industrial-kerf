@@ -71,7 +71,7 @@ jobs:
       # themselves rather than compare against a software rasterizer.
       WGPU_BACKEND: vulkan
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -137,7 +137,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -164,7 +164,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the workspace's dependencies
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
@@ -190,7 +190,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -255,7 +255,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -266,7 +266,7 @@ jobs:
       # Windows package carries (package.yml), so that is what is tested.
       # Kept in the Actions cache, as on Linux, and fetched with retries over
       # several minutes only when it is not there.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
           key: ffmpeg-n9.0.2-17-g2a571b6068-win64-gpl-shared-9.0
@@ -335,7 +335,7 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
       HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -366,7 +366,7 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
       HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install

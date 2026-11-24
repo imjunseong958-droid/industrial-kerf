@@ -103,14 +103,14 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
       # GitHub's release downloads have answered 504 for an hour at a time, so the
       # pinned archive is kept in the Actions cache and fetched, with retries over
       # several minutes, only when it is not there.
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
           key: ${{ env.FFMPEG_NAME }}
@@ -162,7 +162,7 @@ jobs:
           if (-not $failure) { throw 'The installer check passed an installer that registers no kerf:// links' }
           if ($failure -notmatch 'kerf:// opens with') { throw "The installer check failed before it reached the links: $failure" }
           Write-Host "Failed, as it should: $failure"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-windows-x64
           path: |
@@ -178,13 +178,13 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
       - name: Collect the source of the package
         run: scripts/collect-kerf-windows-sources.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-windows-x64-source
           path: |
@@ -204,7 +204,7 @@ jobs:
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
       HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
@@ -249,7 +249,7 @@ jobs:
           echo "Failed, as it should"
       - name: Collect the source of the app
         run: scripts/collect-kerf-macos-sources.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-macos
           path: |
@@ -258,7 +258,7 @@ jobs:
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-macos-source
           path: |
@@ -274,11 +274,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The release rust-toolchain.toml names, with clippy and rustfmt.
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/ffmpeg-archive
           key: ${{ env.LINUX_FFMPEG_NAME }}
@@ -354,7 +354,7 @@ jobs:
         run: rm -rf target/release
       - name: Collect the source of the package
         run: scripts/collect-kerf-linux-sources.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-linux-x64
           path: |
@@ -367,7 +367,7 @@ jobs:
           compression-level: 0
           retention-days: 90
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: industrial-kerf-linux-x64-source
           path: |
@@ -388,7 +388,7 @@ jobs:
     outputs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Check the tag is the workspace's version
         id: version
         run: |
