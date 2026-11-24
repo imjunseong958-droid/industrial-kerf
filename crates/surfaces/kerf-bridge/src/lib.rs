@@ -89,6 +89,7 @@ mod cloud_session;
 mod collab;
 mod command;
 mod conversations;
+mod error;
 pub mod event;
 mod looks;
 mod media;

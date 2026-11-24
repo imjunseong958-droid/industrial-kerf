@@ -6,7 +6,7 @@
 
 use crate::event::{CollabStatus, CollabSync, Event};
 use crate::wake::Outbox;
-use crate::{emit, key, media, tasks, Command, Shared};
+use crate::{emit, key, media, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
 use kerf_runtime::{ErrorCode, RuntimeClient, RuntimeError, StateSnapshot};
@@ -694,9 +694,7 @@ impl Collab {
             .get_document(false)
             .map_err(|error| self.lost(error))?;
         let project = kerf_runtime::parse_document(&document).map_err(|error| error.message)?;
-        let result = media::consolidate(&project, &self.directory, |file| {
-            tasks::probe(file).map(drop)
-        });
+        let result = media::consolidate(&project, &self.directory, media::probe);
         let mut report = empty_report();
         report["summary"] = json!(result.summary());
         if !result.relinks.is_empty() {

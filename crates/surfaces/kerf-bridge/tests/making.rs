@@ -456,4 +456,19 @@ fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
             .is_some_and(|message| message.contains("has its steps under its line")),
         "{again}"
     );
+
+    // A change of the carried steps that the runtime refuses is said by the runtime's code:
+    // here a prompt too long for one request to kerfd.
+    let steps = "kerf-recipe 1\nrender s2 {out}\n";
+    let prompt = "a".repeat(1100 * 1024);
+    editor.send(json!({"type": "recipe_edit", "media": "m1", "was": steps,
+        "text": format!("kerf-recipe 1\ngenerate model=talk prompt=\"{prompt}\" out={{said.txt}}\nrender s2 {{out}}\n")}));
+    let refused = editor.expect("the runtime's refusal", |event| {
+        event["type"] == "error"
+            && event["command"] == "recipe"
+            && event["message"]
+                .as_str()
+                .is_some_and(|message| message.starts_with("request exceeds"))
+    });
+    assert_eq!(refused["code"], "REQUEST_TOO_LARGE", "{refused}");
 }
