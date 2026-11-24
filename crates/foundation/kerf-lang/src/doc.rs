@@ -34,9 +34,9 @@ use kerf_model::time::parse_timecode;
 use kerf_model::Align;
 use kerf_model::{
     validate, AudioInfo, Catalog, Clip, Content, Diagnostic, Domain, Effect, FxDef, Id, Interp,
-    Marker, MarkerColor, Mask, MaskMode, MaskShape, Media, OutlineKey, Param, ParamDef, ParamType,
-    Params, Project, Rate, Sequence, Speed, Synced, Time, Track, TrackKind, Transition, Value,
-    VideoInfo,
+    Marker, MarkerColor, Mask, MaskMode, MaskShape, Media, MissingKind, OutlineKey, Param,
+    ParamDef, ParamType, Params, Project, Rate, Sequence, Speed, Synced, Time, Track, TrackKind,
+    Transition, Value, VideoInfo,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -592,12 +592,12 @@ pub(crate) fn content(
         return Err(line.error(1, "give exactly one of media=, seq=, gen=, or caption="));
     }
     let source_clock = match (&media, &sequence) {
-        (Some(id), _) => Some(
-            project
-                .media(id.as_str())
-                .map(Clock::of_media)
-                .ok_or_else(|| line.error(1, format!("unknown media `{id}`")))?,
-        ),
+        (Some(id), _) => Some(project.media(id.as_str()).map(Clock::of_media).ok_or_else(
+            || {
+                line.error(1, format!("unknown media `{id}`"))
+                    .missing(MissingKind::Media, id.as_str())
+            },
+        )?),
         (_, Some(id)) => Some(
             project
                 .sequence(id.as_str())

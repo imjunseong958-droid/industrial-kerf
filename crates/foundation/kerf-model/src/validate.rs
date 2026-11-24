@@ -4,7 +4,7 @@
 //! as one just read from text or converted from another format.
 
 use crate::catalog::{Catalog, Domain, FxKind, ParamType};
-use crate::diag::Diagnostic;
+use crate::diag::{Diagnostic, MissingKind};
 use crate::id::Id;
 use crate::model::{Align, Clip, Content, Params, Project, Sequence, Track, TrackKind, Transition};
 use crate::time::{Rate, Time};
@@ -196,13 +196,16 @@ impl Validator<'_> {
             }
             if let Some(sync) = &media.sync {
                 if self.project.media(sync.with.as_str()).is_none() {
-                    self.error(
-                        "ref.missing",
-                        &media.id,
-                        format!(
-                            "media `{}` is lined up with unknown media `{}`",
-                            media.id, sync.with
-                        ),
+                    self.out.push(
+                        Diagnostic::error(
+                            "ref.missing",
+                            format!(
+                                "media `{}` is lined up with unknown media `{}`",
+                                media.id, sync.with
+                            ),
+                        )
+                        .entity(&media.id)
+                        .missing(MissingKind::Media, sync.with.as_str()),
                     );
                 } else if self.project.sync_comes_back(&media.id, &sync.with) {
                     self.error(
@@ -661,7 +664,11 @@ impl Validator<'_> {
                 ),
             ),
             (Content::Media { media, .. }, Some(domain)) => match self.project.media(media.as_str()) {
-                None => self.error("ref.missing", id, format!("clip `{id}` uses unknown media `{media}`")),
+                None => self.out.push(
+                    Diagnostic::error("ref.missing", format!("clip `{id}` uses unknown media `{media}`"))
+                        .entity(id)
+                        .missing(MissingKind::Media, media.as_str()),
+                ),
                 Some(found) => {
                     if !found.supports(domain) {
                         self.error(

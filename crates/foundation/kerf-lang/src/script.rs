@@ -27,8 +27,10 @@ pub use print::{print_op, print_ops};
 
 use crate::facts::{Breaks, Facts, NoFacts, Speech};
 use crate::lex::{lex, Arg, Atom, Line};
-use crate::text::Fields;
-use kerf_model::{apply, Catalog, Clip, Content, Diagnostic, Id, Media, Op, Project, Report};
+use crate::text::{Fields, Unread};
+use kerf_model::{
+    apply, Catalog, Clip, Content, Diagnostic, Id, Media, MissingKind, Op, Project, Report,
+};
 use positions::Positions;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -237,10 +239,10 @@ impl Script<'_> {
     }
 
     fn clip(&self, id: &Id, line: &Line) -> Parsed<(&Clip, Positions<'_>)> {
-        let at = self
-            .project
-            .locate(id.as_str())
-            .ok_or_else(|| line.missing(1, self.project.no_clip(id.as_str())))?;
+        let at = self.project.locate(id.as_str()).ok_or_else(|| {
+            line.missing(1, self.project.no_clip(id.as_str()))
+                .missing(MissingKind::Clip, id.as_str())
+        })?;
         Ok((
             self.project.clip_at(at),
             Positions::of(&self.project, at.sequence),
@@ -255,10 +257,10 @@ impl Script<'_> {
     }
 }
 
-fn required<T>(
+fn required<T, E: Into<Unread>>(
     fields: &mut Fields<'_>,
     key: &'static str,
-    parse: impl FnOnce(&str) -> Result<T, String>,
+    parse: impl FnOnce(&str) -> Result<T, E>,
 ) -> Parsed<T> {
     let line = fields.line();
     fields

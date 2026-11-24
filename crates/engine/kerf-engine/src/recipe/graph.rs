@@ -435,6 +435,10 @@ pub struct Graph {
     /// is not set up, a file that is not there.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cannot: Option<String>,
+    /// The model `cannot` says is not set up, where that is why: for what says it in other
+    /// words, as an agent is told it. It is not sent.
+    #[serde(skip)]
+    pub model_not_set_up: Option<String>,
     /// What is worth knowing before it is made, as a plan says it.
     pub notes: Vec<String>,
 }
@@ -890,6 +894,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
         edges: Vec::new(),
         error: None,
         cannot: None,
+        model_not_set_up: None,
         notes: Vec::new(),
     };
     let recipe = match Recipe::parse(&graph.text) {
@@ -1068,7 +1073,12 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
     graph.edges = building.edges;
     match super::plan(project, directory, id, models) {
         Ok(plan) => graph.notes = plan.notes,
-        Err(error) => graph.cannot = Some(error.to_string()),
+        Err(error) => {
+            if let EngineError::NoModel { name, .. } = &error {
+                graph.model_not_set_up = Some(name.clone());
+            }
+            graph.cannot = Some(error.to_string());
+        }
     }
     Ok(graph)
 }

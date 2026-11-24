@@ -2,8 +2,9 @@
 //! each parameter's definition, the clip properties by the track's domain,
 //! and every effect, transition and generator.
 
+use kerf_bridge::event::{ViewFxDef, ViewParamDef};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::OnceLock;
 
 /// What a parameter holds, as the inspector edits it.
@@ -17,7 +18,7 @@ pub(super) enum Kind {
     Text,
 }
 
-/// One parameter's definition, as the catalog's JSON gives it.
+/// One parameter's definition, as the inspector edits it.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Param {
     pub(super) name: String,
@@ -31,33 +32,25 @@ pub(super) struct Param {
 }
 
 impl Param {
-    fn read(def: &Value) -> Option<Self> {
-        let kind = match def["type"].as_str()? {
+    fn read(def: ViewParamDef) -> Self {
+        let kind = match def.kind.as_str() {
             "number" | "time" => Kind::Number,
             "bool" => Kind::Bool,
             "color" => Kind::Color,
             "enum" => Kind::Choice,
             _ => Kind::Text,
         };
-        Some(Self {
-            name: def["name"].as_str()?.to_owned(),
+        Self {
+            name: def.name,
             kind,
-            default: def["default"].clone(),
-            min: def["min"].as_f64(),
-            max: def["max"].as_f64(),
-            unit: def["unit"].as_str().map(str::to_owned),
-            options: def["options"]
-                .as_array()
-                .map(|options| {
-                    options
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            doc: def["doc"].as_str().unwrap_or_default().to_owned(),
-        })
+            default: def.default,
+            // A limit that is not a finite number is none, as it was in JSON.
+            min: def.min.filter(|min| min.is_finite()),
+            max: def.max.filter(|max| max.is_finite()),
+            unit: def.unit,
+            options: def.options.unwrap_or_default(),
+            doc: def.doc,
+        }
     }
 
     /// The limits an edit may take.
@@ -69,12 +62,8 @@ impl Param {
     }
 }
 
-fn params(defs: &Value) -> Vec<Param> {
-    defs.as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Param::read)
-        .collect()
+fn params(defs: Vec<ViewParamDef>) -> Vec<Param> {
+    defs.into_iter().map(Param::read).collect()
 }
 
 /// An effect, transition or generator of the catalog.
@@ -90,17 +79,16 @@ pub(super) struct FxEntry {
 }
 
 impl FxEntry {
-    fn read(entry: &Value) -> Option<Self> {
-        let text = |key: &str| entry[key].as_str().unwrap_or_default().to_owned();
-        Some(Self {
-            id: entry["id"].as_str()?.to_owned(),
-            kind: text("kind"),
-            domain: entry["domain"].as_str().unwrap_or("video").to_owned(),
-            category: text("category"),
-            name: text("name"),
-            doc: text("doc"),
-            params: params(&entry["params"]),
-        })
+    fn read(entry: ViewFxDef) -> Self {
+        Self {
+            id: entry.id,
+            kind: entry.kind,
+            domain: entry.domain,
+            category: entry.category,
+            name: entry.name,
+            doc: entry.doc,
+            params: params(entry.params),
+        }
     }
 
     /// What its doc says past its name.
@@ -119,22 +107,12 @@ pub(super) struct Catalog {
 }
 
 impl Catalog {
-    fn read(props: &Value, all: &Value) -> Self {
+    fn read(props: BTreeMap<String, Vec<ViewParamDef>>, all: Vec<ViewFxDef>) -> Self {
         let props = props
-            .as_object()
-            .map(|domains| {
-                domains
-                    .iter()
-                    .map(|(domain, defs)| (domain.clone(), params(defs)))
-                    .collect()
-            })
-            .unwrap_or_default();
-        let entries: Vec<FxEntry> = all
-            .as_array()
             .into_iter()
-            .flatten()
-            .filter_map(FxEntry::read)
+            .map(|(domain, defs)| (domain, params(defs)))
             .collect();
+        let entries: Vec<FxEntry> = all.into_iter().map(FxEntry::read).collect();
         let order = entries.iter().map(|entry| entry.id.clone()).collect();
         let fx = entries
             .into_iter()
@@ -172,8 +150,8 @@ pub(super) fn catalog() -> &'static Catalog {
     static CATALOG: OnceLock<Catalog> = OnceLock::new();
     CATALOG.get_or_init(|| {
         Catalog::read(
-            &kerf_bridge::clip_properties(),
-            &kerf_bridge::fx_catalog_all(),
+            kerf_bridge::clip_properties(),
+            kerf_bridge::fx_catalog_all(),
         )
     })
 }

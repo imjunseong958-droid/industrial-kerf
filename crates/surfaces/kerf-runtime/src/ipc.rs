@@ -2189,21 +2189,14 @@ fn process_request_line(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_owned();
-            match serde_json::from_value::<RequestEnvelope>(value) {
+            match RequestEnvelope::from_value(value) {
                 Ok(envelope) => {
                     let result = envelope
                         .validate()
                         .and_then(|()| handle.request(envelope.request));
                     (id, result)
                 }
-                Err(error) => {
-                    let code = if error.to_string().contains("unknown variant") {
-                        ErrorCode::UnknownOperation
-                    } else {
-                        ErrorCode::InvalidRequest
-                    };
-                    (id, Err(RuntimeError::new(code, error.to_string())))
-                }
+                Err(error) => (id, Err(error)),
             }
         }
     }

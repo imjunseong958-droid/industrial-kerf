@@ -258,7 +258,7 @@ impl KerfMcpRouter {
         let cannot = |error: EngineError| {
             McpError::new(
                 McpCode::CannotMake,
-                super::harness::cannot_said(error.to_string(), Some(&models)),
+                super::harness::cannot_said(error, Some(&models)),
             )
         };
         // One making is the recipe as it is written. Several are rolls of it, each with its

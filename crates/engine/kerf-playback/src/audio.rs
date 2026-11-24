@@ -215,12 +215,49 @@ struct AudioClockState {
     /// time waits, and playing starts where it was asked to, with its sound.
     opening: AtomicBool,
     /// How often the device has asked for sound, playing or not, and when it
-    /// last did, in nanoseconds of [`since_start`] (0 before the first).
+    /// last did, in nanoseconds of [`Time::since_origin`] (0 before the
+    /// first).
     device_calls: AtomicU64,
     last_device_call: AtomicU64,
     /// The frames the device has asked for, playing or not.
     device_frames: AtomicU64,
     anchor: Mutex<ClockAnchor>,
+    time: Time,
+}
+
+/// Where a clock reads the time: the system's monotonic clock. A test can
+/// move a clock's time on by hand instead, so what the worker makes of a
+/// device that goes quiet and comes back does not hang on how soon the
+/// test's threads happen to run.
+struct Time {
+    /// When the clock was made.
+    origin: Instant,
+    /// The time passed since `origin`, in nanoseconds, when a test moves it
+    /// on by hand.
+    #[cfg(test)]
+    by_hand: Option<AtomicU64>,
+}
+
+impl Time {
+    fn system() -> Self {
+        Self {
+            origin: Instant::now(),
+            #[cfg(test)]
+            by_hand: None,
+        }
+    }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(passed) = &self.by_hand {
+            return self.origin + Duration::from_nanos(passed.load(Ordering::Acquire));
+        }
+        Instant::now()
+    }
+
+    fn since_origin(&self) -> Duration {
+        self.now().saturating_duration_since(self.origin)
+    }
 }
 
 struct ClockAnchor {
@@ -230,6 +267,10 @@ struct ClockAnchor {
 
 impl AudioClock {
     fn new() -> Self {
+        Self::reading(Time::system())
+    }
+
+    fn reading(time: Time) -> Self {
         Self {
             inner: Arc::new(AudioClockState {
                 played_frames: AtomicU64::new(0),
@@ -246,8 +287,14 @@ impl AudioClock {
                     position: 0.0,
                     started: None,
                 }),
+                time,
             }),
         }
+    }
+
+    /// The moment it is now, by the time this clock reads.
+    fn instant(&self) -> Instant {
+        self.inner.time.now()
     }
 
     fn set_opening(&self) {
@@ -264,7 +311,7 @@ impl AudioClock {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         self.inner.opening.store(false, Ordering::Release);
         if anchor.started.is_some() {
-            anchor.started = Some(Instant::now());
+            anchor.started = Some(self.instant());
         }
     }
 
@@ -315,7 +362,7 @@ impl AudioClock {
             .inner
             .playing
             .load(Ordering::Acquire)
-            .then(Instant::now);
+            .then(|| self.instant());
     }
 
     fn play_at(&self, position: f64) {
@@ -327,7 +374,7 @@ impl AudioClock {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         anchor.position = position.max(0.0);
-        anchor.started = Some(Instant::now());
+        anchor.started = Some(self.instant());
     }
 
     fn pause(&self) {
@@ -344,7 +391,7 @@ impl AudioClock {
                 .anchor
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            anchor.started = Some(Instant::now());
+            anchor.started = Some(self.instant());
         } else {
             self.pause();
         }
@@ -376,7 +423,7 @@ impl AudioClock {
     /// The device opened or asked for sound just now.
     #[cfg(feature = "native-audio")]
     fn device_heard_from(&self) {
-        let now = since_start().as_nanos().max(1) as u64;
+        let now = self.inner.time.since_origin().as_nanos().max(1) as u64;
         self.inner.last_device_call.store(now, Ordering::Release);
     }
 
@@ -385,7 +432,12 @@ impl AudioClock {
     fn device_calls(&self) -> (u64, Option<Duration>) {
         let calls = self.inner.device_calls.load(Ordering::Acquire);
         let last = self.inner.last_device_call.load(Ordering::Acquire);
-        let ago = (last > 0).then(|| since_start().saturating_sub(Duration::from_nanos(last)));
+        let ago = (last > 0).then(|| {
+            self.inner
+                .time
+                .since_origin()
+                .saturating_sub(Duration::from_nanos(last))
+        });
         (calls, ago)
     }
 
@@ -416,7 +468,7 @@ impl AudioClock {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         match anchor.started {
             Some(started) if self.is_playing() => {
-                let mut elapsed = started.elapsed();
+                let mut elapsed = self.instant().saturating_duration_since(started);
                 if self.inner.opening.load(Ordering::Acquire) {
                     elapsed = elapsed.saturating_sub(DEVICE_OPEN_WAIT);
                 }
@@ -686,17 +738,18 @@ impl AudioWorker {
             return;
         }
         let frames = self.clock.device_frames();
+        let now = self.clock.instant();
         match self.asking_since {
             _ if ago > DEVICE_QUIET_AFTER => self.asking_since = None,
-            None => self.asking_since = Some((Instant::now(), frames)),
-            Some((since, before)) if since.elapsed() >= DEVICE_STEADY_FOR => {
-                let wanted = since.elapsed().as_secs_f64()
+            None => self.asking_since = Some((now, frames)),
+            Some((since, before)) if now.saturating_duration_since(since) >= DEVICE_STEADY_FOR => {
+                let wanted = now.saturating_duration_since(since).as_secs_f64()
                     * f64::from(self.output.sample_rate())
                     * DEVICE_STEADY_SHARE;
                 if frames.saturating_sub(before) as f64 >= wanted {
                     self.take_device_back();
                 } else {
-                    self.asking_since = Some((Instant::now(), frames));
+                    self.asking_since = Some((now, frames));
                 }
             }
             Some(_) => {}
@@ -1430,103 +1483,129 @@ mod tests {
     }
 
     #[cfg(feature = "native-audio")]
+    impl AudioClock {
+        /// A clock whose time stands still until [`Self::advance`] moves it
+        /// on.
+        fn moved_by_hand() -> Self {
+            Self::reading(super::Time {
+                origin: Instant::now(),
+                by_hand: Some(std::sync::atomic::AtomicU64::new(0)),
+            })
+        }
+
+        fn advance(&self, by: Duration) {
+            let passed = self
+                .inner
+                .time
+                .by_hand
+                .as_ref()
+                .expect("a clock moved on by hand");
+            passed.fetch_add(by.as_nanos() as u64, std::sync::atomic::Ordering::AcqRel);
+        }
+    }
+
+    /// How far the test moves the clock on at once.
+    #[cfg(feature = "native-audio")]
+    const TICK: Duration = Duration::from_millis(10);
+    /// The sound [`SilentDevice`] asks for in a tick, at its own rate.
+    #[cfg(feature = "native-audio")]
+    const TICK_FRAMES: u64 = 480;
+
+    /// `span` passes a tick at a time, the device asking for a tick's sound
+    /// in each when `asking`, and the worker looks at the device after each,
+    /// as it does between its own ticks.
+    #[cfg(feature = "native-audio")]
+    fn pass(worker: &mut super::AudioWorker, clock: &AudioClock, span: Duration, asking: bool) {
+        let mut passed = Duration::ZERO;
+        while passed < span {
+            clock.advance(TICK);
+            passed += TICK;
+            if asking {
+                clock.record_device_call(TICK_FRAMES);
+                if clock.is_playing() {
+                    clock.record_frames(TICK_FRAMES);
+                }
+            }
+            worker.watch_device();
+        }
+    }
+
+    #[cfg(feature = "native-audio")]
     #[test]
     fn a_device_that_goes_quiet_stops_keeping_the_time_until_it_asks_steadily_again() {
         use super::{AudioCommand, AudioWorker, DEVICE_QUIET_AFTER, DEVICE_STEADY_FOR};
         use crate::PlaybackTimeline;
         use std::sync::mpsc;
 
-        let clock = AudioClock::new();
+        // The test keeps the time, so what the worker decides does not hang
+        // on how soon a thread of the test runs on a busy machine.
+        let clock = AudioClock::moved_by_hand();
         clock.device_heard_from();
         clock.set_device_clock(48_000);
         clock.play_at(1.0);
         let (commands, receiver) = mpsc::sync_channel(4);
         let timeline =
             PlaybackTimeline::from_project(&kerf_model::Project::default()).expect("timeline");
-        let worker_clock = clock.clone();
-        let levels = super::LevelTap::new(clock.clone());
-        let worker = thread::spawn(move || {
-            let mut worker = AudioWorker::new(
-                timeline,
-                receiver,
-                worker_clock,
-                Box::new(SilentDevice),
-                levels,
-                false,
-            );
-            worker.playing = true;
-            worker.position = 1.0;
-            worker.run()
-        });
-        let wait_for = |source: ClockSource, within: Duration| {
-            let deadline = Instant::now() + within;
-            while clock.source() != source && Instant::now() < deadline {
-                thread::sleep(Duration::from_millis(2));
-            }
-            clock.source()
-        };
+        let mut worker = AudioWorker::new(
+            timeline,
+            receiver,
+            clock.clone(),
+            Box::new(SilentDevice),
+            super::LevelTap::new(clock.clone()),
+            false,
+        );
+        worker.playing = true;
+        worker.position = 1.0;
 
         // The device asks for nothing: its clock stands still, then the
         // monotonic one carries on from there.
-        thread::sleep(DEVICE_QUIET_AFTER / 4);
+        pass(&mut worker, &clock, DEVICE_QUIET_AFTER, false);
         assert_eq!(clock.source(), ClockSource::AudioDevice, "not that soon");
         assert_eq!(clock.now(), 1.0);
-        assert_eq!(
-            wait_for(ClockSource::MonotonicFallback, DEVICE_QUIET_AFTER * 5),
-            ClockSource::MonotonicFallback
-        );
+        pass(&mut worker, &clock, TICK, false);
+        assert_eq!(clock.source(), ClockSource::MonotonicFallback);
         let carried_on = clock.now();
-        assert!((1.0..1.2).contains(&carried_on), "{carried_on}");
-        thread::sleep(Duration::from_millis(20));
+        assert_eq!(carried_on, 1.0);
+        pass(&mut worker, &clock, Duration::from_millis(20), false);
         assert!(clock.now() > carried_on, "time runs without the device");
 
         // It asks a few times and stops: a stutter does not bring it back.
-        for _ in 0..10 {
-            clock.record_device_call(480);
-            thread::sleep(Duration::from_millis(10));
-        }
-        thread::sleep(DEVICE_QUIET_AFTER * 2);
+        pass(&mut worker, &clock, Duration::from_millis(100), true);
+        assert_eq!(clock.source(), ClockSource::MonotonicFallback);
+        pass(&mut worker, &clock, DEVICE_QUIET_AFTER * 2, false);
         assert_eq!(clock.source(), ClockSource::MonotonicFallback);
 
         // It takes sound at its own rate: after a second of that it keeps
         // the time again, from where the clock is.
-        let asking = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let (device_clock, still_asking) = (clock.clone(), std::sync::Arc::clone(&asking));
-        let device = thread::spawn(move || {
-            let started = Instant::now();
-            let mut asked = 0;
-            while still_asking.load(std::sync::atomic::Ordering::Acquire) {
-                let due = (started.elapsed().as_secs_f64() * 48_000.0) as u64;
-                while asked + 480 <= due {
-                    device_clock.record_device_call(480);
-                    if device_clock.is_playing() {
-                        device_clock.record_frames(480);
-                    }
-                    asked += 480;
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-        });
+        pass(&mut worker, &clock, DEVICE_STEADY_FOR, true);
         assert_eq!(
-            wait_for(ClockSource::AudioDevice, DEVICE_STEADY_FOR * 4),
-            ClockSource::AudioDevice
+            clock.source(),
+            ClockSource::MonotonicFallback,
+            "not before a second of it"
         );
+        let carried_to = clock.now();
+        pass(&mut worker, &clock, TICK, true);
+        assert_eq!(clock.source(), ClockSource::AudioDevice);
         let resumed = clock.now();
-        assert!(resumed > carried_on, "{resumed}");
-        thread::sleep(Duration::from_millis(60));
+        assert!(
+            (resumed - (carried_to + TICK.as_secs_f64())).abs() < 1e-9,
+            "{resumed}"
+        );
+        pass(&mut worker, &clock, Duration::from_millis(60), true);
         assert!(clock.now() > resumed, "its frames advance the clock again");
 
-        // And goes quiet once more.
-        asking.store(false, std::sync::atomic::Ordering::Release);
-        device.join().expect("device");
-        assert_eq!(
-            wait_for(ClockSource::MonotonicFallback, DEVICE_QUIET_AFTER * 5),
-            ClockSource::MonotonicFallback
-        );
+        // And goes quiet once more, which the worker's own loop sees: it goes
+        // round once for the first command and stops at the second.
+        clock.advance(DEVICE_QUIET_AFTER + TICK);
+        assert_eq!(clock.source(), ClockSource::AudioDevice);
+        commands
+            .send(AudioCommand::SetVolume(1.0))
+            .expect("worker's queue");
         commands
             .send(AudioCommand::Shutdown)
-            .expect("worker running");
-        worker.join().expect("worker exits");
+            .expect("worker's queue");
+        worker.run();
+        assert_eq!(clock.source(), ClockSource::MonotonicFallback);
     }
 
     #[cfg(feature = "native-audio")]

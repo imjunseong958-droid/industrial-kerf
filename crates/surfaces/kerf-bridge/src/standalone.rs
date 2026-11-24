@@ -2,9 +2,11 @@
 //! kerfd runs, Kerf's tools served over MCP, crash reports, the system keychain, the
 //! project launcher, the command registry and the catalog.
 
+use crate::event::{ViewFxDef, ViewParamDef};
 use crate::tasks::PresetCheck;
 use crate::{secrets, tasks, updates, SERVE_MCP};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 // ---- about ---------------------------------------------------------------------
@@ -170,15 +172,14 @@ pub fn commands_run(invocation: &Value) -> Value {
     }
 }
 
-/// Everything the catalog offers, as a JSON array of `{id, kind, domain, category, name,
-/// doc, engine, params}`: picture effects and transitions, generators (`kind: "generator"`,
-/// such as titles and solids) and sound effects (`domain: "audio"`).
-pub fn fx_catalog_all() -> Value {
-    kerf_runtime::fx_catalog_all_json()
+/// Everything the catalog offers: picture effects and transitions, generators (`kind`
+/// `generator`, such as titles and solids) and sound effects (`domain` `audio`).
+pub fn fx_catalog_all() -> Vec<ViewFxDef> {
+    kerf_runtime::fx_catalog_all()
 }
 
 /// The properties a clip has by its track's type, which [`fx_catalog_all`] does not list:
-/// `{video: [...], audio: [...]}`, as a timeline's `properties` carries them.
-pub fn clip_properties() -> Value {
-    kerf_runtime::properties_json()
+/// `video` and `audio`, as a timeline's `properties` carries them.
+pub fn clip_properties() -> BTreeMap<String, Vec<ViewParamDef>> {
+    kerf_runtime::clip_properties()
 }

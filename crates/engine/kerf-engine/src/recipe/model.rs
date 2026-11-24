@@ -500,16 +500,13 @@ impl Models {
 
     /// The program and arguments that reach model `name`.
     pub fn command(&self, name: &str) -> Result<&[String]> {
-        self.commands.get(name).map(Vec::as_slice).ok_or_else(|| {
-            let have = if self.commands.is_empty() {
-                "names none".to_owned()
-            } else {
-                format!("names {}", self.names().collect::<Vec<_>>().join(", "))
-            };
-            EngineError::msg(format!(
-                "no model `{name}` is set up: {} {have}. A model is a program named there, as `{{\"{name}\": {{\"run\": [\"<program>\", \"{REQUEST}\"]}}}}`",
-                self.file.display()
-            ))
-        })
+        self.commands
+            .get(name)
+            .map(Vec::as_slice)
+            .ok_or_else(|| EngineError::NoModel {
+                name: name.to_owned(),
+                file: self.file.clone(),
+                have: self.names().map(str::to_owned).collect(),
+            })
     }
 }

@@ -3,7 +3,7 @@
 //! a sound; and what an edit's `workflowSet` and `restoreTake` write of its steps.
 
 use super::tools::{EditInput, HeldInput, PlacedInput, SignalInput, StepInput, WorkflowSetInput};
-use super::{cannot_said, program, resolve_project_source_path};
+use super::{no_model_said, program, resolve_project_source_path};
 use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Project;
 use kerf_shots::ShotError;
@@ -11,10 +11,11 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// A refusal as an agent is told it ([`cannot_said`]); one with a kind of its own keeps it.
+/// A refusal as an agent is told it: a model that is not set up as [`no_model_said`] says it;
+/// any other keeps its kind.
 fn said_to_an_agent(why: ShotError, models: &kerf_engine::recipe::model::Models) -> ShotError {
     match why {
-        ShotError::Other(said) => ShotError::Other(cannot_said(said, Some(models))),
+        ShotError::NoModel { name, .. } => ShotError::Other(no_model_said(&name, models)),
         kind => kind,
     }
 }
@@ -40,11 +41,10 @@ impl KerfMcpRouter {
             .map_err(|why| self.no_shot(media, why))?;
         // An agent reads it as JSON, with what is said here for an agent alone.
         let mut shown = json!(graph);
-        if let Some(cannot) = shown["cannot"].as_str().map(str::to_owned) {
-            shown["cannot"] = json!(cannot_said(
-                cannot,
-                models_error.is_none().then_some(&models)
-            ));
+        if let Some(model) = graph.model_not_set_up.as_deref()
+            && models_error.is_none()
+        {
+            shown["cannot"] = json!(no_model_said(model, &models));
         }
         if let Some(error) = models_error {
             shown["modelsError"] = json!(error);

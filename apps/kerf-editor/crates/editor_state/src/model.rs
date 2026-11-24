@@ -51,7 +51,9 @@ pub trait TimelineShow {
 
     /// The picture the program plays into, in pixels: the sequence's own
     /// size; with none, the largest of its media's pictures; with none of
-    /// those, 1920 × 1080.
+    /// those, 1920 × 1080. kerfd sends a size with every sequence (a
+    /// document must say `size=`), so the fallbacks only answer a project
+    /// with no sequence, which has no clips to place.
     fn canvas(&self) -> (u32, u32);
 }
 

@@ -51,8 +51,9 @@ pub mod workflow {
 pub use kerf_runtime::{
     Author, AuthorKind, ErrorCode, PendingProposal, ProjectionStatus, ProposalEntry,
     ProposalFreshness, ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus,
-    TimelineView, ViewClip, ViewEffect, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewMarker, ViewMask, ViewOutline,
+    ViewOutlineKey, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind,
+    ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.
@@ -559,7 +560,8 @@ pub enum ConnectionStatus {
 pub struct ErrorEvent {
     pub message: String,
     /// Which refusal it is, where it has a code: kerfd's (`INVALID_RENDER_OUTPUT`,
-    /// `REVISION_CONFLICT`, ...), or the bridge's own for a making (`STEPS_NOT_CARRIED`).
+    /// `REVISION_CONFLICT`, ...), or the bridge's own for steps still in a recipe file
+    /// (`STEPS_NOT_CARRIED`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<ErrorCode>,
     /// The command refused, by its `type` (`export`, `media_make`, `look_save`, ...), or
