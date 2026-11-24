@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 # Font tables, glyph outlines and metrics (MIT OR Apache-2.0). Rasterisation is our own.
-skrifa = { version = "0.44", default-features = false, features = ["std"] }
+skrifa = { version = "0.50", default-features = false, features = ["std"] }
 # OpenType shaping (HarfBuzz port on read-fonts, MIT); shares font parsing with skrifa.
 harfrust = { version = "0.12", default-features = false, features = ["std"] }
 # Unicode Bidirectional Algorithm (MIT OR Apache-2.0).
