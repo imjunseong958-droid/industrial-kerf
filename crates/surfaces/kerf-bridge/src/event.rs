@@ -1578,7 +1578,7 @@ pub(crate) fn as_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
 
 /// A list, each item read on its own as [`as_said`] reads a field: one said otherwise is
 /// still an item, of its default. What is not a list is empty.
-pub(crate) fn each_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+fn each_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     deserializer: D,
 ) -> Result<Vec<T>, D::Error> {
     Ok(match Value::deserialize(deserializer)? {

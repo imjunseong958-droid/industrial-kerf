@@ -10,7 +10,7 @@
 //! run again with `--serve-mcp`.
 
 use crate::collab::program_path;
-use crate::event::{as_said, each_said};
+use crate::event::as_said;
 use kerf_agent::{summarize_targets, summarize_tool_result, AgentEvent, ToolResultSummary};
 use kerf_mcp::permissions::{Mode, MODE_VARIABLE};
 use serde::de::DeserializeOwned;
@@ -176,8 +176,7 @@ impl ClaudeCodeSession {
         };
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            // A line that is not a JSON object has nothing to say.
-            let Ok(line) = serde_json::from_str::<Line>(&line) else {
+            let Some(line) = Line::read(&line) else {
                 continue;
             };
             stream.read(line, &mut emit);
@@ -276,10 +275,18 @@ struct Line {
     message: Message,
 }
 
+impl Line {
+    /// What the line `text` says, or nothing when it is not a JSON object. It is read as JSON
+    /// first, so that a key said twice is the last one said, as it is read by key.
+    fn read(text: &str) -> Option<Self> {
+        serde_json::from_value(serde_json::from_str(text).ok()?).ok()
+    }
+}
+
 /// What a line says, by its `type`: those a turn is followed by, and [`Message::Other`] for
-/// any other, or a line that says none. Each field reads on its own ([`as_said`]): one said
-/// otherwise than it is read here is its default, and the rest of the line still says what
-/// it does.
+/// any other, or a line that says none. Each field reads on its own ([`as_said`], and
+/// [`object_said`] where an object belongs): one said otherwise than it is read here is its
+/// default, and the rest of the line still says what it does.
 #[derive(Default, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Message {
@@ -287,22 +294,22 @@ enum Message {
     System {
         #[serde(default, deserialize_with = "as_said")]
         subtype: Option<String>,
-        #[serde(default, deserialize_with = "each_said")]
+        #[serde(default, deserialize_with = "each_object_said")]
         mcp_servers: Vec<McpServer>,
     },
     /// One of the API's own streaming events (`--include-partial-messages`).
     StreamEvent {
-        #[serde(default, deserialize_with = "as_said")]
+        #[serde(default, deserialize_with = "object_said")]
         event: ApiEvent,
     },
     /// What the model answered a request with: its tool calls, and what the request read.
     Assistant {
-        #[serde(default, deserialize_with = "as_said")]
+        #[serde(default, deserialize_with = "object_said")]
         message: ApiMessage,
     },
     /// What went back to the model: its tool calls' results.
     User {
-        #[serde(default, deserialize_with = "as_said")]
+        #[serde(default, deserialize_with = "object_said")]
         message: ApiMessage,
     },
     /// The turn's end: its answer, or why it failed.
@@ -340,7 +347,7 @@ struct McpServer {
 enum ApiEvent {
     MessageStart,
     ContentBlockDelta {
-        #[serde(default, deserialize_with = "as_said")]
+        #[serde(default, deserialize_with = "object_said")]
         delta: Delta,
     },
     #[default]
@@ -365,9 +372,9 @@ enum Delta {
 /// its request read.
 #[derive(Default, Deserialize)]
 struct ApiMessage {
-    #[serde(default, deserialize_with = "each_said")]
+    #[serde(default, deserialize_with = "each_object_said")]
     content: Vec<Block>,
-    #[serde(default, deserialize_with = "as_said")]
+    #[serde(default, deserialize_with = "object_said")]
     usage: Usage,
 }
 
@@ -432,7 +439,7 @@ enum Block {
 #[serde(untagged)]
 enum ResultContent {
     Text(String),
-    Blocks(#[serde(deserialize_with = "each_said")] Vec<Block>),
+    Blocks(#[serde(deserialize_with = "each_object_said")] Vec<Block>),
     #[default]
     Nothing,
 }
@@ -444,16 +451,40 @@ struct ModelUsage {
     context_window: Option<u64>,
 }
 
-/// A map's values, each read on its own as [`each_said`] reads a list's items; what is not a
-/// map has none.
+/// What is said where an object belongs, read as `T` when it is one and as `T`'s default
+/// otherwise, as a key looked up in anything else finds nothing. ([`as_said`] would read a
+/// list as a `T` too, field by field.)
+fn object<T: DeserializeOwned + Default>(said: Value) -> T {
+    match said {
+        Value::Object(_) => serde_json::from_value(said).unwrap_or_default(),
+        _ => T::default(),
+    }
+}
+
+/// A field where an object belongs, read as [`object`] reads it.
+fn object_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<T, D::Error> {
+    Ok(object(Value::deserialize(deserializer)?))
+}
+
+/// A list of objects, each read on its own as [`object`] reads it; what is not a list has
+/// none.
+fn each_object_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+    deserializer: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Array(items) => items.into_iter().map(object).collect(),
+        _ => Vec::new(),
+    })
+}
+
+/// A map's values, each read on its own as [`object`] reads it; what is not a map has none.
 fn each_value_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     deserializer: D,
 ) -> Result<Vec<T>, D::Error> {
     Ok(match Value::deserialize(deserializer)? {
-        Value::Object(values) => values
-            .into_iter()
-            .map(|(_, value)| serde_json::from_value(value).unwrap_or_default())
-            .collect(),
+        Value::Object(values) => values.into_iter().map(|(_, value)| object(value)).collect(),
         _ => Vec::new(),
     })
 }
@@ -729,6 +760,37 @@ fn mcp_program(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stream that has read `lines`, and the events they made.
+    fn read(lines: &[&str]) -> (Stream, Vec<AgentEvent>) {
+        let mut stream = Stream::default();
+        let mut events = Vec::new();
+        for line in lines.iter().filter_map(|line| Line::read(line)) {
+            stream.read(line, &mut |event| events.push(event));
+        }
+        (stream, events)
+    }
+
+    #[test]
+    fn a_line_said_askew_reads_as_its_keys_did() {
+        // A list where an object belongs says nothing, as a key looked up in it found nothing.
+        let (stream, events) = read(&[
+            r#"{"type":"system","subtype":"init","mcp_servers":[["kerf","failed"]]}"#,
+            r#"{"type":"stream_event","event":["message_start"]}"#,
+            r#"{"type":"assistant","message":{"content":[["tool_use","t1","mcp__kerf__edit",{}]],"usage":[7,0,0]}}"#,
+            r#"{"type":"result","subtype":"success","result":"Done.","modelUsage":{"m":[1000000]}}"#,
+        ]);
+        assert!(events.is_empty(), "{events:?}");
+        assert_eq!(stream.failure, None);
+        assert_eq!(stream.context_window, 0);
+        assert_eq!(stream.done.as_deref(), Some("Done."));
+        // Of a key said twice, the last is read, and the line with it.
+        let (stream, _) = read(&[
+            r#"{"session_id":"a","session_id":"b","type":"result","subtype":"success","result":"x"}"#,
+        ]);
+        assert_eq!(stream.session.as_deref(), Some("b"));
+        assert_eq!(stream.done.as_deref(), Some("x"));
+    }
 
     #[test]
     fn the_command_line_carries_only_kerfs_server_and_no_built_in_tools() {
