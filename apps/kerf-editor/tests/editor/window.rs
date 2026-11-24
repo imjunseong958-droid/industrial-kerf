@@ -3,6 +3,7 @@
 use crate::support::{bounds, rect, window};
 use gpui::{point, px, size, Action, Bounds, MenuItem, WindowBounds};
 use jiff::tz::TimeZone;
+use kerf_bridge::event::CollabStatus;
 use kerf_bridge::{CrashReport, CrashReports};
 use kerf_editor::app::{
     crash_notice_text, parse_window_size, path_with_tool_folders, titlebar, window_buttons_at,
@@ -21,10 +22,7 @@ use kerf_editor::keymap::{
 use kerf_editor::model::{RenderJob, RenderQuality, RenderStatus};
 use kerf_editor::prefs::Prefs;
 use kerf_editor::settings::component_name;
-use kerf_editor::sidebar::{
-    app_rows, sync_problem, with_sync_failure, AppDoes, AppMenuInput, AppRow, SwitchBranch,
-    SYNC_FAILURE,
-};
+use kerf_editor::sidebar::{app_rows, sync_problem, AppDoes, AppMenuInput, AppRow, SwitchBranch};
 use kerf_editor::stage::{mask_tool_id, MaskTool};
 use kerf_editor::store::{Connection, Preview};
 use kerf_editor::theme::{layout, text};
@@ -548,12 +546,17 @@ fn the_menu_bars_mask_tools_are_ticked_while_out_and_greyed_with_no_clip_to_draw
 
 // ------------------------------------------------------------ the app's menu
 
+/// The project's Git standing as a `collab` event's `status` says it.
+fn collab_status(status: Value) -> CollabStatus {
+    serde_json::from_value(status).unwrap()
+}
+
 fn kerf_menu_input<'a>(
     commands: &'a [commands::Command],
     menus: &'a [String],
     states: &'a Value,
     checked: &'a BTreeSet<String>,
-    collab: Option<&'a Value>,
+    collab: Option<&'a CollabStatus>,
     menu_bar: bool,
 ) -> AppMenuInput<'a> {
     AppMenuInput {
@@ -565,6 +568,7 @@ fn kerf_menu_input<'a>(
         checked,
         zoom: 0.0,
         collab,
+        sync_failure: None,
         revision: 7,
         menu_bar,
         recent: &[],
@@ -677,54 +681,45 @@ fn ask_kerf_is_greyed_with_why_where_the_app_menu_lists_it() {
 
 #[test]
 fn view_sync_says_why_the_last_sync_failed_until_one_succeeds() {
-    let status = json!({
+    let status = collab_status(json!({
         "repository": true, "branch": "main", "branches": ["main"],
         "behind": 0, "ahead": 1, "conflicted": false,
-    });
+    }));
     // Nothing went wrong: no warning.
-    assert_eq!(sync_problem(Some(&status)), None);
-    assert_eq!(sync_problem(None), None);
-    let failed = with_sync_failure(Some(&status), Some("could not reach origin")).unwrap();
-    assert_eq!(failed[SYNC_FAILURE], "could not reach origin");
+    assert_eq!(sync_problem(Some(&status), None), None);
+    assert_eq!(sync_problem(None, None), None);
+    let failed = Some("could not reach origin");
     assert_eq!(
-        sync_problem(Some(&failed)).as_deref(),
+        sync_problem(Some(&status), failed).as_deref(),
         Some("Sync failed: could not reach origin")
     );
-    // Succeeded since: the window gives none, and the warning goes.
-    let synced = with_sync_failure(Some(&status), None).unwrap();
-    assert_eq!(synced, status);
-    assert_eq!(sync_problem(Some(&synced)), None);
     // No standing heard yet: nothing to say it under.
-    assert_eq!(with_sync_failure(None, Some("no")), None);
+    assert_eq!(sync_problem(None, Some("no")), None);
     // An unfinished merge is said first: no sync goes until it is finished.
-    let mut conflicted = failed.clone();
-    conflicted["conflicted"] = json!(true);
+    let mut conflicted = status.clone();
+    conflicted.git.conflicted = true;
     assert_eq!(
-        sync_problem(Some(&conflicted)).as_deref(),
+        sync_problem(Some(&conflicted), failed).as_deref(),
         Some("A merge is unfinished; finish it with git")
     );
     // In the Sync submenu, a greyed row under its summary.
     let commands = commands::catalog("kerf");
     let states = json!({});
     let checked = BTreeSet::new();
-    let rows = app_rows(&kerf_menu_input(
-        &commands,
-        &[],
-        &states,
-        &checked,
-        Some(&failed),
-        true,
-    ));
+    let mut input = kerf_menu_input(&commands, &[], &states, &checked, Some(&status), true);
+    input.sync_failure = failed;
+    let rows = app_rows(&input);
     let sync = find_row(&find_row(&rows, "View").rows, "Sync");
     assert_eq!(sync.rows[1].words, "Sync failed: could not reach origin");
     assert!(sync.rows[1].disabled);
     assert_eq!(sync.rows[1].does, AppDoes::Nothing);
+    // Succeeded since: the window gives none, and the warning goes.
     let rows = app_rows(&kerf_menu_input(
         &commands,
         &[],
         &states,
         &checked,
-        Some(&synced),
+        Some(&status),
         true,
     ));
     let sync = find_row(&find_row(&rows, "View").rows, "Sync");
@@ -1085,7 +1080,7 @@ fn premiere_menu_input<'a>(
     menus: &'a [String],
     states: &'a Value,
     checked: &'a BTreeSet<String>,
-    collab: Option<&'a Value>,
+    collab: Option<&'a CollabStatus>,
     menu_bar: bool,
 ) -> AppMenuInput<'a> {
     AppMenuInput {
@@ -1097,6 +1092,7 @@ fn premiere_menu_input<'a>(
         checked,
         zoom: 0.5,
         collab,
+        sync_failure: None,
         revision: 22,
         menu_bar,
         recent: &[],
@@ -1220,10 +1216,10 @@ fn the_sync_says_how_it_stands_and_switches_branches() {
         sidebar::sync_summary(None, 4),
         "Revision 4 · not shared yet"
     );
-    let status = json!({
+    let status = collab_status(json!({
         "repository": true, "branch": "main", "branches": ["main", "trailer"],
         "behind": 1, "ahead": 2, "conflicted": false, "live": true,
-    });
+    }));
     assert_eq!(
         sidebar::sync_summary(Some(&status), 22),
         "Revision 22 · 1 commit to pull · 2 commits to push"
@@ -1473,10 +1469,10 @@ proptest! {
 fn switch_branch_in_the_app_menu_offers_the_other_branches() {
     let commands = commands::catalog("kerf");
     let menus = vec!["Collaborate".to_owned()];
-    let status = json!({
+    let status = collab_status(json!({
         "repository": true, "branch": "main", "branches": ["main", "trailer", "colour"],
         "behind": 0, "ahead": 0, "conflicted": false, "live": false,
-    });
+    }));
     let states = json!({});
     let checked = BTreeSet::new();
     let rows = app_rows(&premiere_menu_input(
@@ -1500,7 +1496,7 @@ fn switch_branch_in_the_app_menu_offers_the_other_branches() {
     );
     // With none to go to it says so; and it is greyed with why while the
     // registry says it cannot run.
-    let alone = json!({"repository": true, "branch": "main", "branches": ["main"]});
+    let alone = collab_status(json!({"repository": true, "branch": "main", "branches": ["main"]}));
     let states = json!({"collab.switchBranch": "There are no other branches"});
     let rows = app_rows(&premiere_menu_input(
         &commands,

@@ -101,6 +101,7 @@ fn the_app_menu_offers_sign_out_only_while_signed_in() {
             checked: &checked,
             zoom: 0.0,
             collab: None,
+            sync_failure: None,
             revision: 3,
             menu_bar: true,
             recent: &[],

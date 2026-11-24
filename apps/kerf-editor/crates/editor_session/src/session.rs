@@ -1959,10 +1959,10 @@ impl Session {
                 "durationFrames": clip.duration_frames,
             });
         }
-        if let Some(collab) = &self.state.collab {
-            context["collab"] = collab.clone();
+        if let Some(Ok(mut collab)) = self.state.collab.as_ref().map(serde_json::to_value) {
             // Consolidate Media follows the media outside the project folder.
-            context["collab"]["externalMedia"] = json!(self.state.media_status.external.len());
+            collab["externalMedia"] = json!(self.state.media_status.external.len());
+            context["collab"] = collab;
         }
         // The pinned card's proposal, else (none pinned, or one gone since)
         // the newest pending one.

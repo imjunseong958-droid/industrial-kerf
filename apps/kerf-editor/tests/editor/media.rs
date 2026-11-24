@@ -5,7 +5,7 @@ use gpui::{
     div, point, px, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
     Modifiers, ParentElement, Render, Styled, TestAppContext, VisualTestContext, Window,
 };
-use kerf_bridge::event::RenderQuality;
+use kerf_bridge::event::{CheckSummary, RenderQuality, Row};
 use kerf_editor::artwork::{
     fill_gaps, frame_index, parse_pam_stream, pixel_format_has_alpha, strip_frame_count,
     strip_height, waveform_columns, waveform_raise, Artwork, Bucket, PeakReducer, Peaks,
@@ -1572,18 +1572,24 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
 
 // ---------------------------------------------------------------- Preflight
 
-fn row(code: &str, passed: bool) -> Value {
-    json!({"code": code, "name": code.to_uppercase(), "passed": passed, "value": "1", "limit": "≤ 2"})
+fn row(code: &str, passed: bool) -> Row {
+    serde_json::from_value(
+        json!({"code": code, "name": code.to_uppercase(), "passed": passed, "value": "1", "limit": "≤ 2"}),
+    )
+    .unwrap()
 }
 
 proptest! {
     #[test]
     fn preflight_shows_every_failure_it_can_then_passes(passes in prop::collection::vec(any::<bool>(), 0..14)) {
-        let summary = json!({"rows": passes
-            .iter()
-            .enumerate()
-            .map(|(index, passed)| row(&format!("c{index}"), *passed))
-            .collect::<Vec<_>>()});
+        let summary = CheckSummary {
+            rows: passes
+                .iter()
+                .enumerate()
+                .map(|(index, passed)| row(&format!("c{index}"), *passed))
+                .collect(),
+            ..CheckSummary::default()
+        };
         let failed = passes.iter().filter(|passed| !**passed).count();
         let rows = preflight_rows(&summary, 4, 6);
         let shown_failed = rows.iter().filter(|row| !row.passed).count();

@@ -244,7 +244,7 @@ impl Workspace {
             .state
             .collab
             .as_ref()
-            .is_some_and(|collab| collab["live"].as_bool() == Some(true));
+            .is_some_and(|collab| collab.live);
         [
             ("view.sidebar", self.sidebar_open),
             ("view.picture", picture),

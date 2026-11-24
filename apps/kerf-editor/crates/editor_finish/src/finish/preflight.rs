@@ -5,7 +5,7 @@
 use super::finishing::finishing;
 use editor_session::session::Session;
 use gpui::{App, Entity, SharedString, Window};
-use serde_json::Value;
+use kerf_bridge::event::{CheckSummary, Row};
 
 /// Fills the conversation's composer with `words`, to be changed before it
 /// is sent: a failed check's Ask Kerf, in Export's
@@ -43,22 +43,19 @@ pub struct PreflightRow {
     pub ask: Option<String>,
 }
 
-/// The rows Preflight shows of a check's `summary` (`{rows: [{code, name,
-/// passed, value, limit}]}`): every failed one up to `most`, then passed
-/// ones up to `least` in all, in the summary's order. A row that does not
-/// say passed it.
-pub fn preflight_rows(summary: &Value, least: usize, most: usize) -> Vec<PreflightRow> {
-    let rows = summary["rows"].as_array().cloned().unwrap_or_default();
-    let passed = |row: &Value| row["passed"].as_bool().unwrap_or(true);
+/// The rows Preflight shows of a check's `summary`: every failed one up to
+/// `most`, then passed ones up to `least` in all, in the summary's order.
+pub fn preflight_rows(summary: &CheckSummary, least: usize, most: usize) -> Vec<PreflightRow> {
+    let rows = &summary.rows;
     let mut chosen: Vec<usize> = (0..rows.len())
-        .filter(|index| !passed(&rows[*index]))
+        .filter(|index| !rows[*index].passed)
         .take(most)
         .collect();
     for (index, row) in rows.iter().enumerate() {
         if chosen.len() >= least {
             break;
         }
-        if passed(row) && !chosen.contains(&index) {
+        if row.passed && !chosen.contains(&index) {
             chosen.push(index);
         }
     }
@@ -67,52 +64,39 @@ pub fn preflight_rows(summary: &Value, least: usize, most: usize) -> Vec<Preflig
         .into_iter()
         .map(|index| {
             let row = &rows[index];
-            let code = row["code"].as_str().unwrap_or_default().to_owned();
-            let name = row["name"].as_str().unwrap_or(&code).to_owned();
-            let value = row["value"].as_str().unwrap_or_default();
-            let ok = passed(row);
+            let ok = row.passed;
             PreflightRow {
-                label: if value.is_empty() {
-                    name
+                label: if row.value.is_empty() {
+                    row.name.clone()
                 } else {
-                    format!("{name} · {value}")
+                    format!("{} · {}", row.name, row.value)
                 },
                 passed: ok,
-                limit: row["limit"]
-                    .as_str()
+                limit: row
+                    .limit
+                    .as_deref()
                     .filter(|limit| ok && !limit.is_empty())
                     .map(str::to_owned),
                 ask: (!ok).then(|| ask_text(row)),
-                code,
+                code: row.code.clone(),
             }
         })
         .collect()
 }
 
 /// The failed rows Preflight leaves out of `summary`'s.
-pub fn preflight_hidden(summary: &Value, most: usize) -> usize {
-    let failed = summary["rows"]
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .filter(|row| !row["passed"].as_bool().unwrap_or(true))
-                .count()
-        })
-        .unwrap_or(0);
+pub fn preflight_hidden(summary: &CheckSummary, most: usize) -> usize {
+    let failed = summary.rows.iter().filter(|row| !row.passed).count();
     failed.saturating_sub(most)
 }
 
-/// What Ask Kerf asks of a failed check (`{name, value, limit}`): "Bring
-/// true peak to ≤ −1 dBTP (now −0.4 dBTP)", or, with no limit, "Fix the
-/// flash (3 frames)".
-pub fn ask_text(row: &Value) -> String {
-    let name = row["name"]
-        .as_str()
-        .or_else(|| row["code"].as_str())
-        .unwrap_or_default();
-    let name = lower_first(name);
-    let value = row["value"].as_str().unwrap_or_default();
-    let limit = row["limit"].as_str().unwrap_or_default();
+/// What Ask Kerf asks of a failed check, by its name, value and limit:
+/// "Bring true peak to ≤ −1 dBTP (now −0.4 dBTP)", or, with no limit, "Fix
+/// the flash (3 frames)".
+pub fn ask_text(row: &Row) -> String {
+    let name = lower_first(&row.name);
+    let value = row.value.as_str();
+    let limit = row.limit.as_deref().unwrap_or_default();
     match (limit.is_empty(), value.is_empty()) {
         (false, true) => format!("Bring {name} to {limit}"),
         (false, false) => format!("Bring {name} to {limit} (now {value})"),
@@ -154,10 +138,7 @@ pub struct Preflight {
 pub fn preflight(session: &Entity<Session>, cx: &mut App) -> Preflight {
     let finishing = finishing(session, cx);
     let finishing = finishing.read(cx);
-    let summary = finishing
-        .report
-        .as_ref()
-        .map(|report| &report.summary_value);
+    let summary = finishing.report.as_ref().map(|report| &report.summary);
     Preflight {
         checking: finishing.checking,
         failed: finishing.check_failed.clone(),
