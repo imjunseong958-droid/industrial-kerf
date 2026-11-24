@@ -296,7 +296,7 @@ impl Collab {
         if self.live && (edit_due || now >= self.next_cycle) {
             // A copy into media/ that lands mid-sync would be hashed inside
             // kerfd's commit; sync once copies are done.
-            if self.shared.copies.load(Ordering::SeqCst) > 0 {
+            if self.shared.media.copies.load(Ordering::SeqCst) > 0 {
                 return;
             }
             self.edited = None;
@@ -492,7 +492,8 @@ impl Collab {
     fn download(&self, wanted: bool) -> Result<bool, String> {
         let pointers = self
             .shared
-            .media_status
+            .media
+            .status
             .lock()
             .is_ok_and(|status| !status.pointers.is_empty());
         if !(wanted || pointers) {

@@ -12,8 +12,29 @@ use kerf_model::{
 };
 use kerf_runtime::{ErrorCode, RenderQuality, RuntimeClient};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The viewer's preview renders: whether one is rendering (exports go through the render
+/// queue), what cancels it, which were asked to stop, and the files of those shown or
+/// done with.
+#[derive(Default)]
+pub(crate) struct Previews {
+    busy: AtomicBool,
+    /// The cancel marker of the preview render running, so closing the
+    /// bridge stops it.
+    cancel: Mutex<Option<PathBuf>>,
+    /// The order previews and their stops were sent in, which says which
+    /// previews `preview_stop` and `preview_exit` asked to stop.
+    pub(crate) turns: crate::preview_turns::PreviewTurns,
+    /// Preview renders nothing shows any more whose files could not be
+    /// removed yet: on Windows a playback worker still shutting down keeps
+    /// its file open. The media worker tries them again.
+    stale: Mutex<Vec<PathBuf>>,
+    /// The preview file the media worker plays, so closing the bridge can
+    /// remove it even when the process exits before that worker stops.
+    pub(super) shown: Mutex<Option<PathBuf>>,
+}
 
 /// One render the runtime worker hands to an export thread.
 struct RenderRequest {
@@ -81,7 +102,7 @@ pub(crate) fn start(
 /// A preview that ends before any render of it began: refused, or stopped
 /// on its way here. One asked to stop says so, which answers the stop.
 pub(crate) fn preview_unstarted(shared: &Shared, tx: &Outbox, turn: u64, proposal: Option<String>) {
-    if shared.preview_turns.over(turn) {
+    if shared.preview.turns.over(turn) {
         emit(
             tx,
             Event::Preview(Preview {
@@ -104,11 +125,11 @@ fn spawn_render(
     tx: &Outbox,
     shared: &Arc<Shared>,
 ) {
-    if shared.preview_turns.stopped(turn) {
+    if shared.preview.turns.stopped(turn) {
         preview_unstarted(shared, tx, turn, request.proposal);
         return;
     }
-    if shared.preview_busy.swap(true, Ordering::SeqCst) {
+    if shared.preview.busy.swap(true, Ordering::SeqCst) {
         error(tx, "A preview is already rendering");
         preview_unstarted(shared, tx, turn, request.proposal);
         return;
@@ -129,8 +150,8 @@ fn spawn_render(
         // this keeps the preview out, and one sent after finds it waiting
         // there and puts the program back.
         let stopped = {
-            let slot = shared.project.lock();
-            let stopped = shared.preview_turns.over(turn);
+            let slot = shared.viewer.project.lock();
+            let stopped = shared.preview.turns.over(turn);
             // A preview of a program edited since, one stopped, or one for a
             // closed bridge, is never shown.
             let shown = match (&rendered, slot) {
@@ -175,7 +196,7 @@ fn spawn_render(
         if stopped {
             emit(&tx, Event::Preview(request.event(PreviewStatus::Stopped)));
         }
-        shared.preview_busy.store(false, Ordering::SeqCst);
+        shared.preview.busy.store(false, Ordering::SeqCst);
     });
 }
 
@@ -200,12 +221,12 @@ fn export(
     if preview {
         // The viewer's render, not an output.
         shared.renders.mark_viewer(&job.job_id);
-        if let Ok(mut running) = shared.preview_cancel.lock() {
+        if let Ok(mut running) = shared.preview.cancel.lock() {
             *running = Some(cancel.clone());
         }
         // The bridge may have closed, or the preview stopped, before it
         // could see this render.
-        if shared.closed.load(Ordering::SeqCst) || shared.preview_turns.stopped(turn) {
+        if shared.closed.load(Ordering::SeqCst) || shared.preview.turns.stopped(turn) {
             cancel_preview(shared);
         }
     }
@@ -233,7 +254,7 @@ fn export(
             "render job was cancelled",
         )),
     };
-    if preview && let Ok(mut running) = shared.preview_cancel.lock() {
+    if preview && let Ok(mut running) = shared.preview.cancel.lock() {
         *running = None;
         // A cancel that came as the render finished outlives the job.
         let _ = std::fs::remove_file(&cancel);
@@ -257,7 +278,7 @@ fn export(
             if preview {
                 discard_preview(shared, output);
             }
-            if !(err.code == ErrorCode::Cancelled && shared.preview_turns.stopped(turn)) {
+            if !(err.code == ErrorCode::Cancelled && shared.preview.turns.stopped(turn)) {
                 emit(tx, Event::Preview(request.event(PreviewStatus::Failed)));
             }
             Err(err)
@@ -273,7 +294,7 @@ fn export(
 /// what orders it among them; the rest runs on a thread of its own, since
 /// the events queue may be full while the editor is sending.
 pub(crate) fn stop_preview(shared: &Arc<Shared>, tx: &Outbox) {
-    let answered = shared.preview_turns.stop();
+    let answered = shared.preview.turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
     shared.workers.clone().spawn("bridge:pv-stop", move || {
@@ -300,7 +321,7 @@ fn stopped_preview(shared: &Shared, answered: bool, tx: &Outbox) {
 /// does, and play the program again in place of a rendered preview, which
 /// the media worker announces with `viewer_reset`.
 pub(crate) fn exit_preview(shared: &Arc<Shared>, tx: &Outbox) {
-    shared.preview_turns.stop();
+    shared.preview.turns.stop();
     let shared = shared.clone();
     let tx = tx.clone();
     shared
@@ -313,12 +334,13 @@ pub(crate) fn exit_preview(shared: &Arc<Shared>, tx: &Outbox) {
 fn exited_preview(shared: &Shared, tx: &Outbox) {
     cancel_preview(shared);
     let model = shared.model.lock().ok().and_then(|model| model.clone());
-    if let (Some(model), Ok(mut slot)) = (model, shared.project.lock()) {
+    if let (Some(model), Ok(mut slot)) = (model, shared.viewer.project.lock()) {
         // A preview that was not stopped in time is waiting in the slot or
         // showing: both are looked at with the slot held, as a preview moves
         // from one to the other and into the slot with it held.
         let showing = shared
-            .shown_preview
+            .preview
+            .shown
             .lock()
             .is_ok_and(|shown| shown.is_some());
         let waiting = matches!(*slot, Some(MediaProject::Rendered(..)));
@@ -339,7 +361,7 @@ fn exited_preview(shared: &Shared, tx: &Outbox) {
 
 /// Stop the preview render running, if there is one.
 pub(crate) fn cancel_preview(shared: &Shared) {
-    if let Ok(running) = shared.preview_cancel.lock()
+    if let Ok(running) = shared.preview.cancel.lock()
         && let Some(marker) = &*running
         && let Err(error) = std::fs::write(marker, b"")
     {
@@ -366,14 +388,15 @@ pub(crate) fn install_project(
 /// the bridge has closed, so nothing will show either.
 pub(crate) fn discard_previews(shared: &Shared) {
     let shown = shared
-        .shown_preview
+        .preview
+        .shown
         .lock()
         .ok()
         .and_then(|mut shown| shown.take());
     if let Some(file) = shown {
         discard_preview(shared, file);
     }
-    let waiting = shared.project.lock().ok().and_then(|mut slot| {
+    let waiting = shared.viewer.project.lock().ok().and_then(|mut slot| {
         if matches!(*slot, Some(MediaProject::Rendered(..))) {
             slot.take()
         } else {
@@ -390,7 +413,7 @@ pub(crate) fn discard_previews(shared: &Shared) {
 /// exports are the person's.
 pub(crate) fn discard_preview(shared: &Shared, file: PathBuf) {
     if !remove_preview(&file)
-        && let Ok(mut stale) = shared.stale_previews.lock()
+        && let Ok(mut stale) = shared.preview.stale.lock()
     {
         stale.push(file);
     }
@@ -398,7 +421,7 @@ pub(crate) fn discard_preview(shared: &Shared, file: PathBuf) {
 
 /// Try the previews not removed yet again; `true` once none are left.
 pub(crate) fn sweep_previews(shared: &Shared) -> bool {
-    shared.stale_previews.lock().map_or(true, |mut stale| {
+    shared.preview.stale.lock().map_or(true, |mut stale| {
         stale.retain(|file| !remove_preview(file));
         stale.is_empty()
     })
@@ -519,13 +542,13 @@ mod tests {
         let waiting = directory.path().join("render-2.mp4");
         std::fs::write(&playing, b"preview").unwrap();
         std::fs::write(&waiting, b"preview").unwrap();
-        *shared.shown_preview.lock().unwrap() = Some(playing.clone());
-        *shared.project.lock().unwrap() = Some(rendered(&waiting));
+        *shared.preview.shown.lock().unwrap() = Some(playing.clone());
+        *shared.viewer.project.lock().unwrap() = Some(rendered(&waiting));
 
         discard_previews(&shared);
         assert!(!playing.exists() && !waiting.exists());
-        assert!(shared.shown_preview.lock().unwrap().is_none());
-        assert!(shared.project.lock().unwrap().is_none());
+        assert!(shared.preview.shown.lock().unwrap().is_none());
+        assert!(shared.viewer.project.lock().unwrap().is_none());
     }
 
     /// The next event as JSON, from a thread that may not have run yet.
@@ -553,16 +576,16 @@ mod tests {
         // With one running, the render answers once it has stopped.
         let directory = tempfile::tempdir().unwrap();
         let marker = kerf_runtime::render_cancel_path(directory.path(), "job-1");
-        *shared.preview_cancel.lock().unwrap() = Some(marker.clone());
-        assert!(shared.preview_turns.send(|| true));
-        let turn = shared.preview_turns.take();
+        *shared.preview.cancel.lock().unwrap() = Some(marker.clone());
+        assert!(shared.preview.turns.send(|| true));
+        let turn = shared.preview.turns.take();
         super::stop_preview(&shared, &tx);
         crate::tests_support::wait(Duration::from_secs(10), || marker.exists().then_some(()))
             .expect("the render was told to stop");
-        assert!(shared.preview_turns.stopped(turn));
+        assert!(shared.preview.turns.stopped(turn));
         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
         // It is over, stopped, and the next stop has nothing to wait for.
-        assert!(shared.preview_turns.over(turn));
+        assert!(shared.preview.turns.over(turn));
         super::stop_preview(&shared, &tx);
         assert_eq!(next(&rx), json!({"type": "preview", "status": "stopped"}));
     }
@@ -576,16 +599,16 @@ mod tests {
         let shared = Arc::new(crate::tests_support::shared(directory.path()));
         let client = kerf_runtime::RuntimeClient::new(directory.path()).unwrap();
         let (tx, rx) = crate::wake::outbox(8);
-        assert!(shared.preview_turns.send(|| true));
+        assert!(shared.preview.turns.send(|| true));
         super::stop_preview(&shared, &tx);
-        let turn = shared.preview_turns.take();
+        let turn = shared.preview.turns.take();
         super::spawn_render(preview_request("proposal-7"), turn, &client, &tx, &shared);
         assert_eq!(
             next(&rx),
             json!({"type": "preview", "status": "stopped", "proposalId": "proposal-7"})
         );
         assert!(
-            !shared.preview_busy.load(Ordering::SeqCst),
+            !shared.preview.busy.load(Ordering::SeqCst),
             "no render began"
         );
         assert!(
@@ -594,24 +617,24 @@ mod tests {
         );
 
         // The same with an exit, which also answers for itself.
-        assert!(shared.preview_turns.send(|| true));
+        assert!(shared.preview.turns.send(|| true));
         super::exit_preview(&shared, &tx);
         assert_eq!(next(&rx), json!({"type": "preview", "status": "exited"}));
-        let turn = shared.preview_turns.take();
+        let turn = shared.preview.turns.take();
         super::spawn_render(preview_request("proposal-8"), turn, &client, &tx, &shared);
         assert_eq!(
             next(&rx),
             json!({"type": "preview", "status": "stopped", "proposalId": "proposal-8"})
         );
         assert!(
-            !shared.preview_busy.load(Ordering::SeqCst),
+            !shared.preview.busy.load(Ordering::SeqCst),
             "no render began"
         );
 
         // A preview the runtime worker refuses answers the stop too.
-        assert!(shared.preview_turns.send(|| true));
+        assert!(shared.preview.turns.send(|| true));
         super::stop_preview(&shared, &tx);
-        let turn = shared.preview_turns.take();
+        let turn = shared.preview.turns.take();
         super::preview_unstarted(&shared, &tx, turn, None);
         assert_eq!(next(&rx), json!({"type": "preview", "status": "stopped"}));
         assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());

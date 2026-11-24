@@ -6,14 +6,14 @@ pub(crate) mod preview;
 
 use crate::event::{Preview, PreviewStatus};
 use crate::wake::Outbox;
-use crate::{emit, error, meter, Command, Event, MediaProject, Shared};
+use crate::{emit, error, meter, Command, Event, MediaProject, PendingSeek, Shared};
 use kerf_model::{Id, Project};
 use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackFrame, PlaybackSession, PlaybackState};
 use preview::{discard_preview, discard_previews, sweep_previews};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::Receiver;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -32,6 +32,15 @@ fn preview_frame_size(project: &Project) -> (u32, u32) {
         dimension(f64::from(width) * scale),
         dimension(f64::from(height) * scale),
     )
+}
+
+/// What the viewer plays and shows: the newest frame not taken yet, the seek it was last
+/// asked for, and the project to open next (the program, or a rendered preview of it).
+#[derive(Default)]
+pub(crate) struct Showing {
+    pub(crate) frame: Mutex<Option<PlaybackFrame>>,
+    pub(crate) seek: Mutex<Option<PendingSeek>>,
+    pub(crate) project: Mutex<Option<MediaProject>>,
 }
 
 /// With `KERF_PLAYBACK_STATS` set, a line on stderr every 5 seconds of playing: frames shown and
@@ -155,7 +164,7 @@ struct Player {
 /// project, whether it is a rendered preview, the proposal that preview shows, and the
 /// preview file shown until now.
 fn take_waiting(shared: &Shared) -> Option<(Project, bool, Option<String>, Option<PathBuf>)> {
-    shared.project.lock().ok().and_then(|mut slot| {
+    shared.viewer.project.lock().ok().and_then(|mut slot| {
         // The proposal a rendered preview shows.
         let (project, file, shown_proposal) = match slot.take()? {
             MediaProject::Native(project) => (project, None, None),
@@ -163,7 +172,8 @@ fn take_waiting(shared: &Shared) -> Option<(Project, bool, Option<String>, Optio
         };
         let rendered = file.is_some();
         let old = shared
-            .shown_preview
+            .preview
+            .shown
             .lock()
             .ok()
             .and_then(|mut shown| std::mem::replace(&mut *shown, file));
@@ -223,7 +233,7 @@ impl Player {
         if let Some(old) = old {
             discard_preview(shared, old);
         }
-        if let Ok(mut frame) = shared.frame.lock() {
+        if let Ok(mut frame) = shared.viewer.frame.lock() {
             *frame = None;
         }
         emit(tx, Event::ViewerReset);
@@ -328,7 +338,12 @@ impl Player {
     fn follow(&mut self, tx: &Outbox, shared: &Shared) {
         if let Some(session) = &self.session {
             let handle = session.handle();
-            let seek = shared.seek.lock().ok().and_then(|mut slot| slot.take());
+            let seek = shared
+                .viewer
+                .seek
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take());
             if let Some(seek) = seek {
                 // Where the viewer was asked to be, before the session says
                 // so itself: an edit that replaces this session first opens
@@ -402,7 +417,7 @@ fn show_frame(frame: PlaybackFrame, tx: &Outbox, shared: &Shared) {
         .join("\n");
     // Replaceable: every frame says its captions again.
     let _ = tx.try_send(Event::Caption { text: caption });
-    if let Ok(mut slot) = shared.frame.lock() {
+    if let Ok(mut slot) = shared.viewer.frame.lock() {
         *slot = Some(frame);
     }
     tx.ring();

@@ -13,9 +13,9 @@ use kerf_model::{Catalog, Id, Op, Project};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::SyncSender;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// Copy the file at `path` into the project's `media/` folder on its own
 /// thread, then hand the runtime worker `then(copy)`, which names the copy
@@ -114,7 +114,7 @@ pub(crate) fn make(
     }
     // One making of a media at a time: a second would write the same take.
     let cancellation = kerf_engine::CancellationToken::new();
-    let started = shared.makings.lock().is_ok_and(|mut makings| {
+    let started = shared.makings.ours.lock().is_ok_and(|mut makings| {
         if makings.contains_key(id) {
             return false;
         }
@@ -132,7 +132,7 @@ pub(crate) fn make(
         // to end, and what is about to exit waits for it to have ended. Held to the end of
         // the thread, past what it says of how it went.
         let Some(_drawing) = shared.drawers.begin() else {
-            if let Ok(mut makings) = shared.makings.lock() {
+            if let Ok(mut makings) = shared.makings.ours.lock() {
                 makings.remove(&id);
             }
             return crate::emit(&tx, Event::MediaMakeCancelled { media: id });
@@ -182,7 +182,7 @@ pub(crate) fn make(
                 }
             }
         }
-        if let Ok(mut makings) = shared.makings.lock() {
+        if let Ok(mut makings) = shared.makings.ours.lock() {
             makings.remove(&id);
         }
         // What was made is kept, whatever the making after it came to: the media becomes the
@@ -210,6 +210,23 @@ pub(crate) fn make(
             Err(error) => make_failed(&tx, &id, error),
         }
     });
+}
+
+/// The project's media files, as the bridge last saw them: the status last emitted, and
+/// the copies into `media/` still running, which live sync waits for.
+#[derive(Default)]
+pub(crate) struct Files {
+    pub(crate) status: Mutex<MediaStatus>,
+    pub(crate) copies: AtomicUsize,
+}
+
+/// The makings under way: this bridge's, by the media each makes, with what cancels it;
+/// and those another program runs on this project that are shown, by the media each
+/// makes, with the take and the line last shown of it.
+#[derive(Default)]
+pub(crate) struct Makings {
+    ours: Mutex<BTreeMap<String, kerf_engine::CancellationToken>>,
+    others: Mutex<BTreeMap<String, (u32, String)>>,
 }
 
 /// One of a project's cast, as the editor shows and sets it.
@@ -321,13 +338,13 @@ pub(crate) fn cast(
 pub(crate) fn agent_makings(shared: Arc<Shared>, tx: Outbox) -> kerf_mcp::MakingWatcher {
     use kerf_mcp::MakingEvent;
     let ended = |shared: &Shared, media: &str| {
-        if let Ok(mut makings) = shared.makings.lock() {
+        if let Ok(mut makings) = shared.makings.ours.lock() {
             makings.remove(media);
         }
     };
     Arc::new(move |event| match event {
         MakingEvent::Began { media, take, stop } => {
-            if let Ok(mut makings) = shared.makings.lock() {
+            if let Ok(mut makings) = shared.makings.ours.lock() {
                 makings.entry(media.clone()).or_insert(stop.clone());
             }
             // Let begin just before the bridge closed, and told of only now: the makings were
@@ -389,7 +406,7 @@ pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Out
         .into_iter()
         .filter(|told| told.pid != this_program)
         .collect();
-    let Ok(mut shown) = shared.others_makings.lock() else {
+    let Ok(mut shown) = shared.makings.others.lock() else {
         return;
     };
     for told in &told {
@@ -445,6 +462,7 @@ pub(crate) fn follow_others_makings(shared: &Shared, this_program: u32, tx: &Out
 pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &Outbox) {
     let running = shared
         .makings
+        .ours
         .lock()
         .ok()
         .and_then(|makings| makings.get(id).cloned());
@@ -457,7 +475,7 @@ pub(crate) fn cancel_make(shared: &Shared, id: &str, tx: &Outbox) {
 
 /// Stop every making that is running, as closing the bridge does.
 pub(crate) fn cancel_makings(shared: &Shared) {
-    if let Ok(makings) = shared.makings.lock() {
+    if let Ok(makings) = shared.makings.ours.lock() {
         for cancellation in makings.values() {
             cancellation.cancel();
         }
@@ -469,20 +487,20 @@ pub(crate) fn probe(file: &Path) -> Result<(), String> {
     crate::tasks::probe(file).map(drop)
 }
 
-/// A copy into `media/` that is running, counted in `Shared::copies` until
+/// A copy into `media/` that is running, counted in [`Files::copies`] until
 /// it is dropped.
 struct Copying(Arc<Shared>);
 
 impl Copying {
     fn start(shared: &Arc<Shared>) -> Self {
-        shared.copies.fetch_add(1, Ordering::SeqCst);
+        shared.media.copies.fetch_add(1, Ordering::SeqCst);
         Self(shared.clone())
     }
 }
 
 impl Drop for Copying {
     fn drop(&mut self) {
-        self.0.copies.fetch_sub(1, Ordering::SeqCst);
+        self.0.media.copies.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -523,7 +541,7 @@ pub(crate) fn status(project: &Project, directory: &Path) -> MediaStatus {
 /// bridge emitted.
 pub(crate) fn publish_status(shared: &Shared, tx: &Outbox, project: &Project) {
     let status = status(project, &shared.directory);
-    let Ok(mut last) = shared.media_status.lock() else {
+    let Ok(mut last) = shared.media.status.lock() else {
         return;
     };
     if *last != status {
@@ -706,7 +724,7 @@ mod tests {
         assert_eq!(event["type"], "error", "{event}");
         assert!(imports.try_recv().is_err());
         assert_eq!(fs::read_dir(project.join("media")).unwrap().count(), 0);
-        assert_eq!(shared.copies.load(Ordering::SeqCst), 0);
+        assert_eq!(shared.media.copies.load(Ordering::SeqCst), 0);
     }
 
     #[test]
