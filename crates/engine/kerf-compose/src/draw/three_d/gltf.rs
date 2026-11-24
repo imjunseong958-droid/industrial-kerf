@@ -15,6 +15,7 @@
 
 use std::path::Path;
 
+use serde::Deserialize;
 use serde_json::Value as Json;
 
 use super::texture::{Texture, Wrap};
@@ -304,10 +305,16 @@ enum What {
     Sized,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+/// How an animation goes from one key to the next, as glTF names it: straight, where it names
+/// no other way.
+#[derive(Clone, Copy, Default, PartialEq, Deserialize)]
 enum How {
+    #[serde(rename = "STEP")]
     Step,
+    #[default]
+    #[serde(rename = "LINEAR")]
     Linear,
+    #[serde(rename = "CUBICSPLINE")]
     Cubic,
 }
 
@@ -384,21 +391,11 @@ struct Told {
 }
 
 impl Told {
-    fn of(node: &Json) -> Self {
-        let read = |name: &str, otherwise: &[f64]| {
-            numbers(&node[name])
-                .filter(|told| told.len() == otherwise.len())
-                .unwrap_or_else(|| otherwise.to_vec())
-        };
-        let (t, q, s) = (
-            read("translation", &[0.0; 3]),
-            read("rotation", &[0.0, 0.0, 0.0, 1.0]),
-            read("scale", &[1.0; 3]),
-        );
+    fn of(node: &json::Node) -> Self {
         Self {
-            moved: [t[0], t[1], t[2]],
-            turned: [q[0], q[1], q[2], q[3]],
-            sized: [s[0], s[1], s[2]],
+            moved: node.translation.unwrap_or([0.0; 3]),
+            turned: node.rotation.unwrap_or([0.0, 0.0, 0.0, 1.0]),
+            sized: node.scale.unwrap_or([1.0; 3]),
         }
     }
 
@@ -597,13 +594,9 @@ fn then(outer: &Matrix, inner: &Matrix) -> Matrix {
     out
 }
 
-fn numbers(value: &Json) -> Option<Vec<f64>> {
-    value.as_array()?.iter().map(Json::as_f64).collect()
-}
-
 /// A node's place where the file gives it whole.
-fn matrix_of(node: &Json) -> Option<Matrix> {
-    let m = numbers(&node["matrix"]).filter(|m| m.len() == 16)?;
+fn matrix_of(node: &json::Node) -> Option<Matrix> {
+    let m = node.matrix?;
     // Written a column at a time.
     Some([0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row])))
 }
@@ -631,17 +624,23 @@ fn decoded(base64: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The file's JSON and, in a `.glb`, the bytes that come with it.
-fn parts_of(bytes: &[u8]) -> Result<(Json, Option<&[u8]>), String> {
+/// The file's JSON, as much of it as is read, and, in a `.glb`, the bytes that come with it.
+fn parts_of(bytes: &[u8]) -> Result<(json::Gltf, Option<&[u8]>), String> {
     let word = |at: usize| {
         bytes
             .get(at..at + 4)
             .map(|four| u32::from_le_bytes([four[0], four[1], four[2], four[3]]) as usize)
             .ok_or("it ends early")
     };
+    // Read as JSON first, and only then as the types: JSON says what is there, and a type
+    // reads it a field at a time, as the loader did by key ([`json`]).
+    let typed = |json: &[u8]| {
+        serde_json::from_slice::<Json>(json)
+            .map(json::Gltf::of)
+            .map_err(|error| format!("its JSON: {error}"))
+    };
     if !bytes.starts_with(b"glTF") {
-        let json = serde_json::from_slice(bytes).map_err(|error| format!("its JSON: {error}"))?;
-        return Ok((json, None));
+        return Ok((typed(bytes)?, None));
     }
     let (mut at, mut json, mut binary) = (12, None, None);
     while at + 8 <= bytes.len() {
@@ -655,12 +654,11 @@ fn parts_of(bytes: &[u8]) -> Result<(Json, Option<&[u8]>), String> {
         at += 8 + length;
     }
     let json = json.ok_or("it has no JSON")?;
-    let json = serde_json::from_slice(json).map_err(|error| format!("its JSON: {error}"))?;
-    Ok((json, binary))
+    Ok((typed(json)?, binary))
 }
 
 struct File<'a> {
-    json: &'a Json,
+    json: &'a json::Gltf,
     buffers: Vec<Vec<u8>>,
     /// Where the file is, for what it names beside it.
     folder: &'a Path,
@@ -718,42 +716,41 @@ fn unescaped(uri: &str) -> String {
 impl File<'_> {
     /// The bytes of each element of accessor `index`, its component type, and how many
     /// components an element has.
-    fn accessor(&self, index: &Json) -> Result<(Vec<&[u8]>, u64, usize), String> {
+    fn accessor(&self, index: json::Named) -> Result<(Vec<&[u8]>, u64, usize), String> {
         let accessor = index
-            .as_u64()
-            .and_then(|index| self.json["accessors"].get(index as usize))
+            .0
+            .and_then(|index| self.json.accessors.get(index))
             .ok_or("an accessor is missing")?;
-        if !accessor["sparse"].is_null() {
+        if accessor.sparse.is_some() {
             return Err("a sparse accessor is not read".into());
         }
-        let component = accessor["componentType"].as_u64().unwrap_or(0);
+        let component = accessor.component_type;
         let width = match component {
             5120 | 5121 => 1,
             5122 | 5123 => 2,
             5125 | 5126 => 4,
             _ => return Err("an accessor has no component type".into()),
         };
-        let across = match accessor["type"].as_str() {
-            Some("SCALAR") => 1,
-            Some("VEC2") => 2,
-            Some("VEC3") => 3,
-            Some("VEC4") => 4,
-            Some("MAT4") => 16,
-            _ => return Err("an accessor is of a type that is not read".into()),
+        let across = match accessor.shape {
+            Some(json::Shape::Scalar) => 1,
+            Some(json::Shape::Vec2) => 2,
+            Some(json::Shape::Vec3) => 3,
+            Some(json::Shape::Vec4) => 4,
+            Some(json::Shape::Mat4) => 16,
+            None => return Err("an accessor is of a type that is not read".into()),
         };
-        let count = accessor["count"].as_u64().unwrap_or(0) as usize;
-        let view = accessor["bufferView"]
-            .as_u64()
-            .and_then(|view| self.json["bufferViews"].get(view as usize))
+        let count = accessor.count;
+        let view = accessor
+            .buffer_view
+            .and_then(|view| self.json.buffer_views.get(view))
             .ok_or("an accessor has no buffer view")?;
-        let buffer = view["buffer"]
-            .as_u64()
-            .and_then(|buffer| self.buffers.get(buffer as usize))
+        let buffer = view
+            .buffer
+            .and_then(|buffer| self.buffers.get(buffer))
             .ok_or("a buffer is missing")?;
-        let offset = |of: &Json| of["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let start = offset(view) + offset(accessor);
+        let start = view.byte_offset + accessor.byte_offset;
         let size = width * across;
-        let stride = (view["byteStride"].as_u64().unwrap_or(0) as usize).max(size);
+        let stride = view.byte_stride.max(size);
         (0..count)
             .map(|element| {
                 let at = start + element * stride;
@@ -765,13 +762,13 @@ impl File<'_> {
             .map(|elements| (elements, component, across))
     }
 
-    fn threes(&self, index: &Json) -> Result<Vec<Vector>, String> {
+    fn threes(&self, index: json::Named) -> Result<Vec<Vector>, String> {
         Ok(self.numbers(index, 3)?.as_chunks::<3>().0.to_vec())
     }
 
     /// The numbers of accessor `index`, `across` to an element: floats as they are, and whole
     /// numbers as shares of the most they can hold where the accessor says they are.
-    fn numbers(&self, index: &Json, across: usize) -> Result<Vec<f64>, String> {
+    fn numbers(&self, index: json::Named, across: usize) -> Result<Vec<f64>, String> {
         let (elements, component, told) = self.accessor(index)?;
         if told != across {
             return Err(format!(
@@ -779,9 +776,9 @@ impl File<'_> {
             ));
         }
         let shares = index
-            .as_u64()
-            .and_then(|index| self.json["accessors"].get(index as usize))
-            .is_some_and(|accessor| accessor["normalized"].as_bool() == Some(true));
+            .0
+            .and_then(|index| self.json.accessors.get(index))
+            .is_some_and(|accessor| accessor.normalized);
         let width = elements.first().map_or(1, |element| element.len() / across);
         let mut out = Vec::with_capacity(elements.len() * across);
         for element in elements {
@@ -812,23 +809,20 @@ impl File<'_> {
 
     /// The bytes of picture `index`: inside the file, or beside it.
     fn picture(&self, index: usize) -> Result<Texture, String> {
-        let image = self.json["images"]
-            .get(index)
-            .ok_or("a picture is missing")?;
+        let image = self.json.images.get(index).ok_or("a picture is missing")?;
         let named = |why: String| format!("its picture {index}: {why}");
-        if let Some(uri) = image["uri"].as_str() {
+        if let Some(uri) = &image.uri {
             let bytes = self.beside(uri).map_err(named)?;
             return Texture::read(&bytes).map_err(named);
         }
-        let view = image["bufferView"]
-            .as_u64()
-            .and_then(|view| self.json["bufferViews"].get(view as usize))
+        let view = image
+            .buffer_view
+            .and_then(|view| self.json.buffer_views.get(view))
             .ok_or("a picture is nowhere")?;
-        let start = view["byteOffset"].as_u64().unwrap_or(0) as usize;
-        let length = view["byteLength"].as_u64().unwrap_or(0) as usize;
-        let bytes = view["buffer"]
-            .as_u64()
-            .and_then(|buffer| self.buffers.get(buffer as usize))
+        let (start, length) = (view.byte_offset, view.byte_length);
+        let bytes = view
+            .buffer
+            .and_then(|buffer| self.buffers.get(buffer))
             .and_then(|buffer| buffer.get(start..start + length))
             .ok_or("a picture's bytes are missing")?;
         Texture::read(bytes).map_err(named)
@@ -851,24 +845,20 @@ impl File<'_> {
     /// its edges, which of a corner's places it is read at, and how those are moved on it.
     fn base_picture(
         &self,
-        material: &Json,
+        material: &json::Material,
         out: &mut Read,
         read: &mut Vec<(usize, usize)>,
     ) -> Result<Option<Laid>, String> {
-        let told = &material["pbrMetallicRoughness"]["baseColorTexture"];
-        let Some(texture) = told["index"]
-            .as_u64()
-            .and_then(|index| self.json["textures"].get(index as usize))
+        let told = &material.pbr_metallic_roughness.base_color_texture;
+        let Some(texture) = told.index.and_then(|index| self.json.textures.get(index)) else {
+            return Ok(None);
+        };
+        let Some(image) = texture
+            .source
+            .or(texture.extensions.ext_texture_webp.source)
         else {
             return Ok(None);
         };
-        let Some(image) = texture["source"]
-            .as_u64()
-            .or_else(|| texture["extensions"]["EXT_texture_webp"]["source"].as_u64())
-        else {
-            return Ok(None);
-        };
-        let image = image as usize;
         let place = match read.iter().find(|(known, _)| *known == image) {
             Some((_, place)) => *place,
             None => {
@@ -877,30 +867,24 @@ impl File<'_> {
                 out.textures.len() - 1
             }
         };
-        let sampler = texture["sampler"]
-            .as_u64()
-            .and_then(|sampler| self.json["samplers"].get(sampler as usize));
-        let wrap = |way: &str| Wrap::of(sampler.and_then(|sampler| sampler[way].as_u64()));
-        let moved = &told["extensions"]["KHR_texture_transform"];
-        let pair = |name: &str, otherwise: f64| {
-            numbers(&moved[name])
-                .filter(|pair| pair.len() == 2)
-                .map_or([otherwise; 2], |pair| [pair[0], pair[1]])
-        };
+        let sampler = texture
+            .sampler
+            .and_then(|sampler| self.json.samplers.get(sampler));
+        let moved = &told.extensions.khr_texture_transform;
         Ok(Some(Laid {
             texture: place,
-            wrap: [wrap("wrapS"), wrap("wrapT")],
-            set: moved["texCoord"]
-                .as_u64()
-                .or(told["texCoord"].as_u64())
-                .unwrap_or(0),
-            offset: pair("offset", 0.0),
-            turn: moved["rotation"].as_f64().unwrap_or(0.0),
-            scale: pair("scale", 1.0),
+            wrap: [
+                Wrap::of(sampler.and_then(|sampler| sampler.wrap_s)),
+                Wrap::of(sampler.and_then(|sampler| sampler.wrap_t)),
+            ],
+            set: moved.tex_coord.or(told.tex_coord).unwrap_or(0),
+            offset: moved.offset.unwrap_or([0.0; 2]),
+            turn: moved.rotation.unwrap_or(0.0),
+            scale: moved.scale.unwrap_or([1.0; 2]),
         }))
     }
 
-    fn indices(&self, index: &Json) -> Result<Vec<u32>, String> {
+    fn indices(&self, index: json::Named) -> Result<Vec<u32>, String> {
         let (elements, component, across) = self.accessor(index)?;
         if across != 1 || !matches!(component, 5121 | 5123 | 5125) {
             return Err("indices are read as whole numbers".into());
@@ -919,29 +903,31 @@ impl File<'_> {
     /// space, with what places them: the node, or the bones of `skin`.
     fn primitive(
         &self,
-        primitive: &Json,
+        primitive: &json::Primitive,
         node: usize,
         skin: Option<usize>,
         weights: &[f64],
         out: &mut Read,
     ) -> Result<(), String> {
-        let mode = primitive["mode"].as_u64().unwrap_or(4);
+        let mode = primitive.mode.unwrap_or(4);
         if !matches!(mode, 4..=6) {
             // Points and lines have no sides.
             return Ok(());
         }
-        let attributes = &primitive["attributes"];
-        if attributes["POSITION"].is_null() {
+        let attributes = &primitive.attributes;
+        let Some(position) = attributes.position else {
             return Ok(());
-        }
-        let points = self.threes(&attributes["POSITION"])?;
-        let normals = match &attributes["NORMAL"] {
-            Json::Null => None,
-            normal => Some(self.threes(normal)?).filter(|normals| normals.len() == points.len()),
         };
-        let indices = match &primitive["indices"] {
-            Json::Null => (0..points.len() as u32).collect(),
-            indices => self.indices(indices)?,
+        let points = self.threes(position)?;
+        let normals = match attributes.normal {
+            None => None,
+            Some(normal) => {
+                Some(self.threes(normal)?).filter(|normals| normals.len() == points.len())
+            }
+        };
+        let indices = match primitive.indices {
+            None => (0..points.len() as u32).collect(),
+            Some(indices) => self.indices(indices)?,
         };
         if indices.iter().any(|index| *index as usize >= points.len()) {
             return Err("an index is past its points".into());
@@ -959,38 +945,37 @@ impl File<'_> {
                 .collect(),
         };
         // Which bones move each corner, and how much each: the first four it names.
-        let bones: Option<Vec<Bones>> =
-            match (skin, &attributes["JOINTS_0"], &attributes["WEIGHTS_0"]) {
-                (None, _, _) | (_, Json::Null, _) | (_, _, Json::Null) => None,
-                (Some(_), joints, weights) => {
-                    let (joints, weights) = (self.numbers(joints, 4)?, self.numbers(weights, 4)?);
-                    Some(
-                        joints
-                            .as_chunks::<4>()
-                            .0
-                            .iter()
-                            .zip(weights.as_chunks::<4>().0)
-                            .map(|(joints, weights)| {
-                                let all: f64 = weights.iter().sum();
-                                (
-                                    joints.map(|joint| joint as u16),
-                                    weights.map(|weight| (weight / all.max(1e-12)) as f32),
-                                )
-                            })
-                            .collect::<Vec<_>>(),
-                    )
-                    .filter(|bones| bones.len() == points.len())
-                }
-            };
+        let bones: Option<Vec<Bones>> = match (skin, attributes.joints, attributes.weights) {
+            (Some(_), Some(joints), Some(weights)) => {
+                let (joints, weights) = (self.numbers(joints, 4)?, self.numbers(weights, 4)?);
+                Some(
+                    joints
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(weights.as_chunks::<4>().0)
+                        .map(|(joints, weights)| {
+                            let all: f64 = weights.iter().sum();
+                            (
+                                joints.map(|joint| joint as u16),
+                                weights.map(|weight| (weight / all.max(1e-12)) as f32),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+                .filter(|bones| bones.len() == points.len())
+            }
+            _ => None,
+        };
         let skin = skin.filter(|_| bones.is_some());
         let bone = |corner: u32| {
             bones
                 .as_ref()
                 .map_or(([0; 4], [0.0; 4]), |bones| bones[corner as usize])
         };
-        let material = primitive["material"]
-            .as_u64()
-            .and_then(|material| self.json["materials"].get(material as usize));
+        let material = primitive
+            .material
+            .and_then(|material| self.json.materials.get(material));
         let laid = match material {
             Some(material) => {
                 let mut read = self.pictures.borrow_mut();
@@ -1000,9 +985,9 @@ impl File<'_> {
         };
         // Where each corner is on the picture, where the part has one and says where.
         let uvs: Option<Vec<[f32; 2]>> = match &laid {
-            Some(laid) => match &attributes[format!("TEXCOORD_{}", laid.set).as_str()] {
-                Json::Null => None,
-                told => Some(
+            Some(laid) => match attributes.texcoord(laid.set) {
+                None => None,
+                Some(told) => Some(
                     self.numbers(told, 2)?
                         .as_chunks::<2>()
                         .0
@@ -1016,9 +1001,9 @@ impl File<'_> {
         };
         let laid = laid.filter(|_| uvs.is_some());
         // A corner's color is three numbers or, with how clear it is, four.
-        let colors: Option<Vec<[f32; 3]>> = match &attributes["COLOR_0"] {
-            Json::Null => None,
-            told => {
+        let colors: Option<Vec<[f32; 3]>> = match attributes.color {
+            None => None,
+            Some(told) => {
                 let across = match self.accessor(told)?.2 {
                     4 => 4,
                     _ => 3,
@@ -1040,13 +1025,12 @@ impl File<'_> {
         };
         // Its morph targets: how far each takes each point. One that does not say, or says
         // it of another number of points, takes none anywhere.
-        let targets: Vec<Vec<Vector>> = primitive["targets"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|target| match &target["POSITION"] {
-                Json::Null => Ok(vec![[0.0; 3]; points.len()]),
-                told => self.threes(told).map(|moved| {
+        let targets: Vec<Vec<Vector>> = primitive
+            .targets
+            .iter()
+            .map(|target| match target.position {
+                None => Ok(vec![[0.0; 3]; points.len()]),
+                Some(told) => self.threes(told).map(|moved| {
                     if moved.len() == points.len() {
                         moved
                     } else {
@@ -1102,10 +1086,10 @@ impl File<'_> {
             morphs,
         });
         let color = material.map(|material| {
-            let told = numbers(&material["pbrMetallicRoughness"]["baseColorFactor"])
-                .filter(|told| told.len() >= 3)
-                .unwrap_or_else(|| vec![1.0; 3]);
-            [told[0] as f32, told[1] as f32, told[2] as f32]
+            match material.pbr_metallic_roughness.base_color_factor.as_deref() {
+                Some([red, green, blue, ..]) => [*red as f32, *green as f32, *blue as f32],
+                _ => [1.0; 3],
+            }
         });
         out.parts.push(Part {
             end: out.triangles.len(),
@@ -1120,16 +1104,11 @@ impl File<'_> {
     /// mesh was bound to it, undone.
     fn skins(&self) -> Result<Vec<Skin>, String> {
         let mut skins = Vec::new();
-        for skin in self.json["skins"].as_array().into_iter().flatten() {
-            let joints: Vec<usize> = skin["joints"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|joint| joint.as_u64().map(|joint| joint as usize))
-                .collect();
-            let inverse = match &skin["inverseBindMatrices"] {
-                Json::Null => vec![IDENTITY; joints.len()],
-                told => self
+        for skin in &self.json.skins {
+            let joints: Vec<usize> = skin.joints.iter().flatten().copied().collect();
+            let inverse = match skin.inverse_bind_matrices {
+                None => vec![IDENTITY; joints.len()],
+                Some(told) => self
                     .numbers(told, 16)?
                     .as_chunks::<16>()
                     .0
@@ -1149,23 +1128,22 @@ impl File<'_> {
     /// of each morph target its mesh has.
     fn animations(&self, nodes: usize) -> Result<Vec<Animation>, String> {
         let mut animations = Vec::new();
-        for animation in self.json["animations"].as_array().into_iter().flatten() {
+        for animation in &self.json.animations {
             let mut channels = Vec::new();
             let mut morphs = Vec::new();
-            for channel in animation["channels"].as_array().into_iter().flatten() {
-                if channel["target"]["path"].as_str() == Some("weights") {
-                    let node = channel["target"]["node"].as_u64().map(|node| node as usize);
-                    let sampler = channel["sampler"]
-                        .as_u64()
-                        .and_then(|sampler| animation["samplers"].get(sampler as usize))
-                        .ok_or("an animation's sampler is missing")?;
-                    let how = match sampler["interpolation"].as_str() {
-                        Some("STEP") => How::Step,
-                        Some("CUBICSPLINE") => How::Cubic,
-                        _ => How::Linear,
-                    };
-                    let times = self.numbers(&sampler["input"], 1)?;
-                    let values = self.numbers(&sampler["output"], 1)?;
+            let sampler_of = |channel: &json::Channel| {
+                channel
+                    .sampler
+                    .and_then(|sampler| animation.samplers.get(sampler))
+                    .ok_or("an animation's sampler is missing")
+            };
+            for channel in &animation.channels {
+                if channel.target.path == Some(json::Animated::Weights) {
+                    let node = channel.target.node;
+                    let sampler = sampler_of(channel)?;
+                    let how = sampler.interpolation;
+                    let times = self.numbers(sampler.input, 1)?;
+                    let values = self.numbers(sampler.output, 1)?;
                     let each = times.len() * if how == How::Cubic { 3 } else { 1 };
                     if let Some(node) = node.filter(|node| *node < nodes) {
                         if times.is_empty() || values.len() % each != 0 || values.is_empty() {
@@ -1181,30 +1159,19 @@ impl File<'_> {
                     }
                     continue;
                 }
-                let (what, across) = match channel["target"]["path"].as_str() {
-                    Some("translation") => (What::Moved, 3),
-                    Some("rotation") => (What::Turned, 4),
-                    Some("scale") => (What::Sized, 3),
+                let (what, across) = match channel.target.path {
+                    Some(json::Animated::Translation) => (What::Moved, 3),
+                    Some(json::Animated::Rotation) => (What::Turned, 4),
+                    Some(json::Animated::Scale) => (What::Sized, 3),
                     _ => continue,
                 };
-                let Some(node) = channel["target"]["node"]
-                    .as_u64()
-                    .map(|node| node as usize)
-                    .filter(|node| *node < nodes)
-                else {
+                let Some(node) = channel.target.node.filter(|node| *node < nodes) else {
                     continue;
                 };
-                let sampler = channel["sampler"]
-                    .as_u64()
-                    .and_then(|sampler| animation["samplers"].get(sampler as usize))
-                    .ok_or("an animation's sampler is missing")?;
-                let how = match sampler["interpolation"].as_str() {
-                    Some("STEP") => How::Step,
-                    Some("CUBICSPLINE") => How::Cubic,
-                    _ => How::Linear,
-                };
-                let times = self.numbers(&sampler["input"], 1)?;
-                let values = self.numbers(&sampler["output"], across)?;
+                let sampler = sampler_of(channel)?;
+                let how = sampler.interpolation;
+                let times = self.numbers(sampler.input, 1)?;
+                let values = self.numbers(sampler.output, across)?;
                 let each = across * if how == How::Cubic { 3 } else { 1 };
                 if times.is_empty() || values.len() != times.len() * each {
                     return Err("an animation's times and values do not match".into());
@@ -1224,7 +1191,7 @@ impl File<'_> {
                 .chain(morphs.iter().filter_map(|told| told.times.last()))
                 .fold(0.0f64, |length, last| length.max(*last));
             animations.push(Animation {
-                name: animation["name"].as_str().unwrap_or("").to_owned(),
+                name: animation.name.clone(),
                 length,
                 channels,
                 morphs,
@@ -1245,15 +1212,15 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
         folder,
         pictures: std::cell::RefCell::new(Vec::new()),
     };
-    for (index, buffer) in json["buffers"].as_array().into_iter().flatten().enumerate() {
-        let bytes = match buffer["uri"].as_str() {
+    for (index, buffer) in json.buffers.iter().enumerate() {
+        let bytes = match &buffer.uri {
             Some(uri) => file.beside(uri).map_err(|why| format!("a buffer: {why}"))?,
             None if index == 0 => binary.ok_or("its first buffer is nowhere")?.to_vec(),
             None => return Err("a buffer is nowhere".into()),
         };
         file.buffers.push(bytes);
     }
-    let told: &[Json] = json["nodes"].as_array().map_or(&[], Vec::as_slice);
+    let told = &json.nodes;
     let mut nodes: Vec<Node> = told
         .iter()
         .map(|node| Node {
@@ -1262,12 +1229,11 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
             told: Told::of(node),
         })
         .collect();
-    let under = |node: &Json| -> Vec<usize> {
-        node["children"]
-            .as_array()
-            .into_iter()
+    let under = |node: &json::Node| -> Vec<usize> {
+        node.children
+            .iter()
             .flatten()
-            .filter_map(|child| child.as_u64().map(|child| child as usize))
+            .copied()
             .filter(|child| *child < told.len())
             .collect()
     };
@@ -1289,14 +1255,15 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
         return Err("its nodes go round in a ring".into());
     }
     // The nodes of the scene it opens on, or, where it names no scene, those under no other.
-    let scene = json["scene"].as_u64().unwrap_or(0) as usize;
-    let mut shown: Vec<usize> = match json["scenes"]
+    let scene = json.scene.unwrap_or(0);
+    let mut shown: Vec<usize> = match json
+        .scenes
         .get(scene)
-        .and_then(|scene| scene["nodes"].as_array())
+        .and_then(|scene| scene.nodes.as_ref())
     {
         Some(roots) => roots
             .iter()
-            .filter_map(|root| root.as_u64().map(|root| root as usize))
+            .copied()
             .filter(|root| *root < nodes.len())
             .collect(),
         None => (0..nodes.len())
@@ -1321,13 +1288,13 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
             .iter()
             .enumerate()
             .filter_map(|(index, node)| {
-                let camera = json["cameras"].get(node["camera"].as_u64()? as usize)?;
-                let name = camera["name"].as_str().or(node["name"].as_str());
+                let camera = json.cameras.get(node.camera?)?;
+                let name = camera.name.as_deref().or(node.name.as_deref());
                 Some(Camera {
                     name: name.unwrap_or("").to_owned(),
                     node: index,
-                    fov: camera["perspective"]["yfov"].as_f64().map(f64::to_degrees),
-                    aspect: camera["perspective"]["aspectRatio"].as_f64(),
+                    fov: camera.perspective.yfov.map(f64::to_degrees),
+                    aspect: camera.perspective.aspect_ratio,
                 })
             })
             .collect(),
@@ -1344,21 +1311,18 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
     };
     for index in shown {
         let node = &told[index];
-        let Some(mesh) = node["mesh"]
-            .as_u64()
-            .and_then(|mesh| json["meshes"].get(mesh as usize))
-        else {
+        let Some(mesh) = node.mesh.and_then(|mesh| json.meshes.get(mesh)) else {
             continue;
         };
-        let skin = node["skin"]
-            .as_u64()
-            .map(|skin| skin as usize)
-            .filter(|skin| *skin < out.rig.skins.len());
+        let skin = node.skin.filter(|skin| *skin < out.rig.skins.len());
         // How much of each morph target it has at rest: as its node says, or else its mesh.
-        let weights = numbers(&node["weights"])
-            .or_else(|| numbers(&mesh["weights"]))
+        let weights = node
+            .weights
+            .as_ref()
+            .or(mesh.weights.as_ref())
+            .cloned()
             .unwrap_or_default();
-        for primitive in mesh["primitives"].as_array().into_iter().flatten() {
+        for primitive in &mesh.primitives {
             file.primitive(primitive, index, skin, &weights, &mut out)?;
         }
     }
@@ -1367,4 +1331,469 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
     }
     (out.points, out.normals) = out.posed(None);
     Ok(out)
+}
+
+/// What of a glTF file's JSON is read, as glTF names it: nothing else of it is.
+///
+/// Each field reads on its own, as when the JSON was read by key. A field the file leaves out,
+/// says as `null`, or says as a value of another kind (`"mesh": "0"`) reads as one left out; an
+/// object said as anything but an object says nothing of what it would hold; and in a list,
+/// each item reads on its own. So what a file says wrong fails it where it is used, as it
+/// always has, and not where it is read: a part no node shows fails nothing.
+mod json {
+    use std::collections::BTreeMap;
+
+    use serde::de::{DeserializeOwned, Deserializer, IgnoredAny};
+    use serde::Deserialize;
+    use serde_json::Value as Json;
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Gltf {
+        /// The scene it opens on.
+        #[serde(deserialize_with = "as_said")]
+        pub scene: Option<usize>,
+        #[serde(deserialize_with = "each_said")]
+        pub scenes: Vec<Scene>,
+        #[serde(deserialize_with = "each_said")]
+        pub nodes: Vec<Node>,
+        #[serde(deserialize_with = "each_said")]
+        pub meshes: Vec<Mesh>,
+        #[serde(deserialize_with = "each_said")]
+        pub accessors: Vec<Accessor>,
+        #[serde(deserialize_with = "each_said")]
+        pub buffer_views: Vec<BufferView>,
+        #[serde(deserialize_with = "each_said")]
+        pub buffers: Vec<Buffer>,
+        #[serde(deserialize_with = "each_said")]
+        pub materials: Vec<Material>,
+        #[serde(deserialize_with = "each_said")]
+        pub textures: Vec<Texture>,
+        #[serde(deserialize_with = "each_said")]
+        pub images: Vec<Image>,
+        #[serde(deserialize_with = "each_said")]
+        pub samplers: Vec<Sampler>,
+        #[serde(deserialize_with = "each_said")]
+        pub cameras: Vec<Camera>,
+        #[serde(deserialize_with = "each_said")]
+        pub skins: Vec<Skin>,
+        #[serde(deserialize_with = "each_said")]
+        pub animations: Vec<Animation>,
+    }
+
+    impl Gltf {
+        /// A file's JSON as these types: JSON that is no object holds none of them.
+        pub(super) fn of(json: Json) -> Self {
+            object(json)
+        }
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Scene {
+        /// The nodes it shows with all they hold, where it says.
+        #[serde(deserialize_with = "indices_said")]
+        pub nodes: Option<Vec<usize>>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Node {
+        /// Its place, a column at a time, where it gives it whole.
+        #[serde(deserialize_with = "as_said")]
+        pub matrix: Option<[f64; 16]>,
+        #[serde(deserialize_with = "as_said")]
+        pub translation: Option<[f64; 3]>,
+        /// A turn as a quaternion: x, y, z, w.
+        #[serde(deserialize_with = "as_said")]
+        pub rotation: Option<[f64; 4]>,
+        #[serde(deserialize_with = "as_said")]
+        pub scale: Option<[f64; 3]>,
+        #[serde(deserialize_with = "indices_said")]
+        pub children: Option<Vec<usize>>,
+        #[serde(deserialize_with = "as_said")]
+        pub mesh: Option<usize>,
+        #[serde(deserialize_with = "as_said")]
+        pub skin: Option<usize>,
+        /// How much of each morph target its mesh has at rest.
+        #[serde(deserialize_with = "as_said")]
+        pub weights: Option<Vec<f64>>,
+        #[serde(deserialize_with = "as_said")]
+        pub camera: Option<usize>,
+        #[serde(deserialize_with = "as_said")]
+        pub name: Option<String>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Mesh {
+        #[serde(deserialize_with = "each_said")]
+        pub primitives: Vec<Primitive>,
+        /// How much of each morph target it has at rest, where its node does not say.
+        #[serde(deserialize_with = "as_said")]
+        pub weights: Option<Vec<f64>>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Primitive {
+        /// What its corners make: 4 triangles, 5 a strip of them, 6 a fan, and less, points
+        /// and lines.
+        #[serde(deserialize_with = "as_said")]
+        pub mode: Option<u64>,
+        #[serde(deserialize_with = "object_said")]
+        pub attributes: Attributes,
+        pub indices: Option<Named>,
+        #[serde(deserialize_with = "as_said")]
+        pub material: Option<usize>,
+        #[serde(deserialize_with = "each_said")]
+        pub targets: Vec<Morph>,
+    }
+
+    /// What a primitive's corners have, each in the accessor named.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Attributes {
+        #[serde(rename = "POSITION")]
+        pub position: Option<Named>,
+        #[serde(rename = "NORMAL")]
+        pub normal: Option<Named>,
+        /// The first four bones that move each corner.
+        #[serde(rename = "JOINTS_0")]
+        pub joints: Option<Named>,
+        /// How much each of those bones moves it.
+        #[serde(rename = "WEIGHTS_0")]
+        pub weights: Option<Named>,
+        #[serde(rename = "COLOR_0")]
+        pub color: Option<Named>,
+        /// The rest, by name: among them each corner's places on a picture, `TEXCOORD_0` and on.
+        #[serde(flatten)]
+        rest: BTreeMap<String, Option<Named>>,
+    }
+
+    impl Attributes {
+        /// Where each corner is on a picture, by which of its places that is.
+        pub(super) fn texcoord(&self, set: u64) -> Option<Named> {
+            self.rest.get(&format!("TEXCOORD_{set}")).copied().flatten()
+        }
+    }
+
+    /// A morph target: how far it takes each corner of its primitive.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Morph {
+        #[serde(rename = "POSITION")]
+        pub position: Option<Named>,
+    }
+
+    /// An accessor as something names it: by its number, where it names it by one. Named by
+    /// anything else, it is one that is missing, which is not the same as one not named.
+    #[derive(Clone, Copy, Default)]
+    pub(super) struct Named(pub Option<usize>);
+
+    impl<'de> Deserialize<'de> for Named {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let told = Json::deserialize(deserializer)?;
+            Ok(Self(told.as_u64().map(|index| index as usize)))
+        }
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Accessor {
+        #[serde(deserialize_with = "as_said")]
+        pub buffer_view: Option<usize>,
+        #[serde(deserialize_with = "as_said")]
+        pub byte_offset: usize,
+        /// What each number is, as OpenGL numbers its kinds: 5126 a float.
+        #[serde(deserialize_with = "as_said")]
+        pub component_type: u64,
+        /// How many numbers an element is: none for a type that is not read.
+        #[serde(rename = "type", deserialize_with = "text_said")]
+        pub shape: Option<Shape>,
+        #[serde(deserialize_with = "as_said")]
+        pub count: usize,
+        /// Whether its whole numbers are shares of the most they can hold.
+        #[serde(deserialize_with = "as_said")]
+        pub normalized: bool,
+        /// What it changes of its view's numbers, which is not read: anything but `null`.
+        pub sparse: Option<IgnoredAny>,
+    }
+
+    #[derive(Clone, Copy, Deserialize)]
+    #[serde(rename_all = "UPPERCASE")]
+    pub(super) enum Shape {
+        Scalar,
+        Vec2,
+        Vec3,
+        Vec4,
+        Mat4,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct BufferView {
+        #[serde(deserialize_with = "as_said")]
+        pub buffer: Option<usize>,
+        #[serde(deserialize_with = "as_said")]
+        pub byte_offset: usize,
+        #[serde(deserialize_with = "as_said")]
+        pub byte_length: usize,
+        /// How far apart its elements are, where that is more than an element's size.
+        #[serde(deserialize_with = "as_said")]
+        pub byte_stride: usize,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Buffer {
+        /// Where its bytes are, or the bytes themselves: in a `.glb`, the first has none.
+        #[serde(deserialize_with = "as_said")]
+        pub uri: Option<String>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Material {
+        #[serde(deserialize_with = "object_said")]
+        pub pbr_metallic_roughness: MetallicRoughness,
+    }
+
+    /// What a material says of its color.
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct MetallicRoughness {
+        /// Red, green, blue, and how clear it is, in linear light.
+        #[serde(deserialize_with = "as_said")]
+        pub base_color_factor: Option<Vec<f64>>,
+        #[serde(deserialize_with = "object_said")]
+        pub base_color_texture: TextureInfo,
+    }
+
+    /// The picture a material lays over its part.
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct TextureInfo {
+        /// Which of the file's textures it is.
+        #[serde(deserialize_with = "as_said")]
+        pub index: Option<usize>,
+        /// Which of a corner's places on a picture it is read at.
+        #[serde(deserialize_with = "as_said")]
+        pub tex_coord: Option<u64>,
+        #[serde(deserialize_with = "object_said")]
+        pub extensions: TextureInfoExtensions,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct TextureInfoExtensions {
+        #[serde(rename = "KHR_texture_transform", deserialize_with = "object_said")]
+        pub khr_texture_transform: TextureTransform,
+    }
+
+    /// How a corner's places on a picture are moved on it: sized, turned, and then moved.
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct TextureTransform {
+        #[serde(deserialize_with = "as_said")]
+        pub offset: Option<[f64; 2]>,
+        /// How far it is turned, in radians.
+        #[serde(deserialize_with = "as_said")]
+        pub rotation: Option<f64>,
+        #[serde(deserialize_with = "as_said")]
+        pub scale: Option<[f64; 2]>,
+        /// Which of a corner's places it is read at, in place of the one its picture says.
+        #[serde(deserialize_with = "as_said")]
+        pub tex_coord: Option<u64>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Texture {
+        /// Which of the file's images it is.
+        #[serde(deserialize_with = "as_said")]
+        pub source: Option<usize>,
+        #[serde(deserialize_with = "as_said")]
+        pub sampler: Option<usize>,
+        #[serde(deserialize_with = "object_said")]
+        pub extensions: TextureExtensions,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct TextureExtensions {
+        #[serde(rename = "EXT_texture_webp", deserialize_with = "object_said")]
+        pub ext_texture_webp: WebpTexture,
+    }
+
+    /// The image that is a texture as a WebP, where it has no other.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct WebpTexture {
+        #[serde(deserialize_with = "as_said")]
+        pub source: Option<usize>,
+    }
+
+    /// What a picture does past its edges, across and down, as glTF numbers it ([`super::Wrap`]).
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Sampler {
+        #[serde(deserialize_with = "as_said")]
+        pub wrap_s: Option<u64>,
+        #[serde(deserialize_with = "as_said")]
+        pub wrap_t: Option<u64>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Image {
+        /// Where it is, or its bytes themselves.
+        #[serde(deserialize_with = "as_said")]
+        pub uri: Option<String>,
+        /// Where its bytes are, where it has no `uri`.
+        #[serde(deserialize_with = "as_said")]
+        pub buffer_view: Option<usize>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Camera {
+        #[serde(deserialize_with = "as_said")]
+        pub name: Option<String>,
+        #[serde(deserialize_with = "object_said")]
+        pub perspective: Perspective,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Perspective {
+        /// How much it sees from the top of its picture to the bottom, in radians.
+        #[serde(deserialize_with = "as_said")]
+        pub yfov: Option<f64>,
+        #[serde(deserialize_with = "as_said")]
+        pub aspect_ratio: Option<f64>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default, rename_all = "camelCase")]
+    pub(super) struct Skin {
+        /// The nodes that are its bones.
+        #[serde(deserialize_with = "indices_said")]
+        pub joints: Option<Vec<usize>>,
+        /// Where each bone was when the mesh was bound to it, undone.
+        pub inverse_bind_matrices: Option<Named>,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Animation {
+        #[serde(deserialize_with = "as_said")]
+        pub name: String,
+        #[serde(deserialize_with = "each_said")]
+        pub channels: Vec<Channel>,
+        #[serde(deserialize_with = "each_said")]
+        pub samplers: Vec<AnimationSampler>,
+    }
+
+    /// What an animation moves, and by which of its samplers.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Channel {
+        #[serde(deserialize_with = "as_said")]
+        pub sampler: Option<usize>,
+        #[serde(deserialize_with = "object_said")]
+        pub target: Target,
+    }
+
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct Target {
+        #[serde(deserialize_with = "as_said")]
+        pub node: Option<usize>,
+        /// What of its node it moves: none for what is not read.
+        #[serde(deserialize_with = "text_said")]
+        pub path: Option<Animated>,
+    }
+
+    #[derive(Clone, Copy, PartialEq, Deserialize)]
+    #[serde(rename_all = "lowercase")]
+    pub(super) enum Animated {
+        Translation,
+        Rotation,
+        Scale,
+        /// How much of each morph target its mesh has.
+        Weights,
+    }
+
+    /// An animation's keys: when each is, in `input`, and what it is, in `output`.
+    #[derive(Default, Deserialize)]
+    #[serde(default)]
+    pub(super) struct AnimationSampler {
+        pub input: Named,
+        pub output: Named,
+        #[serde(deserialize_with = "text_said")]
+        pub interpolation: super::How,
+    }
+
+    /// A field as said, or its default where what is said is not of its type.
+    fn as_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+        deserializer: D,
+    ) -> Result<T, D::Error> {
+        Ok(serde_json::from_value(Json::deserialize(deserializer)?).unwrap_or_default())
+    }
+
+    /// A field said by name, as [`as_said`] reads one, but only from a text: a name read from
+    /// anything else, as from an object of one key (`{"STEP": null}`), is no name.
+    fn text_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+        deserializer: D,
+    ) -> Result<T, D::Error> {
+        Ok(match Json::deserialize(deserializer)? {
+            text @ Json::String(_) => serde_json::from_value(text).unwrap_or_default(),
+            _ => T::default(),
+        })
+    }
+
+    /// An object, each of its fields read on its own ([`object`]).
+    fn object_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+        deserializer: D,
+    ) -> Result<T, D::Error> {
+        Ok(object(Json::deserialize(deserializer)?))
+    }
+
+    /// A list of objects, each read on its own ([`object`]): an item said otherwise is still
+    /// one, of its default. What is not a list is empty.
+    fn each_said<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
+        deserializer: D,
+    ) -> Result<Vec<T>, D::Error> {
+        Ok(match Json::deserialize(deserializer)? {
+            Json::Array(items) => items.into_iter().map(object).collect(),
+            _ => Vec::new(),
+        })
+    }
+
+    /// What a list names by number, leaving out what it names otherwise: none where it is no
+    /// list.
+    fn indices_said<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<Vec<usize>>, D::Error> {
+        Ok(match Json::deserialize(deserializer)? {
+            Json::Array(items) => Some(
+                items
+                    .iter()
+                    .filter_map(Json::as_u64)
+                    .map(|index| index as usize)
+                    .collect(),
+            ),
+            _ => None,
+        })
+    }
+
+    /// An object's fields, each read on its own. What is no object says none of them: a type
+    /// would otherwise read a list as its fields in order.
+    fn object<T: DeserializeOwned + Default>(value: Json) -> T {
+        match value {
+            Json::Object(_) => serde_json::from_value(value).unwrap_or_default(),
+            _ => T::default(),
+        }
+    }
 }
