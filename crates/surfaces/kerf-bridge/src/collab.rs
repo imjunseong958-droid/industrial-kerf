@@ -10,7 +10,7 @@ use crate::{emit, key, media, tasks, Command, Shared};
 use kerf_collab::git::{self, CollabError};
 use kerf_collab::scaffold::{self, GitHubRepository, MEDIA_DIR, PRESETS_DIR};
 use kerf_runtime::{ErrorCode, RuntimeClient, RuntimeError, StateSnapshot};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -370,11 +370,9 @@ impl Collab {
     }
 
     fn done(&self, report: Value) {
-        // The report is always an object: `empty_report`'s, with kerfd's merged in.
-        let report = match report {
-            Value::Object(report) => report,
-            _ => Map::new(),
-        };
+        // The report is always `empty_report`'s, with kerfd's merged in. One that did not
+        // read would be this code's own mistake, and says a sync that did nothing.
+        let report = serde_json::from_value(report).unwrap_or_default();
         emit(&self.tx, Event::CollabSync(CollabSync::Done { report }));
     }
 

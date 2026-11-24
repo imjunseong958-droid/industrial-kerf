@@ -1501,7 +1501,12 @@ fn a_pull_request_is_titled_from_its_branch_and_said_with_its_url() {
 
 #[test]
 fn what_a_sync_brought_is_said_and_left_in_activity() {
-    let report = json!({
+    // A report as the bridge sends one, from the JSON it is written in.
+    let report = |written: serde_json::Value| -> kerf_bridge::event::SyncReport {
+        serde_json::from_value(written).expect("a report that reads")
+    };
+    let quiet = report(json!({"incoming": [], "conflicts": [], "pushed": false}));
+    let report = report(json!({
         "incoming": [{"author": "jun", "subject": "Trimmed c3"}, {"author": "mi", "subject": "Title"}],
         "conflicts": [
             {"path": "project.kerf", "what": "c3's out point", "kept": "yours"},
@@ -1509,7 +1514,7 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
         ],
         "renamed": [["c4", "c7"]],
         "pushed": true,
-    });
+    }));
     assert_eq!(
         sync_lines(&report),
         [
@@ -1524,7 +1529,6 @@ fn what_a_sync_brought_is_said_and_left_in_activity() {
         sync_said(&report, false).as_deref(),
         Some("Synced: 2 commits in, pushed, 1 change kept yours, 1 change kept theirs")
     );
-    let quiet = json!({"incoming": [], "conflicts": [], "pushed": false});
     assert_eq!(
         sync_said(&quiet, false),
         None,

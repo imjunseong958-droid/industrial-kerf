@@ -7,9 +7,9 @@ use kerf_bridge::event::workflow::{
 };
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
-    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
+    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, Kept,
     LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, TakeRead, ToolState,
+    RenderQuality, RenderStatus, SyncCommit, SyncConflict, SyncReport, TakeRead, ToolState,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -23,7 +23,10 @@ use serde_json::json;
 /// neutral. The last three are of a shot that session had none of: its `recipe`, the
 /// `workflow` of one of its models with what a server takes, and a take held to its guide
 /// (`take_read`), as the bridge wrote them when their payloads were JSON it passed on
-/// unread, so that the types they now are write the same text.
+/// unread, so that the types they now are write the same text. The three after those are
+/// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
+/// way before their report was a type: one that brought a commit in, a new branch, and a
+/// commit with nothing to commit; the commits' ids are made up.
 const SAMPLES: &str = include_str!("wire_samples.jsonl");
 
 #[test]
@@ -588,8 +591,59 @@ fn collab_sync() -> impl Strategy<Value = Event> {
             CollabSync::Downloading,
         ]),
         text().prop_map(|message| CollabSync::Failed { message }),
+        sync_report().prop_map(|report| CollabSync::Done { report }),
     ]
     .prop_map(Event::CollabSync)
+}
+
+fn sync_report() -> impl Strategy<Value = SyncReport> {
+    let commits = vec(
+        (text(), text(), text()).prop_map(|(commit, author, subject)| SyncCommit {
+            commit,
+            author,
+            subject,
+        }),
+        0..3,
+    );
+    let conflicts = vec(
+        (text(), text(), select(vec![Kept::Ours, Kept::Theirs]))
+            .prop_map(|(path, what, kept)| SyncConflict { path, what, kept }),
+        0..3,
+    );
+    // What kerfd adds under names of its own.
+    let rest = (option::of(any::<bool>()), option::of(text())).prop_map(|(changed, previous)| {
+        let mut rest = serde_json::Map::new();
+        if let Some(changed) = changed {
+            rest.insert("projectChanged".to_owned(), json!(changed));
+        }
+        if let Some(previous) = previous {
+            rest.insert("previous".to_owned(), json!(previous));
+        }
+        rest
+    });
+    (
+        (option::of(text()), commits, any::<bool>(), any::<bool>()),
+        (conflicts, vec((text(), text()), 0..3), vec(text(), 0..3)),
+        (option::of(text()), option::of(text()), rest),
+    )
+        .prop_map(
+            |(
+                (committed, incoming, fast_forward, pushed),
+                (conflicts, renamed, summary),
+                (branch, remote, rest),
+            )| SyncReport {
+                committed,
+                incoming,
+                fast_forward,
+                pushed,
+                conflicts,
+                renamed,
+                summary,
+                branch,
+                remote,
+                rest,
+            },
+        )
 }
 
 fn command() -> impl Strategy<Value = Command> {

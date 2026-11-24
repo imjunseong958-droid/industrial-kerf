@@ -1356,19 +1356,87 @@ pub enum CollabSync {
     Merging,
     Pushing,
     Downloading,
-    /// What it did: `committed` (the commit, or `null`), `incoming` (`[{commit, author,
-    /// subject}]`), `fastForward`, `pushed`, `conflicts` (`[{path, what, kept}]`), `renamed`
-    /// (`[[from, to]]`) and `summary` (lines), always; then, as the command had them, kerfd's
-    /// `branch`, `previous` and `projectChanged` (or `replayed`), the `remote` published
-    /// to, and whether Git LFS files were `downloaded`.
+    /// What it did.
     Done {
         #[serde(default)]
-        report: Map<String, Value>,
+        report: SyncReport,
     },
     Failed {
         #[serde(default)]
         message: String,
     },
+}
+
+/// What a finished collaboration command did. `committed`, `incoming`, `fastForward`,
+/// `pushed`, `conflicts`, `renamed` and `summary` are always said; the rest as the command
+/// had them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SyncReport {
+    /// The commit made of the edits here first; `null` when there were none.
+    pub committed: Option<String>,
+    /// The commits it brought in.
+    pub incoming: Vec<SyncCommit>,
+    pub fast_forward: bool,
+    pub pushed: bool,
+    /// What collided, and whose version the merged project keeps.
+    pub conflicts: Vec<SyncConflict>,
+    /// The clips renumbered: each from, to.
+    pub renamed: Vec<(String, String)>,
+    /// What it did, a line each, where the command says so itself.
+    pub summary: Vec<String>,
+    /// The branch switched to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The remote published to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
+    /// What else the command had to say, as it said it: kerfd's `previous` and
+    /// `projectChanged` (or `replayed`), and whether Git LFS files were `downloaded`.
+    #[serde(flatten)]
+    pub rest: Map<String, Value>,
+}
+
+/// One commit a sync brought in.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncCommit {
+    pub commit: String,
+    pub author: String,
+    pub subject: String,
+}
+
+/// One thing that collided in a merge.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SyncConflict {
+    /// Where, as a path of ids (`s1/V1/c3`); empty for the project as a whole.
+    pub path: String,
+    /// What collided, in plain words.
+    pub what: String,
+    pub kept: Kept,
+}
+
+/// Whose version of what collided the merged project keeps: `ours` or `theirs`, as git's
+/// merge says the sides. Anything that is not `theirs` reads as this side's, as the editor
+/// has always taken it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", from = "String")]
+pub enum Kept {
+    /// This side's.
+    #[default]
+    Ours,
+    /// The other side's.
+    Theirs,
+}
+
+impl From<String> for Kept {
+    fn from(said: String) -> Self {
+        match said.as_str() {
+            "theirs" => Self::Theirs,
+            _ => Self::Ours,
+        }
+    }
 }
 
 /// A float that serde_json wrote as `null` because it was not finite, read back as NaN so
