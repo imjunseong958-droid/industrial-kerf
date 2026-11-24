@@ -453,10 +453,10 @@ fn the_launcher_starts_a_shared_project_from_a_preset() {
     assert_eq!(slots.len(), 2);
 
     // The launcher shows which slots the file can fill.
-    let inspected = preset_inspect(&json!({"path": preset_path, "files": [shot]}));
-    assert_eq!(inspected["name"], "Two Cuts");
-    assert_eq!(inspected["files"][0]["fits"], json!(slots), "{inspected}");
-    assert_eq!(inspected["files"][0]["video"], true);
+    let inspected = preset_inspect(&preset_path, std::slice::from_ref(&shot)).unwrap();
+    assert_eq!(inspected.name, "Two Cuts");
+    assert_eq!(inspected.files[0].fits, slots, "{inspected:?}");
+    assert!(inspected.files[0].video);
 
     let remote = root.0.join("remote.git");
     fs::create_dir_all(&remote).unwrap();

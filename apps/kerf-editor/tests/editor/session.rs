@@ -4,6 +4,7 @@ use crate::support::{
     apply, clip, command, event, preview, snapshot, snapshot_timeline, source, texts,
     timeline_value, EXISTS,
 };
+use kerf_bridge::event::PresetInspection;
 use kerf_editor::changes::clip_changes;
 use kerf_editor::chat::try_asking;
 use kerf_editor::model::{
@@ -1136,7 +1137,13 @@ fn the_store_routes_preset_answers() {
     );
     assert_eq!(
         state.inspected_preset,
-        Some(("/p/a.kerfpreset".to_owned(), preset))
+        Some((
+            "/p/a.kerfpreset".to_owned(),
+            PresetInspection {
+                name: "Intro".into(),
+                ..PresetInspection::default()
+            }
+        ))
     );
     assert_eq!(
         state.apply(&event(

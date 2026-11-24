@@ -7,10 +7,11 @@ use kerf_bridge::event::workflow::{
 };
 use kerf_bridge::event::{
     AgentState, AgentUpdate, CaptionsExport, Check, CheckSummary, ClipReading, CollabSync,
-    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus, Kept,
-    LoudnessEvent, MeterReading, Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport,
-    RenderQuality, RenderStatus, Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead,
-    TimelineView, ToolState, ViewParamDef,
+    ConnectionStatus, ConversationSummary, ErrorCode, ErrorEvent, Export, ExportStatus,
+    InspectedMade, InspectedSlot, Kept, LoudnessEvent, MeterReading, PresetInspection, PresetLook,
+    Preview, PreviewStatus, QueuedRender, RenderCodec, RenderExport, RenderQuality, RenderStatus,
+    SlotClip, SlotFit, Snapshot, SyncCommit, SyncConflict, SyncReport, TakeRead, TimelineView,
+    ToolState, ViewParamDef,
 };
 use kerf_bridge::{Command, EditOp, Event, ShotOf, TrimSide};
 use proptest::collection::{btree_map, vec};
@@ -28,8 +29,10 @@ use serde_json::json;
 /// finished syncs (`collab_sync`, `done`) of two people sharing a project, written the same
 /// way before their report was a type: one that brought a commit in, a new branch, a commit
 /// with nothing to commit, and a first sync that committed and pushed with nothing to merge,
-/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The
-/// recorded `state`'s timeline carries the catalog's definitions as kerfd writes them
+/// so no commit to go back to (`"previous": null`); the commits' ids are made up. The one
+/// after those is what a preset file holds (`preset_inspect`), with a slot that a made media
+/// reads and texts, written the same way before it was a type; its folder is made neutral.
+/// The recorded `state`'s timeline carries the catalog's definitions as kerfd writes them
 /// (`properties`, `maskProperties`, `generators`), which were JSON passed on unread too and
 /// are `ViewParamDef`s now. The last is a `state` with a proposal open, its timeline and the
 /// proposal's (which the bridge makes itself) as the bridge wrote them while those
@@ -161,6 +164,7 @@ fn event() -> impl Strategy<Value = Event> {
         collab_sync(),
         take_read(),
         workflow(),
+        preset_inspect(),
         state(),
     ]
 }
@@ -198,6 +202,88 @@ fn param_def() -> impl Strategy<Value = ViewParamDef> {
                     unit,
                     options,
                     extensions,
+                }
+            },
+        )
+}
+
+/// A clip of a preset's pattern that plays a slot.
+fn slot_clip() -> impl Strategy<Value = SlotClip> {
+    (text(), some_text(), text(), text(), text()).prop_map(|(id, name, sequence, track, at)| {
+        SlotClip {
+            id,
+            name,
+            sequence,
+            track,
+            at,
+        }
+    })
+}
+
+/// What a preset file holds, as kerf-mcp's `look` says it: its slots with the clips that
+/// play them, the media it makes, its texts and its looks.
+fn preset_inspect() -> impl Strategy<Value = Event> {
+    let fit = (text(), any::<i64>()).prop_map(|(media, latest_frame)| SlotFit {
+        media,
+        latest_frame,
+    });
+    let slot = (
+        (text(), any::<bool>(), any::<bool>(), text(), number()),
+        (vec(slot_clip(), 0..3), vec(text(), 0..3), vec(fit, 0..3)),
+    )
+        .prop_map(
+            |((id, video, audio, minimum_duration, seconds), (clips, read_by, fits))| {
+                InspectedSlot {
+                    id,
+                    video,
+                    audio,
+                    minimum_duration,
+                    seconds,
+                    clips,
+                    read_by,
+                    fits,
+                }
+            },
+        );
+    let made = (
+        text(),
+        text(),
+        some_text(),
+        vec(text(), 0..3),
+        vec(slot_clip(), 0..3),
+    )
+        .prop_map(|(id, path, of, steps, clips)| InspectedMade {
+            id,
+            path,
+            of,
+            steps,
+            clips,
+        });
+    let look = (text(), any::<u32>(), text()).prop_map(|(id, version, name)| PresetLook {
+        id,
+        version,
+        name,
+    });
+    (
+        text(),
+        (text(), text(), text(), text()),
+        (vec(slot, 0..3), vec(made, 0..3)),
+        (btree_map(text(), text(), 0..3), vec(look, 0..3)),
+    )
+        .prop_map(
+            |(path, (preset, name, document, sequence), (slots, made), (text_slots, looks))| {
+                Event::PresetInspect {
+                    path,
+                    preset: PresetInspection {
+                        preset,
+                        name,
+                        document,
+                        sequence,
+                        slots,
+                        made,
+                        text_slots,
+                        looks,
+                    },
                 }
             },
         )

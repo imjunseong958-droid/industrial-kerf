@@ -25,7 +25,10 @@ use std::path::PathBuf;
 pub use kerf_cloud::{Access as CloudAccess, Account as CloudAccount};
 pub use kerf_collab::git::{Status as GitStatus, User as GitUser};
 pub use kerf_engine::{Loudness, MediaInfo, Peak, Tempo};
-pub use kerf_mcp::{Finding, Rect, Row, Severity, Summary as CheckSummary};
+pub use kerf_mcp::{
+    Finding, InspectedMade, InspectedSlot, PresetInspection, PresetLook, Rect, Row, Severity,
+    SlotClip, SlotFit, Summary as CheckSummary,
+};
 pub use kerf_shots::takes::ClipReading;
 
 /// A shot's graph, as a `recipe` event lays it out: its nodes, each with what there is to
@@ -273,7 +276,7 @@ pub enum Event {
         #[serde(default)]
         path: String,
         #[serde(default)]
-        preset: Value,
+        preset: PresetInspection,
     },
     /// The preset at `path` staged as a proposal, as kerf-mcp's `edit` says it; the state
     /// follows.
