@@ -470,8 +470,10 @@ cargo clippy --manifest-path apps/kerf-editor/Cargo.toml --workspace --all-targe
 cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
 ```
 
-`.claude/verify.sh` runs these in this order, and CI runs them on Linux. The Rust
-release is the one `rust-toolchain.toml` names, which rustup installs on first use.
+`.claude/verify.sh` runs these in this order, and CI runs them on Linux. CI also runs
+the workspace's clippy on Windows, for code only Windows compiles: a clean run on Linux
+or macOS can still meet a warning there. The Rust release is the one
+`rust-toolchain.toml` names, which rustup installs on first use.
 
 CI also holds both workspaces' dependencies to `deny.toml`, with
 [cargo-deny](https://github.com/EmbarkStudios/cargo-deny): none with a known
