@@ -8,8 +8,11 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
+
+use kerf_engine::process::sidecar::{Sidecar, GRACE};
 
 /// Quality policy: video up to 1080p plus best audio.
 pub const FORMAT_STRING: &str = "bv*[height<=1080]+ba/b[height<=1080]";
@@ -72,6 +75,8 @@ impl From<io::Error> for FetchError {
 /// Options for one download.
 #[derive(Clone, Debug, Default)]
 pub struct FetchOptions {
+    /// How long yt-dlp may run. Then it, and the FFmpeg it runs, are asked
+    /// to end, and killed if they have not within [`GRACE`].
     pub timeout: Option<Duration>,
     pub cookies: Option<PathBuf>,
     pub extra_args: Vec<String>,
@@ -254,46 +259,60 @@ struct ProcessResult {
     timed_out: bool,
 }
 
+/// Run yt-dlp as a sidecar: on Unix it leads a process group of its own,
+/// on Windows it is in a job of its own, so the FFmpeg it runs to merge and
+/// convert ends with it. Past `timeout` it is stopped as a cancelled
+/// sidecar is: asked to end, so it can clean up, and killed with what is
+/// left after [`GRACE`].
 fn run_process(
     binary: &Path,
     args: &[String],
     directory: &Path,
     timeout: Option<Duration>,
 ) -> Result<ProcessResult, FetchError> {
-    let mut child = Command::new(binary)
-        .args(args)
-        .current_dir(directory)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| FetchError::Missing {
-            binary: binary.to_path_buf(),
-            detail: error.to_string(),
-        })?;
-    let stdout = child
+    let mut sidecar = Sidecar::start(
+        Command::new(binary)
+            .args(args)
+            .current_dir(directory)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|error| FetchError::Missing {
+        binary: binary.to_path_buf(),
+        detail: error.to_string(),
+    })?;
+    let stdout = sidecar
         .stdout
         .take()
         .expect("the command above pipes stdout, and this is the one take of it");
-    let stderr = child
+    let stderr = sidecar
         .stderr
         .take()
         .expect("the command above pipes stderr, and this is the one take of it");
     let stdout_thread = thread::spawn(move || read_all(stdout));
     let stderr_thread = thread::spawn(move || read_all(stderr));
-    let deadline = timeout.map(|duration| Instant::now() + duration);
-    let mut timed_out = false;
-    let code = loop {
-        if let Some(status) = child.try_wait()? {
-            break status.code();
-        }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            timed_out = true;
-            child.kill()?;
-            break child.wait()?.code();
-        }
-        thread::sleep(Duration::from_millis(10));
+    // Waits out the timeout, unless yt-dlp ends first and drops `ended`.
+    let (ended, deadline) = mpsc::channel::<()>();
+    let watchdog = timeout.map(|timeout| {
+        let stopper = sidecar.stopper();
+        thread::spawn(move || {
+            let timed_out = deadline.recv_timeout(timeout) == Err(RecvTimeoutError::Timeout);
+            if timed_out {
+                stopper.stop(GRACE);
+            }
+            timed_out
+        })
+    });
+    let status = sidecar.wait();
+    drop(ended);
+    let timed_out = match watchdog {
+        Some(watchdog) => watchdog
+            .join()
+            .map_err(|_| FetchError::InvalidInput("yt-dlp timeout watchdog panicked".into()))?,
+        None => false,
     };
+    let code = status?.code();
     let stdout = stdout_thread
         .join()
         .map_err(|_| FetchError::InvalidInput("yt-dlp stdout reader panicked".into()))??;

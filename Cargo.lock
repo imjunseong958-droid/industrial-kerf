@@ -1812,6 +1812,10 @@ dependencies = [
 [[package]]
 name = "kerf-fetcher"
 version = "0.1.7"
+dependencies = [
+ "kerf-engine",
+ "tempfile",
+]
 
 [[package]]
 name = "kerf-fx"
