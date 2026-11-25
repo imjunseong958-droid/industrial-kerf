@@ -2052,6 +2052,7 @@ dependencies = [
  "kerf-engine",
  "kerf-lang",
  "kerf-model",
+ "kerf-paths",
  "kerf-protocol",
  "libc",
  "log",

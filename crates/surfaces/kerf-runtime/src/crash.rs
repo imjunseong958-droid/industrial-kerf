@@ -34,26 +34,13 @@ pub struct Report {
     pub message: String,
 }
 
-/// The crash folder: `KERF_CRASH_DIR`, or the platform's place for an app's logs. `None` when there
-/// is nowhere to put one.
+/// The crash folder: `KERF_CRASH_DIR`, or Kerf's crash folder in the system's folder for an app's
+/// logs ([`kerf_paths::crash_dir`]). `None` when there is nowhere to put one.
 pub fn folder() -> Option<PathBuf> {
     if let Some(value) = std::env::var_os("KERF_CRASH_DIR").filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(value));
     }
-    let var = |name: &str| {
-        std::env::var_os(name)
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
-    };
-    if cfg!(target_os = "windows") {
-        var("LOCALAPPDATA").map(|folder| folder.join("Kerf").join("crashes"))
-    } else if cfg!(target_os = "macos") {
-        var("HOME").map(|home| home.join("Library/Logs/Kerf"))
-    } else {
-        var("XDG_STATE_HOME")
-            .or_else(|| var("HOME").map(|home| home.join(".local/state")))
-            .map(|folder| folder.join("kerf").join("crashes"))
-    }
+    kerf_paths::crash_dir()
 }
 
 /// Report every panic and native crash in this process from now on as `component`, in
