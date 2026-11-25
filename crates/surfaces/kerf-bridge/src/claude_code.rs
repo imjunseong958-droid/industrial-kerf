@@ -124,13 +124,12 @@ impl ClaudeCodeSession {
     /// One turn: `text` goes to Claude Code and its stream comes back as
     /// the built-in agent's events.
     ///
-    /// Claude Code runs as a sidecar: on Unix it leads a process group of its
-    /// own, and on Windows it is in a job of its own, with the `kerf-mcp` it
-    /// starts and whatever that starts. Stopping the turn stops all of them,
-    /// and what is left when Claude Code ends ends with it. On Unix Claude
-    /// Code starts the shells its tools run in sessions of their own, out of
-    /// its group's reach: it ends them itself when it is asked to end, which
-    /// is why it is asked before it is killed.
+    /// Claude Code runs as a sidecar: in a process group of its own on Unix,
+    /// with the `kerf-mcp` it starts, and in a job of its own on Windows, with
+    /// all it starts. Stopping the turn stops them, and what is left when
+    /// Claude Code ends ends with it. On Unix the sidecars kerf-mcp runs, in
+    /// groups of their own, are reached through kerf-mcp, which passes the
+    /// signal on: one reason the turn is asked to end before it is killed.
     pub(crate) fn run_with_events(
         &mut self,
         text: &str,

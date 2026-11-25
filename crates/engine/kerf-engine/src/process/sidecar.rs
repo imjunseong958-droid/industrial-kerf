@@ -29,7 +29,7 @@
 
 use std::io::{self, BufRead, BufReader};
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -192,13 +192,32 @@ fn run_within(
     })
 }
 
+/// A sidecar as it is listed while it runs: its process id, and the number
+/// it was started as, which no other sidecar has, so that a process id
+/// reused once it has ended is not taken for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Listed {
+    id: u32,
+    serial: u64,
+}
+
+impl Listed {
+    fn of(child: &Child) -> Self {
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        Self {
+            id: child.id(),
+            serial: SERIAL.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
+
 /// The process groups of the sidecars running now, each named by its
 /// leader, which stays unreaped while it is listed.
 #[cfg(unix)]
-static RUNNING: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+static RUNNING: std::sync::Mutex<Vec<Listed>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(unix)]
-fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
+fn running() -> std::sync::MutexGuard<'static, Vec<Listed>> {
     RUNNING
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -208,38 +227,44 @@ fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
 /// could have no job), by its process id, which cannot be reused while its
 /// `Child` holds the process open.
 #[cfg(windows)]
-static JOBS: std::sync::Mutex<Vec<(u32, job::Hold)>> = std::sync::Mutex::new(Vec::new());
+static JOBS: std::sync::Mutex<Vec<(Listed, job::Hold)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(windows)]
-fn jobs() -> std::sync::MutexGuard<'static, Vec<(u32, job::Hold)>> {
+fn jobs() -> std::sync::MutexGuard<'static, Vec<(Listed, job::Hold)>> {
     JOBS.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Start `command` as a sidecar: on Unix, leading a process group of its
 /// own and listed as running; on Windows, in a job of its own.
-fn start(command: &mut Command) -> io::Result<Child> {
+fn start(command: &mut Command) -> io::Result<(Child, Listed)> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         // Listed under the lock, so a forwarded signal cannot miss it.
         let mut running = running();
         let child = command.process_group(0).spawn()?;
-        running.push(child.id());
-        Ok(child)
+        let listed = Listed::of(&child);
+        running.push(listed);
+        Ok((child, listed))
     }
     #[cfg(windows)]
     {
         let child = command.spawn()?;
+        let listed = Listed::of(&child);
         // A sidecar that cannot have a job still runs; stopping it then
         // ends only the sidecar itself.
         if let Ok(hold) = job::Hold::of(&child) {
-            jobs().push((child.id(), hold));
+            jobs().push((listed, hold));
         }
-        Ok(child)
+        Ok((child, listed))
     }
     #[cfg(not(any(unix, windows)))]
-    command.spawn()
+    {
+        let child = command.spawn()?;
+        let listed = Listed::of(&child);
+        Ok((child, listed))
+    }
 }
 
 /// A program run as a sidecar, as `run` runs one, for a caller that talks
@@ -253,6 +278,7 @@ fn start(command: &mut Command) -> io::Result<Child> {
 /// has been waited for, it is killed, and what it started with it.
 pub struct Sidecar {
     child: Child,
+    listed: Listed,
     /// Its stdin, when the command piped it.
     pub stdin: Option<ChildStdin>,
     /// Its stdout, when the command piped it.
@@ -266,12 +292,13 @@ pub struct Sidecar {
 impl Sidecar {
     /// Start `command` as a sidecar.
     pub fn start(command: &mut Command) -> io::Result<Self> {
-        let mut child = start(command)?;
+        let (mut child, listed) = start(command)?;
         Ok(Self {
             stdin: child.stdin.take(),
             stdout: child.stdout.take(),
             stderr: child.stderr.take(),
             child,
+            listed,
             done: false,
         })
     }
@@ -279,7 +306,7 @@ impl Sidecar {
     /// What stops it from another thread while this one waits for it.
     pub fn stopper(&self) -> Stopper {
         Stopper {
-            id: self.child.id(),
+            listed: self.listed,
         }
     }
 
@@ -321,10 +348,10 @@ impl Sidecar {
             let mut running = running();
             // Not reaped yet, so its group is still its own.
             signal_group(self.child.id(), libc::SIGKILL);
-            running.retain(|&id| id != self.child.id());
+            running.retain(|listed| *listed != self.listed);
         }
         #[cfg(windows)]
-        jobs().retain(|(id, _)| *id != self.child.id());
+        jobs().retain(|(listed, _)| *listed != self.listed);
         self.child.wait()
     }
 
@@ -339,12 +366,12 @@ impl Sidecar {
         {
             let mut running = running();
             signal_group(self.child.id(), libc::SIGKILL);
-            running.retain(|&id| id != self.child.id());
+            running.retain(|listed| *listed != self.listed);
         }
         #[cfg(windows)]
         {
             let mut jobs = jobs();
-            if let Some(index) = jobs.iter().position(|(id, _)| *id == self.child.id()) {
+            if let Some(index) = jobs.iter().position(|(listed, _)| *listed == self.listed) {
                 jobs.remove(index).1.terminate();
             }
         }
@@ -366,7 +393,7 @@ impl Drop for Sidecar {
 /// waits for it. Once the sidecar has been waited for, it does nothing.
 #[derive(Clone, Copy, Debug)]
 pub struct Stopper {
-    id: u32,
+    listed: Listed,
 }
 
 impl Stopper {
@@ -376,8 +403,8 @@ impl Stopper {
         #[cfg(unix)]
         {
             let running = running();
-            if running.contains(&self.id) {
-                signal_group(self.id, libc::SIGTERM);
+            if running.contains(&self.listed) {
+                signal_group(self.listed.id, libc::SIGTERM);
             }
         }
     }
@@ -388,7 +415,7 @@ impl Stopper {
         #[cfg(unix)]
         {
             let running = running();
-            !running.contains(&self.id) || exited(self.id)
+            !running.contains(&self.listed) || exited(self.listed.id)
         }
         #[cfg(not(unix))]
         true
@@ -400,12 +427,12 @@ impl Stopper {
         #[cfg(unix)]
         {
             let running = running();
-            if running.contains(&self.id) {
-                signal_group(self.id, libc::SIGKILL);
+            if running.contains(&self.listed) {
+                signal_group(self.listed.id, libc::SIGKILL);
             }
         }
         #[cfg(windows)]
-        if let Some((_, hold)) = jobs().iter().find(|(id, _)| *id == self.id) {
+        if let Some((_, hold)) = jobs().iter().find(|(listed, _)| *listed == self.listed) {
             hold.terminate();
         }
     }
@@ -444,8 +471,15 @@ fn exited(id: u32) -> bool {
             &mut info,
             libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
         );
-        asked != 0 || info.si_pid() != 0
+        asked != 0 || (info.si_pid() != 0 && ended_by(info.si_code))
     }
+}
+
+/// Whether a child's change of state, by its `si_code`, is its end: macOS's
+/// waitid reports a stopped child too.
+#[cfg(unix)]
+fn ended_by(code: libc::c_int) -> bool {
+    matches!(code, libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED)
 }
 
 /// Wait for process `id`, a child of this one, to exit, without reaping it,
@@ -455,17 +489,23 @@ fn exited(id: u32) -> bool {
 fn wait_exited(id: u32) -> io::Result<()> {
     loop {
         // SAFETY: as in `exited`; without WNOHANG it returns once the child has exited.
-        let asked = unsafe {
+        let (asked, code) = unsafe {
             let mut info: libc::siginfo_t = std::mem::zeroed();
-            libc::waitid(
+            let asked = libc::waitid(
                 libc::P_PID,
                 id as libc::id_t,
                 &mut info,
                 libc::WEXITED | libc::WNOWAIT,
-            )
+            );
+            (asked, info.si_code)
         };
-        if asked == 0 {
+        if asked == 0 && ended_by(code) {
             return Ok(());
+        }
+        if asked == 0 {
+            // Stopped, not ended: it is looked at again in a moment.
+            thread::sleep(POLL_INTERVAL);
+            continue;
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
@@ -505,8 +545,8 @@ pub fn forward_termination_signals() {
                             if stopped_instead(signal) {
                                 continue;
                             }
-                            for &leader in running().iter() {
-                                signal_group(leader, signal);
+                            for listed in running().iter() {
+                                signal_group(listed.id, signal);
                             }
                             if let Err(error) =
                                 signal_hook::low_level::emulate_default_handler(signal)
@@ -717,6 +757,43 @@ mod tests {
     }
 
     #[test]
+    fn a_sidecar_stopped_from_another_thread_is_killed_once_its_grace_is_over() {
+        // Waited for on one thread and stopped from another, as a Claude Code turn is.
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap '' TERM; echo ready; while :; do sleep 0.05; done",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut sidecar = Sidecar::start(&mut command).expect("sh starts");
+        let shell = sidecar.child.id();
+        let mut ready = String::new();
+        BufReader::new(sidecar.stdout.take().expect("stdout is piped"))
+            .read_line(&mut ready)
+            .expect("the shell says it is ready");
+        let stopper = sidecar.stopper();
+        let (waited, wait) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let _ = waited.send(sidecar.wait().is_ok());
+        });
+        let grace = Duration::from_millis(300);
+        let start = Instant::now();
+        stopper.stop(grace);
+        // It does not end when asked, so it was given the whole of its grace, then killed.
+        let given = start.elapsed();
+        let ended = wait.recv_timeout(Duration::from_secs(5));
+        if ended.is_err() {
+            // Not left running past a failed test.
+            signal_group(shell, libc::SIGKILL);
+        }
+        assert_eq!(ended, Ok(true), "the sidecar outlived its grace");
+        assert!(given >= grace, "{given:?}");
+        waiter.join().expect("waiter");
+    }
+
+    #[test]
     fn a_sidecar_that_ends_by_itself_takes_what_it_left_running_with_it() {
         let mut command = Command::new("sh");
         command.args(["-c", "sleep 30 >/dev/null 2>&1 & echo $! >&2"]);
@@ -736,7 +813,7 @@ mod tests {
         let (runner, shell, sleeper) = run_sleeper(&token);
         {
             let running = running();
-            assert!(running.contains(&shell));
+            assert!(running.iter().any(|listed| listed.id == shell));
             signal_group(shell, libc::SIGTERM);
         }
         let finished = runner
@@ -745,7 +822,7 @@ mod tests {
             .expect("the shell ends on the signal");
         assert!(!finished.status.success());
         assert!(ends_within(&sleeper, Duration::from_secs(3)));
-        assert!(!running().contains(&shell));
+        assert!(!running().iter().any(|listed| listed.id == shell));
     }
 
     #[test]
@@ -860,14 +937,14 @@ mod windows_tests {
     fn cancelling_ends_what_the_sidecar_started() {
         let token = CancellationToken::new();
         let (runner, shell, pinger) = run_pinger(&token);
-        assert!(jobs().iter().any(|(id, _)| *id == shell));
+        assert!(jobs().iter().any(|(listed, _)| listed.id == shell));
         let start = Instant::now();
         token.cancel();
         let result = runner.join().expect("runner");
         assert!(matches!(result, Err(EngineError::Cancelled)));
         assert!(start.elapsed() < Duration::from_secs(3));
         assert!(ends_within(pinger, Duration::from_secs(3)));
-        assert!(!jobs().iter().any(|(id, _)| *id == shell));
+        assert!(!jobs().iter().any(|(listed, _)| listed.id == shell));
     }
 
     #[test]

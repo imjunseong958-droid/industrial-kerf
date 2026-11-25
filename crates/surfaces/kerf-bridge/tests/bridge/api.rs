@@ -247,7 +247,7 @@ wait
 "#;
 
 /// Whether process `pid` ends within `limit`; a zombie awaiting its new parent counts as
-/// ended.
+/// ended. `ps` that says nothing, not even why, has found no such process.
 #[cfg(unix)]
 fn ends_within(pid: &str, limit: Duration) -> bool {
     let start = Instant::now();
@@ -257,7 +257,8 @@ fn ends_within(pid: &str, limit: Duration) -> bool {
             .output()
             .expect("ps runs");
         let state = String::from_utf8_lossy(&output.stdout);
-        if state.trim().is_empty() || state.trim_start().starts_with('Z') {
+        let gone = state.trim().is_empty() && output.stderr.is_empty();
+        if gone || state.trim_start().starts_with('Z') {
             return true;
         }
         std::thread::sleep(Duration::from_millis(20));
