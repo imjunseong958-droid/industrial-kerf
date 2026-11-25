@@ -137,8 +137,9 @@ pub use queue::ExportRequest;
 pub use recipes::Edit as RecipeEdit;
 pub use standalone::{
     about, clip_properties, commands_catalog, commands_run, commands_states, crash_install,
-    crash_reports, ffmpeg_bin, fx_catalog_all, keychain_off, preset_inspect, project_inspect,
-    secret, serve_mcp, update_check, About, CrashReport, CrashReports, REPOSITORY,
+    crash_reports, ffmpeg_bin, forward_termination_signals, fx_catalog_all, keychain_off,
+    preset_inspect, project_inspect, secret, serve_mcp, update_check, About, CrashReport,
+    CrashReports, REPOSITORY,
 };
 pub use tasks::{CheckedFile, PresetCheck, ProjectInfo, Task, TaskDone, TaskStatus};
 pub use tracks::{Follow as ShotFollow, Of as ShotOf};

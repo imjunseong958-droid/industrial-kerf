@@ -924,18 +924,35 @@ impl RuntimeClient {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(stderr);
+        // kerfd outlives the client that starts it, so it leaves the client's
+        // process group, or its job on Windows, rather than end with it: the
+        // client may be a sidecar, as the kerf-mcp Claude Code starts for a
+        // turn is, and a stopped turn stops its whole group.
+        #[cfg(unix)]
+        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        #[cfg(windows)]
+        use windows_sys::Win32::System::Threading::{CREATE_BREAKAWAY_FROM_JOB, CREATE_NO_WINDOW};
+        #[cfg(windows)]
+        let mut breakaway = true;
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
             // kerfd is a console program; started from the editor it would
             // otherwise open a console window of its own.
-            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
+            command.creation_flags(CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB);
         }
         // A binary just written can stay busy for a moment: a process another
         // thread is forking holds it open for writing until its exec.
         let mut busy = 0;
         loop {
             match command.spawn() {
+                // In a job that lets nothing leave it, kerfd starts in it.
+                #[cfg(windows)]
+                Err(error) if breakaway && error.kind() == std::io::ErrorKind::PermissionDenied => {
+                    use std::os::windows::process::CommandExt;
+                    breakaway = false;
+                    command.creation_flags(CREATE_NO_WINDOW);
+                }
                 Err(error)
                     if error.kind() == std::io::ErrorKind::ExecutableFileBusy && busy < 25 =>
                 {

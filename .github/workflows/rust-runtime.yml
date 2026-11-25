@@ -4,9 +4,9 @@ name: Rust runtime
 # check what differs on them. The repository is public, so hosted runners
 # cost nothing: the systems run side by side, and so do the parts of one
 # that do not wait on each other (Linux's tests, lint and editor; macOS's
-# editor and workspace), on every pull request, every merge to main, and by
-# hand (Actions > Rust runtime > Run workflow). A run takes as long as its
-# slowest job, not the sum of them.
+# editor and workspace), on every pull request and every merge to main that
+# touches what they check, and by hand (Actions > Rust runtime > Run
+# workflow). A run takes as long as its slowest job, not the sum of them.
 # Feature branches are not built on push: their pull request runs the
 # jobs. A weekly run catches what a newer FFmpeg (Homebrew's, on macOS) or
 # runner image broke; the Rust release is rust-toolchain.toml's, and moves
@@ -17,6 +17,7 @@ on:
     - cron: "0 18 * * 0"
   push:
     branches: [main]
+    # `changes` asks a pull request about the same paths; keep the two in sync.
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
@@ -27,23 +28,16 @@ on:
       - "crates/**"
       - "tools/**"
       - "apps/kerf-editor/**"
+      # Built into kerf-skills, and read by the tests.
+      - "skills/**"
+      - "fixtures/**"
       - "scripts/smoke-editor-close.sh"
       - ".github/workflows/rust-runtime.yml"
       - ".github/actions/**"
+  # Not filtered by path: `gate` has to report on every pull request, and a
+  # run that a path filter keeps from starting reports nothing. `changes`
+  # filters the jobs instead.
   pull_request:
-    paths:
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "deny.toml"
-      - "rust-toolchain.toml"
-      - "rustfmt.toml"
-      - ".cargo/**"
-      - "crates/**"
-      - "tools/**"
-      - "apps/kerf-editor/**"
-      - "scripts/smoke-editor-close.sh"
-      - ".github/workflows/rust-runtime.yml"
-      - ".github/actions/**"
   workflow_dispatch:
 
 # A newer push supersedes the checks still running for the one before it, on a
@@ -62,7 +56,48 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  # Whether a pull request into main touches what the jobs below check.
+  # Everything else that starts a run runs them all, a pull request into
+  # another branch included: its checks stay with it when its base becomes
+  # main, which starts no run, and they would not have seen that branch's own
+  # changes.
+  changes:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.paths.outputs.rust }}
+    steps:
+      # The pull request's merge into main, and that merge's parents, the first
+      # of which is main.
+      - uses: actions/checkout@v7
+        if: ${{ github.base_ref == 'main' }}
+        with:
+          fetch-depth: 2
+      - name: Look for changed paths
+        id: paths
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          rust=true
+          if [ "$BASE" = main ]; then
+            status=0
+            git diff --quiet HEAD^1 HEAD -- \
+              Cargo.toml Cargo.lock deny.toml rust-toolchain.toml rustfmt.toml \
+              .cargo/ crates/ tools/ apps/kerf-editor/ skills/ fixtures/ \
+              scripts/smoke-editor-close.sh \
+              .github/workflows/rust-runtime.yml .github/actions/ || status=$?
+            # 0 is no difference and 1 is one; anything else is git failing.
+            case $status in
+              0) rust=false ;;
+              1) ;;
+              *) exit "$status" ;;
+            esac
+          fi
+          echo "rust=$rust" | tee -a "$GITHUB_OUTPUT"
+
   linux:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
@@ -130,10 +165,12 @@ jobs:
           KERF_GPU: software
         run: "cargo test --workspace --test compose -- catalog_cost:: --nocapture"
 
-  # The rest of the gate README.md's Verification names. Clippy checks
+  # The rest of the checks README.md's Verification names. Clippy checks
   # rather than builds, so it shares nothing with the tests' build and
   # waits on none of it.
   linux-lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -161,6 +198,8 @@ jobs:
   # to the code. `cargo update -p <crate>` in the workspace it names is the
   # usual mend.
   deny:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
@@ -187,6 +226,8 @@ jobs:
   # package carries. Its gpui never awaits what a quit handler returns, and
   # says "timed out waiting on app_will_quit" each time the editor quits.
   linux-editor:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
@@ -252,6 +293,8 @@ jobs:
         run: cargo test --manifest-path apps/kerf-editor/Cargo.toml --workspace
 
   windows-runtime:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: windows-latest
     timeout-minutes: 75
     steps:
@@ -328,6 +371,8 @@ jobs:
           }
 
   macos-editor:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -358,6 +403,8 @@ jobs:
         run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
 
   macos-workspace:
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: macos-latest
     timeout-minutes: 90
     env:
@@ -402,3 +449,32 @@ jobs:
       # run and nothing is built again.
       - name: Test the system keychain
         run: cargo test --workspace --lib real_keychain -- --ignored
+
+  # The one check main's ruleset requires, so it has to run however the others
+  # end: a job skipped for want of a success counts as passed. It fails unless
+  # every job passed, or every one was skipped because the pull request touches
+  # nothing they check. A job added above belongs in `needs`.
+  gate:
+    if: ${{ always() }}
+    needs:
+      - changes
+      - linux
+      - linux-lint
+      - deny
+      - linux-editor
+      - windows-runtime
+      - macos-editor
+      - macos-workspace
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Check the jobs' results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          jq -e '
+            (if .changes.outputs.rust == "false" then "skipped" else "success" end) as $wanted
+            | .changes.result == "success"
+              and all(del(.changes)[]; .result == $wanted)
+          ' <<< "$NEEDS"

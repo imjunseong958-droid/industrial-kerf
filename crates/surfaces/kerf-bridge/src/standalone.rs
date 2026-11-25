@@ -1,6 +1,6 @@
 //! What the editor calls without a bridge, all synchronous: about and updates, the FFmpeg
-//! kerfd runs, Kerf's tools served over MCP, crash reports, the system keychain, the
-//! project launcher, the command registry and the catalog.
+//! kerfd runs, Kerf's tools served over MCP, termination signals, crash reports, the system
+//! keychain, the project launcher, the command registry and the catalog.
 
 use crate::event::{ViewFxDef, ViewParamDef};
 use crate::tasks::{PresetCheck, ProjectInfo};
@@ -86,6 +86,16 @@ fn served_directory(arguments: &[String]) -> Option<Result<PathBuf, String>> {
         [option, directory] if option == "--dir" => Ok(directory.into()),
         _ => Err("expected --dir <project-directory>".into()),
     })
+}
+
+// ---- termination signals ---------------------------------------------------------
+
+/// Pass a terminal's Ctrl-C, a hangup, SIGTERM and SIGQUIT on to the programs the editor
+/// runs as sidecars, then end as each would have ended it. They run in process groups of
+/// their own, Claude Code's turns among them, out of reach of the terminal's signal. Does
+/// nothing elsewhere than Unix. Call once, at start.
+pub fn forward_termination_signals() {
+    kerf_engine::process::sidecar::forward_termination_signals();
 }
 
 // ---- crash reports ---------------------------------------------------------------
