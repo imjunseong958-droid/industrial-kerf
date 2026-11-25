@@ -12,6 +12,7 @@
 use crate::collab::program_path;
 use crate::event::as_said;
 use kerf_agent::{summarize_targets, summarize_tool_result, AgentEvent, ToolResultSummary};
+use kerf_engine::process::sidecar::{Sidecar, Stopper, GRACE};
 use kerf_mcp::permissions::{Mode, MODE_VARIABLE};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
@@ -20,10 +21,8 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::Duration;
 
 /// The name the server goes by in Claude Code; its tools are `mcp__kerf__*`.
 const SERVER: &str = "kerf";
@@ -53,7 +52,7 @@ pub(crate) struct ClaudeCodeSession {
     session: Option<String>,
     /// The model's context window in tokens, once a turn's result has said.
     context_window: u64,
-    aborted: Arc<AtomicBool>,
+    abort: Abort,
 }
 
 impl ClaudeCodeSession {
@@ -79,12 +78,12 @@ impl ClaudeCodeSession {
             model: model.filter(|model| !model.trim().is_empty() && model != "default"),
             session: None,
             context_window: DEFAULT_CONTEXT_WINDOW,
-            aborted: Arc::new(AtomicBool::new(false)),
+            abort: Abort::default(),
         })
     }
 
-    pub(crate) fn abort_handle(&self) -> Arc<AtomicBool> {
-        Arc::clone(&self.aborted)
+    pub(crate) fn abort_handle(&self) -> Abort {
+        self.abort.clone()
     }
 
     /// Go on in Claude Code's session `id`, kept from an earlier launch.
@@ -124,77 +123,47 @@ impl ClaudeCodeSession {
 
     /// One turn: `text` goes to Claude Code and its stream comes back as
     /// the built-in agent's events.
+    ///
+    /// Claude Code runs as a sidecar: on Unix it leads a process group of its
+    /// own, and on Windows it is in a job of its own, with the `kerf-mcp` it
+    /// starts and whatever that starts. Stopping the turn stops all of them,
+    /// and what is left when Claude Code ends ends with it. On Unix Claude
+    /// Code starts the shells its tools run in sessions of their own, out of
+    /// its group's reach: it ends them itself when it is asked to end, which
+    /// is why it is asked before it is killed.
     pub(crate) fn run_with_events(
         &mut self,
         text: &str,
         mut emit: impl FnMut(AgentEvent),
     ) -> Result<(), String> {
-        self.aborted.store(false, Ordering::SeqCst);
-        let mut child = self
-            .command()
-            .spawn()
+        self.abort.begin();
+        let mut claude = Sidecar::start(&mut self.command())
             .map_err(|error| format!("Could not start Claude Code: {error}"))?;
-        // The request goes on stdin: list options would take it as a value.
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(text.as_bytes())
-                .map_err(|error| format!("Could not send the request to Claude Code: {error}"))?;
+        self.abort.runs(claude.stopper());
+        let read = self.read(&mut claude, text, &mut emit);
+        if read.is_err() {
+            claude.kill();
         }
-        let stdout = child.stdout.take().ok_or("Claude Code has no output")?;
-        let mut stderr = child
-            .stderr
-            .take()
-            .ok_or("Claude Code has no error output")?;
-        let errors = thread::spawn(move || {
-            let mut text = String::new();
-            // What it said before a read failed is all there is to say.
-            let _ = stderr.read_to_string(&mut text);
-            text
-        });
-        let child = Arc::new(Mutex::new(child));
-        let finished = Arc::new(AtomicBool::new(false));
-        let watcher = {
-            let child = Arc::clone(&child);
-            let finished = Arc::clone(&finished);
-            let aborted = Arc::clone(&self.aborted);
-            thread::spawn(move || {
-                while !finished.load(Ordering::SeqCst) {
-                    if aborted.load(Ordering::SeqCst) {
-                        if let Ok(mut child) = child.lock() {
-                            // It may have ended by itself already.
-                            let _ = child.kill();
-                        }
-                        return;
-                    }
-                    thread::sleep(Duration::from_millis(100));
-                }
-            })
+        // Its output has ended: it has, or is ending. What it left running is ended as it is
+        // waited for.
+        let status = claude.wait().map_err(|error| error.to_string());
+        let aborted = self.abort.over();
+        let (mut stream, errors) = match read {
+            Ok(read) => read,
+            // The request could not be sent to a Claude Code that was being stopped.
+            Err(_) if aborted => {
+                emit(AgentEvent::Aborted);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
         };
-        let mut stream = Stream {
-            context_window: self.context_window,
-            ..Stream::default()
-        };
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
-            let Some(line) = Line::read(&line) else {
-                continue;
-            };
-            stream.read(line, &mut emit);
-        }
-        finished.store(true, Ordering::SeqCst);
-        // The watcher only waits and kills; there is nothing it could fail with.
-        let _ = watcher.join();
-        let status = child
-            .lock()
-            .map_err(|_| "Claude Code's process was lost")?
-            .wait()
-            .map_err(|error| error.to_string())?;
+        let status = status?;
         let errors = errors.join().unwrap_or_default();
         if let Some(session) = stream.session.take() {
             self.session = Some(session);
         }
         self.context_window = stream.context_window;
-        if self.aborted.load(Ordering::SeqCst) {
+        if aborted {
             emit(AgentEvent::Aborted);
             return Ok(());
         }
@@ -208,6 +177,110 @@ impl ClaudeCodeSession {
             }
             None => Err(failed_turn(status.code(), &errors)),
         }
+    }
+
+    /// Send `text` to `claude` and read its stream to the end, as `emit`ted
+    /// events; with what it said on stderr, once that has ended too.
+    fn read(
+        &self,
+        claude: &mut Sidecar,
+        text: &str,
+        emit: &mut impl FnMut(AgentEvent),
+    ) -> Result<(Stream, thread::JoinHandle<String>), String> {
+        let stdout = claude.stdout.take().ok_or("Claude Code has no output")?;
+        let mut stderr = claude
+            .stderr
+            .take()
+            .ok_or("Claude Code has no error output")?;
+        let errors = thread::spawn(move || {
+            let mut text = String::new();
+            // What it said before a read failed is all there is to say.
+            let _ = stderr.read_to_string(&mut text);
+            text
+        });
+        // The request goes on stdin: list options would take it as a value.
+        if let Some(mut stdin) = claude.stdin.take() {
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|error| format!("Could not send the request to Claude Code: {error}"))?;
+        }
+        let mut stream = Stream {
+            context_window: self.context_window,
+            ..Stream::default()
+        };
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            let Some(line) = Line::read(&line) else {
+                continue;
+            };
+            stream.read(line, emit);
+        }
+        Ok((stream, errors))
+    }
+}
+
+/// What stops a session's turns. The turn running is stopped as soon as it
+/// is asked, as a cancelled sidecar is: Claude Code and what it started are
+/// asked to end (SIGTERM to their process group on Unix), and what is left
+/// of them after [`GRACE`] is killed.
+#[derive(Clone, Default)]
+pub(crate) struct Abort(Arc<Mutex<Stopping>>);
+
+#[derive(Default)]
+struct Stopping {
+    /// The turn was asked to stop.
+    asked: bool,
+    /// Claude Code, while it runs the turn.
+    running: Option<Stopper>,
+}
+
+impl Abort {
+    /// Stop the turn running, without waiting for it to end.
+    pub(crate) fn abort(&self) {
+        let mut stopping = self.stopping();
+        stopping.asked = true;
+        if let Some(claude) = stopping.running.take() {
+            stop(claude);
+        }
+    }
+
+    fn stopping(&self) -> MutexGuard<'_, Stopping> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// A turn begins: what was asked of the one before is over.
+    fn begin(&self) {
+        *self.stopping() = Stopping::default();
+    }
+
+    /// Claude Code has started the turn: stopped at once if it was asked to
+    /// stop while it started.
+    fn runs(&self, claude: Stopper) {
+        let mut stopping = self.stopping();
+        if stopping.asked {
+            stop(claude);
+        } else {
+            stopping.running = Some(claude);
+        }
+    }
+
+    /// The turn is over; whether it was asked to stop.
+    fn over(&self) -> bool {
+        let mut stopping = self.stopping();
+        stopping.running = None;
+        stopping.asked
+    }
+}
+
+/// Ask Claude Code and what it started to end, and kill what is left of
+/// them after [`GRACE`], on a thread of its own: whoever asked does not wait.
+fn stop(claude: Stopper) {
+    claude.ask_to_end();
+    let waiting = thread::Builder::new()
+        .name("kerf-claude-code-stop".into())
+        .spawn(move || claude.kill_after(GRACE));
+    if waiting.is_err() {
+        claude.kill();
     }
 }
 

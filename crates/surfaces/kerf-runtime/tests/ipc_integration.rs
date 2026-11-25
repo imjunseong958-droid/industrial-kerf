@@ -3,6 +3,7 @@
 
 #![cfg(any(unix, windows))]
 
+use kerf_engine::process::sidecar::Sidecar;
 use kerf_runtime::{
     response_value, EditKey, EditParam, EndpointAddress, ErrorCode, Interp, ProjectionStatus,
     RenderCodec, RenderQuality, RuntimeClient, RuntimeError, RuntimeLease, StartRenderOptions,
@@ -971,6 +972,63 @@ fn a_client_starts_the_daemon_it_cannot_reach() {
         thread::sleep(Duration::from_millis(20));
     }
     panic!("the started kerfd kept running after its project was deleted");
+}
+
+/// Not a test of its own: `a_daemon_outlives_the_stopped_sidecar_that_started_it` runs this
+/// binary again, as a sidecar, to start kerfd from there.
+#[test]
+fn daemon_starter_process() {
+    let Some(directory) = std::env::var_os("KERFD_TEST_STARTER") else {
+        return;
+    };
+    let kerfd = Path::new(env!("CARGO_BIN_EXE_kerfd"));
+    let client = RuntimeClient::connect_or_spawn(Path::new(&directory), Some(kerfd)).unwrap();
+    client.get_state().unwrap();
+    println!("kerfd-started");
+    // Until stopped, or until the test that started it goes and closes its stdin.
+    let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+    std::process::exit(0);
+}
+
+#[test]
+fn a_daemon_outlives_the_stopped_sidecar_that_started_it() {
+    // As kerf-mcp, run by Claude Code for a turn, starts kerfd: a stopped turn stops Claude
+    // Code's whole process group, or its job.
+    let _project = Project::new("sidecar");
+    let directory = _project.0.clone();
+    let mut starter = Sidecar::start(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["daemon_starter_process", "--exact", "--nocapture"])
+            .env("KERFD_TEST_STARTER", &directory)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    let stdout = starter.stdout.take().unwrap();
+    let (started, wait) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        use std::io::BufRead;
+        let line = std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+            .any(|line| line.contains("kerfd-started"));
+        let _ = started.send(line);
+    });
+    assert!(
+        wait.recv_timeout(Duration::from_secs(30)).unwrap_or(false),
+        "the sidecar never started kerfd"
+    );
+    starter.stopper().stop(Duration::from_secs(5));
+    let _ = starter.wait();
+    let observer = RuntimeClient::new(&directory).unwrap();
+    for _ in 0..10 {
+        assert!(
+            observer.get_state().is_ok(),
+            "kerfd ended with the sidecar that started it"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
