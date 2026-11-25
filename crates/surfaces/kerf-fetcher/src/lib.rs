@@ -75,8 +75,9 @@ impl From<io::Error> for FetchError {
 /// Options for one download.
 #[derive(Clone, Debug, Default)]
 pub struct FetchOptions {
-    /// How long yt-dlp may run. Then it, and the FFmpeg it runs, are asked
-    /// to end, and killed if they have not within [`GRACE`].
+    /// How long yt-dlp may run. Then on Unix it is asked to end, with the
+    /// FFmpeg it runs, and killed if it has not within [`GRACE`]; what it
+    /// started is killed as it ends. On Windows it is ended at once.
     pub timeout: Option<Duration>,
     pub cookies: Option<PathBuf>,
     pub extra_args: Vec<String>,
@@ -262,8 +263,8 @@ struct ProcessResult {
 /// Run yt-dlp as a sidecar: on Unix it leads a process group of its own,
 /// on Windows it is in a job of its own, so the FFmpeg it runs to merge and
 /// convert ends with it. Past `timeout` it is stopped as a cancelled
-/// sidecar is: asked to end, so it can clean up, and killed with what is
-/// left after [`GRACE`].
+/// sidecar is: on Unix asked to end, so it can clean up, and killed after
+/// [`GRACE`]; on Windows ended at once.
 fn run_process(
     binary: &Path,
     args: &[String],

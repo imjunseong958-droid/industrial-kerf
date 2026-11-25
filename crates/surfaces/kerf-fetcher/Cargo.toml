@@ -8,8 +8,8 @@ description = "Safe yt-dlp adapter for the native Kerf workflow"
 
 [dependencies]
 # yt-dlp runs as one of its sidecars, so that the FFmpeg yt-dlp starts ends
-# with it, and a forwarded Ctrl-C reaches both. `kerf`, the one user of this
-# crate, links kerf-engine already.
+# with it, and a forwarded Ctrl-C reaches both. `kerf`, which uses this crate,
+# links kerf-engine already.
 kerf-engine = { path = "../../engine/kerf-engine" }
 
 [dev-dependencies]
