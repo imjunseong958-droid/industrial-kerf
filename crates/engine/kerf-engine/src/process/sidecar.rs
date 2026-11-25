@@ -334,3 +334,72 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::time::Instant;
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+
+    /// Run PowerShell, which starts `ping` waiting half a minute, reports
+    /// its own process id and ping's on stderr, and waits. Returns the run
+    /// and the two ids once reported.
+    fn run_pinger(
+        cancellation: &CancellationToken,
+    ) -> (thread::JoinHandle<Result<Finished>>, u32, u32) {
+        let (sender, lines) = mpsc::channel();
+        let cancellation = cancellation.clone();
+        let runner = thread::spawn(move || {
+            let mut command = Command::new("powershell");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$p = Start-Process ping -ArgumentList '-n','30','127.0.0.1' -NoNewWindow -PassThru; \
+                 [Console]::Error.WriteLine(\"$PID $($p.Id)\"); $p.WaitForExit()",
+            ]);
+            run(command, &cancellation, |line| {
+                let _ = sender.send(line.to_owned());
+            })
+        });
+        let line = lines
+            .recv_timeout(Duration::from_secs(30))
+            .expect("PowerShell reports its process ids");
+        let (shell, pinger) = line.trim().split_once(' ').expect("two process ids");
+        (
+            runner,
+            shell.parse().expect("shell id"),
+            pinger.parse().expect("ping id"),
+        )
+    }
+
+    /// Whether process `pid` ends within `limit`.
+    #[allow(unsafe_code)]
+    fn ends_within(pid: u32, limit: Duration) -> bool {
+        // SAFETY: opens the process only to wait on it, and closes it.
+        unsafe {
+            let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if process.is_null() {
+                return true;
+            }
+            let ended = WaitForSingleObject(process, limit.as_millis() as u32) == WAIT_OBJECT_0;
+            CloseHandle(process);
+            ended
+        }
+    }
+
+    #[test]
+    fn cancelling_ends_what_the_sidecar_started() {
+        let token = CancellationToken::new();
+        let (runner, _, pinger) = run_pinger(&token);
+        let start = Instant::now();
+        token.cancel();
+        let result = runner.join().expect("runner");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(start.elapsed() < Duration::from_secs(3));
+        assert!(ends_within(pinger, Duration::from_secs(3)));
+    }
+}
