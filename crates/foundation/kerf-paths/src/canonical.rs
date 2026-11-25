@@ -4,14 +4,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// `path` absolute, with every `.`, `..` and link in it resolved, as [`std::fs::canonicalize`]
-/// makes it, but without the `\\?\` it puts before every path on Windows wherever the path
-/// names the same file without it.
+/// makes it, but without the `\\?\` it puts before every path on Windows when the path is on
+/// a drive and short enough to work without it.
 ///
 /// A verbatim path (`\\?\C:\project`) takes `/` literally, so a project-relative
 /// `media/a.mov` joined to it names nothing. Nor is it equal to the same folder written
 /// plainly, and it is not the path to show a person or to hand another program. A path
 /// that is not on a drive (a share's `\\?\UNC\server\share`) keeps it, and so does one too
-/// long without it.
+/// long without it: two paths are in one form only when both are on one side of that
+/// length. A path with a name Windows reads otherwise without the prefix (one that ends in
+/// a dot or a space, or a device's, such as `NUL`) loses it all the same.
 pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     #[expect(
         clippy::disallowed_methods,
@@ -68,6 +70,8 @@ mod tests {
             plain(r"\\?\Volume{1}\project"),
             PathBuf::from(r"\\?\Volume{1}\project")
         );
+        // A drive is named by a letter.
+        assert_eq!(plain(r"\\?\1:\project"), PathBuf::from(r"\\?\1:\project"));
     }
 
     #[test]
