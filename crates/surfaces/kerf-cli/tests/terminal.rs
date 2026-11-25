@@ -375,7 +375,10 @@ fn a_persons_skills_are_found_where_only_the_user_profile_is_set() {
 fn a_url_to_import_is_refused_as_one() {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("project.kerf"), DOCUMENT).unwrap();
+    // Its settings are none of whoever runs the tests.
     let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
+        .env("HOME", project.path())
+        .env("USERPROFILE", project.path())
         .env("KERF_MODELS", project.path().join("models.json"))
         .arg("--dir")
         .arg(project.path())
