@@ -101,6 +101,8 @@ windows-sys = "0.61"
 # expectation warns once the code it excused is gone, where an `allow` stays
 # on, silently, and the reason says why. Where the excused code is built only
 # on some systems, so is the expectation (`cfg_attr`): unfulfilled, it warns.
+# allow_attributes catches an outer `#[allow]` but not an inner `#![allow]`,
+# so a module's or crate's own is left to review.
 [workspace.lints.rust]
 unsafe_code = "deny"
 

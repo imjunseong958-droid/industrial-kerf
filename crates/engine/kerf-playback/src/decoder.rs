@@ -104,7 +104,7 @@ pub(crate) struct VideoDecoder {
 impl VideoDecoder {
     #[expect(
         clippy::too_many_arguments,
-        reason = "each argument is a separate part of what a clip's decoder opens on: the clip and its source, the time, the size and the epoch"
+        reason = "each argument is a separate part of what a clip's decoder opens on: the timeline, the clip and its source, the time, the size, whether its first picture may be early, and the epoch"
     )]
     pub fn open(
         timeline: &PlaybackTimeline,

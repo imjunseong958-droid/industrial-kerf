@@ -1439,7 +1439,7 @@ pub fn cached_waveform(
 /// accidentally reuses a full-source derivative.
 #[expect(
     clippy::too_many_arguments,
-    reason = "each argument is a separate measure of the waveform asked for, and part of its identity in the cache"
+    reason = "the cache, and the source and each measure of the waveform asked for, which together are its identity in the cache"
 )]
 pub fn cached_waveform_range(
     src: &str,
