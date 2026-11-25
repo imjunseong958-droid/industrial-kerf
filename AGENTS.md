@@ -57,10 +57,11 @@ so without `--workspace` they cover only that package, not the editor's crates.
 
 ## Home folder
 
-Find a person's home folder with `kerf_paths::home()` and their `~/.kerf` with
-`kerf_paths::user_dir()`, never by reading `HOME`: Windows sets none, so code that reads it
-finds nothing there. A cache, log or font folder that each system places by its own rule
-may name `HOME` in its macOS and Linux branches.
+Find a person's home folder with `kerf_paths::home()`, their `~/.kerf` with
+`kerf_paths::user_dir()` and Kerf's cache folder with `kerf_paths::cache_dir()`, never by
+reading `HOME`: Windows sets none, so code that reads it finds nothing there. A log or font
+folder that each system places by its own rule may name `HOME` in its macOS and Linux
+branches.
 
 ## Motion UI
 
