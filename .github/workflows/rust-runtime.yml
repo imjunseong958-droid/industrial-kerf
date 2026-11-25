@@ -374,9 +374,11 @@ jobs:
       # handler's exception filter, and test helpers left unused once their
       # cfg(unix) tests drop out. Last, so a lint failure skips no test, and
       # run whatever the tests did, so a failing test does not hide the lint.
-      # Its check build shares nothing with the builds above, so where it
-      # goes saves no time; main's run caches it with the rest, so after
-      # that a run checks little more than the workspace's own crates.
+      # Of the builds above it reuses only the build scripts and proc macros,
+      # as it would anywhere in the job, so where it goes saves no time. The
+      # dependencies it checks afresh each run until main saves a new cache,
+      # which it does only after a change to Cargo.lock, a manifest or the
+      # toolchain (an entry is never overwritten); from then on it keeps them.
       - name: Lint workspace
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
