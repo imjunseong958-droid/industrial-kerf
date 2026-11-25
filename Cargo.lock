@@ -1805,6 +1805,7 @@ dependencies = [
  "kerf-lang",
  "kerf-model",
  "kerf-motion",
+ "kerf-paths",
  "kerf-raster",
  "kerf-text",
  "log",

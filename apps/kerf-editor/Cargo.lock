@@ -3745,6 +3745,7 @@ dependencies = [
  "kerf-image",
  "kerf-model",
  "kerf-motion",
+ "kerf-paths",
  "kerf-raster",
  "log",
  "lz4_flex",

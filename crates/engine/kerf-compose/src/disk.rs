@@ -119,24 +119,16 @@ fn files_under(folder: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
     found
 }
 
-/// The default folder for frames: the user's cache folder, or `KERF_FRAME_CACHE`, which `off` turns
-/// them off. `None` when frames are off or there is nowhere to put them.
+/// The default folder for frames: `frames` in Kerf's cache folder ([`kerf_paths::cache_dir`]), or
+/// `KERF_FRAME_CACHE`, which `off` turns them off. `None` when frames are off or there is nowhere to
+/// put them.
 pub fn default_frame_folder() -> Option<PathBuf> {
     match std::env::var_os("KERF_FRAME_CACHE") {
         Some(value) if value == "off" || value == "0" || value.is_empty() => return None,
         Some(value) => return Some(PathBuf::from(value)),
         None => {}
     }
-    let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
-    if cfg!(target_os = "windows") {
-        var("LOCALAPPDATA").map(|folder| folder.join("Kerf").join("frames"))
-    } else if cfg!(target_os = "macos") {
-        var("HOME").map(|home| home.join("Library/Caches/Kerf/frames"))
-    } else {
-        var("XDG_CACHE_HOME")
-            .or_else(|| var("HOME").map(|home| home.join(".cache")))
-            .map(|folder| folder.join("kerf").join("frames"))
-    }
+    kerf_paths::cache_dir().map(|folder| folder.join("frames"))
 }
 
 /// What `folder` has done since this process opened it; nothing if it has not.

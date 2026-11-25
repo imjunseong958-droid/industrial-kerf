@@ -251,24 +251,15 @@ pub(crate) fn count_whole() {
     add(&COUNTS.whole, 1);
 }
 
-/// The folder stretches are kept in: the user's cache folder, or
-/// `KERF_SECTION_CACHE`, which `off` turns into none.
+/// The folder stretches are kept in: `sections` in Kerf's cache folder
+/// ([`kerf_paths::cache_dir`]), or `KERF_SECTION_CACHE`, which `off` turns into none.
 fn default_folder() -> Option<PathBuf> {
     match std::env::var_os("KERF_SECTION_CACHE") {
         Some(value) if value == "off" || value == "0" || value.is_empty() => return None,
         Some(value) => return Some(PathBuf::from(value)),
         None => {}
     }
-    let var = |name: &str| std::env::var_os(name).map(PathBuf::from);
-    if cfg!(target_os = "windows") {
-        var("LOCALAPPDATA").map(|folder| folder.join("Kerf").join("sections"))
-    } else if cfg!(target_os = "macos") {
-        var("HOME").map(|home| home.join("Library/Caches/Kerf/sections"))
-    } else {
-        var("XDG_CACHE_HOME")
-            .or_else(|| var("HOME").map(|home| home.join(".cache")))
-            .map(|folder| folder.join("kerf").join("sections"))
-    }
+    kerf_paths::cache_dir().map(|folder| folder.join("sections"))
 }
 
 /// A folder of kept stretches: `<root>/<stamp>/<2 hex>/<32 hex>.<extension>`.
