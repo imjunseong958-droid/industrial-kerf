@@ -376,6 +376,11 @@ fn taken_kept() -> &'static Taken {
 /// killed.
 const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// How long the pipes of a program that has ended are given to close. What it started in
+/// its group ends with it; what it put outside its group may hold them open, and is not
+/// waited for.
+const CLOSING: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// Run `program --workflow <named> --inputs` and read what it prints.
 ///
 /// It runs as a sidecar, so stopping it stops what it started too. What it prints is read
@@ -392,8 +397,8 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, ShotError> {
             .stderr(Stdio::piped()),
     )
     .map_err(|error| format!("cannot run {program}: {error}"))?;
-    let stdout = read_out(sidecar.stdout.take());
-    let stderr = read_out(sidecar.stderr.take());
+    let stdout = Reading::of(sidecar.stdout.take());
+    let stderr = Reading::of(sidecar.stderr.take());
     let late = || -> ShotError {
         format!(
             "{PROGRAM} did not say what the server takes within {} s",
@@ -403,26 +408,28 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, ShotError> {
     };
     let started = std::time::Instant::now();
     let status = loop {
-        let exited = match sidecar.try_wait() {
-            Ok(exited) => exited,
+        match sidecar.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < ASKING => {
+                std::thread::sleep(std::time::Duration::from_millis(50))
+            }
+            Ok(None) => {
+                // Asked to end first, as a sidecar is, then killed with what it started.
+                sidecar.stopper().stop(GRACE);
+                sidecar.kill();
+                return Err(late());
+            }
             Err(_) => {
                 sidecar.kill();
                 return Err(late());
             }
-        };
-        // All it said is read once it has ended and its pipes have closed.
-        if let Some(status) = exited.filter(|_| stdout.is_finished() && stderr.is_finished()) {
-            break status;
         }
-        if started.elapsed() >= ASKING {
-            // Asked to end first, so that it can take back what it asked of its server.
-            sidecar.stopper().stop(GRACE);
-            sidecar.kill();
-            return Err(late());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    let (stdout, stderr) = (said(stdout)?, said(stderr)?);
+    let ended = std::time::Instant::now();
+    while !(stdout.is_closed() && stderr.is_closed()) && ended.elapsed() < CLOSING {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let (stdout, stderr) = (stdout.said()?, stderr.said()?);
     if !status.success() {
         let why = String::from_utf8_lossy(&stderr);
         return Err(why.trim().trim_start_matches("kerf-comfy: ").into());
@@ -432,24 +439,56 @@ fn asked_inputs(program: &str, named: &str) -> Result<Value, ShotError> {
     })
 }
 
-/// Read `pipe` to its end on a thread of its own.
-fn read_out(
-    pipe: Option<impl std::io::Read + Send + 'static>,
-) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
-    std::thread::spawn(move || {
-        let mut said = Vec::new();
-        if let Some(mut pipe) = pipe {
-            pipe.read_to_end(&mut said)?;
-        }
-        Ok(said)
-    })
+/// A pipe read on a thread of its own as it is written to, and what has come of it so far.
+struct Reading {
+    said: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    reader: std::thread::JoinHandle<std::io::Result<()>>,
 }
 
-/// What [`read_out`] read.
-fn said(reading: std::thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>, ShotError> {
-    match reading.join() {
-        Ok(read) => read.map_err(|error| error.to_string().into()),
-        Err(_) => Err(format!("{PROGRAM}'s output could not be read").into()),
+impl Reading {
+    /// Read `pipe` to its end.
+    fn of(pipe: Option<impl std::io::Read + Send + 'static>) -> Self {
+        let said = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let into = said.clone();
+        let reader = std::thread::spawn(move || {
+            let Some(mut pipe) = pipe else {
+                return Ok(());
+            };
+            let mut chunk = vec![0; 64 * 1024];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => return Ok(()),
+                    Ok(read) => into
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .extend_from_slice(&chunk[..read]),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        });
+        Self { said, reader }
+    }
+
+    /// Whether the pipe has closed and all of it has been read.
+    fn is_closed(&self) -> bool {
+        self.reader.is_finished()
+    }
+
+    /// What has come: all of it, once the pipe has closed.
+    fn said(self) -> Result<Vec<u8>, ShotError> {
+        if self.reader.is_finished() {
+            match self.reader.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => return Err(error.to_string().into()),
+                Err(_) => return Err(format!("{PROGRAM}'s output could not be read").into()),
+            }
+        }
+        let mut said = self
+            .said
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(std::mem::take(&mut *said))
     }
 }
 

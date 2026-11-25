@@ -1,5 +1,6 @@
 //! What a workflow's model program says its inputs take ([`kerf_shots::workflow::taken`]),
-//! asked of a stand-in for `kerf-comfy`: a shell script of that name.
+//! asked of a stand-in for `kerf-comfy`: a shell script of that name. One leaves a process
+//! outside its group with Perl, which macOS has where it has no `setsid`.
 
 #![cfg(unix)]
 
@@ -82,6 +83,30 @@ fn an_answer_longer_than_a_pipe_holds_is_read_whole() {
         Ok(true),
         "the answer read is not the one said"
     );
+}
+
+#[test]
+fn an_answer_is_heard_though_what_the_program_left_outside_its_group_holds_its_pipes() {
+    let folder = tempfile::tempdir().unwrap();
+    let dir = folder.path();
+    // It leaves a process in a group of its own that holds its stdout and stderr open for
+    // half a minute, says which once it has left, then answers and ends.
+    let started = Instant::now();
+    let said = taken(
+        dir,
+        r#"#!/bin/sh
+here=$(dirname "$0")
+perl -e 'setpgrp(0, 0); open(my $f, ">", "$ARGV[0].new") or die; print $f $$; close($f); rename("$ARGV[0].new", $ARGV[0]); exec("sleep", "30")' "$here/holder" &
+until [ -s "$here/holder" ]; do sleep 0.05; done
+echo '{"KSampler": {"seed": {"min": 0}}}'
+"#,
+    );
+    let took = started.elapsed();
+    let holder = std::fs::read_to_string(dir.join("holder")).unwrap_or_default();
+    // Not left running past the test.
+    let _ = Command::new("kill").args(["-KILL", holder.trim()]).status();
+    assert_eq!(said, Ok(json!({"KSampler": {"seed": {"min": 0}}})));
+    assert!(took < Duration::from_secs(5), "{took:?}");
 }
 
 #[test]
