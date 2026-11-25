@@ -14,8 +14,9 @@
 //!
 //! Reading takes any version of those schemas, `Clip.1` with its single
 //! `media_reference` and `Marker.3` among them, and reports what it does not
-//! import. Both directions hold what the Python bridge holds, so a file means
-//! the same whichever wrote or read it.
+//! import. Both directions hold what the tests' Python bridge
+//! (`tests/interchange/otio_bridge.py`) holds, so a file means the same
+//! whichever wrote or read it.
 
 use crate::otio::{Item, Timeline, WireKind, WireMarker, WireMedia, WireSequence, WireTrack};
 use crate::{issue, InterchangeCode, InterchangeError, InterchangeIssue, IssueSeverity};

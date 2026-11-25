@@ -48,7 +48,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Local media path or a URL to import before opening the editor/session.
+    /// Local media file to import before opening the editor/session.
     media: Option<String>,
 
     /// LLM API key. Prefer the provider-specific environment variable.
@@ -85,10 +85,6 @@ struct Args {
     #[arg(long, global = true)]
     kerfd: Option<PathBuf>,
 
-    /// yt-dlp cookie file.
-    #[arg(long)]
-    cookies: Option<PathBuf>,
-
     /// Execute one instruction and exit.
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
@@ -116,10 +112,6 @@ struct Args {
     /// Attach configured inbound MCP servers through mcp_search/mcp_call.
     #[arg(long = "mcp-tools")]
     mcp_tools: bool,
-
-    /// Keep the flag accepted for launcher-script compatibility.
-    #[arg(long)]
-    no_open: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -460,12 +452,7 @@ fn run() -> Result<()> {
     }
 
     if let Some(media) = args.media.as_deref() {
-        let path = import_media(
-            &directory,
-            args.kerfd.as_deref(),
-            media,
-            args.cookies.as_deref(),
-        )?;
+        let path = import_media(&directory, args.kerfd.as_deref(), media)?;
         println!("imported {}", path.display());
     }
 

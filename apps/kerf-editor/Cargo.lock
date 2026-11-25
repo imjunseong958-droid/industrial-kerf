@@ -3879,7 +3879,6 @@ name = "kerf-interchange"
 version = "0.1.7"
 dependencies = [
  "kerf-model",
- "kerf-sidecar",
  "serde",
  "serde_json",
 ]

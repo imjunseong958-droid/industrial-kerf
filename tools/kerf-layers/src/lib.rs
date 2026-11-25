@@ -40,13 +40,7 @@ pub fn allowed(from: &str, to: &str) -> bool {
 /// which gathers those, and last the editor's bridge and the `kerf` command, which gather
 /// them all: no other crate of `surfaces` is built on those two.
 pub const SURFACES: [&[&str]; 4] = [
-    &[
-        "kerf-cloud",
-        "kerf-fetcher",
-        "kerf-runtime",
-        "kerf-skills",
-        "kerf-workflow",
-    ],
+    &["kerf-cloud", "kerf-runtime", "kerf-skills", "kerf-workflow"],
     &["kerf-agent", "kerf-commands", "kerf-shots"],
     &["kerf-mcp"],
     &["kerf-bridge", "kerf-cli"],

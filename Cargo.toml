@@ -42,7 +42,6 @@ members = [
     "crates/surfaces/kerf-cli",
     "crates/surfaces/kerf-bridge",
     "crates/surfaces/kerf-cloud",
-    "crates/surfaces/kerf-fetcher",
     "crates/surfaces/kerf-shots",
     "crates/surfaces/kerf-workflow",
     # tools

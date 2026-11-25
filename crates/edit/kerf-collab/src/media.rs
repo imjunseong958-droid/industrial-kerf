@@ -162,8 +162,8 @@ pub fn relative_to(directory: &Path, file: &Path) -> Option<String> {
 }
 
 /// A new path in the project's [`INCOMING_DIR`], which is made when
-/// missing, ending in `suffix`. What interrupted copies and downloads left
-/// there is cleared first (see [`sweep`]).
+/// missing, ending in `suffix`. What interrupted copies left there is
+/// cleared first (see [`sweep`]).
 pub fn incoming_path(directory: &Path, suffix: &str) -> io::Result<PathBuf> {
     let folder = directory.join(INCOMING_DIR);
     fs::create_dir_all(&folder)?;
@@ -172,13 +172,14 @@ pub fn incoming_path(directory: &Path, suffix: &str) -> io::Result<PathBuf> {
 }
 
 /// How long an entry in [`INCOMING_DIR`] goes unwritten before it is taken
-/// for one an interrupted copy or download left.
+/// for one an interrupted copy left.
 const STALE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Remove the entries in `folder` that another process's [`incoming_path`]
 /// made and nothing has written for [`STALE`] by `now`: an app quit mid-copy
-/// or a download stopped part way leaves them, and no one else would. A
-/// copy or download in progress keeps writing, so it is never stale.
+/// leaves them, as a download an older `kerf <URL>` stopped part way left a
+/// folder, and no one else would. A copy in progress keeps writing, so it is
+/// never stale.
 fn sweep(folder: &Path, now: SystemTime) {
     let Ok(entries) = fs::read_dir(folder) else {
         return;
@@ -210,8 +211,8 @@ fn sweep(folder: &Path, now: SystemTime) {
     }
 }
 
-/// When `path` was last written: for a folder, whatever directly in it was
-/// written last, as a download writes its partial file there.
+/// When `path` was last written: for a folder (an older `kerf <URL>`
+/// downloaded into one), whatever directly in it was written last.
 fn last_written(path: &Path, metadata: &fs::Metadata) -> Option<SystemTime> {
     let mut latest = metadata.modified().ok()?;
     if metadata.is_dir() {
