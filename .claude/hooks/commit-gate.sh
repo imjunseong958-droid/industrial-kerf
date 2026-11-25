@@ -20,11 +20,12 @@ cwd=$(jq -r '.cwd // ""' <<<"$input")
 
 # Only gate git commit: also `/usr/bin/git commit`, `git -C "/a b" -c k="v w" commit`,
 # `... && git commit`, `bash -c 'git commit'` and `(git commit)`, but not `git commit-tree`.
-# Group 2 is the call itself, from git to commit. A word may hold quoted spaces.
-piece="(\"[^\"]*\"|'[^']*'|[^[:space:]\"'])"
-value="(\"[^\"]*\"|'[^']*'|[^-[:space:]\"'])$piece*"
-gitcall="([^[:space:];&|()\"'\`]*/)?git[[:space:]]+(-${piece}+[[:space:]]+(${value}[[:space:]]+)?)*commit"
-commit="(^|[;&|(\"'\`[:space:]])($gitcall)([;&|)\"'\`[:space:]]|\$)"
+# Group 2 is the call itself, from git to commit. A word may hold quoted spaces, and a quote
+# with no partner, as in O\'Brien, is an ordinary character.
+piece="(\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:]])"
+value="(\"[^\"]*\"|'[^']*'|\\\\.|[^-[:space:]])$piece*"
+gitcall="([^[:space:];&|()\"'\`]*/)?git[[:space:]]+([\"']?-${piece}+[[:space:]]+(${value}[[:space:]]+)?)*commit"
+commit="(^|[;&|(\"'\`\\[:space:]])($gitcall)([;&|)<>\"'\`[:space:]]|\$)"
 grep -Eq "$commit" <<<"$cmd" || exit 0
 
 # Find the checkouts the command commits in. CLAUDE_PROJECT_DIR does not say: in a session of
@@ -90,10 +91,15 @@ fi
 
 # Each commit in the command. A match ends on the character after `commit`, and that character
 # can also open the next one, as in `git commit;git -C dir commit`, so it is put back.
+# A call met before is not checked again.
 calls=()
+seen=$'\n'
 rest=$cmd
 while [[ $rest =~ $commit ]]; do
-  calls+=("${BASH_REMATCH[2]}")
+  if [[ $seen != *$'\n'"${BASH_REMATCH[2]}"$'\n'* ]]; then
+    calls+=("${BASH_REMATCH[2]}")
+    seen+=${BASH_REMATCH[2]}$'\n'
+  fi
   rest=${rest#*"${BASH_REMATCH[0]}"}
   rest=${BASH_REMATCH[0]: -1}$rest
 done
@@ -110,11 +116,12 @@ for call in ${calls[@]+"${calls[@]}"}; do
     call=${call#"${BASH_REMATCH[0]}"}
   done
   for ((i = 1; i < ${#words[@]}; i++)); do
-    bare=${words[i]//\"/} bare=${bare//\'/}
-    case $bare in
+    # Quotes do not change what git reads, and its config keys ignore case.
+    bare=${words[i]//[\"\']/}
+    case $(tr '[:upper:]' '[:lower:]' <<<"$bare") in
       --git-dir* | --work-tree* | *core.worktree=*) unknown "git ${words[i]}" ;;
     esac
-    case ${words[i]} in
+    case $bare in
       -C)
         i=$((i + 1))
         next=()
