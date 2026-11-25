@@ -2050,6 +2050,7 @@ dependencies = [
 name = "kerf-runtime"
 version = "0.1.7"
 dependencies = [
+ "env_filter",
  "env_logger",
  "fs2",
  "kerf-collab",

@@ -35,6 +35,9 @@ pub fn to_stderr() {
 ///
 /// The file is made at the first line written, so a project kerfd has nothing to say about gets
 /// none. A line that cannot be written there is dropped.
+///
+/// A `RUST_LOG` that does not read is said in the log, and warnings and errors are written. It is
+/// read here, not by env_logger, which would say so on stderr, ahead of that JSON error.
 pub fn to_project(directory: &Path) {
     let log = ProjectLog {
         path: directory.join(PROJECT_LOG),
@@ -42,11 +45,23 @@ pub fn to_project(directory: &Path) {
         file: None,
         length: 0,
     };
-    let _ = builder()
+    let asked = std::env::var("RUST_LOG").ok();
+    let refused = asked
+        .as_deref()
+        .and_then(|asked| env_filter::Builder::new().try_parse(asked).err());
+    let filters = match (&asked, &refused) {
+        (Some(asked), None) => asked.as_str(),
+        _ => DEFAULT_FILTER,
+    };
+    let installed = env_logger::Builder::new()
+        .parse_filters(filters)
         .target(Target::Pipe(Box::new(log)))
         // Never colour escapes in a file, whatever RUST_LOG_STYLE says.
         .write_style(WriteStyle::Never)
         .try_init();
+    if let (Ok(()), Some(refused)) = (installed, refused) {
+        log::warn!("RUST_LOG was not read, so warnings and errors are written: {refused}");
+    }
 }
 
 fn builder() -> env_logger::Builder {

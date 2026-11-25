@@ -17,7 +17,9 @@ kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-protocol = { path = "../../foundation/kerf-protocol" }
 # The log kerfd, kerf-mcp and kerf write (`logging`): RUST_LOG's filter, and
-# each line's time. No colour: kerfd's log is a file.
+# each line's time. No colour: kerfd's log is a file. env_filter, which
+# env_logger reads RUST_LOG with, reads kerfd's without a word on stderr.
+env_filter = { version = "2", default-features = false }
 env_logger = { version = "0.11", default-features = false, features = ["humantime"] }
 fs2 = "0.4"
 libc.workspace = true
