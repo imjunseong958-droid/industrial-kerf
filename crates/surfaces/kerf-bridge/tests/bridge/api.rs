@@ -1,5 +1,6 @@
 //! The bridge's own surface: the commands it refuses at once, the folder it names, the
-//! threads it started and leaves none of at work, and the editor's `--serve-mcp` argument.
+//! threads it started and leaves none of at work, the processes a stopped Claude Code turn
+//! leaves none of running, and the editor's `--serve-mcp` argument.
 //!
 //! Needs kerfd built beside this test: `cargo build -p kerf-runtime --bin kerfd`.
 
@@ -157,8 +158,8 @@ const ALONE: &str = "KERF_BRIDGE_API_ALONE";
 /// asks its person first would hold that thread for as long as they took. `test` runs again
 /// in a process of its own, this binary started for it alone, with a home of the tests' own
 /// and the keychain off. True in that process, where the test goes on; false in this one,
-/// once the test has passed there.
-fn alone(test: &str) -> bool {
+/// once the test has passed there. `env` is set in that process too.
+fn alone(test: &str, env: &[(&str, &std::ffi::OsStr)]) -> bool {
     if std::env::var_os(ALONE).is_some() {
         return true;
     }
@@ -170,6 +171,7 @@ fn alone(test: &str) -> bool {
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env("KERF_SECRETS", "off")
+        .envs(env.iter().copied())
         .output()
         .unwrap();
     let said = format!(
@@ -186,7 +188,10 @@ fn alone(test: &str) -> bool {
 
 #[test]
 fn a_bridge_let_go_leaves_none_of_the_threads_it_started_at_work() {
-    if !alone("api::a_bridge_let_go_leaves_none_of_the_threads_it_started_at_work") {
+    if !alone(
+        "api::a_bridge_let_go_leaves_none_of_the_threads_it_started_at_work",
+        &[],
+    ) {
         return;
     }
     let project = Project::new();
@@ -221,4 +226,116 @@ fn a_bridge_let_go_leaves_none_of_the_threads_it_started_at_work() {
         "{} of the threads the bridge started were still at work a minute after it was let go",
         workers.running()
     );
+}
+
+/// Stands in for Claude Code, as `claude` beside a `pids` file: it reads the request, starts
+/// a long shell command with a child of its own, and another that does not end when asked
+/// to, nor does its child, says the turn has begun and waits. Each writes its process id to
+/// `pids`; asked to end, the stand-in writes `asked` beside them first.
+#[cfg(unix)]
+const STAND_IN_CLAUDE: &str = r#"#!/bin/sh
+here=$(dirname "$0")
+cat >/dev/null
+trap 'echo asked >"$here/asked"; exit 143' TERM
+sh -c 'sleep 600 & echo $! >>"$1/pids"; wait' long "$here" >/dev/null 2>&1 &
+echo $! >>"$here/pids"
+sh -c 'trap "" TERM; sleep 600 & echo $! >>"$1/pids"; wait' stubborn "$here" >/dev/null 2>&1 &
+echo $! >>"$here/pids"
+echo $$ >>"$here/pids"
+echo '{"type":"system","subtype":"init","session_id":"stand-in","mcp_servers":[]}'
+wait
+"#;
+
+/// Whether process `pid` ends within `limit`; a zombie awaiting its new parent counts as
+/// ended. `ps` that says nothing, not even why, has found no such process.
+#[cfg(unix)]
+fn ends_within(pid: &str, limit: Duration) -> bool {
+    let start = Instant::now();
+    while start.elapsed() < limit {
+        let output = std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .expect("ps runs");
+        let state = String::from_utf8_lossy(&output.stdout);
+        let gone = state.trim().is_empty() && output.stderr.is_empty();
+        if gone || state.trim_start().starts_with('Z') {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stopped_claude_code_turn_leaves_nothing_it_started_running() {
+    // Claude Code is the stand-in `KERF_CLAUDE_BIN` names, which only a process started with
+    // it set reads. The stand-in starts no server: Kerf needs only one named.
+    let named = std::env::temp_dir()
+        .join(format!("kq-claude-{}", std::process::id()))
+        .join("claude");
+    if !alone(
+        "api::a_stopped_claude_code_turn_leaves_nothing_it_started_running",
+        &[
+            ("KERF_CLAUDE_BIN", named.as_os_str()),
+            ("KERF_MCP_BIN", "kerf-mcp".as_ref()),
+        ],
+    ) {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let claude = PathBuf::from(std::env::var_os("KERF_CLAUDE_BIN").unwrap());
+    let folder = Project(claude.parent().unwrap().to_owned());
+    fs::create_dir_all(&folder.0).unwrap();
+    fs::write(&claude, STAND_IN_CLAUDE).unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let project = Project::new();
+    let mut bridge = Bridge::open(&project.0, &kerfd());
+    assert!(send(
+        &mut bridge,
+        &json!({"type": "agent", "text": "Run the long command", "provider": "claude-code"})
+    ));
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let started = loop {
+        let said = fs::read_to_string(folder.0.join("pids")).unwrap_or_default();
+        let pids: Vec<String> = said.lines().map(str::to_owned).collect();
+        if pids.len() == 5 {
+            break pids;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the turn did not start all it runs: {said:?}; events: {events:?}"
+        );
+        events.extend(poll(&mut bridge));
+        std::thread::sleep(Duration::from_millis(20));
+    };
+
+    assert!(send(&mut bridge, &json!({"type": "abort"})));
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match poll(&mut bridge) {
+            Some(event) if event["type"] == "agent_state" && event["state"] == "aborted" => break,
+            Some(event) => events.push(event),
+            None => {
+                assert!(
+                    Instant::now() < deadline,
+                    "the turn did not stop: {events:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    }
+    // Asked to end before anything was killed, and nothing it started outlives the turn.
+    assert!(
+        folder.0.join("asked").is_file(),
+        "Claude Code was not asked to end"
+    );
+    for pid in &started {
+        assert!(
+            ends_within(pid, Duration::from_secs(5)),
+            "process {pid} of the stopped turn is still running"
+        );
+    }
 }

@@ -194,6 +194,7 @@ fn main() {
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     kerf_bridge::crash_install();
+    kerf_bridge::forward_termination_signals();
     motion::init_from_env();
     let mut prefs = Prefs::load();
     if prefs.reduce_motion {
