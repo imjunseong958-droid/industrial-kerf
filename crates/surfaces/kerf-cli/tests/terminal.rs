@@ -369,6 +369,30 @@ fn a_persons_skills_are_found_where_only_the_user_profile_is_set() {
     );
 }
 
+/// `kerf <URL>` fetches nothing, and says so, where it once downloaded the URL: it is not
+/// taken for a file in the project that does not exist.
+#[test]
+fn a_url_to_import_is_refused_as_one() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::write(project.path().join("project.kerf"), DOCUMENT).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
+        .env("KERF_MODELS", project.path().join("models.json"))
+        .arg("--dir")
+        .arg(project.path())
+        .arg("https://example.com/a.mp4")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("kerf runs");
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        said.contains(
+            "URLs are not fetched; download https://example.com/a.mp4 first and pass the file's path"
+        ),
+        "{said}"
+    );
+}
+
 /// A server `.kerf/mcp.json` configures runs as Kerf's sidecars do. A SIGTERM that ends `kerf`
 /// while it waits on one ends the server too, and what its launcher started; and what the server
 /// started in a session of its own, out of reach of that, does not hold `kerf`'s stderr open.

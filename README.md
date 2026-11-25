@@ -88,7 +88,7 @@ Every editor action is declared once, in `kerf-commands`, with its shortcuts in
 the Kerf, Premiere Pro, and Final Cut Pro keymaps and the reason it may be
 unavailable, so the menus, the shortcuts, and the toolbar cannot disagree.
 
-FFmpeg, ffprobe, and yt-dlp remain controlled native sidecars. Editing
+FFmpeg and ffprobe remain controlled native sidecars. Editing
 playbooks are data in `skills/*/SKILL.md`.
 
 ## Build and run
@@ -179,10 +179,11 @@ target/release/kerf --terminal --dir ./my-project --mcp
 target/release/kerf --terminal --dir ./my-project --mcp-tools -p "use the connected research tool"
 ```
 
-In editor mode, `kerf` imports a local media path or an HTTP(S) URL before
-opening the native window; in a project with a `media/` folder, or a shared
-one, the file is copied (or downloaded) into `media/` first, as the editor's
-import does. The terminal workflow, `kerf preset`, `kerf sync`,
+In editor mode, `kerf` imports a local media file before opening the
+native window; in a project with a `media/` folder, or a shared one, the
+file is copied into `media/` first, as the editor's import does. `kerf`
+does not download a URL: download it first and pass the file. The terminal
+workflow, `kerf preset`, `kerf sync`,
 and a media import use the current directory unless `--dir` or
 `KERF_PROJECT_DIR` names a project. So do `kerf load`, which takes a
 `project.kerf` changed outside Kerf as the project, `kerf proposals`,
@@ -452,9 +453,11 @@ written and holds it equal to the one its own writer makes, and the
 (`crates/edit/kerf-interchange/tests`). Treat a first import as a check, and
 read the list.
 
-Only the other OpenTimelineIO adapters, `otioz` and the adapter plugins, go
-through the bundled `crates/edit/kerf-interchange/python/otio_bridge.py`,
-which needs an environment with `opentimelineio` and the adapter asked for.
+Kerf writes no other OpenTimelineIO format (`otioz`, or an adapter plugin's)
+and runs no Python. The check against OpenTimelineIO itself runs in the tests,
+through `crates/edit/kerf-interchange/tests/interchange/otio_bridge.py`, with
+a Python that has `opentimelineio` (`KERF_OTIO_PYTHON`, else `python3`);
+without one, that check is skipped.
 
 ## Verification
 

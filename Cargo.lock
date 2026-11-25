@@ -1722,7 +1722,6 @@ dependencies = [
  "kerf-agent",
  "kerf-collab",
  "kerf-engine",
- "kerf-fetcher",
  "kerf-interchange",
  "kerf-lang",
  "kerf-mcp",
@@ -1866,10 +1865,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kerf-fetcher"
-version = "0.1.7"
-
-[[package]]
 name = "kerf-fx"
 version = "0.1.7"
 dependencies = [
@@ -1926,7 +1921,6 @@ version = "0.1.7"
 dependencies = [
  "kerf-lang",
  "kerf-model",
- "kerf-sidecar",
  "roxmltree",
  "serde",
  "serde_json",

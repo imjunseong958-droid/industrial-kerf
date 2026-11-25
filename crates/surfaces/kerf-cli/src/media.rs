@@ -1,21 +1,11 @@
-//! `kerf <media>`: a file or an address brought into the project as a session starts.
+//! `kerf <media>`: a file brought into the project as a session starts.
 
 use crate::{open_router, operation_key, runtime_error};
 use anyhow::{bail, Context, Result};
-use std::fs;
 use std::path::{Path, PathBuf};
 
-pub(crate) fn import_media(
-    directory: &Path,
-    kerfd: Option<&Path>,
-    media: &str,
-    cookies: Option<&Path>,
-) -> Result<PathBuf> {
-    let options = kerf_fetcher::FetchOptions {
-        cookies: cookies.map(Path::to_path_buf),
-        ..kerf_fetcher::FetchOptions::default()
-    };
-    let path = media_file(directory, media, &options)?;
+pub(crate) fn import_media(directory: &Path, kerfd: Option<&Path>, media: &str) -> Result<PathBuf> {
+    let path = media_file(directory, media)?;
     let router = open_router(directory, kerfd)?;
     let snapshot = router.runtime().get_state().map_err(runtime_error)?;
     let key = operation_key("cli-import");
@@ -26,32 +16,14 @@ pub(crate) fn import_media(
     Ok(path)
 }
 
-/// The file `kerf <media>` imports into the project in `directory`: a
-/// download of a URL, or a local file. A project that keeps its media in
-/// `media/` gets a copy there (named by its content) of a download and of a
-/// file its repository would not carry, as the editor's import does.
-fn media_file(
-    directory: &Path,
-    media: &str,
-    options: &kerf_fetcher::FetchOptions,
-) -> Result<PathBuf> {
-    if media.starts_with("http://") || media.starts_with("https://") {
-        if !kerf_collab::media::shares_media(directory) {
-            return Ok(kerf_fetcher::fetch_video(media, directory, options)?.path);
-        }
-        // Downloaded where Git does not look, so a sync meanwhile never
-        // commits half of it, then copied in.
-        let folder = kerf_collab::media::incoming_path(directory, "-download")
-            .context("make a download folder")?;
-        let copied = kerf_fetcher::fetch_video(media, &folder, options)
-            .map_err(anyhow::Error::from)
-            .and_then(|fetched| {
-                kerf_collab::media::copy_into_media(directory, &fetched.path)
-                    .with_context(|| format!("copy {} into media/", fetched.path.display()))
-            });
-        // What stays in the incoming folder is swept as stale later.
-        let _ = fs::remove_dir_all(&folder);
-        return Ok(directory.join(copied?));
+/// The file `kerf <media>` imports into the project in `directory`. A
+/// project that keeps its media in `media/` gets a copy there (named by its
+/// content) of a file its repository would not carry, as the editor's
+/// import does. A URL is refused, and said to be one: read as a path, it
+/// would be a file in the project that does not exist.
+fn media_file(directory: &Path, media: &str) -> Result<PathBuf> {
+    if is_web_address(media) {
+        bail!("URLs are not fetched; download {media} first and pass the file's path");
     }
     let path = kerf_collab::media::absolute(directory, Path::new(media));
     if !path.is_file() {
@@ -63,4 +35,13 @@ fn media_file(
         return Ok(directory.join(copy));
     }
     Ok(path)
+}
+
+/// Whether `media` is an `http://` or `https://` address, in any case.
+fn is_web_address(media: &str) -> bool {
+    ["http://", "https://"].iter().any(|scheme| {
+        media
+            .get(..scheme.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(scheme))
+    })
 }
