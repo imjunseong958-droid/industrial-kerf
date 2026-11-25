@@ -14,13 +14,22 @@
 //! ends at once on the signal. Windows has no such signal to send a job,
 //! so there a cancelled sidecar is ended outright.
 //!
+//! A sidecar that ends by itself takes what it left running with it: on
+//! Unix what is still in its group is killed as it is waited for, and on
+//! Windows its job closes.
+//!
+//! `run` runs one to its end, reading its stderr. A program that is
+//! talked to over its pipes, as Claude Code is, is started as a [`Sidecar`]
+//! and waited for on its own thread, while its [`Stopper`] stops it from
+//! any other.
+//!
 //! A terminal's Ctrl-C ends the binary that runs sidecars, and what they
 //! started with it, unless the binary holds [`stop_on_termination`]: then
 //! the first one cancels that work, and so stops its sidecar as above.
 
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::io::{self, BufRead, BufReader};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -93,17 +102,18 @@ fn run_within(
         return Err(EngineError::Cancelled);
     }
     let program = command.get_program().to_string_lossy().into_owned();
-    let mut child = start(
+    let mut sidecar = Sidecar::start(
         command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped()),
     )
     .map_err(|error| EngineError::msg(format!("{program} could not start: {error}")))?;
-    let Some(stderr) = child.stderr.take() else {
-        kill(&mut child);
+    let Some(stderr) = sidecar.stderr.take() else {
+        sidecar.kill();
         return Err(EngineError::msg(format!("{program} stderr is unavailable")));
     };
+    let stopper = sidecar.stopper();
     let (sender, receiver) = mpsc::sync_channel::<String>(STDERR_QUEUE_CAPACITY);
     let reader = thread::spawn(move || {
         for line in BufReader::new(stderr)
@@ -129,8 +139,8 @@ fn run_within(
             // Asked first, so that it can undo what it has under way and say so. It is
             // not reaped while it is waited for: its group stays its own to signal.
             let asked = Instant::now();
-            ask_to_end(&child);
-            while asked.elapsed() < grace && !has_ended(&child) {
+            stopper.ask_to_end();
+            while asked.elapsed() < grace && !stopper.has_ended() {
                 drain(&mut tail);
                 thread::sleep(POLL_INTERVAL);
             }
@@ -146,18 +156,18 @@ fn run_within(
                 }
                 drain(&mut tail);
             };
-            if has_ended(&child) {
+            if stopper.has_ended() {
                 read_out();
             }
-            kill(&mut child);
+            sidecar.kill();
             read_out();
             break Err(EngineError::Cancelled);
         }
-        match try_wait(&mut child) {
+        match sidecar.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => thread::sleep(POLL_INTERVAL),
             Err(error) => {
-                kill(&mut child);
+                sidecar.kill();
                 break Err(error.into());
             }
         }
@@ -182,142 +192,326 @@ fn run_within(
     })
 }
 
+/// A sidecar as it is listed while it runs: its process id, and the number
+/// it was started as, which no other sidecar has, so that a process id
+/// reused once it has ended is not taken for it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Listed {
+    id: u32,
+    serial: u64,
+}
+
+impl Listed {
+    fn of(child: &Child) -> Self {
+        static SERIAL: AtomicU64 = AtomicU64::new(0);
+        Self {
+            id: child.id(),
+            serial: SERIAL.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+}
+
 /// The process groups of the sidecars running now, each named by its
 /// leader, which stays unreaped while it is listed.
 #[cfg(unix)]
-static RUNNING: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
+static RUNNING: std::sync::Mutex<Vec<Listed>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(unix)]
-fn running() -> std::sync::MutexGuard<'static, Vec<u32>> {
+fn running() -> std::sync::MutexGuard<'static, Vec<Listed>> {
     RUNNING
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The job of each sidecar running now, by its process id, which cannot be
-/// reused while its `Child` holds the process open.
+/// What holds each sidecar running now (its job, or its process where it
+/// could have no job), by its process id, which cannot be reused while its
+/// `Child` holds the process open.
 #[cfg(windows)]
-static JOBS: std::sync::Mutex<Vec<(u32, job::Job)>> = std::sync::Mutex::new(Vec::new());
+static JOBS: std::sync::Mutex<Vec<(Listed, job::Hold)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(windows)]
-fn jobs() -> std::sync::MutexGuard<'static, Vec<(u32, job::Job)>> {
+fn jobs() -> std::sync::MutexGuard<'static, Vec<(Listed, job::Hold)>> {
     JOBS.lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Start `command` as a sidecar: on Unix, leading a process group of its
 /// own and listed as running; on Windows, in a job of its own.
-fn start(command: &mut Command) -> std::io::Result<Child> {
+fn start(command: &mut Command) -> io::Result<(Child, Listed)> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         // Listed under the lock, so a forwarded signal cannot miss it.
         let mut running = running();
         let child = command.process_group(0).spawn()?;
-        running.push(child.id());
-        Ok(child)
+        let listed = Listed::of(&child);
+        running.push(listed);
+        Ok((child, listed))
     }
     #[cfg(windows)]
     {
         let child = command.spawn()?;
-        // A sidecar that cannot have a job still runs; cancelling it then
+        let listed = Listed::of(&child);
+        // A sidecar that cannot have a job still runs; stopping it then
         // ends only the sidecar itself.
-        if let Ok(job) = job::Job::assign(&child) {
-            jobs().push((child.id(), job));
+        if let Ok(hold) = job::Hold::of(&child) {
+            jobs().push((listed, hold));
         }
-        Ok(child)
+        Ok((child, listed))
     }
     #[cfg(not(any(unix, windows)))]
-    command.spawn()
+    {
+        let child = command.spawn()?;
+        let listed = Listed::of(&child);
+        Ok((child, listed))
+    }
 }
 
-/// Poll the sidecar. On Unix one that has exited leaves the running list
-/// under the same lock, before its process id can be reused. On Windows
-/// its job closes, ending anything it left running.
-fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
-    #[cfg(unix)]
-    {
-        let mut running = running();
-        let status = child.try_wait()?;
-        if status.is_some() {
-            running.retain(|&id| id != child.id());
-        }
-        Ok(status)
-    }
-    #[cfg(windows)]
-    {
-        let status = child.try_wait()?;
-        if status.is_some() {
-            jobs().retain(|(id, _)| *id != child.id());
-        }
-        Ok(status)
-    }
-    #[cfg(not(any(unix, windows)))]
-    child.try_wait()
+/// A program run as a sidecar, as `run` runs one, for a caller that talks
+/// to it over its pipes: on Unix it leads a process group of its own, on
+/// Windows it is in a job of its own. Its pipes are taken as a [`Child`]'s
+/// are.
+///
+/// It is waited for here and not through its `Child`, so that on Unix it
+/// stays its group's leader, unreaped, for as long as anything may signal
+/// that group. Waiting for it ends what it left running. Dropped before it
+/// has been waited for, it is killed, and what it started with it.
+pub struct Sidecar {
+    child: Child,
+    listed: Listed,
+    /// Its stdin, when the command piped it.
+    pub stdin: Option<ChildStdin>,
+    /// Its stdout, when the command piped it.
+    pub stdout: Option<ChildStdout>,
+    /// Its stderr, when the command piped it.
+    pub stderr: Option<ChildStderr>,
+    /// Reaped, or about to be: no longer listed, and nothing more to stop.
+    done: bool,
 }
 
-/// Ask the sidecar and what it started to end: SIGTERM to its process
-/// group on Unix. Windows has nothing to ask a job with.
-fn ask_to_end(child: &Child) {
-    #[cfg(unix)]
-    {
-        let running = running();
-        if running.contains(&child.id()) {
-            signal_group(child.id(), libc::SIGTERM);
+impl Sidecar {
+    /// Start `command` as a sidecar.
+    pub fn start(command: &mut Command) -> io::Result<Self> {
+        let (mut child, listed) = start(command)?;
+        Ok(Self {
+            stdin: child.stdin.take(),
+            stdout: child.stdout.take(),
+            stderr: child.stderr.take(),
+            child,
+            listed,
+            done: false,
+        })
+    }
+
+    /// What stops it from another thread while this one waits for it.
+    pub fn stopper(&self) -> Stopper {
+        Stopper {
+            listed: self.listed,
         }
     }
-    #[cfg(not(unix))]
-    let _ = child;
+
+    /// How it exited, if it has; then, as [`Sidecar::wait`] does, what it
+    /// left running is ended.
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        if self.done {
+            return self.child.try_wait();
+        }
+        #[cfg(unix)]
+        let exited = exited(self.child.id());
+        #[cfg(not(unix))]
+        let exited = self.child.try_wait()?.is_some();
+        if !exited {
+            return Ok(None);
+        }
+        self.end().map(Some)
+    }
+
+    /// Wait for it to exit, then end what it left running: on Unix what is
+    /// still in its group is killed, and on Windows its job closes. Its
+    /// [`Stopper`] stops it from another thread meanwhile.
+    pub fn wait(&mut self) -> io::Result<ExitStatus> {
+        if self.done {
+            return self.child.wait();
+        }
+        #[cfg(unix)]
+        wait_exited(self.child.id())?;
+        #[cfg(not(unix))]
+        self.child.wait()?;
+        self.end()
+    }
+
+    /// End what the sidecar, which has exited, left running, and reap it.
+    fn end(&mut self) -> io::Result<ExitStatus> {
+        self.done = true;
+        #[cfg(unix)]
+        {
+            let mut running = running();
+            // Not reaped yet, so its group is still its own.
+            signal_group(self.child.id(), libc::SIGKILL);
+            running.retain(|listed| *listed != self.listed);
+        }
+        #[cfg(windows)]
+        jobs().retain(|(listed, _)| *listed != self.listed);
+        self.child.wait()
+    }
+
+    /// Kill the sidecar and everything left in its process group on Unix,
+    /// or in its job on Windows, then reap it.
+    pub fn kill(&mut self) {
+        if self.done {
+            return;
+        }
+        self.done = true;
+        #[cfg(unix)]
+        {
+            let mut running = running();
+            signal_group(self.child.id(), libc::SIGKILL);
+            running.retain(|listed| *listed != self.listed);
+        }
+        #[cfg(windows)]
+        {
+            let mut jobs = jobs();
+            if let Some(index) = jobs.iter().position(|(listed, _)| *listed == self.listed) {
+                jobs.remove(index).1.terminate();
+            }
+        }
+        // Best effort: the sidecar may have ended already, and what a caller is told is how
+        // the run went, not how it was put out.
+        #[cfg(not(unix))]
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
-/// Whether the sidecar has ended, without reaping it: it stays listed, and
-/// its group stays its own, until [`kill`] or [`try_wait`] takes it. Where
-/// nothing was asked of it there is nothing to wait for.
-fn has_ended(child: &Child) -> bool {
-    #[cfg(unix)]
-    #[allow(unsafe_code)]
-    {
-        // SAFETY: `info` is zeroed, which waitid reads as no child having changed, and is
-        // written only by waitid. WNOWAIT leaves the child to be reaped later.
-        unsafe {
+impl Drop for Sidecar {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+/// What stops a running [`Sidecar`] from a thread other than the one that
+/// waits for it. Once the sidecar has been waited for, it does nothing.
+#[derive(Clone, Copy, Debug)]
+pub struct Stopper {
+    listed: Listed,
+}
+
+impl Stopper {
+    /// Ask the sidecar and what it started to end: SIGTERM to its process
+    /// group on Unix. Windows has nothing to ask a job with.
+    pub fn ask_to_end(&self) {
+        #[cfg(unix)]
+        {
+            let running = running();
+            if running.contains(&self.listed) {
+                signal_group(self.listed.id, libc::SIGTERM);
+            }
+        }
+    }
+
+    /// Whether the sidecar has ended. Where nothing could be asked of it
+    /// there is nothing to wait for.
+    pub fn has_ended(&self) -> bool {
+        #[cfg(unix)]
+        {
+            let running = running();
+            !running.contains(&self.listed) || exited(self.listed.id)
+        }
+        #[cfg(not(unix))]
+        true
+    }
+
+    /// Kill the sidecar and everything left in its process group on Unix,
+    /// or in its job on Windows. It is reaped where it is waited for.
+    pub fn kill(&self) {
+        #[cfg(unix)]
+        {
+            let running = running();
+            if running.contains(&self.listed) {
+                signal_group(self.listed.id, libc::SIGKILL);
+            }
+        }
+        #[cfg(windows)]
+        if let Some((_, hold)) = jobs().iter().find(|(listed, _)| *listed == self.listed) {
+            hold.terminate();
+        }
+    }
+
+    /// Stop the sidecar as a cancelled one is stopped: ask it to end, give
+    /// it `grace` to, and kill what is left once it has ended or that is
+    /// over. Returns then.
+    pub fn stop(&self, grace: Duration) {
+        self.ask_to_end();
+        self.kill_after(grace);
+    }
+
+    /// The rest of [`Stopper::stop`], for a sidecar already asked to end:
+    /// wait until it has ended or `grace` is over, then kill what is left.
+    pub fn kill_after(&self, grace: Duration) {
+        let asked = Instant::now();
+        while asked.elapsed() < grace && !self.has_ended() {
+            thread::sleep(POLL_INTERVAL);
+        }
+        self.kill();
+    }
+}
+
+/// Whether process `id`, a child of this one, has exited, without reaping
+/// it: it stays listed, and its group stays its own, until it is reaped.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn exited(id: u32) -> bool {
+    // SAFETY: `info` is zeroed, which waitid reads as no child having changed, and is
+    // written only by waitid. WNOWAIT leaves the child to be reaped later.
+    unsafe {
+        let mut info: libc::siginfo_t = std::mem::zeroed();
+        let asked = libc::waitid(
+            libc::P_PID,
+            id as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        );
+        asked != 0 || (info.si_pid() != 0 && ended_by(info.si_code))
+    }
+}
+
+/// Whether a child's change of state, by its `si_code`, is its end: macOS's
+/// waitid reports a stopped child too.
+#[cfg(unix)]
+fn ended_by(code: libc::c_int) -> bool {
+    matches!(code, libc::CLD_EXITED | libc::CLD_KILLED | libc::CLD_DUMPED)
+}
+
+/// Wait for process `id`, a child of this one, to exit, without reaping it,
+/// as [`exited`] looks.
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn wait_exited(id: u32) -> io::Result<()> {
+    loop {
+        // SAFETY: as in `exited`; without WNOHANG it returns once the child has exited.
+        let (asked, code) = unsafe {
             let mut info: libc::siginfo_t = std::mem::zeroed();
             let asked = libc::waitid(
                 libc::P_PID,
-                child.id() as libc::id_t,
+                id as libc::id_t,
                 &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+                libc::WEXITED | libc::WNOWAIT,
             );
-            asked != 0 || info.si_pid() != 0
+            (asked, info.si_code)
+        };
+        if asked == 0 && ended_by(code) {
+            return Ok(());
+        }
+        if asked == 0 {
+            // Stopped, not ended: it is looked at again in a moment.
+            thread::sleep(POLL_INTERVAL);
+            continue;
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::Interrupted {
+            return Err(error);
         }
     }
-    #[cfg(not(unix))]
-    {
-        let _ = child;
-        true
-    }
-}
-
-/// Kill the sidecar and everything left in its process group on Unix, or
-/// in its job on Windows, then reap it.
-fn kill(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let mut running = running();
-        signal_group(child.id(), libc::SIGKILL);
-        running.retain(|&id| id != child.id());
-    }
-    #[cfg(windows)]
-    {
-        let mut jobs = jobs();
-        if let Some(index) = jobs.iter().position(|(id, _)| *id == child.id()) {
-            jobs.remove(index).1.terminate();
-        }
-    }
-    // Best effort: the sidecar may have ended already, and what a caller is told is how
-    // the run went, not how it was put out.
-    #[cfg(not(unix))]
-    let _ = child.kill();
-    let _ = child.wait();
 }
 
 /// Send `signal` to the process group `leader` leads. Callers hold the
@@ -351,8 +545,8 @@ pub fn forward_termination_signals() {
                             if stopped_instead(signal) {
                                 continue;
                             }
-                            for &leader in running().iter() {
-                                signal_group(leader, signal);
+                            for listed in running().iter() {
+                                signal_group(listed.id, signal);
                             }
                             if let Err(error) =
                                 signal_hook::low_level::emulate_default_handler(signal)
@@ -563,12 +757,63 @@ mod tests {
     }
 
     #[test]
+    fn a_sidecar_stopped_from_another_thread_is_killed_once_its_grace_is_over() {
+        // Waited for on one thread and stopped from another, as a Claude Code turn is.
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap '' TERM; echo ready; while :; do sleep 0.05; done",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut sidecar = Sidecar::start(&mut command).expect("sh starts");
+        let shell = sidecar.child.id();
+        let mut ready = String::new();
+        BufReader::new(sidecar.stdout.take().expect("stdout is piped"))
+            .read_line(&mut ready)
+            .expect("the shell says it is ready");
+        let stopper = sidecar.stopper();
+        let (waited, wait) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let _ = waited.send(sidecar.wait().is_ok());
+        });
+        let grace = Duration::from_millis(300);
+        let start = Instant::now();
+        stopper.stop(grace);
+        // It does not end when asked, so it was given the whole of its grace, then killed.
+        let given = start.elapsed();
+        let ended = wait.recv_timeout(Duration::from_secs(5));
+        if ended.is_err() {
+            // Not left running past a failed test.
+            signal_group(shell, libc::SIGKILL);
+        }
+        assert_eq!(ended, Ok(true), "the sidecar outlived its grace");
+        assert!(given >= grace, "{given:?}");
+        waiter.join().expect("waiter");
+    }
+
+    #[test]
+    fn a_sidecar_that_ends_by_itself_takes_what_it_left_running_with_it() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30 >/dev/null 2>&1 & echo $! >&2"]);
+        let mut said = Vec::new();
+        let finished = run(command, &CancellationToken::new(), |line| {
+            said.push(line.to_owned())
+        })
+        .expect("the shell ends by itself");
+        assert!(finished.status.success());
+        let sleeper = said.first().expect("the shell reports the sleeper's id");
+        assert!(ends_within(sleeper, Duration::from_secs(3)));
+    }
+
+    #[test]
     fn a_signal_to_a_running_sidecar_reaches_what_it_started() {
         let token = CancellationToken::new();
         let (runner, shell, sleeper) = run_sleeper(&token);
         {
             let running = running();
-            assert!(running.contains(&shell));
+            assert!(running.iter().any(|listed| listed.id == shell));
             signal_group(shell, libc::SIGTERM);
         }
         let finished = runner
@@ -577,7 +822,7 @@ mod tests {
             .expect("the shell ends on the signal");
         assert!(!finished.status.success());
         assert!(ends_within(&sleeper, Duration::from_secs(3)));
-        assert!(!running().contains(&shell));
+        assert!(!running().iter().any(|listed| listed.id == shell));
     }
 
     #[test]
@@ -692,14 +937,14 @@ mod windows_tests {
     fn cancelling_ends_what_the_sidecar_started() {
         let token = CancellationToken::new();
         let (runner, shell, pinger) = run_pinger(&token);
-        assert!(jobs().iter().any(|(id, _)| *id == shell));
+        assert!(jobs().iter().any(|(listed, _)| listed.id == shell));
         let start = Instant::now();
         token.cancel();
         let result = runner.join().expect("runner");
         assert!(matches!(result, Err(EngineError::Cancelled)));
         assert!(start.elapsed() < Duration::from_secs(3));
         assert!(ends_within(pinger, Duration::from_secs(3)));
-        assert!(!jobs().iter().any(|(id, _)| *id == shell));
+        assert!(!jobs().iter().any(|(listed, _)| listed.id == shell));
     }
 
     #[test]

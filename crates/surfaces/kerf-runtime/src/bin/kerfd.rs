@@ -9,7 +9,9 @@ fn main() {
     kerf_runtime::crash::install("kerfd");
     let args: Vec<String> = env::args().collect();
     if args.get(1).map(String::as_str) == Some("merge-driver") {
-        // Git merges project.kerf through this: `kerfd merge-driver %O %A %B %P`.
+        // Git merges project.kerf through this: `kerfd merge-driver %O %A %B %P`,
+        // and shows what it writes on stderr.
+        kerf_runtime::logging::to_stderr();
         std::process::exit(kerf_collab::run_merge_driver(&args[2..]));
     }
     kerf_engine::process::sidecar::forward_termination_signals();
@@ -19,6 +21,7 @@ fn main() {
         .map(|pair| PathBuf::from(&pair[1]))
         .or_else(|| env::var_os("KERF_PROJECT_DIR").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(".kerf/runtime"));
+    kerf_runtime::logging::to_project(&directory);
     let result = if args.iter().any(|arg| arg == "--endpoint") {
         // Print where clients reach this project's daemon: `<dir>/.kerfd.sock`,
         // or a per-user socket when that path is too long for the OS.

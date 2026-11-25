@@ -3,6 +3,7 @@
 
 #![cfg(any(unix, windows))]
 
+use kerf_engine::process::sidecar::Sidecar;
 use kerf_runtime::{
     response_value, EditKey, EditParam, EndpointAddress, ErrorCode, Interp, ProjectionStatus,
     RenderCodec, RenderQuality, RuntimeClient, RuntimeError, RuntimeLease, StartRenderOptions,
@@ -847,6 +848,68 @@ fn daemon_exits_once_its_project_directory_is_deleted() {
     panic!("kerfd kept running after its project directory was deleted");
 }
 
+/// What kerfd warns of is kept in the project's `.kerf-runtime.log`, at the level it logs at when
+/// RUST_LOG says nothing: here, a journal record a crash cut short, which it drops. kerfd writes
+/// none of it to stderr, which a client that starts it reads as the error it stopped with.
+#[test]
+fn what_kerfd_warns_of_is_kept_in_the_projects_log() {
+    let _project = Project::new("log");
+    let directory = _project.0.clone();
+    let log = directory.join(".kerf-runtime.log");
+    let stderr = directory.join("kerfd.stderr");
+    let start = || {
+        let mut command = daemon_command(&directory);
+        command
+            .env_remove("RUST_LOG")
+            .stderr(fs::File::create(&stderr).unwrap());
+        command.spawn().expect("spawn kerfd")
+    };
+    let client = RuntimeClient::new(&directory).unwrap();
+    let daemon = start();
+    wait_until_ready(&client);
+    client
+        .apply_script_request("ui", "logged", "marker add at=0f as=kept", 0)
+        .unwrap();
+    stop_daemon(daemon);
+    // Nothing to say, and no log.
+    assert!(!log.exists());
+
+    // What a crash in the middle of writing a record leaves.
+    let mut journal = fs::OpenOptions::new()
+        .append(true)
+        .open(directory.join(".kerf-runtime.journal"))
+        .unwrap();
+    journal.write_all(br#"{"v":4,"revision":2,"scr"#).unwrap();
+    drop(journal);
+    let daemon = start();
+    wait_until_ready(&client);
+    let state = client.get_state().unwrap();
+    stop_daemon(daemon);
+    assert_eq!(state.revision, 1);
+    assert!(has_marker(&state, "kept"));
+    let said = fs::read_to_string(&log).unwrap();
+    assert!(said.contains("WARN"), "{said}");
+    assert!(said.contains("a record cut short"), "{said}");
+    assert_eq!(fs::read_to_string(&stderr).unwrap(), "");
+}
+
+/// A RUST_LOG kerfd cannot read is said in its log, not on stderr, where it would come ahead of
+/// the error kerfd stops with and the client reads there.
+#[test]
+fn a_rust_log_kerfd_cannot_read_leaves_the_error_it_stops_with_readable() {
+    let _project = Project::new("bad-rust-log");
+    let directory = _project.0.clone();
+    fs::write(directory.join("project.kerf"), "kerf 1\nnot a document\n").unwrap();
+    let client =
+        RuntimeClient::connect_or_spawn(&directory, Some(Path::new(env!("CARGO_BIN_EXE_kerfd"))))
+            .unwrap()
+            .with_daemon_env([("RUST_LOG", "kerf_runtime=verbose")]);
+    let error = client.get_state().unwrap_err();
+    assert_eq!(error.code.as_str(), "INVALID_PROJECT", "{}", error.message);
+    let said = fs::read_to_string(directory.join(".kerf-runtime.log")).unwrap();
+    assert!(said.contains("RUST_LOG was not read"), "{said}");
+}
+
 #[cfg(unix)]
 #[test]
 fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
@@ -971,6 +1034,61 @@ fn a_client_starts_the_daemon_it_cannot_reach() {
         thread::sleep(Duration::from_millis(20));
     }
     panic!("the started kerfd kept running after its project was deleted");
+}
+
+#[test]
+fn a_daemon_outlives_the_stopped_sidecar_that_started_it() {
+    // As kerf-mcp, run by Claude Code for a turn, starts kerfd: a stopped turn stops Claude
+    // Code's whole process group, or its job. The sidecar is this test, run again to start
+    // kerfd from there.
+    if let Some(directory) = std::env::var_os("KERFD_TEST_STARTER") {
+        let kerfd = Path::new(env!("CARGO_BIN_EXE_kerfd"));
+        let client = RuntimeClient::connect_or_spawn(Path::new(&directory), Some(kerfd)).unwrap();
+        client.get_state().unwrap();
+        println!("kerfd-started");
+        // Until stopped, or until the test that started it goes and closes its stdin.
+        let _ = std::io::copy(&mut std::io::stdin(), &mut std::io::sink());
+        std::process::exit(0);
+    }
+    let _project = Project::new("sidecar");
+    let directory = _project.0.clone();
+    let mut starter = Sidecar::start(
+        Command::new(std::env::current_exe().unwrap())
+            .args([
+                "a_daemon_outlives_the_stopped_sidecar_that_started_it",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("KERFD_TEST_STARTER", &directory)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )
+    .unwrap();
+    let stdout = starter.stdout.take().unwrap();
+    let (started, wait) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        use std::io::BufRead;
+        let line = std::io::BufReader::new(stdout)
+            .lines()
+            .map_while(Result::ok)
+            .any(|line| line.contains("kerfd-started"));
+        let _ = started.send(line);
+    });
+    assert!(
+        wait.recv_timeout(Duration::from_secs(30)).unwrap_or(false),
+        "the sidecar never started kerfd"
+    );
+    starter.stopper().stop(Duration::from_secs(5));
+    let _ = starter.wait();
+    let observer = RuntimeClient::new(&directory).unwrap();
+    for _ in 0..10 {
+        assert!(
+            observer.get_state().is_ok(),
+            "kerfd ended with the sidecar that started it"
+        );
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[test]
