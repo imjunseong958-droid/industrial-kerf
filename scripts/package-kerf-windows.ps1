@@ -8,7 +8,7 @@
 .DESCRIPTION
     Needs, as a Windows build of the editor does: Rust, Visual Studio's C++ tools (the
     linker, the resource compiler that puts the icon in kerf-editor.exe, and the C++
-    runtime to carry), a Windows SDK of any version (its fxc.exe compiles GPUI's
+    runtime to carry), a Windows 10 or 11 SDK (its fxc.exe compiles GPUI's
     shaders; GPUI_FXC_PATH names another), a shared GPL build of FFmpeg in FFMPEG_DIR,
     LIBCLANG_PATH for its bindings, and Inno Setup 6 for the installer (choco install
     innosetup). The editor is one Rust program drawn with GPUI (DirectX 11): it carries
@@ -133,7 +133,8 @@ try {
     if (-not $SkipBuild) {
         # Optimized: the editor's live preview and its exports draw frames in kerf-bridge,
         # which it links.
-        if (-not $env:GPUI_FXC_PATH) { $env:GPUI_FXC_PATH = Find-Fxc }
+        # GPUI passes over a GPUI_FXC_PATH that is not there.
+        if (-not $env:GPUI_FXC_PATH -or -not (Test-Path $env:GPUI_FXC_PATH)) { $env:GPUI_FXC_PATH = Find-Fxc }
         Write-Host "GPUI's shaders are compiled with $env:GPUI_FXC_PATH"
         Invoke-Tool cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
         Invoke-Tool cargo build --release -p kerf-cli --bin kerf
