@@ -368,3 +368,142 @@ fn a_persons_skills_are_found_where_only_the_user_profile_is_set() {
         "{listed}"
     );
 }
+
+/// A server `.kerf/mcp.json` configures runs as Kerf's sidecars do. A SIGTERM that ends `kerf`
+/// while it waits on one ends the server too, and what its launcher started; and what the server
+/// started in a session of its own, out of reach of that, does not hold `kerf`'s stderr open.
+#[cfg(unix)]
+#[test]
+fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
+    use std::io::Read;
+    use std::os::unix::process::ExitStatusExt;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let Some(kerfd) = kerfd() else {
+        return;
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::write(directory.join("project.kerf"), DOCUMENT).unwrap();
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).unwrap();
+    let _held = runtime.hold();
+    // A launcher, as npx is, whose server is its child and never answers, and which starts
+    // something in a session of its own, holding only its stderr. Each writes its process id.
+    let ids = tempfile::tempdir().unwrap();
+    let apart = "import os, sys, time\n\
+        os.setsid()\n\
+        with open(sys.argv[1], 'w') as file: file.write(str(os.getpid()))\n\
+        time.sleep(600)";
+    let launcher = format!(
+        "sleep 600 & echo $! > \"$0/server\"; \
+         python3 -c \"{apart}\" \"$0/apart\" </dev/null >/dev/null & \
+         echo $$ > \"$0/launcher\"; read line; sleep 600"
+    );
+    let config = serde_json::json!({"mcpServers": {"stalls": {
+        "command": "sh",
+        "args": ["-c", launcher, ids.path()],
+    }}});
+    std::fs::create_dir_all(directory.join(".kerf")).unwrap();
+    std::fs::write(directory.join(".kerf/mcp.json"), config.to_string()).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    /// What is killed as the test ends, however it ends, so that one that fails leaves
+    /// nothing running: `kerf` if it still runs, and each process or `-group` named.
+    struct Leftovers {
+        kerf: std::process::Child,
+        named: Vec<String>,
+    }
+    impl Drop for Leftovers {
+        fn drop(&mut self) {
+            // Nothing is signalled once it has been waited for.
+            let _ = self.kerf.kill();
+            let _ = self.kerf.wait();
+            for id in &self.named {
+                let _ = Command::new("kill").args(["-KILL", "--", id]).status();
+            }
+        }
+    }
+    let kerf = Command::new(env!("CARGO_BIN_EXE_kerf"))
+        // No one's own servers, and no timeout while the server is waited on.
+        .env("HOME", home.path())
+        .env("KERF_MCP_TIMEOUT_MS", "600000")
+        .arg("--dir")
+        .arg(directory)
+        .arg("--kerfd")
+        .arg(&kerfd)
+        .arg("--mcp")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("kerf runs");
+    let mut left_over = Leftovers {
+        kerf,
+        named: Vec::new(),
+    };
+    let mut stderr = left_over.kerf.stderr.take().unwrap();
+    let id = |name: &str| {
+        let started = Instant::now();
+        loop {
+            let written = std::fs::read_to_string(ids.path().join(name)).unwrap_or_default();
+            if let Ok(id) = written.trim().parse::<u32>() {
+                return id.to_string();
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(60),
+                "the server's {name} never started"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let launcher = id("launcher");
+    // It leads its group, which holds its server.
+    left_over.named.push(format!("-{launcher}"));
+    let server = id("server");
+    let apart = id("apart");
+    left_over.named.push(apart.clone());
+    // A process left without its parent stays a zombie until something reaps it, which `kill -0`
+    // cannot tell from one running. Only `ps` says which.
+    let runs = |id: &str| {
+        let state = Command::new("ps")
+            .args(["-o", "stat=", "-p", id])
+            .output()
+            .unwrap()
+            .stdout;
+        let state = String::from_utf8_lossy(&state);
+        let state = state.trim();
+        !state.is_empty() && !state.starts_with('Z')
+    };
+
+    let sent = Command::new("kill")
+        .args(["-TERM", &left_over.kerf.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    let ended = left_over.kerf.wait().unwrap();
+    // SIGTERM is 15 on every Unix.
+    assert_eq!(ended.signal(), Some(15), "{ended:?}");
+    let (said, heard) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = stderr.read_to_end(&mut text);
+        let _ = said.send(text);
+    });
+    let closed = heard.recv_timeout(Duration::from_secs(5));
+    let started = Instant::now();
+    while (runs(&launcher) || runs(&server)) && started.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let left = [&launcher, &server].map(|id| runs(id));
+    let apart_ran = runs(&apart);
+    assert_eq!(
+        left,
+        [false, false],
+        "the launcher {launcher} or its server {server} still runs"
+    );
+    assert!(
+        apart_ran,
+        "what left the server's group ended too: nothing held stderr"
+    );
+    assert!(closed.is_ok(), "kerf's stderr stayed open after it ended");
+}
