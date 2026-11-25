@@ -370,6 +370,7 @@ fn a_branch_that_tracks_local_settings_is_not_switched_to() {
 }
 
 /// Point `dir`'s remote at an SSH URL, which the stand-in ssh answers.
+#[cfg(unix)]
 fn ssh_remote(dir: &Path) {
     git::set_remote(dir, "git@kerf.invalid:team/film.git").unwrap();
 }
