@@ -6,14 +6,15 @@
 //! `mcp_call` without exposing every external schema to the model at once.
 
 use kerf_agent::{AgentTool, ToolMap};
+use kerf_engine::process::sidecar::{Sidecar, GRACE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -78,8 +79,13 @@ struct InboundTool {
 }
 
 struct McpProcess {
-    child: Child,
-    stdin: ChildStdin,
+    /// The server, run as Kerf's other sidecars are: with what a launcher
+    /// (npx, uvx, docker) started, in a process group (Unix) or a job
+    /// (Windows) of its own, which the signals that end this process are
+    /// passed on to.
+    server: Sidecar,
+    /// Closed as the server is stopped.
+    stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
     timeout: Duration,
     next_id: u64,
@@ -388,33 +394,34 @@ impl McpProcess {
     /// Start `config`'s server and complete the MCP handshake; with the
     /// tools it lists.
     fn start(config: &McpServerConfig, timeout: Duration) -> Result<(Self, Vec<Value>), String> {
-        let mut command = Command::new(&config.command);
-        command
-            .args(&config.args)
-            .envs(&config.env)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit());
-        // A group of its own, so stopping it stops what a launcher (npx,
-        // uvx, docker) started too.
-        #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("failed to spawn {}: {error}", config.command))?;
-        let stdin = child
+        // Until it is in `process`, an error drops it, which kills it.
+        let mut server = Sidecar::start(
+            Command::new(&config.command)
+                .args(&config.args)
+                .envs(&config.env)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .map_err(|error| format!("failed to spawn {}: {error}", config.command))?;
+        let stderr = server
+            .stderr
+            .take()
+            .ok_or_else(|| "MCP child stderr was not piped".to_owned())?;
+        pass_on_stderr(stderr)?;
+        let stdin = server
             .stdin
             .take()
             .ok_or_else(|| "MCP child stdin was not piped".to_owned())?;
         set_nonblocking_stdin(&stdin)?;
-        let stdout = child
+        let stdout = server
             .stdout
             .take()
             .ok_or_else(|| "MCP child stdout was not piped".to_owned())?;
         set_nonblocking(&stdout)?;
         let mut process = McpProcess {
-            child,
-            stdin,
+            server,
+            stdin: Some(stdin),
             stdout: BufReader::new(stdout),
             next_id: 1,
             timeout,
@@ -483,23 +490,21 @@ impl McpProcess {
         }
     }
 
-    /// Kill the server and everything in its process group, and reap it.
+    /// Stop the server and what it started, and reap it. Its stdin closes
+    /// first, as MCP's stdio transport has a client end a server. Then, as a
+    /// cancelled sidecar is stopped, its process group is asked to end
+    /// (SIGTERM), so that a launcher such as `docker run` can end what it
+    /// started, and what is left is killed once the server has ended or
+    /// [`GRACE`] is over. On Windows its job is ended at once.
     fn stop(&mut self) {
         if self.stopped {
             return;
         }
         self.stopped = true;
-        #[cfg(unix)]
-        #[allow(unsafe_code)]
-        if let Ok(group) = libc::pid_t::try_from(self.child.id()) {
-            // SAFETY: the group is the unreaped child's own, so its id is
-            // not reused yet.
-            unsafe { libc::killpg(group, libc::SIGKILL) };
-        }
-        // The group's kill may have ended it already, so this kill can fail harmlessly; the
-        // wait reaps it either way, and a server that cannot be reaped is past stopping.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.stdin = None;
+        self.server.stopper().stop(GRACE);
+        // It has ended, or been killed; a server that cannot be reaped even so is past stopping.
+        let _ = self.server.wait();
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -611,7 +616,10 @@ impl McpProcess {
                 self.stop();
                 return Err("MCP request timed out while writing".to_owned());
             }
-            match self.stdin.write(remaining) {
+            let Some(stdin) = self.stdin.as_mut() else {
+                return Err("MCP stdin closed".to_owned());
+            };
+            match stdin.write(remaining) {
                 Ok(0) => {
                     self.stop();
                     return Err("MCP stdin closed".to_owned());
@@ -629,7 +637,8 @@ impl McpProcess {
             }
         }
         self.stdin
-            .flush()
+            .as_mut()
+            .map_or(Ok(()), Write::flush)
             .map_err(|error| format!("MCP write failed: {error}"))
     }
 }
@@ -674,6 +683,38 @@ fn parse_tool_response(response: Value) -> Result<Value, String> {
     } else {
         Ok(result)
     }
+}
+
+/// Pass what a server writes to its stderr on to this process's stderr,
+/// where an inherited stderr would have put it, until nothing holds the
+/// server's end open.
+///
+/// Piped rather than inherited, so that nothing of the server can hold this
+/// process's stderr open after it has ended: whatever runs Kerf may read
+/// that stderr to its end, as Kerf's bridge reads Claude Code's and a shell
+/// reads a command substitution's. A server's process group is ended with
+/// it, but something it started in a session of its own is not in that
+/// group, and would otherwise keep the stderr it inherited.
+fn pass_on_stderr(mut stderr: ChildStderr) -> Result<(), String> {
+    std::thread::Builder::new()
+        .name("kerf-mcp-server-stderr".into())
+        .spawn(move || {
+            let mut buffer = [0; 8 * 1024];
+            loop {
+                match stderr.read(&mut buffer) {
+                    Ok(0) => break,
+                    // Read on where this process's stderr fails: a server must never wait on a
+                    // full pipe.
+                    Ok(read) => {
+                        let _ = std::io::stderr().write_all(&buffer[..read]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_) => break,
+                }
+            }
+        })
+        .map(drop)
+        .map_err(|error| format!("MCP stderr could not be read: {error}"))
 }
 
 fn bounded_description(value: &str) -> String {
