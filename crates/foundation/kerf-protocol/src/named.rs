@@ -6,33 +6,37 @@
 //! a name it does not know still reads: it is kept as it came, and written the same.
 //!
 //! A client's own names read the same way (the editor's bridge names its commands with
-//! [`named!`](crate::named!)), so the macro is exported.
+//! [`named!`](crate::named!)), so the macro is exported. Such a client keeps the names it does
+//! not know in a type of its own, as this crate keeps its own in [`Unnamed`].
 
-/// A name this build has no value for. Only a value's `from_name` makes one, so a name this
-/// build does know is always its own variant, and two values are equal just when their
-/// names are.
+/// A name this build has no value for. Only a value's `from_name` makes one, and nothing
+/// outside this crate can, so a name this build does know is always its own variant, and
+/// two values are equal just when their names are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unnamed(String);
 
 impl Unnamed {
-    /// For [`named!`](crate::named!)'s `from_name` alone, which has looked for the name
-    /// among its own first. Public only because the macro expands in other crates too.
-    #[doc(hidden)]
-    pub fn new(name: &str) -> Self {
+    /// For [`named!`]'s `from_name` alone, which has looked for the name among its own first.
+    pub(crate) fn new(name: &str) -> Self {
         Self(name.to_owned())
     }
 
-    /// The name, as it came.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 /// An enum of named values: each written once with its name, so a value cannot be given one
 /// name going out and read by another coming in.
+///
+/// In another crate, it is given the type its enum keeps an unknown name in
+/// (`unnamed = Type;` first): one with a `new(&str)` only that enum's module can call, so
+/// that only `from_name` makes one, and an `as_str()` that gives the name back. This
+/// crate's [`Unnamed`] can be made in this crate alone.
 #[macro_export]
 macro_rules! named {
     (
+        unnamed = $Unnamed:ty;
         $(#[$about:meta])*
         $vis:vis enum $Value:ident {
             $($(#[$note:meta])* $value:ident = $name:literal,)+
@@ -45,7 +49,7 @@ macro_rules! named {
             /// A name this build has no value for, as it came: another build wrote it, or
             /// it is passed on as something else said it. Only [`Self::from_name`] makes
             /// one.
-            Other($crate::Unnamed),
+            Other($Unnamed),
         }
 
         impl $Value {
@@ -65,7 +69,7 @@ macro_rules! named {
             pub fn from_name(name: &str) -> Self {
                 match name {
                     $($name => Self::$value,)+
-                    _ => Self::Other($crate::Unnamed::new(name)),
+                    _ => Self::Other(<$Unnamed>::new(name)),
                 }
             }
         }
@@ -91,6 +95,20 @@ macro_rules! named {
             ) -> ::std::result::Result<Self, D::Error> {
                 <String as ::serde::Deserialize>::deserialize(deserializer)
                     .map(|name| Self::from_name(&name))
+            }
+        }
+    };
+    (
+        $(#[$about:meta])*
+        $vis:vis enum $Value:ident {
+            $($(#[$note:meta])* $value:ident = $name:literal,)+
+        }
+    ) => {
+        $crate::named! {
+            unnamed = $crate::named::Unnamed;
+            $(#[$about])*
+            $vis enum $Value {
+                $($(#[$note])* $value = $name,)+
             }
         }
     };

@@ -558,7 +558,26 @@ impl Command {
     }
 }
 
+/// A name [`CommandName`] has no variant for, as it came: a bridge of another build said it.
+/// Only [`CommandName::from_name`] makes one, so a name this build knows is always its own
+/// variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnnamedCommand(String);
+
+impl UnnamedCommand {
+    /// For [`CommandName::from_name`] alone, which has looked for the name among its own.
+    fn new(name: &str) -> Self {
+        Self(name.to_owned())
+    }
+
+    /// The name, as it came.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 kerf_runtime::named! {
+    unnamed = UnnamedCommand;
     /// A command's name, as its `type` says it (`seek`, `media_make`, ...), and what an
     /// `error` says it is about where no one command is: a conversation, a recipe, a
     /// workflow or the cast, whichever command it was that asked.
