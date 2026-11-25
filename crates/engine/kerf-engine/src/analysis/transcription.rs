@@ -2060,8 +2060,6 @@ mod tests {
 
     use std::fs;
 
-    use std::thread;
-    use std::time::{Duration, Instant};
     use tempfile::tempdir;
 
     #[test]
@@ -2087,6 +2085,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn cancellation_kills_running_sidecar() {
+        use std::thread;
+        use std::time::{Duration, Instant};
+
         let token = CancellationToken::new();
         let cancel = token.clone();
         let thread = thread::spawn(move || {

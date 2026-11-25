@@ -7,11 +7,11 @@ use kerf_editor::cast::Entry;
 use kerf_editor::making::{
     another_seed, arrange, card_height, card_size, card_state, card_title, draw_signal,
     draws_curve, extent, fitted_in, graph_start, in_port, input_kind, link_output, nearest_toward,
-    one_line, out_port, output_within, part_id, part_number, placed_over, point_on, port_says,
-    ports_for, reading_lines, reads_port, settle, shown_value, signal_keys, signal_line,
-    signal_under, take_tip, value_of, wants_carrying, wire_nth, zoom_about, Camera, CardState,
-    GraphEdge, GraphNode, GraphStart, Holds, InputKind, PictureQueue, Progress, Recipe, Toward,
-    Workflow, ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
+    one_line, out_port, part_id, part_number, placed_over, point_on, port_says, ports_for,
+    reading_lines, reads_port, settle, shown_value, signal_keys, signal_line, signal_under,
+    take_tip, value_of, wants_carrying, wire_nth, zoom_about, Camera, CardState, GraphEdge,
+    GraphNode, GraphStart, Holds, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow,
+    ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
 };
 use kerf_editor::model::Ask;
 use kerf_editor::model::Interp;
@@ -20,7 +20,6 @@ use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 // ------------------------------------------------------------------- cast
 
@@ -971,6 +970,9 @@ fn a_picture_queue_that_may_run_none_runs_one() {
 #[cfg(unix)]
 #[test]
 fn what_a_program_writes_is_kept_unless_it_runs_too_long() {
+    use kerf_editor::making::output_within;
+    use std::time::{Duration, Instant};
+
     let mut says = std::process::Command::new("sh");
     says.args(["-c", "printf 'P7 picture'; echo trouble >&2"]);
     assert_eq!(

@@ -10,8 +10,8 @@ use kerf_editor::launcher::{
 };
 use kerf_editor::preset_file::{existing_preset, write_document};
 use kerf_editor::presets::{
-    export_path, file_fit, import_refusal, made_kind, made_line, needs_line, path_refusal,
-    presets_in, read_by_line, seconds, slot_read_by, start_frame, uses_line, Fit,
+    export_path, file_fit, import_refusal, made_kind, made_line, needs_line, presets_in,
+    read_by_line, seconds, slot_read_by, start_frame, uses_line, Fit,
 };
 use kerf_editor::workspace::folder_media;
 use proptest::prelude::*;
@@ -568,6 +568,7 @@ fn an_import_refused_is_said_under_its_slot() {
 #[cfg(unix)]
 #[test]
 fn a_name_that_is_not_utf8_is_refused_not_sent() {
+    use kerf_editor::presets::path_refusal;
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
     let odd = PathBuf::from(OsStr::from_bytes(b"/m/a\xff.mov"));

@@ -1,8 +1,12 @@
-use super::model::Models;
 use super::*;
+// Only the tests that run models use these, and their models are Unix programs.
+#[cfg(unix)]
+use super::model::Models;
+#[cfg(unix)]
 use kerf_model::Project;
 
 /// A project of `lines` after its header, read as a document is.
+#[cfg(unix)]
 fn project(lines: &str) -> Project {
     kerf_lang::parse_document(
         &format!("kerf 1\nproject name=\"shots\"\n{lines}"),
@@ -13,6 +17,7 @@ fn project(lines: &str) -> Project {
 }
 
 /// `steps`, a step a line, as the document holds them under a media's line.
+#[cfg(unix)]
 fn under(steps: &str) -> String {
     steps
         .lines()
@@ -23,6 +28,7 @@ fn under(steps: &str) -> String {
 }
 
 /// A project whose media `m1`, its file at `path`, is made by `steps`, a step a line.
+#[cfg(unix)]
 fn shot(path: &str, steps: &str) -> Project {
     project(&format!(
         "media m1 path=\"{path}\" rate=24 dur=1s video=160x120\n{}",
@@ -31,6 +37,7 @@ fn shot(path: &str, steps: &str) -> Project {
 }
 
 /// A models file in `folder` naming `models`, read.
+#[cfg(unix)]
 fn models(folder: &Path, models: &str) -> Models {
     let file = folder.join("models.json");
     std::fs::write(&file, models).unwrap();

@@ -680,33 +680,32 @@ mod windows {
     // returned, so the transmute below gives back the function it was.
     unsafe extern "system" fn on_exception(pointers: *const EXCEPTION_POINTERS) -> i32 {
         unsafe {
-            if let Some(setup) = SETUP.get() {
-                if !pointers.is_null()
-                    && !(*pointers).ExceptionRecord.is_null()
-                    && first_report(false)
-                {
-                    let record = &*(*pointers).ExceptionRecord;
-                    let code = record.ExceptionCode as u32;
-                    let mut message = Text::<96>::new();
-                    message
-                        .str(exception_name(code))
-                        .str(" (exception ")
-                        .hex(u64::from(code))
-                        .str(")");
-                    let location = |text: &mut Text<2048>| {
-                        module_and_offset(text, record.ExceptionAddress as usize);
-                        // An access violation says what it tried, and where.
-                        if code == 0xC000_0005 && record.NumberParameters >= 2 {
-                            let what = match record.ExceptionInformation[0] {
-                                0 => " reading ",
-                                8 => " executing ",
-                                _ => " writing ",
-                            };
-                            text.str(what).hex(record.ExceptionInformation[1] as u64);
-                        }
-                    };
-                    write_report(setup, &location, message.as_bytes());
-                }
+            if let Some(setup) = SETUP.get()
+                && !pointers.is_null()
+                && !(*pointers).ExceptionRecord.is_null()
+                && first_report(false)
+            {
+                let record = &*(*pointers).ExceptionRecord;
+                let code = record.ExceptionCode as u32;
+                let mut message = Text::<96>::new();
+                message
+                    .str(exception_name(code))
+                    .str(" (exception ")
+                    .hex(u64::from(code))
+                    .str(")");
+                let location = |text: &mut Text<2048>| {
+                    module_and_offset(text, record.ExceptionAddress as usize);
+                    // An access violation says what it tried, and where.
+                    if code == 0xC000_0005 && record.NumberParameters >= 2 {
+                        let what = match record.ExceptionInformation[0] {
+                            0 => " reading ",
+                            8 => " executing ",
+                            _ => " writing ",
+                        };
+                        text.str(what).hex(record.ExceptionInformation[1] as u64);
+                    }
+                };
+                write_report(setup, &location, message.as_bytes());
             }
             let previous = PREVIOUS_FILTER.load(Ordering::SeqCst);
             if previous == 0 {
@@ -723,14 +722,14 @@ mod windows {
     /// The C runtime has put back the default handler before calling this one, and ends the
     /// process once it returns.
     extern "C" fn on_abort(_signal: libc::c_int) {
-        if let Some(setup) = SETUP.get() {
-            if first_report(true) {
-                let location = |text: &mut Text<2048>| {
-                    text.str("unknown");
-                };
-                // SAFETY: from the C runtime's signal handler, in the aborting thread.
-                unsafe { write_report(setup, &location, b"Aborted (SIGABRT)") };
-            }
+        if let Some(setup) = SETUP.get()
+            && first_report(true)
+        {
+            let location = |text: &mut Text<2048>| {
+                text.str("unknown");
+            };
+            // SAFETY: from the C runtime's signal handler, in the aborting thread.
+            unsafe { write_report(setup, &location, b"Aborted (SIGABRT)") };
         }
     }
 
