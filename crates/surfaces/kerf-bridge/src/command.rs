@@ -479,76 +479,189 @@ pub enum Command {
 }
 
 impl Command {
+    /// Its name, as its `type` says it on the wire.
+    pub fn name(&self) -> &'static CommandName {
+        match self {
+            Self::Refresh => &CommandName::Refresh,
+            Self::Reconnect => &CommandName::Reconnect,
+            Self::Preview { .. } => &CommandName::Preview,
+            Self::PreviewStop => &CommandName::PreviewStop,
+            Self::PreviewExit => &CommandName::PreviewExit,
+            Self::Import { .. } => &CommandName::Import,
+            Self::Edit { .. } => &CommandName::Edit,
+            Self::Undo { .. } => &CommandName::Undo,
+            Self::Redo { .. } => &CommandName::Redo,
+            Self::Accept { .. } => &CommandName::Accept,
+            Self::Reject { .. } => &CommandName::Reject,
+            Self::Forward { .. } => &CommandName::Forward,
+            Self::Agent { .. } => &CommandName::Agent,
+            Self::AgentVersions { .. } => &CommandName::AgentVersions,
+            Self::Abort => &CommandName::Abort,
+            Self::Play => &CommandName::Play,
+            Self::Pause => &CommandName::Pause,
+            Self::Seek { .. } => &CommandName::Seek,
+            Self::Volume { .. } => &CommandName::Volume,
+            Self::Export(_) => &CommandName::Export,
+            Self::ExportCancel { .. } => &CommandName::ExportCancel,
+            Self::RenderQueue => &CommandName::RenderQueue,
+            Self::ExportCaptions(_) => &CommandName::ExportCaptions,
+            Self::Loudness { .. } => &CommandName::Loudness,
+            Self::ScopeSignal { .. } => &CommandName::ScopeSignal,
+            Self::MediaInfo { .. } => &CommandName::MediaInfo,
+            Self::MediaIndex { .. } => &CommandName::MediaIndex,
+            Self::LookSave { .. } => &CommandName::LookSave,
+            Self::LookApply { .. } => &CommandName::LookApply,
+            Self::PresetExport { .. } => &CommandName::PresetExport,
+            Self::PresetInspect { .. } => &CommandName::PresetInspect,
+            Self::PresetApply { .. } => &CommandName::PresetApply,
+            Self::PresetLibrary => &CommandName::PresetLibrary,
+            Self::PresetSave { .. } => &CommandName::PresetSave,
+            Self::MediaReplace { .. } => &CommandName::MediaReplace,
+            Self::MediaMake { .. } => &CommandName::MediaMake,
+            Self::CastGet => &CommandName::CastGet,
+            Self::CastSet { .. } => &CommandName::CastSet,
+            Self::MediaCarry { .. } => &CommandName::MediaCarry,
+            Self::MediaMakeCancel { .. } => &CommandName::MediaMakeCancel,
+            Self::RecipeGet { .. } => &CommandName::RecipeGet,
+            Self::RecipeEdit(_) => &CommandName::RecipeEdit,
+            Self::SignalFromSound { .. } => &CommandName::SignalFromSound,
+            Self::ShotPicture { .. } => &CommandName::ShotPicture,
+            Self::ShotFollow(_) => &CommandName::ShotFollow,
+            Self::TakesRead { .. } => &CommandName::TakesRead,
+            Self::WorkflowGet { .. } => &CommandName::WorkflowGet,
+            Self::WorkflowEdit(_) => &CommandName::WorkflowEdit,
+            Self::Models => &CommandName::Models,
+            Self::ProjectionImport => &CommandName::ProjectionImport,
+            Self::ProjectionRepair => &CommandName::ProjectionRepair,
+            Self::CollabStatus => &CommandName::CollabStatus,
+            Self::CollabSync { .. } => &CommandName::CollabSync,
+            Self::CollabLive { .. } => &CommandName::CollabLive,
+            Self::CollabCommit { .. } => &CommandName::CollabCommit,
+            Self::CollabBranch { .. } => &CommandName::CollabBranch,
+            Self::CollabPullRequest { .. } => &CommandName::CollabPullRequest,
+            Self::CollabPublish { .. } => &CommandName::CollabPublish,
+            Self::CollabConsolidate => &CommandName::CollabConsolidate,
+            Self::Reload => &CommandName::Reload,
+            Self::EffectPreviews(_) => &CommandName::EffectPreviews,
+            Self::Conversations(_) => &CommandName::Conversations,
+            Self::Check { .. } => &CommandName::Check,
+            Self::Solo { .. } => &CommandName::Solo,
+            Self::CloudSignIn { .. } => &CommandName::CloudSignIn,
+            Self::CloudSignOut => &CommandName::CloudSignOut,
+            Self::CloudRefresh => &CommandName::CloudRefresh,
+        }
+    }
+
     /// Its `type`, as the wire names it (`seek`, `media_make`, ...).
     pub fn kind(&self) -> &'static str {
-        match self {
-            Self::Refresh => "refresh",
-            Self::Reconnect => "reconnect",
-            Self::Preview { .. } => "preview",
-            Self::PreviewStop => "preview_stop",
-            Self::PreviewExit => "preview_exit",
-            Self::Import { .. } => "import",
-            Self::Edit { .. } => "edit",
-            Self::Undo { .. } => "undo",
-            Self::Redo { .. } => "redo",
-            Self::Accept { .. } => "accept",
-            Self::Reject { .. } => "reject",
-            Self::Forward { .. } => "forward",
-            Self::Agent { .. } => "agent",
-            Self::AgentVersions { .. } => "agent_versions",
-            Self::Abort => "abort",
-            Self::Play => "play",
-            Self::Pause => "pause",
-            Self::Seek { .. } => "seek",
-            Self::Volume { .. } => "volume",
-            Self::Export(_) => "export",
-            Self::ExportCancel { .. } => "export_cancel",
-            Self::RenderQueue => "render_queue",
-            Self::ExportCaptions(_) => "export_captions",
-            Self::Loudness { .. } => "loudness",
-            Self::ScopeSignal { .. } => "scope_signal",
-            Self::MediaInfo { .. } => "media_info",
-            Self::MediaIndex { .. } => "media_index",
-            Self::LookSave { .. } => "look_save",
-            Self::LookApply { .. } => "look_apply",
-            Self::PresetExport { .. } => "preset_export",
-            Self::PresetInspect { .. } => "preset_inspect",
-            Self::PresetApply { .. } => "preset_apply",
-            Self::PresetLibrary => "preset_library",
-            Self::PresetSave { .. } => "preset_save",
-            Self::MediaReplace { .. } => "media_replace",
-            Self::MediaMake { .. } => "media_make",
-            Self::CastGet => "cast_get",
-            Self::CastSet { .. } => "cast_set",
-            Self::MediaCarry { .. } => "media_carry",
-            Self::MediaMakeCancel { .. } => "media_make_cancel",
-            Self::RecipeGet { .. } => "recipe_get",
-            Self::RecipeEdit(_) => "recipe_edit",
-            Self::SignalFromSound { .. } => "signal_from_sound",
-            Self::ShotPicture { .. } => "shot_picture",
-            Self::ShotFollow(_) => "shot_follow",
-            Self::TakesRead { .. } => "takes_read",
-            Self::WorkflowGet { .. } => "workflow_get",
-            Self::WorkflowEdit(_) => "workflow_edit",
-            Self::Models => "models",
-            Self::ProjectionImport => "projection_import",
-            Self::ProjectionRepair => "projection_repair",
-            Self::CollabStatus => "collab_status",
-            Self::CollabSync { .. } => "collab_sync",
-            Self::CollabLive { .. } => "collab_live",
-            Self::CollabCommit { .. } => "collab_commit",
-            Self::CollabBranch { .. } => "collab_branch",
-            Self::CollabPullRequest { .. } => "collab_pull_request",
-            Self::CollabPublish { .. } => "collab_publish",
-            Self::CollabConsolidate => "collab_consolidate",
-            Self::Reload => "reload",
-            Self::EffectPreviews(_) => "effect_previews",
-            Self::Conversations(_) => "conversations",
-            Self::Check { .. } => "check",
-            Self::Solo { .. } => "solo",
-            Self::CloudSignIn { .. } => "cloud_sign_in",
-            Self::CloudSignOut => "cloud_sign_out",
-            Self::CloudRefresh => "cloud_refresh",
-        }
+        self.name().as_str()
+    }
+}
+
+/// A name [`CommandName`] has no variant for, as it came: a bridge of another build said it.
+/// Only [`CommandName::from_name`] makes one, so a name this build knows is always its own
+/// variant.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnnamedCommand(String);
+
+impl UnnamedCommand {
+    /// For [`CommandName::from_name`] alone, which has looked for the name among its own.
+    fn new(name: &str) -> Self {
+        Self(name.to_owned())
+    }
+
+    /// The name, as it came.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+kerf_runtime::named! {
+    unnamed = UnnamedCommand;
+    /// A command's name, as its `type` says it (`seek`, `media_make`, ...), and what an
+    /// `error` says it is about where no one command is: a conversation, a recipe, a
+    /// workflow or the cast, whichever command it was that asked.
+    ///
+    /// An `error` names one ([`ErrorEvent::command`](crate::event::ErrorEvent::command)) for
+    /// what sent it to tell its own refusals from the rest. A name this build does not know
+    /// still reads, as [`CommandName::Other`].
+    pub enum CommandName {
+        Refresh = "refresh",
+        Reconnect = "reconnect",
+        Preview = "preview",
+        PreviewStop = "preview_stop",
+        PreviewExit = "preview_exit",
+        Import = "import",
+        Edit = "edit",
+        Undo = "undo",
+        Redo = "redo",
+        Accept = "accept",
+        Reject = "reject",
+        Forward = "forward",
+        Agent = "agent",
+        AgentVersions = "agent_versions",
+        Abort = "abort",
+        Play = "play",
+        Pause = "pause",
+        Seek = "seek",
+        Volume = "volume",
+        Export = "export",
+        ExportCancel = "export_cancel",
+        RenderQueue = "render_queue",
+        ExportCaptions = "export_captions",
+        Loudness = "loudness",
+        ScopeSignal = "scope_signal",
+        MediaInfo = "media_info",
+        MediaIndex = "media_index",
+        LookSave = "look_save",
+        LookApply = "look_apply",
+        PresetExport = "preset_export",
+        PresetInspect = "preset_inspect",
+        PresetApply = "preset_apply",
+        PresetLibrary = "preset_library",
+        PresetSave = "preset_save",
+        MediaReplace = "media_replace",
+        MediaMake = "media_make",
+        CastGet = "cast_get",
+        CastSet = "cast_set",
+        MediaCarry = "media_carry",
+        MediaMakeCancel = "media_make_cancel",
+        RecipeGet = "recipe_get",
+        RecipeEdit = "recipe_edit",
+        SignalFromSound = "signal_from_sound",
+        ShotPicture = "shot_picture",
+        ShotFollow = "shot_follow",
+        TakesRead = "takes_read",
+        WorkflowGet = "workflow_get",
+        WorkflowEdit = "workflow_edit",
+        Models = "models",
+        ProjectionImport = "projection_import",
+        ProjectionRepair = "projection_repair",
+        CollabStatus = "collab_status",
+        CollabSync = "collab_sync",
+        CollabLive = "collab_live",
+        CollabCommit = "collab_commit",
+        CollabBranch = "collab_branch",
+        CollabPullRequest = "collab_pull_request",
+        CollabPublish = "collab_publish",
+        CollabConsolidate = "collab_consolidate",
+        Reload = "reload",
+        EffectPreviews = "effect_previews",
+        Conversations = "conversations",
+        Check = "check",
+        Solo = "solo",
+        CloudSignIn = "cloud_sign_in",
+        CloudSignOut = "cloud_sign_out",
+        CloudRefresh = "cloud_refresh",
+
+        // What an error is about, where no one command is.
+        /// Changing a conversation: renaming, archiving, deleting or opening it.
+        Conversation = "conversation",
+        /// Reading or changing a media's recipe.
+        Recipe = "recipe",
+        /// Reading or changing the workflow a model is run with.
+        Workflow = "workflow",
+        /// Reading or saving the cast.
+        Cast = "cast",
     }
 }

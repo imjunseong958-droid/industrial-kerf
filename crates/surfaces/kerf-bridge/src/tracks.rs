@@ -14,6 +14,7 @@
 
 use crate::event::{ErrorEvent, Event};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::Shared;
 use kerf_shots::tracks::For;
 use serde::{Deserialize, Serialize};
@@ -54,12 +55,12 @@ pub struct Follow {
     pub outside: Vec<[f64; 2]>,
 }
 
-fn failed(tx: &Outbox, command: &str, clip: &str, of: Of, why: String) {
+fn failed(tx: &Outbox, command: CommandName, clip: &str, of: Of, why: String) {
     crate::emit(
         tx,
         Event::Error(ErrorEvent {
             message: why,
-            command: Some(command.to_owned()),
+            command: Some(command),
             clip: Some(clip.to_owned()),
             of: Some(of),
             ..ErrorEvent::default()
@@ -115,7 +116,7 @@ pub(crate) fn picture(
         match drawn {
             Ok(Some(event)) => crate::emit(&tx, event),
             Ok(None) => {}
-            Err(why) => failed(&tx, "shot_picture", &clip, of, why),
+            Err(why) => failed(&tx, CommandName::ShotPicture, &clip, of, why),
         }
     });
 }
@@ -167,7 +168,7 @@ pub(crate) fn follow(
                 },
             ),
             Ok(None) => {}
-            Err(why) => failed(&tx, "shot_follow", &clip, of, why),
+            Err(why) => failed(&tx, CommandName::ShotFollow, &clip, of, why),
         }
     });
 }

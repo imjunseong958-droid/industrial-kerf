@@ -15,7 +15,7 @@
 //! read are left out. What only a reader takes ([`AgentUpdate::Other`],
 //! [`PreviewStatus::Other`]) is never sent.
 
-use crate::ShotOf;
+use crate::{CommandName, ShotOf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -562,7 +562,7 @@ pub struct ErrorEvent {
     /// The command refused, by its `type` (`export`, `media_make`, `look_save`, ...), or
     /// what it is about (`agent`, `conversation`, `recipe`, `workflow`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
+    pub command: Option<CommandName>,
     /// The render job that failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,

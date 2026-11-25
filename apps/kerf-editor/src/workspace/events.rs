@@ -20,7 +20,7 @@ use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::motion as scene;
 use gpui::{App, Context, Entity, FocusHandle, Subscription, Window};
 use kerf_bridge::event::{AgentState, AgentUpdate, ConnectionStatus, Export, ExportStatus};
-use kerf_bridge::{Command, ConversationsRequest, Event};
+use kerf_bridge::{Command, CommandName, ConversationsRequest, Event};
 use std::collections::HashSet;
 
 impl Workspace {
@@ -365,7 +365,7 @@ impl Workspace {
                     .and_then(sidebar::parse_time);
             }
             Event::Error(error) => {
-                let command = error.command.as_deref().unwrap_or_default();
+                let command = error.command.as_ref();
                 if !kept_in_bar(command) {
                     return;
                 }
@@ -396,7 +396,7 @@ impl Workspace {
                 // deleting, opening it): the notice says so, for
                 // `scene::NOTICE_HOLD`, and the conversations are listed
                 // again, so what was shown at once goes back to what is kept.
-                if command == "conversation" {
+                if command == Some(&CommandName::Conversation) {
                     self.session.update(cx, |session, cx| {
                         let said = session
                             .state
@@ -413,7 +413,7 @@ impl Workspace {
                     });
                 }
                 let readable = readable_error(&raw);
-                let text = if command == "forward" {
+                let text = if command == Some(&CommandName::Forward) {
                     format!("Not brought forward · {readable}")
                 } else {
                     readable
@@ -435,7 +435,7 @@ impl Workspace {
                 self.error = Some(ErrorBar {
                     raw,
                     text,
-                    from_agent: command == "agent",
+                    from_agent: command == Some(&CommandName::Agent),
                     from_sync: false,
                     key: self.errors,
                 });

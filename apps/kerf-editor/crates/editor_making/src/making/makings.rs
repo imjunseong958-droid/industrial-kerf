@@ -20,7 +20,7 @@ use gpui::{
     div, prelude::*, px, AnimationExt, AnyElement, Context, ElementId, Entity, Rgba, Subscription,
     Window,
 };
-use kerf_bridge::{Command, Event};
+use kerf_bridge::{Command, CommandName, Event};
 use std::collections::{HashMap, HashSet};
 
 /// How a making asked for in the conversation goes.
@@ -226,7 +226,7 @@ impl Makings {
                 );
             }
             Event::Error(error)
-                if error.command.as_deref() == Some("media_make")
+                if error.command == Some(CommandName::MediaMake)
                     && !error.media.as_deref().unwrap_or_default().is_empty() =>
             {
                 let media = error.media.clone().unwrap_or_default();

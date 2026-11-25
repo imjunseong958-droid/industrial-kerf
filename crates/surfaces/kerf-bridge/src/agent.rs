@@ -6,6 +6,7 @@ mod versions;
 
 use crate::event::{AgentState, AgentUpdate, ErrorEvent, ToolState};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::{
     claude_code, conversations, emit, error, sessions, steps, AgentRequest, AgentSettings,
     ChatProvider, Command, Event, Shared,
@@ -281,7 +282,7 @@ pub(crate) fn agent_worker(
                 &tx,
                 Event::Error(ErrorEvent {
                     message: err,
-                    command: Some("agent".to_owned()),
+                    command: Some(CommandName::Agent),
                     ..ErrorEvent::default()
                 }),
             );

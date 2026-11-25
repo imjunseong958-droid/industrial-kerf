@@ -15,7 +15,7 @@ use editor_ui::ui;
 use gpui::{
     div, prelude::*, px, AnimationExt, AnyElement, App, Context, Rgba, SharedString, Window,
 };
-use kerf_bridge::Command;
+use kerf_bridge::{Command, CommandName};
 
 /// The last error, kept in a bar under the toolbar until it is dismissed.
 pub(super) struct ErrorBar {
@@ -325,13 +325,24 @@ pub fn first_line(text: &str) -> &str {
 /// Whether an error the bridge sends stays in the error bar: not what a
 /// view answers in place (a making, a shot's graph, a recipe, a workflow,
 /// the Cast dialog).
-pub fn kept_in_bar(command: &str) -> bool {
-    !(matches!(
+pub fn kept_in_bar(command: Option<&CommandName>) -> bool {
+    !matches!(
         command,
-        "media_make" | "media_carry" | "takes_read" | "cast"
-    ) || command.starts_with("recipe")
-        || command.starts_with("shot_")
-        || command.starts_with("workflow"))
+        Some(
+            CommandName::MediaMake
+                | CommandName::MediaCarry
+                | CommandName::TakesRead
+                | CommandName::Cast
+                | CommandName::Recipe
+                | CommandName::RecipeGet
+                | CommandName::RecipeEdit
+                | CommandName::ShotPicture
+                | CommandName::ShotFollow
+                | CommandName::Workflow
+                | CommandName::WorkflowGet
+                | CommandName::WorkflowEdit
+        )
+    )
 }
 
 /// An error as a person reads it: an engine diagnostic's severity and code
