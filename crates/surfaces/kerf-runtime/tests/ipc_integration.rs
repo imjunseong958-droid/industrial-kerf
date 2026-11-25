@@ -847,6 +847,47 @@ fn daemon_exits_once_its_project_directory_is_deleted() {
     panic!("kerfd kept running after its project directory was deleted");
 }
 
+/// What kerfd warns of is kept in the project's `.kerf-runtime.log`, at the level it logs at when
+/// RUST_LOG says nothing: here, a journal record a crash cut short, which it drops. kerfd writes
+/// none of it to stderr, which a client that starts it reads as the error it stopped with.
+#[test]
+fn what_kerfd_warns_of_is_kept_in_the_projects_log() {
+    let _project = Project::new("log");
+    let directory = _project.0.clone();
+    let log = directory.join(".kerf-runtime.log");
+    let start = || {
+        let mut command = daemon_command(&directory);
+        command.env_remove("RUST_LOG");
+        command.spawn().expect("spawn kerfd")
+    };
+    let client = RuntimeClient::new(&directory).unwrap();
+    let daemon = start();
+    wait_until_ready(&client);
+    client
+        .apply_script_request("ui", "logged", "marker add at=0f as=kept", 0)
+        .unwrap();
+    stop_daemon(daemon);
+    // Nothing to say, and no log.
+    assert!(!log.exists());
+
+    // What a crash in the middle of writing a record leaves.
+    let mut journal = fs::OpenOptions::new()
+        .append(true)
+        .open(directory.join(".kerf-runtime.journal"))
+        .unwrap();
+    journal.write_all(br#"{"v":4,"revision":2,"scr"#).unwrap();
+    drop(journal);
+    let daemon = start();
+    wait_until_ready(&client);
+    let state = client.get_state().unwrap();
+    stop_daemon(daemon);
+    assert_eq!(state.revision, 1);
+    assert!(has_marker(&state, "kept"));
+    let said = fs::read_to_string(&log).unwrap();
+    assert!(said.contains("WARN"), "{said}");
+    assert!(said.contains("a record cut short"), "{said}");
+}
+
 #[cfg(unix)]
 #[test]
 fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {

@@ -4,3 +4,4 @@ mod cut_edges;
 mod preset_looks;
 mod qc;
 mod qc_full;
+mod stdio;

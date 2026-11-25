@@ -30,6 +30,12 @@ minutes after the last request instead; `KERFD_IDLE_TIMEOUT`, in the
 environment `kerfd` starts with, sets that wait in seconds, and `0` turns it
 off. The next request starts it again.
 
+`kerfd` writes its warnings, such as media it could not index, to
+`.kerf-runtime.log` in the project folder, which keeps the newest one to two MiB;
+`kerf` and `kerf-mcp` write theirs to stderr. `RUST_LOG` (`RUST_LOG=debug`) changes
+what is written, warnings and errors otherwise; `kerfd` takes it from the
+environment it starts with.
+
 A crate's folder under `crates/` says what it may depend on, and the areas may
 not depend on each other, so each can be rewritten alone; `tools/kerf-layers`
 fails the tests otherwise. The crates of `surfaces` keep an order among
