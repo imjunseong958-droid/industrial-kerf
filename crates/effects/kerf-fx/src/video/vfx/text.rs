@@ -8,7 +8,10 @@ use crate::video::graphics::paint_mask;
 
 /// Draw `text` with its first baseline's cap height centred on `pos` (layer pixels), aligned
 /// left/centre/right on `pos.x`, over an optional black box.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate setting of a burn-in: its text, face, place, size, alignment, colour and box"
+)]
 pub(crate) fn draw_text(
     img: &mut Image,
     text: &str,

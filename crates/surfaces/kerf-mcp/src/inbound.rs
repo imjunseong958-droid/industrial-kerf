@@ -736,7 +736,10 @@ fn bounded_description(value: &str) -> String {
 }
 
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "fcntl, which std does not wrap, makes the pipe nonblocking"
+)]
 fn set_nonblocking(stdout: &ChildStdout) -> Result<(), String> {
     use std::os::unix::io::AsRawFd;
     let fd = stdout.as_raw_fd();
@@ -753,7 +756,10 @@ fn set_nonblocking(stdout: &ChildStdout) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "fcntl, which std does not wrap, makes the pipe nonblocking"
+)]
 fn set_nonblocking_stdin(stdin: &ChildStdin) -> Result<(), String> {
     use std::os::unix::io::AsRawFd;
     let fd = stdin.as_raw_fd();

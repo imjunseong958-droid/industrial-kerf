@@ -116,7 +116,10 @@ fn markers(snapshot: &Value) -> Vec<Value> {
 /// once read an audio DLL Windows had unloaded; that was only sometimes
 /// fatal, but it showed every time.
 #[cfg(windows)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "installs a vectored exception handler, a Win32 call with no safe wrapper"
+)]
 fn count_access_violations() -> &'static std::sync::atomic::AtomicUsize {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use windows_sys::Win32::Foundation::EXCEPTION_ACCESS_VIOLATION;

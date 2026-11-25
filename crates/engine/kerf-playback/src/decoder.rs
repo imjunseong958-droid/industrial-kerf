@@ -102,7 +102,10 @@ pub(crate) struct VideoDecoder {
 }
 
 impl VideoDecoder {
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate part of what a clip's decoder opens on: the clip and its source, the time, the size and the epoch"
+    )]
     pub fn open(
         timeline: &PlaybackTimeline,
         clip: &PlaybackClip,
@@ -560,7 +563,10 @@ impl Drop for VideoDecoder {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input to the clip's filter graph"
+)]
 fn video_filter(
     timeline: &PlaybackTimeline,
     clip: &PlaybackClip,

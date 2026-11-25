@@ -59,7 +59,10 @@ pub(super) fn run_versions(
 
 /// One agent's version: its request and reply go in a thread of their own,
 /// and `agent_version` events say how it is going.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate part of one version's run"
+)]
 fn run_version(
     directory: &std::path::Path,
     binary: &std::path::Path,

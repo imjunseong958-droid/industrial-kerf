@@ -419,6 +419,10 @@ fn a_subject_under_an_open_shutter_is_kept_up_with() {
 
 /// The frames of the real footage `scripts/fetch-real-footage.sh` fetches, `width` across, as 0 to 1
 /// RGB, or `None` when `KERF_REAL_FOOTAGE` does not say where it is.
+#[expect(
+    clippy::type_complexity,
+    reason = "carried from EffectCraft, whose tests spell out nested types"
+)]
 fn footage(
     names: impl Iterator<Item = String>,
     width: usize,

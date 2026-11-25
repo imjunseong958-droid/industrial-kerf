@@ -118,8 +118,10 @@ impl TimelineView {
 
 /// What a clip's media is doing, in a pill at its foot: the making's
 /// clock, "Queued", "Not made" (ink2), "Offline" (brick).
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 pub(super) fn paint_activity(
     activity: &Activity,
     pen: Pen,

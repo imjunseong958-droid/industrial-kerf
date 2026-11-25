@@ -683,7 +683,7 @@ fn replace_file(temporary_path: &Path, destination: &Path) -> Result<(), Runtime
         .collect();
     // MoveFileExW with REPLACE_EXISTING and WRITE_THROUGH is the Windows
     // equivalent of the same-volume atomic replacement used by rename(2).
-    #[allow(unsafe_code)]
+    #[expect(unsafe_code, reason = "std offers no write-through MoveFileExW")]
     // SAFETY: both paths are NUL-terminated, and the pointers remain valid for
     // the duration of the synchronous call.
     let replaced = unsafe {

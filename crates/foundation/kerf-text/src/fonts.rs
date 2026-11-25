@@ -627,9 +627,10 @@ pub fn system_scanned() -> bool {
 }
 
 /// A face by id (unknown ids give the default face).
-// The bundled faces are compiled in (`include_bytes!`) and registered when the database is
-// created, so `faces` is never empty.
-#[allow(clippy::expect_used)]
+#[expect(
+    clippy::expect_used,
+    reason = "the bundled faces are compiled in (`include_bytes!`) and registered when the database is created, so `faces` is never empty"
+)]
 pub fn face(id: FaceId) -> Arc<Face> {
     let d = db().read().unwrap_or_else(|e| e.into_inner());
     d.faces

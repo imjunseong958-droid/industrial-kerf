@@ -243,8 +243,10 @@ fn paint_marks(
 }
 
 /// Kerf's cursor: a line in its blue with its light either side, and its name.
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 pub(super) fn paint_kerf(
     view: &Viewport,
     time: f64,

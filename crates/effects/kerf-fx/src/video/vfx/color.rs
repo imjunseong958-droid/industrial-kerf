@@ -17,9 +17,6 @@ pub(crate) fn cdl(c: [f32; 3], s: [f32; 3], o: [f32; 3], p: [f32; 3], sat: f32) 
     v.map(|q| (l + sat * (q - l)).clamp(0.0, 1.0))
 }
 
-#[allow(unused_imports)]
-pub(crate) use crate::video::gpufx::limit;
-
 /// Logo Cutout: removes a flat white/black/custom background by un-multiplying it — the alpha of
 /// a pixel is how far it is from the background towards the gamut edge, and the colour is
 /// recovered as if it had been composited over that background.
@@ -257,7 +254,10 @@ pub fn cineon(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
     });
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the value and each of the Cineon Converter's settings, read once for the frame"
+)]
 pub(crate) fn cineon_value(
     v: f32,
     mode: u32,

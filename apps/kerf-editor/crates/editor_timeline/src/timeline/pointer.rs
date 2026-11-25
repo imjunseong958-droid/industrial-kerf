@@ -76,8 +76,10 @@ impl TimelineView {
     }
 
     /// A press on clip `index` of `row`: what the tool and the keys held make of it.
-    // Each argument is a distinct part of the press: its event, which clip, where and when.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct part of the press: its event, which clip, where and when"
+    )]
     fn press_clip(
         &mut self,
         event: &MouseDownEvent,

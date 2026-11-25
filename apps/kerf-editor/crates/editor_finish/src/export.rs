@@ -160,8 +160,10 @@ impl ExportView {
     /// One row of the menu: its words, what it makes or why it cannot be
     /// done now, a check where it is the one chosen. `press` runs on a
     /// press while it can be done.
-    // Each argument is a distinct part of the row.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct part of the row"
+    )]
     fn row(
         &self,
         id: impl Into<ElementId>,
@@ -274,8 +276,10 @@ impl ExportView {
 
     /// One row of Preflight: its dot, its words, and at its end what a
     /// passed check allows or, accented, what a press does.
-    // Each argument is a distinct part of the row.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct part of the row"
+    )]
     fn preflight_row(
         &self,
         id: impl Into<ElementId>,

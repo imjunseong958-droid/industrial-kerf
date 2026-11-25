@@ -14,8 +14,14 @@
 //! module and offset. After writing, the signal goes on as it would have without the handler, so
 //! the process still dies of it and the system's own crash reporting still sees it.
 
-// Unsafe throughout: a signal handler and an exception filter that call libc and Win32 directly.
-#![allow(unsafe_code)]
+// The handler is Unix's and Windows'; elsewhere only its safe stand-ins are built.
+#![cfg_attr(
+    any(unix, windows),
+    expect(
+        unsafe_code,
+        reason = "unsafe throughout: a signal handler and an exception filter that call libc and Win32 directly"
+    )
+)]
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

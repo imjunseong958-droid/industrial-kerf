@@ -166,8 +166,10 @@ pub fn add_gain_key(
 /// through each key (`at` seconds in, at `pps`) at its value in `values`,
 /// flat to its end at the last; and whether it is keyed (a diamond on each
 /// point but the ends).
-// The band takes its keys, their values and each measure of the clip it crosses.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the band takes its keys, their values and each measure of the clip it crosses"
+)]
 pub fn band_line(
     keys: &[GainKey],
     values: &[f64],

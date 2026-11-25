@@ -191,8 +191,10 @@ pub(super) fn hovered(
 /// and `on_click` runs on a press of the pointer or the keys. A press of
 /// the pointer leaves the keys where they were. On a control `filled`
 /// with the accent the ring goes round it outside ([`ring_around`]).
-// Each control of the kit gives its own key context, Tab stop, corner, fill and press.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each control of the kit gives its own key context, Tab stop, corner, fill and press"
+)]
 pub(super) fn keyed(
     element: Stateful<Div>,
     state: &Entity<Control>,

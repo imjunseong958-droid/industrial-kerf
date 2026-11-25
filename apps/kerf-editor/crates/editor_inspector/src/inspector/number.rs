@@ -182,8 +182,10 @@ impl InspectorView {
         cx.notify();
     }
 
-    // Each argument is a distinct part of the row: its label, what it sets and the value held.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a distinct part of the row: its label, what it sets and the value held"
+    )]
     pub(super) fn number_row(
         &self,
         row: gpui::Div,

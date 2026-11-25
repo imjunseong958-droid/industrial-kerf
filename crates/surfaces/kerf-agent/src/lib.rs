@@ -361,7 +361,10 @@ impl AgentSession {
         self
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate setting of a new session"
+    )]
     pub fn from_provider(
         llm: Box<dyn LlmProvider>,
         model: Option<String>,
