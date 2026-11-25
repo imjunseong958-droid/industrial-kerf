@@ -65,6 +65,10 @@ fn craft_fonts(dir: &std::path::Path) -> Result<String, String> {
         if wasm && !(*family == "BIZ UDPGothic" && *style == "Regular") {
             continue;
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "only include_bytes! and cargo read this path, and both take a verbatim one"
+        )]
         let path = dir
             .join(file)
             .canonicalize()

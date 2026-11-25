@@ -307,8 +307,7 @@ fn run() -> Result<()> {
         Some(Command::New(new)) => return run_new(new),
         Some(Command::Sync { message }) => {
             let directory = requested.unwrap_or_else(current);
-            let directory = directory
-                .canonicalize()
+            let directory = kerf_paths::canonicalize(&directory)
                 .with_context(|| format!("no project at {}", directory.display()))?;
             return run_sync(&directory, args.kerfd.as_deref(), message.as_deref());
         }
@@ -510,11 +509,10 @@ fn requested_project(args: &Args, environment: Option<OsString>) -> Option<PathB
 
 /// `directory` as an absolute path, made first when it does not exist.
 fn resolve_directory(directory: &Path) -> Result<PathBuf> {
-    directory
-        .canonicalize()
+    kerf_paths::canonicalize(directory)
         .or_else(|_| {
             fs::create_dir_all(directory)?;
-            directory.canonicalize()
+            kerf_paths::canonicalize(directory)
         })
         .context("resolve project directory")
 }

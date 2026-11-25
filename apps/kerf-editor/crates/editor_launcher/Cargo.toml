@@ -17,6 +17,7 @@ editor_state.workspace = true
 editor_ui.workspace = true
 editor_session.workspace = true
 kerf-bridge.workspace = true
+kerf-paths.workspace = true
 gpui.workspace = true
 log.workspace = true
 serde_json.workspace = true

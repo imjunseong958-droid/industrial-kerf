@@ -187,10 +187,9 @@ impl KerfMcpRouter {
         let path = self.preset_path(file)?;
         let parent = path
             .parent()
-            .ok_or_else(|| invalid("preset has no parent directory"))?
-            .canonicalize()
-            .map_err(io_error)?;
-        if !parent.starts_with(self.dir.canonicalize().map_err(io_error)?) {
+            .ok_or_else(|| invalid("preset has no parent directory"))?;
+        let parent = kerf_paths::canonicalize(parent).map_err(io_error)?;
+        if !parent.starts_with(kerf_paths::canonicalize(&self.dir).map_err(io_error)?) {
             return Err(invalid(
                 "save presets inside the project; copy the file to share it",
             ));

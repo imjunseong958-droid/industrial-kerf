@@ -1750,6 +1750,7 @@ version = "0.1.7"
 dependencies = [
  "kerf-lang",
  "kerf-model",
+ "kerf-paths",
  "log",
  "serde",
  "serde_json",
@@ -2052,6 +2053,7 @@ dependencies = [
  "kerf-engine",
  "kerf-lang",
  "kerf-model",
+ "kerf-paths",
  "kerf-protocol",
  "libc",
  "log",

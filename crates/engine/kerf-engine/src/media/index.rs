@@ -188,7 +188,7 @@ pub fn media_index(
             .current_dir(&entry.directory)
             .args(video_decode_prefix())
             .args(["-hide_banner", "-nostats", "-i"])
-            .arg(src.canonicalize()?)
+            .arg(kerf_paths::canonicalize(src)?)
             .args(["-filter_complex", &graph.join(";")])
             .args(outputs);
         let finished = sidecar::run(command, cancellation, |_| {})?;

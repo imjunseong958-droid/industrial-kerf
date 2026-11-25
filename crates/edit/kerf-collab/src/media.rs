@@ -126,7 +126,7 @@ fn ignored(directory: &Path, paths: &[&str]) -> BTreeSet<String> {
 /// (macOS's `/var` is `/private/var`); the file's own name is kept even
 /// when it is a link.
 pub fn inside(directory: &Path, file: &Path) -> bool {
-    match (directory.canonicalize(), resolved_parent(file)) {
+    match (kerf_paths::canonicalize(directory), resolved_parent(file)) {
         (Ok(directory), Some(parent)) => parent.starts_with(directory),
         _ => false,
     }
@@ -141,12 +141,12 @@ fn resolved_parent(file: &Path) -> Option<PathBuf> {
                 parent
             }
         })
-        .and_then(|parent| parent.canonicalize().ok())
+        .and_then(|parent| kerf_paths::canonicalize(parent).ok())
 }
 
 /// `file` relative to `directory` with `/` separators, when it is inside.
 pub fn relative_to(directory: &Path, file: &Path) -> Option<String> {
-    let directory = directory.canonicalize().ok()?;
+    let directory = kerf_paths::canonicalize(directory).ok()?;
     let path = resolved_parent(file)?.join(file.file_name()?);
     let relative = path.strip_prefix(directory).ok()?;
     let parts: Option<Vec<&str>> = relative
