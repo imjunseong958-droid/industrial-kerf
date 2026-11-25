@@ -18,8 +18,13 @@ cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
 session=$(jq -r '.session_id // "default"' <<<"$input")
 cwd=$(jq -r '.cwd // ""' <<<"$input")
 
-# Only gate git commit (also `git -C dir commit` and `... && git commit`).
-commit='(^|[;&|(]|[[:space:]])git[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*commit([[:space:]]|$)'
+# Only gate git commit: also `/usr/bin/git commit`, `git -C "/a b" -c k="v w" commit`,
+# `... && git commit`, `bash -c 'git commit'` and `(git commit)`, but not `git commit-tree`.
+# Group 2 is the call itself, from git to commit. A word may hold quoted spaces.
+piece="(\"[^\"]*\"|'[^']*'|[^[:space:]\"'])"
+value="(\"[^\"]*\"|'[^']*'|[^-[:space:]\"'])$piece*"
+gitcall="([^[:space:];&|()\"'\`]*/)?git[[:space:]]+(-${piece}+[[:space:]]+(${value}[[:space:]]+)?)*commit"
+commit="(^|[;&|(\"'\`[:space:]])($gitcall)([;&|)\"'\`[:space:]]|\$)"
 grep -Eq "$commit" <<<"$cmd" || exit 0
 
 # Find the checkouts the command commits in. CLAUDE_PROJECT_DIR does not say: in a session of
@@ -83,11 +88,32 @@ if set_by=$(grep -Eo "$setting" <<<"$before"); then
   unknown "$(head -n 1 <<<"$set_by")"
 fi
 
+# Each commit in the command. A match ends on the character after `commit`, and that character
+# can also open the next one, as in `git commit;git -C dir commit`, so it is put back.
+calls=()
+rest=$cmd
+while [[ $rest =~ $commit ]]; do
+  calls+=("${BASH_REMATCH[2]}")
+  rest=${rest#*"${BASH_REMATCH[0]}"}
+  rest=${BASH_REMATCH[0]: -1}$rest
+done
+# grep saw a commit, so not finding it here must not let it through.
+[ ${#calls[@]} -gt 0 ] || unknown "$cmd"
+
 tops=()
-while IFS= read -r call; do
+for call in ${calls[@]+"${calls[@]}"}; do
   dirs=("${here[@]}")
-  read -ra words <<<"$call"
+  # Split the call into words, keeping quoted spaces in their word.
+  words=()
+  while [[ $call =~ ^[[:space:]]*($piece+) ]]; do
+    words+=("${BASH_REMATCH[1]}")
+    call=${call#"${BASH_REMATCH[0]}"}
+  done
   for ((i = 1; i < ${#words[@]}; i++)); do
+    bare=${words[i]//\"/} bare=${bare//\'/}
+    case $bare in
+      --git-dir* | --work-tree* | *core.worktree=*) unknown "git ${words[i]}" ;;
+    esac
     case ${words[i]} in
       -C)
         i=$((i + 1))
@@ -98,7 +124,6 @@ while IFS= read -r call; do
         [ ${#next[@]} -gt 0 ] || unknown "git -C ${words[i]}"
         dirs=("${next[@]}")
         ;;
-      --git-dir* | --work-tree* | core.worktree=*) unknown "git ${words[i]}" ;;
     esac
   done
   for dir in "${dirs[@]}"; do
@@ -108,7 +133,7 @@ while IFS= read -r call; do
     done
     tops+=("$top")
   done
-done < <(grep -Eo "$commit" <<<"$cmd"; grep -Eo "${commit%(*}[;&|)]" <<<"$cmd")
+done
 
 # Outside any checkout, the project's own is checked: leaving it must not skip the checks.
 if [ ${#tops[@]} -eq 0 ]; then
