@@ -371,47 +371,86 @@ fn taken_kept() -> &'static Taken {
     KEPT.get_or_init(Default::default)
 }
 
-/// How long the program is given to ask its server before it is given up on.
+/// How long the program is given to ask its server before it is asked to end. It then has
+/// [`GRACE`](kerf_engine::process::sidecar::GRACE) to, before it and what it started are
+/// killed.
 const ASKING: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// Run `program --workflow <named> --inputs` and read what it prints.
+///
+/// It runs as a sidecar, so stopping it stops what it started too. What it prints is read
+/// as it prints it: an answer longer than a pipe holds, as a server with many weights
+/// gives, would otherwise hold the program up until it was stopped.
 fn asked_inputs(program: &str, named: &str) -> Result<Value, ShotError> {
+    use kerf_engine::process::sidecar::{Sidecar, GRACE};
     use std::process::Stdio;
-    let mut child = kerf_engine::recipe::model::program(program)
-        .args([FLAG, named, "--inputs"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("cannot run {program}: {error}"))?;
+    let mut sidecar = Sidecar::start(
+        kerf_engine::recipe::model::program(program)
+            .args([FLAG, named, "--inputs"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|error| format!("cannot run {program}: {error}"))?;
+    let stdout = read_out(sidecar.stdout.take());
+    let stderr = read_out(sidecar.stderr.take());
+    let late = || -> ShotError {
+        format!(
+            "{PROGRAM} did not say what the server takes within {} s",
+            ASKING.as_secs()
+        )
+        .into()
+    };
     let started = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if started.elapsed() < ASKING => {
-                std::thread::sleep(std::time::Duration::from_millis(50))
+    let status = loop {
+        let exited = match sidecar.try_wait() {
+            Ok(exited) => exited,
+            Err(_) => {
+                sidecar.kill();
+                return Err(late());
             }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{PROGRAM} did not say what the server takes within {} s",
-                    ASKING.as_secs()
-                )
-                .into());
-            }
+        };
+        // All it said is read once it has ended and its pipes have closed.
+        if let Some(status) = exited.filter(|_| stdout.is_finished() && stderr.is_finished()) {
+            break status;
         }
-    }
-    let said = child
-        .wait_with_output()
-        .map_err(|error| error.to_string())?;
-    if !said.status.success() {
-        let why = String::from_utf8_lossy(&said.stderr);
+        if started.elapsed() >= ASKING {
+            // Asked to end first, so that it can take back what it asked of its server.
+            sidecar.stopper().stop(GRACE);
+            sidecar.kill();
+            return Err(late());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    let (stdout, stderr) = (said(stdout)?, said(stderr)?);
+    if !status.success() {
+        let why = String::from_utf8_lossy(&stderr);
         return Err(why.trim().trim_start_matches("kerf-comfy: ").into());
     }
-    serde_json::from_slice(&said.stdout).map_err(|error| {
+    serde_json::from_slice(&stdout).map_err(|error| {
         format!("{PROGRAM} said something that is not what its inputs take: {error}").into()
     })
+}
+
+/// Read `pipe` to its end on a thread of its own.
+fn read_out(
+    pipe: Option<impl std::io::Read + Send + 'static>,
+) -> std::thread::JoinHandle<std::io::Result<Vec<u8>>> {
+    std::thread::spawn(move || {
+        let mut said = Vec::new();
+        if let Some(mut pipe) = pipe {
+            pipe.read_to_end(&mut said)?;
+        }
+        Ok(said)
+    })
+}
+
+/// What [`read_out`] read.
+fn said(reading: std::thread::JoinHandle<std::io::Result<Vec<u8>>>) -> Result<Vec<u8>, ShotError> {
+    match reading.join() {
+        Ok(read) => read.map_err(|error| error.to_string().into()),
+        Err(_) => Err(format!("{PROGRAM}'s output could not be read").into()),
+    }
 }
 
 /// `shown`, a workflow as [`shown`] says it, with what each of its inputs takes beside
