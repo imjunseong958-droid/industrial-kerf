@@ -30,22 +30,28 @@ links FFmpeg through the bridge, found as kerfd finds it (`FFMPEG_DIR`, or `pkg-
 Build it with `--release` to judge playback: the live preview draws its frames in the
 bridge.
 
-What GPUI needs to build:
+What it needs to build, beside FFmpeg and the libclang that makes its bindings:
 
-- **Linux**: xkbcommon, xcb, Wayland, fontconfig and freetype, and the Vulkan loader. On
-  Debian and Ubuntu:
+- **Linux**: xkbcommon, xcb, Wayland, fontconfig and freetype, and the Vulkan loader, for
+  GPUI, and ALSA, for playback. On Debian and Ubuntu:
 
   ```sh
-  sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+  sudo apt install libclang-dev libasound2-dev \
+      libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
       libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
   ```
 
   At run time it loads libxkbcommon, libxcb, libwayland-client and the Vulkan loader
   from the system, and needs a Vulkan driver: Mesa's (`mesa-vulkan-drivers`), or the GPU
   vendor's. With no GPU, Mesa's lavapipe draws it in software.
-- **macOS**: Xcode, whose `metal` compiles GPUI's shaders.
+- **macOS**: the Command Line Tools (`xcode-select --install`). Xcode is not needed: the
+  editor compiles GPUI's Metal shaders as it opens (`runtime_shaders`, in `Cargo.toml`).
 - **Windows**: Visual Studio's C++ tools, for the linker and the resource compiler that
-  puts Kerf's icon in `kerf-editor.exe` (`assets/icon/kerf-editor.rc`).
+  puts Kerf's icon in `kerf-editor.exe` (`assets/icon/kerf-editor.rc`). A release build
+  also needs `fxc.exe`, from a Windows SDK, to compile GPUI's shaders (a debug build
+  compiles them as it opens). GPUI looks for it on `PATH` and in SDK 10.0.26100.0 alone,
+  and stops with "Failed to find fxc.exe": with another SDK, set `GPUI_FXC_PATH` to its
+  `bin\<version>\x64\fxc.exe`. `scripts/package-kerf-windows.ps1` does this by itself.
 
 ## Run
 

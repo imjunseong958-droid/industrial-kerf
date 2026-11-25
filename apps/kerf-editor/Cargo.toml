@@ -21,7 +21,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 license = "MIT"
 # Nothing here goes to crates.io: every crate takes `publish.workspace = true`.
@@ -43,7 +43,10 @@ editor_timeline = { path = "crates/editor_timeline" }
 editor_ui = { path = "crates/editor_ui" }
 kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
 kerf-paths = { path = "../../crates/foundation/kerf-paths" }
-gpui = "0.2.2"
+# runtime_shaders: on macOS GPUI otherwise compiles its Metal shaders as it
+# builds, with a `metal` only Xcode has; with it the editor compiles them as it
+# opens, and builds with the Command Line Tools alone. Elsewhere it does nothing.
+gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 # The version gpui draws pictures with: its RenderImage holds these frames
 # (and `--screenshot` writes its PNG with it).
 image = { version = "0.25", default-features = false }

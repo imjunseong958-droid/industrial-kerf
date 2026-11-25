@@ -4,8 +4,8 @@
 # FFmpeg and every Homebrew library they need copied into the bundle, zipped as
 # target/package-macos/<name>.zip with its sha256.
 #
-# Runs on a Mac with Xcode (GPUI compiles its Metal shaders with it), Rust, and Homebrew's
-# ffmpeg and pkg-config, as CI's macOS job installs them. Homebrew's FFmpeg is GPL, so the zip is too: it says so, and
+# Runs on a Mac with the Command Line Tools, Rust, and Homebrew's ffmpeg and pkg-config,
+# as CI's macOS job installs them. Homebrew's FFmpeg is GPL, so the zip is too: it says so, and
 # target/package-macos/bundled-formulae.txt names each Homebrew formula whose files
 # went in, for scripts/collect-kerf-macos-sources.sh to fetch the source of.
 #

@@ -353,8 +353,7 @@ jobs:
           shared-key: macos
           save-if: false
       # Only what Linux cannot show: the editor against Homebrew's libav,
-      # drawn with GPUI's Metal renderer (its shaders compiled by Xcode's
-      # metal), and the daemon beside it.
+      # drawn with GPUI's Metal renderer, and the daemon beside it.
       - name: Build the editor and the daemon
         run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
 
