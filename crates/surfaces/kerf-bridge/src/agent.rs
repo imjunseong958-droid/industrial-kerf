@@ -29,11 +29,29 @@ pub(crate) enum Agent {
     ClaudeCode(claude_code::ClaudeCodeSession),
 }
 
-impl Agent {
-    fn abort_handle(&self) -> Arc<AtomicBool> {
+/// What stops an agent's turn.
+#[derive(Clone)]
+pub(crate) enum Abort {
+    /// Kerf's own loop, which looks at the flag between its steps.
+    Native(Arc<AtomicBool>),
+    /// Claude Code, which is stopped as soon as it is asked.
+    ClaudeCode(claude_code::Abort),
+}
+
+impl Abort {
+    fn abort(&self) {
         match self {
-            Self::Native(session, _) => session.abort_handle(),
-            Self::ClaudeCode(session) => session.abort_handle(),
+            Self::Native(abort) => abort.store(true, Ordering::SeqCst),
+            Self::ClaudeCode(abort) => abort.abort(),
+        }
+    }
+}
+
+impl Agent {
+    fn abort_handle(&self) -> Abort {
+        match self {
+            Self::Native(session, _) => Abort::Native(session.abort_handle()),
+            Self::ClaudeCode(session) => Abort::ClaudeCode(session.abort_handle()),
         }
     }
 
@@ -298,9 +316,9 @@ const RESTORED_FAILED: &str = "\u{0}restored: ";
 pub(crate) struct Turns {
     busy: AtomicBool,
     /// What stops the turn running.
-    abort: Mutex<Option<Arc<AtomicBool>>>,
+    abort: Mutex<Option<Abort>>,
     /// What stops each agent making a version of a request, while they run.
-    versions: Mutex<Vec<Arc<AtomicBool>>>,
+    versions: Mutex<Vec<Abort>>,
 }
 
 impl Turns {
@@ -315,7 +333,7 @@ impl Turns {
     }
 
     /// The turn's agent has started: `abort` stops it.
-    fn turn_runs(&self, abort: Arc<AtomicBool>) {
+    fn turn_runs(&self, abort: Abort) {
         if let Ok(mut running) = self.abort.lock() {
             *running = Some(abort);
         }
@@ -328,7 +346,7 @@ impl Turns {
     }
 
     /// One more agent is making a version: `abort` stops it.
-    fn version_runs(&self, abort: Arc<AtomicBool>) {
+    fn version_runs(&self, abort: Abort) {
         if let Ok(mut running) = self.versions.lock() {
             running.push(abort);
         }
@@ -347,7 +365,7 @@ impl Turns {
         match self.abort.try_lock() {
             Ok(abort) => {
                 if let Some(abort) = &*abort {
-                    abort.store(true, Ordering::SeqCst);
+                    abort.abort();
                 }
                 true
             }
@@ -360,7 +378,7 @@ impl Turns {
         if let Ok(abort) = self.abort.lock()
             && let Some(abort) = &*abort
         {
-            abort.store(true, Ordering::SeqCst);
+            abort.abort();
         }
         self.stop_versions();
     }
@@ -368,7 +386,7 @@ impl Turns {
     fn stop_versions(&self) {
         if let Ok(aborts) = self.versions.lock() {
             for abort in aborts.iter() {
-                abort.store(true, Ordering::SeqCst);
+                abort.abort();
             }
         }
     }

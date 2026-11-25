@@ -7,6 +7,7 @@ struct Options {
 }
 
 fn main() {
+    kerf_runtime::logging::to_stderr();
     kerf_engine::process::sidecar::forward_termination_signals();
     if let Err(error) = run() {
         eprintln!("kerf-mcp: {error}");

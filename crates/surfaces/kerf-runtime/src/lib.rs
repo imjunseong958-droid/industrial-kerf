@@ -20,6 +20,7 @@ pub mod author;
 pub mod crash;
 mod ipc;
 mod kernel;
+pub mod logging;
 #[cfg(windows)]
 mod named_pipe;
 mod render;

@@ -298,6 +298,7 @@ enum PresetAction {
 
 fn main() {
     kerf_runtime::crash::install("kerf");
+    kerf_runtime::logging::to_stderr();
     kerf_engine::process::sidecar::forward_termination_signals();
     if let Err(error) = run() {
         eprintln!("kerf: {error:#}");
