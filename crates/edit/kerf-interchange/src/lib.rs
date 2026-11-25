@@ -17,14 +17,16 @@ pub mod otio;
 pub mod otio_json;
 
 use kerf_model::Project;
+use kerf_sidecar::{Sidecar, GRACE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -471,7 +473,9 @@ impl OpenTimelineIoAdapter {
     }
 
     /// Run the bridge to completion within the configured timeout and read
-    /// its JSON response.
+    /// its JSON response. At the timeout the bridge and what it started are
+    /// asked to end, and what is left is killed once the bridge has ended or
+    /// [`GRACE`] is over.
     fn run_bridge(
         &self,
         invocation: ProcessInvocation,
@@ -694,47 +698,63 @@ fn run_process(
     stdin: Option<String>,
     timeout: Duration,
 ) -> Result<ProcessResult, InterchangeError> {
-    let mut child = Command::new(command)
-        .args(args)
-        .current_dir(cwd.unwrap_or_else(|| Path::new(".")))
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            InterchangeError::new(
-                InterchangeCode::ProcessFailed,
-                format!("could not start {}: {error}", command.display()),
-            )
-        })?;
+    let mut sidecar = Sidecar::start(
+        Command::new(command)
+            .args(args)
+            .current_dir(cwd.unwrap_or_else(|| Path::new(".")))
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|error| {
+        InterchangeError::new(
+            InterchangeCode::ProcessFailed,
+            format!("could not start {}: {error}", command.display()),
+        )
+    })?;
     if let Some(stdin) = stdin {
-        child
+        sidecar
             .stdin
             .take()
             .expect("stdin was piped")
             .write_all(stdin.as_bytes())?;
     }
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout = sidecar.stdout.take().expect("stdout was piped");
+    let stderr = sidecar.stderr.take().expect("stderr was piped");
     let stdout_thread = thread::spawn(move || read_all(stdout));
     let stderr_thread = thread::spawn(move || read_all(stderr));
-    let deadline = Instant::now() + timeout;
-    let mut timed_out = false;
-    let code = loop {
-        if let Some(status) = child.try_wait()? {
-            break status.code();
+    // Waited for on a thread of its own, so that the timeout is a wait for its end.
+    let stopper = sidecar.stopper();
+    let (sender, exited) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(sidecar.wait());
+    });
+    let waiter_lost =
+        || InterchangeError::new(InterchangeCode::ProcessFailed, "bridge waiter panicked");
+    let (status, timed_out) = match exited.recv_timeout(timeout) {
+        Ok(status) => (status?, false),
+        Err(RecvTimeoutError::Timeout) => {
+            // Asked to end before it is killed, with what it started.
+            stopper.stop(GRACE);
+            (exited.recv().map_err(|_| waiter_lost())??, true)
         }
-        if Instant::now() >= deadline {
-            timed_out = true;
-            child.kill()?;
-            break child.wait()?.code();
-        }
-        thread::sleep(Duration::from_millis(10));
+        Err(RecvTimeoutError::Disconnected) => return Err(waiter_lost()),
     };
+    let code = status.code();
+    if timed_out {
+        // What it wrote is not read to the end: something it started outside its process
+        // group could hold its pipes open long after it.
+        return Ok(ProcessResult {
+            stdout: String::new(),
+            stderr: String::new(),
+            code,
+            timed_out,
+        });
+    }
     Ok(ProcessResult {
         stdout: stdout_thread.join().map_err(|_| {
             InterchangeError::new(InterchangeCode::ProcessFailed, "stdout reader panicked")

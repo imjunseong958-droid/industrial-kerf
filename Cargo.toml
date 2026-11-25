@@ -8,6 +8,7 @@ members = [
     "crates/foundation/kerf-geom",
     "crates/foundation/kerf-color",
     "crates/foundation/kerf-text",
+    "crates/foundation/kerf-sidecar",
     # render
     "crates/render/kerf-raster",
     "crates/render/kerf-draw",

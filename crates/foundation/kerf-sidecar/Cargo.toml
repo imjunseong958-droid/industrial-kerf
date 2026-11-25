@@ -1,0 +1,23 @@
+[package]
+name = "kerf-sidecar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Supervised sidecar processes: each in a process group or job of its own, asked to end before it is killed, and reached by the signals that end Kerf"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+log.workspace = true
+signal-hook.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
+
+[lints]
+workspace = true

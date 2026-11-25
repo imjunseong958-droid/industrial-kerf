@@ -23,6 +23,7 @@ kerf-core = { path = "../../engine/kerf-core" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-paths = { path = "../../foundation/kerf-paths" }
+kerf-sidecar = { path = "../../foundation/kerf-sidecar" }
 kerf-track = { path = "../../vfx/kerf-track" }
 hex.workspace = true
 log.workspace = true
@@ -34,17 +35,8 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
-signal-hook.workspace = true
-
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = [
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_System_JobObjects",
-    "Win32_System_Threading",
-] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile.workspace = true
