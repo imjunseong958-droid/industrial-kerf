@@ -407,7 +407,23 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
     std::fs::create_dir_all(directory.join(".kerf")).unwrap();
     std::fs::write(directory.join(".kerf/mcp.json"), config.to_string()).unwrap();
     let home = tempfile::tempdir().unwrap();
-    let mut kerf = Command::new(env!("CARGO_BIN_EXE_kerf"))
+    /// What is killed as the test ends, however it ends, so that one that fails leaves
+    /// nothing running: `kerf` if it still runs, and each process or `-group` named.
+    struct Leftovers {
+        kerf: std::process::Child,
+        named: Vec<String>,
+    }
+    impl Drop for Leftovers {
+        fn drop(&mut self) {
+            // Nothing is signalled once it has been waited for.
+            let _ = self.kerf.kill();
+            let _ = self.kerf.wait();
+            for id in &self.named {
+                let _ = Command::new("kill").args(["-KILL", "--", id]).status();
+            }
+        }
+    }
+    let kerf = Command::new(env!("CARGO_BIN_EXE_kerf"))
         // No one's own servers, and no timeout while the server is waited on.
         .env("HOME", home.path())
         .env("KERF_MCP_TIMEOUT_MS", "600000")
@@ -421,7 +437,11 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
         .stderr(Stdio::piped())
         .spawn()
         .expect("kerf runs");
-    let mut stderr = kerf.stderr.take().unwrap();
+    let mut left_over = Leftovers {
+        kerf,
+        named: Vec::new(),
+    };
+    let mut stderr = left_over.kerf.stderr.take().unwrap();
     let id = |name: &str| {
         let started = Instant::now();
         loop {
@@ -436,7 +456,12 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
             std::thread::sleep(Duration::from_millis(20));
         }
     };
-    let (launcher, server, apart) = (id("launcher"), id("server"), id("apart"));
+    let launcher = id("launcher");
+    // It leads its group, which holds its server.
+    left_over.named.push(format!("-{launcher}"));
+    let server = id("server");
+    let apart = id("apart");
+    left_over.named.push(apart.clone());
     // A process left without its parent stays a zombie until something reaps it, which `kill -0`
     // cannot tell from one running. Only `ps` says which.
     let runs = |id: &str| {
@@ -451,11 +476,11 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
     };
 
     let sent = Command::new("kill")
-        .args(["-TERM", &kerf.id().to_string()])
+        .args(["-TERM", &left_over.kerf.id().to_string()])
         .status()
         .unwrap();
     assert!(sent.success());
-    let ended = kerf.wait().unwrap();
+    let ended = left_over.kerf.wait().unwrap();
     // SIGTERM is 15 on every Unix.
     assert_eq!(ended.signal(), Some(15), "{ended:?}");
     let (said, heard) = std::sync::mpsc::channel();
@@ -471,10 +496,6 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
     }
     let left = [&launcher, &server].map(|id| runs(id));
     let apart_ran = runs(&apart);
-    // What is left, whatever the test finds: the launcher leads its group.
-    for id in [apart.clone(), format!("-{launcher}")] {
-        let _ = Command::new("kill").args(["-KILL", "--", &id]).status();
-    }
     assert_eq!(
         left,
         [false, false],

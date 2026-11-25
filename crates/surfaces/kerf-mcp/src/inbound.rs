@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 const MCP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MCP_MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MCP_SEARCH_PAGE_SIZE: usize = 50;
+/// How long what a stopped server last wrote to its stderr is waited for, once it has ended.
+const LAST_WORDS: Duration = Duration::from_millis(500);
 
 fn request_timeout() -> Duration {
     env::var("KERF_MCP_TIMEOUT_MS")
@@ -87,9 +89,11 @@ struct McpProcess {
     /// Closed as the server is stopped.
     stdin: Option<ChildStdin>,
     stdout: BufReader<ChildStdout>,
+    /// What passes the server's stderr on ([`pass_on_stderr`]).
+    stderr: Option<std::thread::JoinHandle<()>>,
     timeout: Duration,
     next_id: u64,
-    /// Killed after a call timed out, was cancelled, or broke the transport;
+    /// Stopped after a call timed out, was cancelled, or broke the transport;
     /// the next call starts the server again.
     stopped: bool,
 }
@@ -408,7 +412,7 @@ impl McpProcess {
             .stderr
             .take()
             .ok_or_else(|| "MCP child stderr was not piped".to_owned())?;
-        pass_on_stderr(stderr)?;
+        let stderr = pass_on_stderr(stderr)?;
         let stdin = server
             .stdin
             .take()
@@ -423,6 +427,7 @@ impl McpProcess {
             server,
             stdin: Some(stdin),
             stdout: BufReader::new(stdout),
+            stderr: Some(stderr),
             next_id: 1,
             timeout,
             stopped: false,
@@ -491,11 +496,13 @@ impl McpProcess {
     }
 
     /// Stop the server and what it started, and reap it. Its stdin closes
-    /// first, as MCP's stdio transport has a client end a server. Then, as a
-    /// cancelled sidecar is stopped, its process group is asked to end
+    /// first, as MCP's stdio transport has a client end a server: one that
+    /// ignores SIGTERM, as a container's first process may, can still end on
+    /// that. Then, as a cancelled sidecar is stopped, its process group is asked to end
     /// (SIGTERM), so that a launcher such as `docker run` can end what it
     /// started, and what is left is killed once the server has ended or
-    /// [`GRACE`] is over. On Windows its job is ended at once.
+    /// [`GRACE`] is over. On Windows its job is ended at once. What it last
+    /// wrote to its stderr is passed on before this returns.
     fn stop(&mut self) {
         if self.stopped {
             return;
@@ -505,6 +512,14 @@ impl McpProcess {
         self.server.stopper().stop(GRACE);
         // It has ended, or been killed; a server that cannot be reaped even so is past stopping.
         let _ = self.server.wait();
+        // Its stderr closes once nothing of its group is left: a moment, in case something it
+        // started outside its group holds it open. The reader then reads on by itself.
+        if let Some(reader) = self.stderr.take() {
+            let since = Instant::now();
+            while !reader.is_finished() && since.elapsed() < LAST_WORDS {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
     }
 
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
@@ -695,7 +710,7 @@ fn parse_tool_response(response: Value) -> Result<Value, String> {
 /// reads a command substitution's. A server's process group is ended with
 /// it, but something it started in a session of its own is not in that
 /// group, and would otherwise keep the stderr it inherited.
-fn pass_on_stderr(mut stderr: ChildStderr) -> Result<(), String> {
+fn pass_on_stderr(mut stderr: ChildStderr) -> Result<std::thread::JoinHandle<()>, String> {
     std::thread::Builder::new()
         .name("kerf-mcp-server-stderr".into())
         .spawn(move || {
@@ -713,7 +728,6 @@ fn pass_on_stderr(mut stderr: ChildStderr) -> Result<(), String> {
                 }
             }
         })
-        .map(drop)
         .map_err(|error| format!("MCP stderr could not be read: {error}"))
 }
 
@@ -998,6 +1012,36 @@ for line in sys.stdin:
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(!runs(), "the launcher's child {pid} still runs");
+    }
+
+    /// A launcher (`docker run`, npx) is asked to end before it is killed, so that it can
+    /// end what it started itself.
+    #[cfg(unix)]
+    #[test]
+    fn a_stopped_server_is_asked_to_end_before_it_is_killed() {
+        let root = tempfile::tempdir().unwrap();
+        let asked = root.path().join("asked");
+        let config = McpServerConfig {
+            command: "sh".into(),
+            args: vec![
+                "-c".into(),
+                "trap 'echo asked > \"$0\"; exit' TERM; read line; sleep 30 & wait".into(),
+                asked.to_string_lossy().into_owned(),
+            ],
+            env: BTreeMap::new(),
+            tools: None,
+        };
+        let error = match ConnectedServer::connect_with_timeout(config, Duration::from_millis(300))
+        {
+            Ok(_) => panic!("a server that never answers connected"),
+            Err(error) => error,
+        };
+        assert!(error.contains("timed out"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&asked).unwrap_or_default(),
+            "asked\n",
+            "the launcher was killed without being asked to end"
+        );
     }
 
     #[test]
