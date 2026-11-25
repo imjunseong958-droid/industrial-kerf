@@ -10,14 +10,15 @@ use std::path::{Path, PathBuf};
 /// A verbatim path (`\\?\C:\project`) takes `/` literally, so a project-relative
 /// `media/a.mov` joined to it names nothing. Nor is it equal to the same folder written
 /// plainly, and it is not the path to show a person or to hand another program. A path
-/// that is not on a drive (a share's `\\?\UNC\server\share`) keeps it. A path with a name
+/// that is not on a drive (a share's `\\?\UNC\server\share`) keeps it, and so does one that
+/// is not UTF-8 (a name with a lone surrogate, which Windows allows). A path with a name
 /// Windows reads otherwise without the prefix (one that ends in a dot or a space, or a
 /// device's, such as `NUL`) loses it all the same.
 ///
-/// A long path loses it too, so that a folder and a file in it always come out in one form
+/// A long path loses it too, so that a folder and a long path in it come out in one form
 /// and compare as they are. Windows's file calls take a path of about 250 characters or more
-/// only with the prefix, but Rust's own put it back on a path that long, and so does the
-/// way FFmpeg opens a file.
+/// only with the prefix, but std::fs's put it back on a path that long, and so does FFmpeg,
+/// since 5.1, when it opens a file.
 pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     #[expect(
         clippy::disallowed_methods,
@@ -75,14 +76,14 @@ mod tests {
         assert_eq!(plain(r"\\?\1:\project"), PathBuf::from(r"\\?\1:\project"));
     }
 
-    // A folder and a file deep in it come out in one form, so on Windows the folder holds
-    // the file: `Path::starts_with` takes `\\?\C:` and `C:` for different drives.
+    // A file deep in `C:\project` comes out in the form its folder does, so on Windows the
+    // folder holds the file: `Path::starts_with` takes `\\?\C:` and `C:` for different drives.
     #[test]
     fn a_long_path_loses_the_prefix_as_its_folder_does() {
-        let folder = r"C:\project";
-        let file = format!(r"{folder}\{}\a.mov", "deep".repeat(80));
-        let plain = |text: &str| without_verbatim_prefix(PathBuf::from(format!(r"\\?\{text}")));
-        assert_eq!(plain(folder), PathBuf::from(folder));
-        assert_eq!(plain(&file), PathBuf::from(&file));
+        let file = format!(r"C:\project\{}\a.mov", "deep".repeat(80));
+        assert_eq!(
+            without_verbatim_prefix(PathBuf::from(format!(r"\\?\{file}"))),
+            PathBuf::from(&file)
+        );
     }
 }
