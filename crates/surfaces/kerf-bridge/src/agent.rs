@@ -498,16 +498,20 @@ impl TurnEvents<'_> {
                 if let (Some("asked"), Some(media), Some(said)) =
                     (summary.status.as_deref(), &summary.media, &summary.ask)
                 {
-                    let parts = kerf_mcp::kept_ask(self.directory, media, said).unwrap_or_default();
+                    let parts = kerf_mcp::kept_ask(self.directory, media, said);
+                    if parts.is_none() {
+                        log::warn!(
+                            "no parts are kept for the ask to make {media}: its card shows the plan alone"
+                        );
+                    }
                     let ask = conversations::Ask {
                         media: media.clone(),
                         rolls: summary.rolls.filter(|rolls| *rolls > 1),
                         take: summary.take,
                         text: said.clone(),
-                        why: parts.why,
-                        steps: parts.steps,
-                        notes: parts.notes,
-                    };
+                        ..conversations::Ask::default()
+                    }
+                    .with_parts(parts.unwrap_or_default());
                     emit(
                         tx,
                         Event::AgentAsk {

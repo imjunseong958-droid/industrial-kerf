@@ -348,23 +348,29 @@ cat >/dev/null
 cat "$(dirname "$0")/said.jsonl"
 "#;
 
-/// An agent's ask reaches the editor in the parts kerf-mcp wrote its words from, on the
-/// card's `agent_ask` and in the conversation that keeps it: the editor shows those, and does
-/// not read them back out of words worded for the agent.
+/// What reaches the editor of an agent's ask, made in test `test` with `why`: the answer
+/// kerf-mcp gives the agent's `make` (its `result`), the card's `agent_ask`, and the ask the
+/// conversation keeps. None in the process that runs `test` in a process of its own.
 #[cfg(unix)]
-#[test]
-fn an_agents_ask_reaches_the_editor_in_its_parts() {
+fn asked_through_claude_code(
+    test: &str,
+    why: &str,
+) -> Option<(serde_json::Value, serde_json::Value, serde_json::Value)> {
     let named = std::env::temp_dir()
-        .join(format!("kq-asks-{}", std::process::id()))
+        .join(format!(
+            "kq-{}-{}",
+            test.replace("::", "-"),
+            std::process::id()
+        ))
         .join("claude");
     if !alone(
-        "api::an_agents_ask_reaches_the_editor_in_its_parts",
+        test,
         &[
             ("KERF_CLAUDE_BIN", named.as_os_str()),
             ("KERF_MCP_BIN", "kerf-mcp".as_ref()),
         ],
     ) {
-        return;
+        return None;
     }
     use std::os::unix::fs::PermissionsExt;
     let project = Project::new();
@@ -379,19 +385,11 @@ fn an_agents_ask_reaches_the_editor_in_its_parts() {
     )
     .unwrap();
     // What kerf-mcp answers an agent's `make` with, the person being asked: the ask in words.
-    // A why whose second line reads like a step is the agent's words all the same.
-    let why = "the wider look you wanted\n1. keeps the window's light";
     let router = kerf_mcp::KerfMcpRouter::new(&project.0, Some(&kerfd())).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
     let answered = router.call("make", json!({"media": "m1", "why": why}));
     drop(router);
-    let asked = &answered["result"];
-    assert_eq!(asked["status"], "asked", "{answered}");
-    let steps = asked["steps"].clone();
-    assert!(
-        steps.as_array().is_some_and(|steps| !steps.is_empty()),
-        "{asked}"
-    );
+    assert_eq!(answered["result"]["status"], "asked", "{answered}");
 
     // Claude Code makes the call, and kerf-mcp's answer is the text of its result.
     let claude = PathBuf::from(std::env::var_os("KERF_CLAUDE_BIN").unwrap());
@@ -438,14 +436,60 @@ fn an_agents_ask_reaches_the_editor_in_its_parts() {
         }
     };
     let card = events
-        .iter()
+        .into_iter()
         .find(|event| event["type"] == "agent_ask")
-        .unwrap_or_else(|| panic!("no card was asked for: {events:?}"));
-    for ask in [card, &kept["items"][1]["asks"][0]] {
+        .expect("a card was asked for");
+    let kept = kept["items"][1]["asks"][0].clone();
+    Some((answered["result"].clone(), card, kept))
+}
+
+/// An agent's ask reaches the editor in the parts kerf-mcp wrote its words from, on the
+/// card's `agent_ask` and in the conversation that keeps it: the editor shows those, and does
+/// not read them back out of words worded for the agent.
+#[cfg(unix)]
+#[test]
+fn an_agents_ask_reaches_the_editor_in_its_parts() {
+    // A why whose second line reads like a step is the agent's words all the same.
+    let why = "the wider look you wanted\n1. keeps the window's light";
+    let Some((asked, card, kept)) =
+        asked_through_claude_code("api::an_agents_ask_reaches_the_editor_in_its_parts", why)
+    else {
+        return;
+    };
+    let steps = &asked["steps"];
+    assert!(
+        steps.as_array().is_some_and(|steps| !steps.is_empty()),
+        "{asked}"
+    );
+    for ask in [&card, &kept] {
         assert_eq!(ask["media"], "m1", "{ask}");
         assert_eq!(ask["take"], 1, "{ask}");
         assert_eq!(ask["why"], why, "{ask}");
-        assert_eq!(ask["steps"], steps, "{ask}");
+        assert_eq!(&ask["steps"], steps, "{ask}");
         assert_eq!(ask["text"], asked["ask"], "{ask}");
+    }
+}
+
+/// An ask too long to keep whole reaches the editor as its words do, cut short: its parts
+/// as far as they fit, in the order its words have them, and no further.
+#[cfg(unix)]
+#[test]
+fn a_long_ask_reaches_the_editor_cut_short() {
+    let why = "the window's light falls across the wall and stays there, ".repeat(100);
+    let Some((asked, card, kept)) =
+        asked_through_claude_code("api::a_long_ask_reaches_the_editor_cut_short", &why)
+    else {
+        return;
+    };
+    for ask in [&card, &kept] {
+        let text = ask["text"].as_str().unwrap();
+        let cut = text.strip_suffix('…').expect("the words are cut short");
+        assert!(asked["ask"].as_str().unwrap().starts_with(cut), "{ask}");
+        // The why is as much of it as fits, and nothing comes after it.
+        let kept_why = ask["why"].as_str().expect("the why is kept");
+        let begun = kept_why.strip_suffix('…').expect("the why is cut short");
+        assert!(why.trim().starts_with(begun), "{ask}");
+        assert!(kept_why.len() <= 4 * 1024, "{}", kept_why.len());
+        assert!(ask["steps"].is_null() && ask["notes"].is_null(), "{ask}");
     }
 }

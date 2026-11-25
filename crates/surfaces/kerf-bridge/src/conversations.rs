@@ -102,6 +102,43 @@ pub(crate) struct Ask {
     pub notes: Vec<String>,
 }
 
+/// The most of an ask's parts kept, in bytes: as much as an agent's summary keeps of its
+/// words, so that an event and a conversation's file stay as small as they were.
+const MOST_ASK_BYTES: usize = 4 * 1024;
+
+impl Ask {
+    /// The ask with `parts`, as much of them as fits [`MOST_ASK_BYTES`] in the order its
+    /// words have them, why, steps and then notes: the one that does not fit is cut short
+    /// with `…`, and those after it are left out.
+    pub(crate) fn with_parts(self, parts: kerf_mcp::MakingAsk) -> Self {
+        let mut room = MOST_ASK_BYTES;
+        let mut keep = |part: String| {
+            if room == 0 {
+                return None;
+            }
+            if part.len() <= room {
+                room -= part.len();
+                return Some(part);
+            }
+            let mut end = room.saturating_sub('…'.len_utf8());
+            while !part.is_char_boundary(end) {
+                end -= 1;
+            }
+            room = 0;
+            Some(format!("{}…", &part[..end]))
+        };
+        let why = parts.why.and_then(&mut keep);
+        let steps = parts.steps.into_iter().map_while(&mut keep).collect();
+        let notes = parts.notes.into_iter().map_while(&mut keep).collect();
+        Self {
+            why,
+            steps,
+            notes,
+            ..self
+        }
+    }
+}
+
 /// A conversation as the editor gets it: its file without Claude Code's session.
 impl From<&Conversation> for crate::event::Conversation {
     fn from(conversation: &Conversation) -> Self {
