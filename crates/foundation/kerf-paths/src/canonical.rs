@@ -5,15 +5,19 @@ use std::path::{Path, PathBuf};
 
 /// `path` absolute, with every `.`, `..` and link in it resolved, as [`std::fs::canonicalize`]
 /// makes it, but without the `\\?\` it puts before every path on Windows when the path is on
-/// a drive and short enough to work without it.
+/// a drive.
 ///
 /// A verbatim path (`\\?\C:\project`) takes `/` literally, so a project-relative
 /// `media/a.mov` joined to it names nothing. Nor is it equal to the same folder written
 /// plainly, and it is not the path to show a person or to hand another program. A path
-/// that is not on a drive (a share's `\\?\UNC\server\share`) keeps it, and so does one too
-/// long without it: two paths are in one form only when both are on one side of that
-/// length. A path with a name Windows reads otherwise without the prefix (one that ends in
-/// a dot or a space, or a device's, such as `NUL`) loses it all the same.
+/// that is not on a drive (a share's `\\?\UNC\server\share`) keeps it. A path with a name
+/// Windows reads otherwise without the prefix (one that ends in a dot or a space, or a
+/// device's, such as `NUL`) loses it all the same.
+///
+/// A long path loses it too, so that a folder and a file in it always come out in one form
+/// and compare as they are. Windows's file calls take a path of about 250 characters or more
+/// only with the prefix, but Rust's own put it back on a path that long, and so does the
+/// way FFmpeg opens a file.
 pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     #[expect(
         clippy::disallowed_methods,
@@ -27,18 +31,15 @@ pub fn canonicalize(path: impl AsRef<Path>) -> io::Result<PathBuf> {
     })
 }
 
-/// `C:\project` for `\\?\C:\project`. A path 248 bytes long or longer without the prefix
-/// keeps it, as Windows's CreateDirectory takes none that long without it; so does one that
-/// is not on a drive, or not UTF-8.
+/// `C:\project` for `\\?\C:\project`, however long. A path that is not on a drive, or not
+/// UTF-8, keeps the prefix.
 fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
     let stripped = path
         .to_str()
         .and_then(|text| text.strip_prefix(r"\\?\"))
         .filter(|rest| {
             let bytes = rest.as_bytes();
-            rest.len() < 248
-                && bytes.first().is_some_and(u8::is_ascii_alphabetic)
-                && bytes.get(1) == Some(&b':')
+            bytes.first().is_some_and(u8::is_ascii_alphabetic) && bytes.get(1) == Some(&b':')
         })
         .map(PathBuf::from);
     stripped.unwrap_or(path)
@@ -74,18 +75,14 @@ mod tests {
         assert_eq!(plain(r"\\?\1:\project"), PathBuf::from(r"\\?\1:\project"));
     }
 
+    // A folder and a file deep in it come out in one form, so on Windows the folder holds
+    // the file: `Path::starts_with` takes `\\?\C:` and `C:` for different drives.
     #[test]
-    fn a_path_too_long_without_the_prefix_keeps_it() {
-        let rest = |length: usize| format!(r"C:\{}", "a".repeat(length - 3));
-        let longest = rest(247);
-        assert_eq!(
-            without_verbatim_prefix(PathBuf::from(format!(r"\\?\{longest}"))),
-            PathBuf::from(&longest)
-        );
-        let too_long = format!(r"\\?\{}", rest(248));
-        assert_eq!(
-            without_verbatim_prefix(PathBuf::from(&too_long)),
-            PathBuf::from(&too_long)
-        );
+    fn a_long_path_loses_the_prefix_as_its_folder_does() {
+        let folder = r"C:\project";
+        let file = format!(r"{folder}\{}\a.mov", "deep".repeat(80));
+        let plain = |text: &str| without_verbatim_prefix(PathBuf::from(format!(r"\\?\{text}")));
+        assert_eq!(plain(folder), PathBuf::from(folder));
+        assert_eq!(plain(&file), PathBuf::from(&file));
     }
 }
