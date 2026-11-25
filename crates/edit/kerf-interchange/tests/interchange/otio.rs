@@ -153,6 +153,76 @@ fn the_adapter_writes_and_reads_otio_files_without_python() {
     assert_eq!(error.code.as_str(), "INTERCHANGE_PROCESS_FAILED");
 }
 
+#[cfg(unix)]
+#[test]
+fn a_bridge_past_its_timeout_is_asked_to_end_and_what_it_started_ends_with_it() {
+    use std::time::{Duration, Instant};
+    // A stand-in bridge that starts a long child, which holds none of its pipes, and says
+    // when it is asked to end.
+    let folder = tempfile::tempdir().unwrap();
+    let asked = folder.path().join("asked");
+    let child = folder.path().join("child");
+    let script = folder.path().join("bridge.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "trap 'echo asked > \"{asked}\"; exit 1' TERM\n\
+             sleep 30 >/dev/null 2>&1 &\n\
+             echo $! > \"{child}\"\n\
+             wait\n",
+            asked = asked.display(),
+            child = child.display(),
+        ),
+    )
+    .unwrap();
+    let timeout = Duration::from_secs(2);
+    let adapter = OpenTimelineIoAdapter::new(InterchangeConfig {
+        python_executable: PathBuf::from("sh"),
+        bridge_script: Some(script),
+        timeout,
+        ..InterchangeConfig::default()
+    })
+    .unwrap();
+    let start = Instant::now();
+    let error = adapter
+        .import(&folder.path().join("cut.edl"), Some("cmx_3600"))
+        .unwrap_err();
+    assert!(start.elapsed() >= timeout, "{:?}", start.elapsed());
+    assert_eq!(error.code.as_str(), "INTERCHANGE_TIMEOUT");
+    assert_eq!(
+        error.message,
+        "OpenTimelineIO conversion timed out after 2s"
+    );
+    let child = std::fs::read_to_string(&child).unwrap();
+    assert!(
+        ends_within(child.trim(), Duration::from_secs(3)),
+        "the bridge's child outlived it"
+    );
+    assert!(
+        asked.exists(),
+        "the bridge was killed without being asked to end"
+    );
+}
+
+/// Whether process `pid` ends within `limit`; a zombie awaiting its new
+/// parent counts as ended.
+#[cfg(unix)]
+fn ends_within(pid: &str, limit: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    while start.elapsed() < limit {
+        let output = Command::new("ps")
+            .args(["-o", "stat=", "-p", pid])
+            .output()
+            .unwrap();
+        let state = String::from_utf8_lossy(&output.stdout);
+        if state.trim().is_empty() || state.trim_start().starts_with('Z') {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    false
+}
+
 #[test]
 fn a_program_matches_the_golden_otio_file_and_lists_what_it_leaves_out() {
     let project = project(PROGRAM);

@@ -1794,8 +1794,8 @@ dependencies = [
  "kerf-lang",
  "kerf-model",
  "kerf-paths",
+ "kerf-sidecar",
  "kerf-track",
- "libc",
  "log",
  "mimalloc",
  "rayon",
@@ -1803,7 +1803,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "signal-hook",
  "tempfile",
  "thiserror 2.0.21",
  "windows-sys 0.61.2",
@@ -1870,6 +1869,7 @@ version = "0.1.7"
 dependencies = [
  "kerf-lang",
  "kerf-model",
+ "kerf-sidecar",
  "roxmltree",
  "serde",
  "serde_json",
@@ -2030,6 +2030,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "kerf-sidecar"
+version = "0.1.7"
+dependencies = [
+ "libc",
+ "log",
+ "signal-hook",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

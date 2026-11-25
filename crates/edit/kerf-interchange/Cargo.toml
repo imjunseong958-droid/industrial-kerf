@@ -8,6 +8,7 @@ description = "Project interchange for Kerf: OpenTimelineIO, Final Cut Pro XML, 
 
 [dependencies]
 kerf-model = { path = "../../foundation/kerf-model" }
+kerf-sidecar = { path = "../../foundation/kerf-sidecar" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 

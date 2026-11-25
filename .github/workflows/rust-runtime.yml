@@ -302,7 +302,7 @@ jobs:
         run: cargo test -p kerf-runtime --all-targets
       # Sidecars run in job objects, which end them with kerfd.
       - name: Test sidecar supervision
-        run: cargo test -p kerf-engine --lib "sidecar::"
+        run: cargo test -p kerf-sidecar
       # The editor steps run even when a test above failed, so the editor
       # and the bridge it links are built regardless.
       - name: Build the editor and the daemon
