@@ -79,7 +79,9 @@ pub(crate) struct Item {
 
 /// A making an agent asked for and the person has to say yes to: the media,
 /// how many takes (one unless said), the first of them, and the plan as the
-/// person is asked about it.
+/// person is asked about it, in the words the agent was answered with and in
+/// the parts kerf-mcp wrote them from (`kerf_mcp::MakingAsk`), which are what a
+/// card shows. An ask kept before the parts were carried has only its words.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Ask {
@@ -89,6 +91,15 @@ pub(crate) struct Ask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub take: Option<u32>,
     pub text: String,
+    /// What the making is for, as the agent said it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// Each step as it would run, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
+    /// What its model has said it does not take.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 /// A conversation as the editor gets it: its file without Claude Code's session.
@@ -130,6 +141,9 @@ impl From<&Ask> for crate::event::ConversationAsk {
             rolls: ask.rolls,
             take: ask.take,
             text: ask.text.clone(),
+            why: ask.why.clone(),
+            steps: ask.steps.clone(),
+            notes: ask.notes.clone(),
         }
     }
 }

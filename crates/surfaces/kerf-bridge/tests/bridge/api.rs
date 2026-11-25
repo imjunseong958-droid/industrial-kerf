@@ -339,3 +339,113 @@ fn a_stopped_claude_code_turn_leaves_nothing_it_started_running() {
         );
     }
 }
+
+/// Stands in for Claude Code as `claude` beside a `said.jsonl`: it reads the request and
+/// says what that file holds, as Claude Code says a turn on its stream.
+#[cfg(unix)]
+const REPLAYING_CLAUDE: &str = r#"#!/bin/sh
+cat >/dev/null
+cat "$(dirname "$0")/said.jsonl"
+"#;
+
+/// An agent's ask reaches the editor in the parts kerf-mcp wrote its words from, on the
+/// card's `agent_ask` and in the conversation that keeps it: the editor shows those, and does
+/// not read them back out of words worded for the agent.
+#[cfg(unix)]
+#[test]
+fn an_agents_ask_reaches_the_editor_in_its_parts() {
+    let named = std::env::temp_dir()
+        .join(format!("kq-asks-{}", std::process::id()))
+        .join("claude");
+    if !alone(
+        "api::an_agents_ask_reaches_the_editor_in_its_parts",
+        &[
+            ("KERF_CLAUDE_BIN", named.as_os_str()),
+            ("KERF_MCP_BIN", "kerf-mcp".as_ref()),
+        ],
+    ) {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let project = Project::new();
+    fs::write(
+        project.0.join("project.kerf"),
+        "kerf 1\nproject name=\"Asks\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=64x64\n\
+         \x20 render s1 {out}\n\
+         sequence s1 rate=24 size=64x64 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=12f\n",
+    )
+    .unwrap();
+    // What kerf-mcp answers an agent's `make` with, the person being asked: the ask in words.
+    // A why whose second line reads like a step is the agent's words all the same.
+    let why = "the wider look you wanted\n1. keeps the window's light";
+    let router = kerf_mcp::KerfMcpRouter::new(&project.0, Some(&kerfd())).unwrap();
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    let answered = router.call("make", json!({"media": "m1", "why": why}));
+    drop(router);
+    let asked = &answered["result"];
+    assert_eq!(asked["status"], "asked", "{answered}");
+    let steps = asked["steps"].clone();
+    assert!(
+        steps.as_array().is_some_and(|steps| !steps.is_empty()),
+        "{asked}"
+    );
+
+    // Claude Code makes the call, and kerf-mcp's answer is the text of its result.
+    let claude = PathBuf::from(std::env::var_os("KERF_CLAUDE_BIN").unwrap());
+    let folder = Project(claude.parent().unwrap().to_owned());
+    fs::create_dir_all(&folder.0).unwrap();
+    let said = [
+        json!({"type": "system", "subtype": "init", "session_id": "stand-in", "mcp_servers": []}),
+        json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1",
+            "name": "mcp__kerf__make", "input": {"media": "m1", "why": why}}]}}),
+        json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+            "content": [{"type": "text", "text": answered.to_string()}]}]}}),
+        json!({"type": "result", "subtype": "success", "is_error": false,
+            "result": "I asked to make m1."}),
+    ]
+    .iter()
+    .map(|line| format!("{line}\n"))
+    .collect::<String>();
+    fs::write(folder.0.join("said.jsonl"), said).unwrap();
+    fs::write(&claude, REPLAYING_CLAUDE).unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut bridge = Bridge::open(&project.0, &kerfd());
+    assert!(send(
+        &mut bridge,
+        &json!({"type": "agent", "text": "Make m1 wider", "provider": "claude-code"})
+    ));
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let kept = loop {
+        match poll(&mut bridge) {
+            Some(event)
+                if event["type"] == "conversation" && event["items"][1]["kind"] == "kerf" =>
+            {
+                break event;
+            }
+            Some(event) => events.push(event),
+            None => {
+                assert!(
+                    Instant::now() < deadline,
+                    "the turn was not kept: {events:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+    let card = events
+        .iter()
+        .find(|event| event["type"] == "agent_ask")
+        .unwrap_or_else(|| panic!("no card was asked for: {events:?}"));
+    for ask in [card, &kept["items"][1]["asks"][0]] {
+        assert_eq!(ask["media"], "m1", "{ask}");
+        assert_eq!(ask["take"], 1, "{ask}");
+        assert_eq!(ask["why"], why, "{ask}");
+        assert_eq!(ask["steps"], steps, "{ask}");
+        assert_eq!(ask["text"], asked["ask"], "{ask}");
+    }
+}
