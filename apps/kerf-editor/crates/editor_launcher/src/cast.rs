@@ -27,7 +27,7 @@ use gpui::{
     Focusable, FontWeight, KeyBinding, MouseButton, PathPromptOptions, Subscription, Window,
 };
 use kerf_bridge::event::CastToMake;
-use kerf_bridge::{Command, Event};
+use kerf_bridge::{Command, CommandName, Event};
 use std::path::Path;
 
 use editor_ui::input::{InputEvent, TextInput};
@@ -236,7 +236,7 @@ pub fn heard(stage: Stage, event: &Event) -> Heard {
                 Heard::ToMake
             }
         }
-        Event::Error(error) if error.command.as_deref() == Some("cast") => {
+        Event::Error(error) if error.command == Some(CommandName::Cast) => {
             let (fallback, stage) = match stage {
                 Stage::Reading | Stage::Unreadable => {
                     ("The cast could not be read", Stage::Unreadable)

@@ -703,7 +703,7 @@ fn error() -> impl Strategy<Value = Event> {
                 Event::Error(ErrorEvent {
                     message,
                     code,
-                    command,
+                    command: command.map(|name| kerf_bridge::CommandName::from_name(&name)),
                     job_id,
                     media,
                     clip,

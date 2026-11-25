@@ -27,6 +27,7 @@
 use crate::error::BridgeError;
 use crate::event::{ErrorEvent, Event};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_model::Project;
@@ -130,7 +131,7 @@ fn failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
         Event::Error(ErrorEvent {
             message: why.to_string(),
             code: why.code(),
-            command: Some("workflow".to_owned()),
+            command: Some(CommandName::Workflow),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
         }),

@@ -16,7 +16,7 @@ use gpui::{
     FocusHandle, Focusable, Rgba, SharedString, Subscription, Window,
 };
 use kerf_bridge::event::{ErrorCode, ErrorEvent, MediaMakePlan};
-use kerf_bridge::{Command, Event};
+use kerf_bridge::{Command, CommandName, Event};
 
 /// What a making would run, as the bridge says it before anything runs
 /// (`media_make_plan`).
@@ -352,7 +352,7 @@ impl MakePlan {
                 self.stage = Stage::Plan(Plan::from_event(plan));
             }
             Event::Error(error)
-                if error.command.as_deref() == Some("media_make")
+                if error.command == Some(CommandName::MediaMake)
                     && matches!(self.stage, Stage::Asking) =>
             {
                 self.stage = Stage::Refused {
@@ -372,7 +372,7 @@ impl MakePlan {
                     notes: notes.clone(),
                 };
             }
-            Event::Error(error) if error.command.as_deref() == Some("media_carry") => {
+            Event::Error(error) if error.command == Some(CommandName::MediaCarry) => {
                 self.stage = Stage::CarryRefused(refusal(&error.message, &self.media));
             }
             Event::MediaCarried { recipe, held, .. } => {

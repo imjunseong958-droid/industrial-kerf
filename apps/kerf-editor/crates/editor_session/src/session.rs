@@ -14,7 +14,8 @@ use kerf_bridge::event::{
     AgentUpdate, CloudAccess, CloudStatus, Export, ExportStatus, PreviewStatus, RenderQuality,
 };
 use kerf_bridge::{
-    AgentSettings, ChatProvider, Command, ConversationsRequest, Event, Focus, FocusScope,
+    AgentSettings, ChatProvider, Command, CommandName, ConversationsRequest, Event, Focus,
+    FocusScope,
 };
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -949,7 +950,7 @@ impl Session {
     /// says it is disconnected once, and an edit refused for it would only
     /// say so again. False then.
     pub fn send(&mut self, command: Command) -> bool {
-        if !self.may_send(command.kind()) {
+        if !self.may_send(command.name()) {
             return false;
         }
         let activity = activity_of_command(&command, self.timeline());
@@ -969,18 +970,21 @@ impl Session {
     /// with a bridge, and (unless it is one [`sent_unconnected`]) once kerfd
     /// is connected. A seek or playback that goes takes the picture from the
     /// pointer, and a pause ends Loop Playback's wrap.
-    fn may_send(&mut self, kind: &str) -> bool {
+    fn may_send(&mut self, kind: &CommandName) -> bool {
         if self.bridge.is_none() || (!self.connected() && !sent_unconnected(kind)) {
             return false;
         }
         // A seek or playback from anywhere but the pointer takes the
         // picture from it ([`Session::skim`]).
-        if matches!(kind, "seek" | "play" | "pause") {
+        if matches!(
+            kind,
+            CommandName::Seek | CommandName::Play | CommandName::Pause
+        ) {
             self.pointer = None;
         }
         // Paused from here: a stop that follows is not Loop Playback's to
         // play on from.
-        if kind == "pause" {
+        if *kind == CommandName::Pause {
             self.wrapped = false;
         }
         true
@@ -1034,7 +1038,7 @@ impl Session {
             ops.into_iter().map(serde_json::from_value).collect();
         match ops {
             Ok(ops) => self.send(Command::Edit { ops, revision }),
-            Err(_) => self.may_send("edit") && self.refused(),
+            Err(_) => self.may_send(&CommandName::Edit) && self.refused(),
         }
     }
 
@@ -1138,7 +1142,7 @@ impl Session {
     /// start it while a render is needed or runs. True when it was sent.
     pub fn toggle_playback(&mut self) -> bool {
         match self.state.playback_toggle() {
-            Some("pause") => self.send(Command::Pause),
+            Some(CommandName::Pause) => self.send(Command::Pause),
             Some(_) => self.send(Command::Play),
             None => false,
         }
@@ -2020,7 +2024,7 @@ impl Session {
                 }
                 Err(_) => {
                     let kind = request["type"].as_str().unwrap_or_default();
-                    self.may_send(kind) && self.refused()
+                    self.may_send(&CommandName::from_name(kind)) && self.refused()
                 }
             }
         } else {
@@ -2348,30 +2352,39 @@ pub fn nearer_frame(shown: Option<f64>, frame: f64, target: f64, fps: f64) -> bo
 /// tracks heard alone), Reconnect and Stop, and a request to Kerf (the
 /// composer says whether it can ask). Edits, renders and the rest of what
 /// kerfd answers, and playback and seeks, wait for it.
-pub fn sent_unconnected(kind: &str) -> bool {
-    kind.starts_with("collab_")
-        || kind.starts_with("cloud_")
-        || matches!(
-            kind,
-            "reconnect"
-                | "abort"
-                | "conversations"
-                | "agent"
-                | "agent_versions"
-                | "models"
-                | "media_info"
-                | "media_index"
-                | "media_make_cancel"
-                | "check"
-                | "loudness"
-                | "scope_signal"
-                | "effect_previews"
-                | "preset_library"
-                | "preview_stop"
-                | "preview_exit"
-                | "volume"
-                | "solo"
-        )
+pub fn sent_unconnected(kind: &CommandName) -> bool {
+    matches!(
+        kind,
+        CommandName::CollabStatus
+            | CommandName::CollabSync
+            | CommandName::CollabLive
+            | CommandName::CollabCommit
+            | CommandName::CollabBranch
+            | CommandName::CollabPullRequest
+            | CommandName::CollabPublish
+            | CommandName::CollabConsolidate
+            | CommandName::CloudSignIn
+            | CommandName::CloudSignOut
+            | CommandName::CloudRefresh
+            | CommandName::Reconnect
+            | CommandName::Abort
+            | CommandName::Conversations
+            | CommandName::Agent
+            | CommandName::AgentVersions
+            | CommandName::Models
+            | CommandName::MediaInfo
+            | CommandName::MediaIndex
+            | CommandName::MediaMakeCancel
+            | CommandName::Check
+            | CommandName::Loudness
+            | CommandName::ScopeSignal
+            | CommandName::EffectPreviews
+            | CommandName::PresetLibrary
+            | CommandName::PreviewStop
+            | CommandName::PreviewExit
+            | CommandName::Volume
+            | CommandName::Solo
+    )
 }
 
 /// What a request from the Ask popover is about: the chosen clip itself,

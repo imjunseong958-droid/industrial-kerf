@@ -4,26 +4,33 @@
 //! A kerfd and its clients may be of different builds, and what kerfd keeps on disk outlives
 //! the build that wrote it. So each such value is an enum of the names this build knows, and
 //! a name it does not know still reads: it is kept as it came, and written the same.
+//!
+//! A client's own names read the same way (the editor's bridge names its commands with
+//! [`named!`](crate::named!)), so the macro is exported.
 
-/// A name this build has no value for. Only a value's `from_name` makes one, and nothing
-/// outside this crate can, so a name this build does know is always its own variant, and
-/// two values are equal just when their names are.
+/// A name this build has no value for. Only a value's `from_name` makes one, so a name this
+/// build does know is always its own variant, and two values are equal just when their
+/// names are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unnamed(String);
 
 impl Unnamed {
-    /// For [`named!`]'s `from_name` alone, which has looked for the name among its own first.
-    pub(crate) fn new(name: &str) -> Self {
+    /// For [`named!`](crate::named!)'s `from_name` alone, which has looked for the name
+    /// among its own first. Public only because the macro expands in other crates too.
+    #[doc(hidden)]
+    pub fn new(name: &str) -> Self {
         Self(name.to_owned())
     }
 
-    pub(crate) fn as_str(&self) -> &str {
+    /// The name, as it came.
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 /// An enum of named values: each written once with its name, so a value cannot be given one
 /// name going out and read by another coming in.
+#[macro_export]
 macro_rules! named {
     (
         $(#[$about:meta])*
@@ -35,10 +42,10 @@ macro_rules! named {
         #[derive(Debug, Clone, PartialEq, Eq)]
         $vis enum $Value {
             $($(#[$note])* $value,)+
-            /// A name this build has no value for, as it came: a kerfd of another build
-            /// wrote it, or kerfd passes it on as something else said it. Only
-            /// [`Self::from_name`] makes one.
-            Other($crate::named::Unnamed),
+            /// A name this build has no value for, as it came: another build wrote it, or
+            /// it is passed on as something else said it. Only [`Self::from_name`] makes
+            /// one.
+            Other($crate::Unnamed),
         }
 
         impl $Value {
@@ -58,7 +65,7 @@ macro_rules! named {
             pub fn from_name(name: &str) -> Self {
                 match name {
                     $($name => Self::$value,)+
-                    _ => Self::Other($crate::named::Unnamed::new(name)),
+                    _ => Self::Other($crate::Unnamed::new(name)),
                 }
             }
         }

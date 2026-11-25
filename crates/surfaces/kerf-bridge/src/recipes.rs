@@ -14,6 +14,7 @@
 use crate::error::BridgeError;
 use crate::event::{ErrorEvent, Event, Recipe};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::Shared;
 use kerf_engine::recipe::model::Models;
 use kerf_engine::EngineError;
@@ -223,7 +224,7 @@ pub(crate) fn carry(
             Event::Error(ErrorEvent {
                 message: format!("cannot carry {id}: {why}"),
                 code: why.code(),
-                command: Some("media_carry".to_owned()),
+                command: Some(CommandName::MediaCarry),
                 media: Some(id.to_owned()),
                 ..ErrorEvent::default()
             }),
@@ -247,7 +248,7 @@ fn failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
         Event::Error(ErrorEvent {
             message: why.to_string(),
             code: why.code(),
-            command: Some("recipe".to_owned()),
+            command: Some(CommandName::Recipe),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
         }),

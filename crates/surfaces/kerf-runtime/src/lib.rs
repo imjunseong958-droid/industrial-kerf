@@ -31,6 +31,8 @@ pub use ipc::{
     response_value, run_ipc, run_ipc_with, run_stdio, EndpointAddress, IpcOptions, RuntimeClient,
     RuntimeLease, MAX_REQUEST_BYTES, UNIX_SOCKET_PATH_LIMIT,
 };
+/// For a client's own names to read as kerfd's do: one this build does not know is kept.
+pub use kerf_protocol::named;
 pub use kerf_protocol::{
     validate_actor, Author, AuthorKind, EditKey, EditOp, EditParam, ErrorCode, GeneratorSpec,
     Interp, MaskOutline, PendingProposal, ProjectionStatus, ProposalEntry, ProposalFreshness,

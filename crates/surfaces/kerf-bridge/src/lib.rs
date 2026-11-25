@@ -119,7 +119,7 @@ mod workers;
 mod workflows;
 
 pub use claude_code::SERVE_MCP;
-pub use command::{AgentSettings, ChatProvider, Command};
+pub use command::{AgentSettings, ChatProvider, Command, CommandName};
 pub use conversations::Request as ConversationsRequest;
 pub use event::{Event, Snapshot};
 pub use kerf_agent::{Focus, FocusScope, OpenAiApiMode};

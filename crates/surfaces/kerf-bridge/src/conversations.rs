@@ -13,6 +13,7 @@
 use crate::emit;
 use crate::event::{ConversationSummary, ErrorEvent, Event};
 use crate::wake::Outbox;
+use crate::CommandName;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -372,7 +373,7 @@ pub(crate) fn command(store: &Store, request: Request, tx: &Outbox) {
             tx,
             Event::Error(ErrorEvent {
                 message,
-                command: Some("conversation".to_owned()),
+                command: Some(CommandName::Conversation),
                 ..ErrorEvent::default()
             }),
         ),
