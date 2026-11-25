@@ -318,7 +318,9 @@ pub struct Face {
     pub id: FaceId,
     pub info: FaceInfo,
     bytes: OnceLock<Option<FaceBytes>>,
-    shaper: OnceLock<harfrust::ShaperData>,
+    /// The face as harfrust shapes it. It shares the bytes, and keeps the layout tables harfrust
+    /// reads from them, so they are read once for every instance shaped.
+    shaper: OnceLock<Option<harfrust::Font>>,
     /// The code points it maps, as sorted ranges.
     charset: OnceLock<Vec<(u32, u32)>>,
 }
@@ -352,7 +354,7 @@ pub struct VMetrics {
 }
 
 impl Face {
-    fn bytes(&self) -> Option<&[u8]> {
+    fn face_bytes(&self) -> Option<&FaceBytes> {
         self.bytes
             .get_or_init(|| match &self.info.data {
                 FaceData::Static(b) => Some(FaceBytes::Static(b)),
@@ -362,15 +364,26 @@ impl Face {
                     .map(|v| FaceBytes::Shared(Arc::new(v))),
             })
             .as_ref()
-            .map(FaceBytes::get)
+    }
+    fn bytes(&self) -> Option<&[u8]> {
+        self.face_bytes().map(FaceBytes::get)
     }
     /// The parsed font (None if the file is missing or unreadable).
     pub fn font(&self) -> Option<FontRef<'_>> {
         FontRef::from_index(self.bytes()?, self.info.index).ok()
     }
-    pub(crate) fn shaper_data(&self) -> Option<&harfrust::ShaperData> {
-        let f = self.font()?;
-        Some(self.shaper.get_or_init(|| harfrust::ShaperData::new(&f)))
+    /// The face for harfrust, which shapes only what [`Face::font`] can read and draw.
+    pub(crate) fn shaping_font(&self) -> Option<&harfrust::Font> {
+        self.shaper
+            .get_or_init(|| {
+                self.font()?;
+                let blob = match self.face_bytes()? {
+                    FaceBytes::Static(b) => harfrust::font::Blob::Static(b),
+                    FaceBytes::Shared(b) => harfrust::font::Blob::Shared(b.clone()),
+                };
+                harfrust::Font::new(blob, self.info.index)
+            })
+            .as_ref()
     }
     pub fn units_per_em(&self) -> f32 {
         self.font()

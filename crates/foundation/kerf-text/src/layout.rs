@@ -18,7 +18,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use harfrust::{Direction, Feature, Tag, UnicodeBuffer};
+use harfrust::{Buffer, Direction, Feature, ShapeOptions, ShaperFont, Tag};
 use unicode_bidi::{BidiInfo, Level};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -424,23 +424,20 @@ fn shape_item(
     vertical: bool,
 ) -> Vec<ShapedGlyph> {
     let f = fonts::face(face);
-    let (Some(font), Some(data)) = (f.font(), f.shaper_data()) else {
+    let Some(font) = f.shaping_font() else {
         return Vec::new();
     };
-    let variations = (!axes.is_empty()).then(|| {
-        harfrust::ShaperInstance::from_variations(
-            &font,
-            fonts::settled(axes).map(|(tag, value)| harfrust::Variation {
-                tag: Tag::new(&tag),
-                value,
-            }),
-        )
+    // The font where `axes` set it; it shares the layout tables harfrust has read from the face.
+    let varied = (!axes.is_empty()).then(|| {
+        font.instance_builder()
+            .variations(fonts::settled(axes).map(|(tag, value)| (Tag::new(&tag), value)))
+            .build()
     });
     let instance = fonts::instance(face, axes);
-    let shaper = data.shaper(&font).instance(variations.as_ref()).build();
-    let mut buf = UnicodeBuffer::new();
+    let shaper = ShaperFont::new(varied.as_ref().unwrap_or(font));
+    let mut buf = Buffer::new();
     for &(b, _, sc) in chars {
-        buf.add(if sc == '\t' { ' ' } else { sc }, b as u32);
+        buf.push(u32::from(if sc == '\t' { ' ' } else { sc }), b as u32);
     }
     buf.set_direction(if rtl {
         Direction::RightToLeft
@@ -467,13 +464,16 @@ fn shape_item(
             .iter()
             .map(|(tag, value)| Feature::new(Tag::new(tag), *value, ..)),
     );
-    let out = shaper.shape(buf, harfrust::ShapeOptions::new().features(&feats));
+    // It fails only on a buffer shaped already or without a direction, and this one is neither.
+    if harfrust::shape(&shaper, &mut buf, ShapeOptions::new().features(&feats)).is_err() {
+        return Vec::new();
+    }
     let k = size / f.units_per_em();
     // What is shaped comes from `chars`, which hold their offsets into `text`.
     let _ = text;
-    out.glyph_infos()
+    buf.glyph_infos()
         .iter()
-        .zip(out.glyph_positions())
+        .zip(buf.glyph_positions())
         .map(|(i, p)| ShapedGlyph {
             face,
             instance,
