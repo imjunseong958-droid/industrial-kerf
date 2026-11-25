@@ -96,22 +96,28 @@ cargo build --release -p kerf-mcp --bin kerf-mcp
 
 Building needs FFmpeg's development libraries (`libavcodec`, `libavformat`,
 `libavfilter`, `libswscale`, `libswresample`) where `pkg-config` finds them, or
-`FFMPEG_DIR` naming where they are.
+`FFMPEG_DIR` naming where they are; CI builds against FFmpeg 9 on every system. It
+also needs libclang, which makes the bindings to them: `libclang-dev` on Debian and
+Ubuntu, LLVM on Windows (`LIBCLANG_PATH` names its `bin`), and on macOS the Command
+Line Tools have it.
 
 The editor is one Rust binary, `kerf-editor` (`apps/kerf-editor`), drawn with
 [GPUI](https://www.gpui.rs); it links `kerf-bridge` and FFmpeg as kerfd does,
 and needs no toolkit. It is a Cargo workspace of its own, built with
 `--manifest-path`, so that GPUI's features never reach kerfd, `kerf` or
 `kerf-mcp` (its manifest says why); it builds into the same `target`. On Linux GPUI builds against xkbcommon, xcb, Wayland,
-fontconfig and freetype, and draws with Vulkan; on Debian and Ubuntu:
+fontconfig and freetype, and draws with Vulkan, and playback plays through ALSA; on
+Debian and Ubuntu:
 
 ```bash
-sudo apt install libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
+sudo apt install libclang-dev libasound2-dev \
+    libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libxcb1-dev \
     libx11-xcb-dev libfontconfig-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
 ```
 
-On macOS it draws with Metal, whose shaders Xcode compiles; on Windows with
-DirectX 11.
+On macOS it draws with Metal, and builds with the Command Line Tools; Xcode is not
+needed. On Windows it draws with DirectX 11, and a release build needs `fxc.exe` from a
+Windows SDK ([apps/kerf-editor/README.md](apps/kerf-editor/README.md)).
 
 Or build and install everything: `kerf`, `kerfd` and `kerf-mcp` to
 `~/.local/bin` (`KERF_LOCAL_BIN` moves them), and the editor. On macOS the

@@ -8,9 +8,11 @@
 .DESCRIPTION
     Needs, as a Windows build of the editor does: Rust, Visual Studio's C++ tools (the
     linker, the resource compiler that puts the icon in kerf-editor.exe, and the C++
-    runtime to carry), a shared GPL build of FFmpeg in FFMPEG_DIR, LIBCLANG_PATH for
-    its bindings, and Inno Setup 6 for the installer (choco install innosetup). The
-    editor is one Rust program drawn with GPUI (DirectX 11): it carries no toolkit.
+    runtime to carry), a Windows SDK of any version (its fxc.exe compiles GPUI's
+    shaders; GPUI_FXC_PATH names another), a shared GPL build of FFmpeg in FFMPEG_DIR,
+    LIBCLANG_PATH for its bindings, and Inno Setup 6 for the installer (choco install
+    innosetup). The editor is one Rust program drawn with GPUI (DirectX 11): it carries
+    no toolkit.
 
     The FFmpeg build makes the package GPL, so it may only be given to anyone with
     its source: scripts/collect-kerf-windows-sources.sh makes that, of this commit.
@@ -72,6 +74,24 @@ function Find-CppRuntime {
     return $redist.FullName
 }
 
+# The Windows SDK's shader compiler, which a release build of GPUI runs. Left to itself
+# GPUI looks on PATH, which outside a developer prompt has none, and in the folder of one
+# SDK version, so with any other SDK its build stops: this takes the newest there is.
+function Find-Fxc {
+    $found = Get-Command fxc.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { return $found.Source }
+    $installed = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows Kits\Installed Roots' -ErrorAction SilentlyContinue
+    $kits = if ($installed.KitsRoot10) { $installed.KitsRoot10 } else { Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10' }
+    $fxc = Get-ChildItem (Join-Path $kits 'bin') -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^\d+(\.\d+){3}$' } |
+        Sort-Object { [version]$_.Name } -Descending |
+        ForEach-Object { Join-Path $_.FullName 'x64\fxc.exe' } |
+        Where-Object { Test-Path $_ } |
+        Select-Object -First 1
+    if (-not $fxc) { throw "No fxc.exe on PATH or under ${kits}: install a Windows SDK (Visual Studio's C++ workload offers one), or set GPUI_FXC_PATH" }
+    return $fxc
+}
+
 # Inno Setup's compiler, wherever its installer put it.
 function Find-InnoSetup {
     $found = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source
@@ -113,6 +133,8 @@ try {
     if (-not $SkipBuild) {
         # Optimized: the editor's live preview and its exports draw frames in kerf-bridge,
         # which it links.
+        if (-not $env:GPUI_FXC_PATH) { $env:GPUI_FXC_PATH = Find-Fxc }
+        Write-Host "GPUI's shaders are compiled with $env:GPUI_FXC_PATH"
         Invoke-Tool cargo build --release --manifest-path apps/kerf-editor/Cargo.toml
         Invoke-Tool cargo build --release -p kerf-cli --bin kerf
         Invoke-Tool cargo build --release -p kerf-runtime --bin kerfd
