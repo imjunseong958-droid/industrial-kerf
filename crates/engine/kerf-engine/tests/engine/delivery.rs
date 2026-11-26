@@ -184,6 +184,27 @@ fn strobing_is_flashing_and_a_black_segment_is_found() {
     assert!(high > 900.0 && high <= 940.0, "white is near 940: {high}");
 }
 
+/// What the program refuses is said once by the error and its sources together, as `kerf`
+/// prints them.
+#[test]
+fn a_refusal_of_the_program_is_said_once() {
+    let dir = tempfile::tempdir().expect("temp directory");
+    let project = project(
+        "kerf 1\nproject name=\"qc\"\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 gen=solid@1 at=0f dur=24f\n",
+    );
+    let error = picture_qc(&project, Some("s9"), dir.path(), &CancellationToken::new())
+        .expect_err("no sequence s9");
+    let said = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
+        error.source()
+    })
+    .map(ToString::to_string)
+    .collect::<Vec<_>>();
+    assert_eq!(said, ["no sequence `s9`"]);
+}
+
 /// A pass after an edit draws and measures the frames the edit changed,
 /// takes the rest from what the pass before kept in the project, and finds
 /// what a pass that measures every frame finds.

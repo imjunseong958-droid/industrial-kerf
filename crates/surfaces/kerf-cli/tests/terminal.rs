@@ -343,6 +343,38 @@ fn a_media_whose_steps_are_in_a_recipe_file_is_made_once_they_are_carried() {
     );
 }
 
+#[test]
+fn a_refusal_from_the_compositor_is_said_once() {
+    let Some(kerfd) = kerfd() else {
+        return;
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    // A camera draws nothing, so there is no matte of it.
+    std::fs::write(
+        directory.join("project.kerf"),
+        "kerf 1
+project name=\"matte\"
+media m1 path=\"shots/open.mp4\" rate=24 dur=24f video=160x90
+  render s1 {out} size=160x90 matte=cam
+sequence s1 rate=24 size=160x90 audio=48000
+  track V1 video
+    clip c1 gen=solid@1 at=0f dur=24f
+  track V2 video
+    clip cam gen=camera@1 at=0f dur=24f
+",
+    )
+    .unwrap();
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).unwrap();
+    let _held = runtime.hold();
+
+    let (_, said, ok) = kerf(directory, &kerfd, &["make", "m1", "--yes"]);
+    assert!(!ok);
+    let refusal = "a matte is of a clip that draws, and the sequence has no such clip `cam`";
+    assert_eq!(said.matches(refusal).count(), 1, "{said}");
+    assert!(said.ends_with(&format!("kerf: {refusal}\n")), "{said}");
+}
+
 /// Windows sets no `HOME`: a person's own skills (`~/.kerf/skills`) are found by their
 /// `USERPROFILE` there, as `kerf --skills` lists them.
 #[test]

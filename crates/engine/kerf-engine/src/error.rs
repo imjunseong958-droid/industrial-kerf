@@ -13,9 +13,9 @@ pub enum EngineError {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
-    #[error("{0}")]
+    #[error(transparent)]
     Program(#[from] kerf_core::program::ProgramError),
-    #[error("{0}")]
+    #[error(transparent)]
     Compose(#[from] kerf_compose::ComposeError),
     #[error("ffmpeg failed ({code}): {stderr}")]
     Ffmpeg { code: i32, stderr: String },
