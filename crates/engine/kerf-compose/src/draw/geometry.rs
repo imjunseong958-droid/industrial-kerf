@@ -62,7 +62,7 @@ impl Drawing {
             return None;
         }
         let shutter = number(&param(&plan.clip, "shutter").value_at(time));
-        if !(shutter > 0.0) {
+        if shutter.is_nan() || shutter <= 0.0 {
             return None;
         }
         let open = sequence.rate.frame_duration().seconds() * shutter / 360.0;
@@ -94,7 +94,7 @@ impl Drawing {
             before = after;
         }
         let across = fastest * STRETCHES as f64;
-        if !(across >= 0.5) {
+        if across.is_nan() || across < 0.5 {
             return None;
         }
         let count = ((across / SMEAR_STEP).ceil() as usize + 1).clamp(2, MOST_SMEARS);
