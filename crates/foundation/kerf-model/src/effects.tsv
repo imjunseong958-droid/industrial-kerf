@@ -175,15 +175,6 @@ effect	distort.lens	Distort	Lens Distortion	Barrel or pincushion lens curvature;
 	number	curvature	0	-100..100		Curvature
 	number	v_decentering	0	-100..100		Vertical Decentering
 	number	h_decentering	0	-100..100		Horizontal Decentering
-effect	distort.magnify	Distort	Magnify	A magnifying circle or square; zoom in on a detail.	2
-	enum	shape	circle	circle|square		Shape
-	number	center_x	0.5	-10..10	picture widths	Center (0 left, 1 right)
-	number	center_y	0.5	-10..10	picture heights	Center (0 top, 1 bottom)
-	number	magnification	200	100..600		Magnification
-	number	size	100	0..4000		Size
-	number	feather	0	0..1000		Feather
-	number	opacity	100	0..100	%	Opacity
-	enum	mode	normal	normal|add|screen|multiply|overlay		Blending Mode
 effect	distort.transform	Distort	Transform	Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture.	2
 	number	anchor_x	0.5	-10..10	picture widths	Anchor Point (0 left, 1 right)
 	number	anchor_y	0.5	-10..10	picture heights	Anchor Point (0 top, 1 bottom)
@@ -251,15 +242,6 @@ effect	generate.grid	Generate	Grid	Draws a grid of lines; layouts, tech overlays
 	number	border	2	0..100		Border
 	color	color	#ffffff			Color
 	number	opacity	100	0..100	%	Opacity
-effect	generate.paintbucket	Generate	Paint Bucket	Fills a region from a point; recolor flat areas.	2
-	number	point_x	0.5	-10..10	picture widths	Fill Point (0 left, 1 right)
-	number	point_y	0.5	-10..10	picture heights	Fill Point (0 top, 1 bottom)
-	enum	selector	color-alpha	color-alpha|straight-color|transparency|opacity		Fill Selector
-	number	tolerance	10	0..255		Tolerance
-	bool	invert	false			Invert Fill
-	color	color	#ff0000			Color
-	number	opacity	100	0..100	%	Opacity
-	enum	mode	normal	normal|behind|add|multiply|screen		Blending Mode
 effect	vr.blur	Immersive Video	VR Blur	Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.	2
 	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
 	number	blurriness	0	0..1000		Blurriness
@@ -377,15 +359,6 @@ effect	text.clipname	Text	Clip Name	Burns the clip's name into the picture; revi
 	number	position_x	0.5	-10..10	picture widths	Position (0 left, 1 right)
 	number	position_y	0.5	-10..10	picture heights	Position (0 top, 1 bottom)
 	number	size	15	1..100	%	Size
-effect	text.simple	Text	Simple Text	A line of text drawn on the clip itself, with a backing box; labels, quick captions, and lower thirds.
-	text	text	Simple Text			Text
-	number	position_x	0.5	-10..10	picture widths	Position (0 left, 1 right)
-	number	position_y	0.5	-10..10	picture heights	Position (0 top, 1 bottom)
-	number	size	64	1..1000		Size
-	enum	font	inter	inter|jetbrains-mono		Font
-	enum	alignment	center	left|center|right		Alignment
-	color	color	#ffffff			Color
-	number	bg_opacity	0	0..100	%	Background Opacity
 effect	text.timecode	Text	Timecode	Burns the timecode into the picture; review copies and slates.	2
 	number	position_x	0.5	-10..10	picture widths	Position (0 left, 1 right)
 	number	position_y	0.5	-10..10	picture heights	Position (0 top, 1 bottom)
@@ -399,20 +372,6 @@ effect	transform.autoreframe	Transform	Auto Reframe	Keeps the moving subject in 
 	number	offset_y	0	-100000..100000	pixels	Reframe Offset (down)
 	number	zoom	100	100..400	%	Reframe Zoom
 	enum	aspect	sequence	sequence|vertical-9-16|square-1-1|vertical-4-5|horizontal-16-9		Target Aspect
-effect	transform.spacer	Transform	Spacer	Pads the picture with a border of color, rounded if you like; framed cards and picture-in-picture.
-	number	left	40	0..4000		Left
-	number	top	40	0..4000		Top
-	number	right	40	0..4000		Right
-	number	bottom	40	0..4000		Bottom
-	bool	uniform	true			Uniform Spacing
-	number	radius	0	0..2000		Corner Radius
-	bool	fill	false			Fill Background
-	color	color	#000000			Background Color
-effect	utility.autoalign	Utility	Auto Align	Moves the picture's visible content to an edge or the center with a margin; aligning cutouts and logos.
-	enum	horizontal	center	none|left|center|right		Horizontal Alignment
-	enum	vertical	center	none|top|center|bottom		Vertical Alignment
-	number	margin_x	0	0..4000		Horizontal Margin
-	number	margin_y	0	0..4000		Vertical Margin
 effect	utility.cineon	Utility	Cineon Converter	Converts log Cineon footage to video and back; log to video.	2
 	enum	conversion	log-to-linear	log-to-linear|linear-to-log|log-to-log		Conversion Type
 	number	black10	95	0..1023		10 Bit Black Point
@@ -423,15 +382,6 @@ effect	utility.cineon	Utility	Cineon Converter	Converts log Cineon footage to vi
 	number	rolloff	20	0..255		Highlight Rolloff
 effect	utility.edgefeather	Utility	Edge Feather	Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture.
 	number	amount	0	0..100		Amount
-effect	utility.roundedcrop	Utility	Rounded Crop	Crops with rounded corners, a feather, and a border; rounded picture-in-picture and cards.
-	number	left	0	0..100	%	Left
-	number	top	0	0..100	%	Top
-	number	right	0	0..100	%	Right
-	number	bottom	0	0..100	%	Bottom
-	number	radius	40	0..2000		Roundness
-	number	feather	0	0..500		Feather
-	number	border	0	0..500		Border Width
-	color	border_color	#ffffff			Border Color
 effect	utility.stroke	Utility	Stroke	An outline around the picture's alpha, inside, outside, or centered; stickers and outlined cutouts.
 	color	color	#ffffff			Color
 	number	width	4	0..500		Width

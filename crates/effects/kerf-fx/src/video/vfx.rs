@@ -1,6 +1,6 @@
 //! CPU implementations of what Kerf carries of the Premiere 26 video-effect catalogue added in
 //! M5.11 (see `crate::video::project::effect::vfx` for the definitions), plus the rebuilt versions
-//! of a few core effects (Ultra Key, Noise, Mosaic, Simple Text, Track Matte Key).
+//! of a few core effects (Ultra Key, Noise, Mosaic, Track Matte Key).
 //!
 //! Conventions match [`crate::video::effects`]: images are premultiplied linear f32; spatial parameters
 //! are full-resolution clip pixels scaled by `FxCtx::px_scale`; colour maths that artists expect
@@ -278,25 +278,19 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         "reduce_interlace_flicker" => blur::interlace_flicker(img, e, cx),
         // Distort / Transform / Utility geometry
         "corner_pin" => distort::corner_pin(img, e, cx),
-        "magnify" => distort::magnify(img, e, cx),
         "transform" if bv(e, "shutter_override") && fv(e, "shutter_angle", cx) > 0.5 => {
             distort::transform_fx(img, e, cx)
         }
-        "spacer" => distort::spacer(img, e, cx),
-        "auto_align" => distort::auto_align(img, e, cx),
-        "rounded_crop" => distort::rounded_crop(img, e, cx),
         "mosaic" => distort::mosaic(img, e, cx),
         // Stylize / Perspective / Generate / Legacy & obsolete generators
         "stroke" => stylize::stroke(img, e, cx),
         "gradient" => stylize::gradient(img, e, cx),
         "checkerboard" => stylize::checkerboard(img, e, cx),
-        "paint_bucket" => stylize::paint_bucket(img, e, cx),
         // Time / analysis
         "posterize_time" => temporal::posterize_time(img, e, cx),
         "warp_stabilizer" => temporal::warp_stabilizer(img, e, cx),
         "auto_reframe" => temporal::auto_reframe(img, e, cx),
         // Text
-        "simple_text" => text::simple_text(img, e, cx),
         "metadata_burnin" => text::metadata_burnin(img, e, cx),
         id if id.starts_with("vr_") => immersive::apply(img, e, cx),
         _ => return false,

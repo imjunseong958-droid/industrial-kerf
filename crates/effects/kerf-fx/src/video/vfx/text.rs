@@ -1,4 +1,4 @@
-//! Text burn-ins: Simple Text and Metadata & Timecode Burn-in.
+//! Text burn-ins: Metadata & Timecode Burn-in.
 
 use crate::video::project::EffectInstance;
 use kerf_text::{layout, render, Align, ParagraphStyle, TextStyle};
@@ -82,26 +82,6 @@ pub(crate) fn draw_text(
         y0,
         crate::video::graphics::premul_linear(color),
         1.0,
-    );
-}
-
-/// Simple Text: a single block of text burned into the clip.
-pub fn simple_text(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    let text = tv(e, "text");
-    let pos = pv(e, "position", cx, img);
-    let size = (fv(e, "size", cx) * cx.px_scale).max(2.0);
-    let family = ["Inter", "JetBrains Mono"][chv(e, "font").min(1) as usize];
-    let color = cv(e, "color", cx);
-    let bg = fv(e, "bg_opacity", cx) / 100.0;
-    draw_text(
-        img,
-        &text,
-        family,
-        pos,
-        size,
-        chv(e, "alignment"),
-        color,
-        bg,
     );
 }
 

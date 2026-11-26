@@ -157,51 +157,6 @@ impl Kernel {
                     only: crate::video::effects::b(e, "only"),
                 }
             }
-            "rounded_crop" => {
-                let (w, h) = (size.0 as f32, size.1 as f32);
-                let (l, t, r, b) = (
-                    fv(e, "left", cx) / 100.0 * w,
-                    fv(e, "top", cx) / 100.0 * h,
-                    w - fv(e, "right", cx) / 100.0 * w,
-                    h - fv(e, "bottom", cx) / 100.0 * h,
-                );
-                Kernel::RoundedCrop(kerf_kernel::RoundedCrop {
-                    edges: [l, t, r, b],
-                    radius: (fv(e, "radius", cx) * cx.px_scale)
-                        .min(((r - l).min(b - t) / 2.0).max(0.0)),
-                    feather: fv(e, "feather", cx) * cx.px_scale,
-                    border: fv(e, "border", cx) * cx.px_scale,
-                    border_color: lin(cv(e, "border_color", cx)),
-                })
-            }
-            "spacer" => {
-                let k = f64::from(cx.px_scale);
-                let l = f64::from(fv(e, "left", cx)) * k;
-                let (t, r, b) = if bv(e, "uniform") {
-                    (l, l, l)
-                } else {
-                    (
-                        f64::from(fv(e, "top", cx)) * k,
-                        f64::from(fv(e, "right", cx)) * k,
-                        f64::from(fv(e, "bottom", cx)) * k,
-                    )
-                };
-                let (w, h) = (size.0 as f64, size.1 as f64);
-                let (bw, bh) = ((w - l - r).max(1.0), (h - t - b).max(1.0));
-                let s = (bw / w).min(bh / h);
-                let (dw, dh) = (w * s, h * s);
-                let (x0, y0) = (l + (bw - dw) / 2.0, t + (bh - dh) / 2.0);
-                let radius = (f64::from(fv(e, "radius", cx)) * k).min(dw.min(dh) / 2.0);
-                Kernel::Spacer {
-                    place: [x0, y0, s],
-                    told: kerf_kernel::Spacer {
-                        edges: [x0 as f32, y0 as f32, (x0 + dw) as f32, (y0 + dh) as f32],
-                        radius: if radius > 0.0 { radius as f32 } else { 0.0 },
-                        fill: if bv(e, "fill") { 1.0 } else { 0.0 },
-                        color: lin(cv(e, "color", cx)),
-                    },
-                }
-            }
             "vr_projection" | "vr_rotate_sphere" => match immersive::turn_of(e, cx) {
                 Some((turn, share)) => Kernel::Sphere {
                     turn,
@@ -231,23 +186,6 @@ impl Kernel {
                     ],
                     reach: (w / 2.0).hypot(h / 2.0) as f32,
                     curvature: (f64::from(f(e, "curvature", cx)) / 100.0) as f32,
-                }
-            }
-            "magnify" => {
-                let sized = Image {
-                    w: size.0,
-                    h: size.1,
-                    px: Vec::new(),
-                };
-                let center = pv(e, "center", cx, &sized);
-                Kernel::Magnify {
-                    center: [center.x as f32, center.y as f32],
-                    magnification: (fv(e, "magnification", cx) / 100.0).max(0.01),
-                    size: fv(e, "size", cx) * cx.px_scale,
-                    feather: fv(e, "feather", cx) * cx.px_scale,
-                    opacity: fv(e, "opacity", cx) / 100.0,
-                    square: chv(e, "shape") == 1,
-                    mode: chv(e, "mode"),
                 }
             }
             "four_color_gradient" => {

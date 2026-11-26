@@ -121,22 +121,10 @@ const SCENES: &[(&str, &str)] = &[
         "drop shadow",
         "      set scale=0.7\n      mask k1 ellipse=0.5,0.5,0.4,0.45\n      fx perspective.dropshadow@2 distance=40 softness=30 opacity=70\n",
     ),
-    (
-        "rounded crop",
-        "      fx utility.roundedcrop@1 left=8 top=5 right=8 bottom=5 radius=120 border=8\n",
-    ),
-    (
-        "spacer",
-        "      fx transform.spacer@1 left=120 radius=60 fill=true color=#203040\n",
-    ),
     ("lens", "      fx distort.lens@2 curvature=30\n"),
     ("optics", "      fx distort.opticscompensation fieldOfView=80\n"),
     ("sphere", "      fx vr.rotatesphere tilt=20 pan=-70 roll=10\n"),
     ("plane to sphere", "      fx vr.planetosphere scale=90 pan=30 feather=20\n"),
-    (
-        "magnify",
-        "      fx distort.magnify@2 center_x=0.4 center_y=0.45 size=400 magnification=250 feather=40\n",
-    ),
     // What generates a picture over the clip's.
     ("four colors", "      fx generate.fourcolor@2 opacity=60\n"),
     ("grid", "      fx generate.grid@2 size=120 border=4\n"),

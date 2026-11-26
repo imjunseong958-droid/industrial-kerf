@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, the Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid, the Cineon Converter, and the
+// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Mosaic, Lens Distortion, the Gradient, Ramp, 4-Color Gradient, Checkerboard, and Grid, the Cineon Converter, and the
 // color effects kept from EffectCraft), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
@@ -1186,32 +1186,6 @@ fn blend_simple(mode: u32, b: vec3<f32>, s: vec3<f32>) -> vec3<f32> {
     }
 }
 
-// `distort::magnify`. a.x: square; a.y: how the glass is blended; p0: its center, how much it
-// magnifies, and how far it reaches; p1: its feather, and its opacity.
-// By hand, not from `kerf_kernel`, for `corner_pin`'s reason: where a pixel comes from is worked out in
-// 64 bits on the CPU.
-@compute @workgroup_size(16, 16)
-fn magnify(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let c = textureLoad(src, p, 0);
-    let off = vec2<f32>(id.xy) + 0.5 - u.p0.xy;
-    let d = select(length(off), max(abs(off.x), abs(off.y)), u.a.x != 0u);
-    var k = clamp(u.p0.w - d + 0.5, 0.0, 1.0);
-    if u.p1.x > 0.0 {
-        k = clamp((u.p0.w - d) / u.p1.x, 0.0, 1.0);
-    }
-    k *= u.p1.y;
-    if k <= 0.0 {
-        textureStore(dst, p, c);
-        return;
-    }
-    let at = u.p0.xy + off / u.p0.z;
-    let s = sample(at.x, at.y);
-    let o = blend_simple(u.a.y, straight(c), straight(s)) * s.a;
-    textureStore(dst, p, c + (vec4(o, s.a) - c) * k);
-}
-
 // `distort::mosaic`, its blocks: a picture with a pixel to each, read from the middle of each in
 // `src`. p0.xy: a block's width and height.
 // By hand, not from `kerf_kernel`: it reads a second, smaller picture at whole-number places, a block to
@@ -1239,28 +1213,8 @@ fn mosaic(@builtin(global_invocation_id) id: vec3<u32>) {
     textureStore(dst, vec2<i32>(id.xy), out);
 }
 
-// The three below take their arithmetic from `kerf_kernel`, which writes `rounded_crop_px`, `spacer_px`,
-// and `shadow_px` out from what the CPU can run too; they go on the end of this.
-
-// `distort::rounded_crop`. p0: its left, top, right, and bottom; p1: radius, feather, border; p2: the
-// border's color.
-@compute @workgroup_size(16, 16)
-fn rounded_crop(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let xy = vec2<f32>(id.xy) + 0.5;
-    textureStore(dst, p, rounded_crop_px(textureLoad(src, p, 0), xy.x, xy.y));
-}
-
-// What `distort::spacer` does to the picture once it is placed. p0: the placed picture's left, top,
-// right, and bottom; p1: radius, and 1 to fill behind it; p2: the color behind it.
-@compute @workgroup_size(16, 16)
-fn spacer(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    let xy = vec2<f32>(id.xy) + 0.5;
-    textureStore(dst, p, spacer_px(textureLoad(src, p, 0), xy.x, xy.y));
-}
+// The one below takes its arithmetic from `kerf_kernel`, which writes `shadow_px` out from what the CPU
+// can run too; it goes on the end of this.
 
 // The shadow of `effects`' Drop Shadow, from the picture moved to where it falls. p0: its color, and
 // how dark it is.

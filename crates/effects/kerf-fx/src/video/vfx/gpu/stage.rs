@@ -42,7 +42,7 @@ fn source() -> String {
     format!(
         "{}{}{}{}",
         include_str!("../kernels.wgsl"),
-        kerf_kernel::rounded_wgsl(),
+        kerf_kernel::shadow_wgsl(),
         kerf_kernel::color_wgsl(),
         kerf_kernel::generated_wgsl()
     )
@@ -73,8 +73,6 @@ pub(super) struct Stage {
     pub(super) from_gamut: wgpu::ComputePipeline,
     pub(super) corner_pin: wgpu::ComputePipeline,
     pub(super) shadow: wgpu::ComputePipeline,
-    pub(super) rounded_crop: wgpu::ComputePipeline,
-    pub(super) spacer: wgpu::ComputePipeline,
     pub(super) mosaic_blocks: wgpu::ComputePipeline,
     pub(super) mosaic: wgpu::ComputePipeline,
     pub(super) kept_through: wgpu::ComputePipeline,
@@ -93,7 +91,6 @@ pub(super) struct Stage {
     pub(super) choke_columns: wgpu::ComputePipeline,
     pub(super) choke_put: wgpu::ComputePipeline,
     pub(super) plane_to_sphere: wgpu::ComputePipeline,
-    pub(super) magnify: wgpu::ComputePipeline,
     pub(super) four_colors: wgpu::ComputePipeline,
     pub(super) grid: wgpu::ComputePipeline,
     pub(super) ramp: wgpu::ComputePipeline,
@@ -147,8 +144,6 @@ impl Stage {
                 from_gamut: kernel("from_gamut"),
                 corner_pin: kernel("corner_pin"),
                 shadow: kernel("shadow"),
-                rounded_crop: kernel("rounded_crop"),
-                spacer: kernel("spacer"),
                 mosaic_blocks: kernel("mosaic_blocks"),
                 mosaic: kernel("mosaic"),
                 kept_through: kernel("kept_through"),
@@ -167,7 +162,6 @@ impl Stage {
                 choke_columns: kernel("choke_columns"),
                 choke_put: kernel("choke_put"),
                 plane_to_sphere: kernel("plane_to_sphere"),
-                magnify: kernel("magnify"),
                 four_colors: kernel("four_colors"),
                 grid: kernel("grid"),
                 ramp: kernel("ramp"),

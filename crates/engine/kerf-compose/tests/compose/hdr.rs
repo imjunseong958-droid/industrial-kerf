@@ -653,11 +653,8 @@ const EXACT_EFFECTS: &[&str] = &[
     "      fx distort.cornerpin upper_left_x=0.1 upper_left_y=0.15 upper_right_x=0.85 upper_right_y=0.05 lower_right_x=0.95 lower_right_y=0.9 lower_left_x=0.05 lower_left_y=0.8\n",
     // A shadow shows past what casts it, so of a picture with an outline.
     "      mask k1 ellipse=0.5,0.5,0.4,0.4\n      fx perspective.dropshadow distance=6 softness=4 direction=120 color=#ffffff opacity=80\n",
-    "      fx utility.roundedcrop left=6 right=10 radius=20 border=3 border_color=#ffffff\n",
-    "      fx transform.spacer left=10 radius=8 fill=true color=#ffffff\n",
     "      fx stylize.mosaic horizontal=12 vertical=7 softness=30\n",
     "      fx distort.lens curvature=35 h_decentering=15\n",
-    "      fx distort.magnify center_x=0.4 center_y=0.45 size=30 magnification=250 feather=6\n",
     "      fx vr.rotatesphere tilt=20 pan=-70\n",
     "      fx vr.planetosphere scale=90 pan=30 feather=20\n",
     "      fx generate.fourcolor blend=200 opacity=50\n",

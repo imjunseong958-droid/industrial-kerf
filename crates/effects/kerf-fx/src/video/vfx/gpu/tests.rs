@@ -221,12 +221,11 @@ fn kernels_match_the_effects() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Drop Shadow, Rounded Crop, Spacer, Mosaic, Lens Distortion, Magnify, the five that generate a
-/// picture, and the Cineon Converter, each way they can be set.
+/// Drop Shadow, Mosaic, Lens Distortion, the five that generate a picture, and the Cineon Converter,
+/// each way they can be set.
 fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
     let fl = ParamValue::Float;
     let on = ParamValue::Bool(true);
-    let off = ParamValue::Bool(false);
     let color = |r: f32, g: f32, b: f32| ParamValue::Color([r, g, b, 1.0]);
     vec![
         ("drop_shadow", vec![]),
@@ -247,60 +246,6 @@ fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
                 ("only", on.clone()),
             ],
         ),
-        // Its roundness of 40 is more than half of this picture, so its ends are round.
-        ("rounded_crop", vec![]),
-        (
-            "rounded_crop",
-            vec![
-                ("left", fl(10.0)),
-                ("top", fl(20.0)),
-                ("right", fl(5.0)),
-                ("bottom", fl(8.0)),
-                ("radius", fl(9.0)),
-                ("feather", fl(4.0)),
-            ],
-        ),
-        (
-            "rounded_crop",
-            vec![
-                ("radius", fl(12.0)),
-                ("border", fl(3.0)),
-                ("border_color", color(0.2, 0.6, 1.0)),
-            ],
-        ),
-        (
-            "rounded_crop",
-            vec![
-                ("radius", fl(0.0)),
-                ("left", fl(30.0)),
-                ("border", fl(1.5)),
-                ("feather", fl(2.0)),
-            ],
-        ),
-        // Its 40 pixels a side leave this picture a fiftieth of its size, halved on the way.
-        ("spacer", vec![]),
-        ("spacer", vec![("left", fl(6.0))]),
-        (
-            "spacer",
-            vec![
-                ("left", fl(8.0)),
-                ("radius", fl(6.0)),
-                ("fill", on.clone()),
-                ("color", color(0.1, 0.3, 0.2)),
-            ],
-        ),
-        (
-            "spacer",
-            vec![
-                ("uniform", off),
-                ("left", fl(20.0)),
-                ("top", fl(2.0)),
-                ("right", fl(4.0)),
-                ("bottom", fl(10.0)),
-                ("radius", fl(3.0)),
-            ],
-        ),
-        ("spacer", vec![("left", fl(0.0)), ("fill", on.clone())]),
         ("mosaic", vec![]),
         (
             "mosaic",
@@ -369,48 +314,6 @@ fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
                 ("curvature", fl(25.0)),
                 ("h_decentering", fl(30.0)),
                 ("v_decentering", fl(-45.0)),
-            ],
-        ),
-        // A glass larger than this picture, then ones that fit in it.
-        ("magnify", vec![]),
-        ("magnify", vec![("size", fl(20.0))]),
-        (
-            "magnify",
-            vec![
-                ("shape", ParamValue::Choice(1)),
-                ("center", ParamValue::Vec2(Vec2::new(30.0, 20.0))),
-                ("magnification", fl(350.0)),
-                ("size", fl(14.0)),
-                ("feather", fl(6.0)),
-                ("opacity", fl(80.0)),
-            ],
-        ),
-        (
-            "magnify",
-            vec![
-                ("center", ParamValue::Vec2(Vec2::new(70.0, 40.0))),
-                ("size", fl(24.0)),
-                ("mode", ParamValue::Choice(1)),
-            ],
-        ),
-        (
-            "magnify",
-            vec![
-                ("size", fl(22.0)),
-                ("mode", ParamValue::Choice(2)),
-                ("feather", fl(3.0)),
-            ],
-        ),
-        (
-            "magnify",
-            vec![("size", fl(22.0)), ("mode", ParamValue::Choice(3))],
-        ),
-        (
-            "magnify",
-            vec![
-                ("size", fl(22.0)),
-                ("mode", ParamValue::Choice(4)),
-                ("opacity", fl(60.0)),
             ],
         ),
         // What is generated: four colors, a grid, a ramp, a gradient, a checkerboard.
@@ -572,15 +475,6 @@ fn from_one_source(kernel: &Kernel, image: &Image) -> Option<Image> {
     };
     let (w, h) = (image.w, image.h);
     Some(match kernel {
-        Kernel::RoundedCrop(told) => {
-            each(image, &|p, x, y| kerf_kernel::rounded_crop(p, x, y, told))
-        }
-        Kernel::Spacer { place, told } => {
-            let [x0, y0, s] = *place;
-            let to = Affine::translate(x0, y0).then_apply(&Affine::scale(s, s));
-            let placed = image.transformed(w, h, &to);
-            each(&placed, &|p, x, y| kerf_kernel::spacer(p, x, y, told))
-        }
         Kernel::DropShadow {
             offset,
             color,
@@ -624,7 +518,6 @@ fn kernels_from_one_source_are_the_effects_to_the_bit() {
             let by_hand = [
                 "mosaic",
                 "lens_distortion",
-                "magnify",
                 "vr_rotate_sphere",
                 "vr_projection",
                 "vr_plane_to_sphere",
@@ -642,7 +535,7 @@ fn kernels_from_one_source_are_the_effects_to_the_bit() {
         assert_ne!(cpu.px, image.px, "{id} {params:?} changes nothing");
         held += 1;
     }
-    assert_eq!(held, 12 + 4 + 5);
+    assert_eq!(held, 3 + 4 + 5);
 }
 
 /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes

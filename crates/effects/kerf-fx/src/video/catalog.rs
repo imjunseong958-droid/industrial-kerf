@@ -42,7 +42,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     // Distort
     ("corner_pin", "distort.cornerpin", 2, "Moves the four corners; fit a picture into a screen or frame."),
     ("lens_distortion", "distort.lens", 2, "Barrel or pincushion lens curvature; fisheye looks, or undoing a wide lens."),
-    ("magnify", "distort.magnify", 2, "A magnifying circle or square; zoom in on a detail."),
     ("transform", "distort.transform", 2, "Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture."),
     ("warp_stabilizer", "distort.warpstabilizer", 2, "Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage."),
     // Generate
@@ -51,7 +50,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("gradient", "generate.gradient", 1, "A smooth linear or radial gradient between two colors, dithered against banding; skies, backgrounds, shading."),
     ("ramp", "generate.gradientramp", 2, "A linear or radial ramp between two colors; skies, backgrounds, shading."),
     ("grid", "generate.grid", 2, "Draws a grid of lines; layouts, tech overlays, and backgrounds."),
-    ("paint_bucket", "generate.paintbucket", 2, "Fills a region from a point; recolor flat areas."),
     // Immersive Video
     ("vr_blur", "vr.blur", 2, "Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds."),
     ("vr_denoise", "vr.denoise", 2, "Reduces noise on a 360° frame without seams; cleaning VR footage."),
@@ -77,17 +75,13 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     // Text
     ("clip_name", "text.clipname", 1, "Burns the clip's name into the picture; review copies and versions."),
     ("metadata_burnin", "text.burnin", 1, "Burns timecode, the frame number, or the file name into the picture; review copies and slates."),
-    ("simple_text", "text.simple", 1, "A line of text drawn on the clip itself, with a backing box; labels, quick captions, and lower thirds."),
     ("timecode", "text.timecode", 2, "Burns the timecode into the picture; review copies and slates."),
     // Time
     ("posterize_time", "time.posterizetime", 2, "Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement."),
     // Transform
     ("auto_reframe", "transform.autoreframe", 1, "Keeps the moving subject in frame when the sequence's aspect differs from the clip's; vertical and square versions."),
-    ("spacer", "transform.spacer", 1, "Pads the picture with a border of color, rounded if you like; framed cards and picture-in-picture."),
     // Utility
-    ("auto_align", "utility.autoalign", 1, "Moves the picture's visible content to an edge or the center with a margin; aligning cutouts and logos."),
     ("edge_feather", "utility.edgefeather", 1, "Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture."),
-    ("rounded_crop", "utility.roundedcrop", 1, "Crops with rounded corners, a feather, and a border; rounded picture-in-picture and cards."),
     ("stroke", "utility.stroke", 1, "An outline around the picture's alpha, inside, outside, or centered; stickers and outlined cutouts."),
 ];
 

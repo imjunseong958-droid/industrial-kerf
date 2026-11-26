@@ -783,13 +783,12 @@ const KEEPS_WHOLE: [&str; 5] = [
 ];
 
 /// Effects that only take away from a picture or draw at its edge: a keyer, a choker, a drop
-/// shadow, a rounded crop, a feather, an outline. A picture that does not cover the frame
+/// shadow, a feather, an outline. A picture that does not cover the frame
 /// without them does not with them. The first three are categories of the catalog.
-const TRIMS: [&str; 6] = [
+const TRIMS: [&str; 5] = [
     "Keying",
     "Matte",
     "Perspective",
-    "utility.roundedcrop",
     "utility.edgefeather",
     "utility.stroke",
 ];
@@ -2292,11 +2291,11 @@ sequence s1 rate=24 size=1920x1080
         let turned = flashes(&format!("{o1}{over}set o2 rotation=180"));
         assert!(turned.is_empty(), "{turned:?}");
         // In a corner it leaves c1 showing, and the flash is seen beside it, whatever is cut
-        // from it there: a rounded crop, a mask, and a key take nothing off c1.
+        // from it there: a feathered edge, a mask, and a key take nothing off c1.
         let corner = format!("{o1}{over}set o2 scale=0.5\n");
         assert_eq!(flashes(&corner).len(), 1);
         let dressed = flashes(&format!(
-            "{corner}fx o2 add utility.roundedcrop\nfx o2 add key.luma\n\
+            "{corner}fx o2 add utility.edgefeather\nfx o2 add key.luma\n\
              mask o2 add m ellipse=0.5,0.5,0.4,0.4"
         ));
         assert_eq!(dressed.len(), 1, "{dressed:?}");
