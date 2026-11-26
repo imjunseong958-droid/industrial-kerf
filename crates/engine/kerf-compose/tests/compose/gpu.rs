@@ -1,10 +1,6 @@
 //! The GPU against the CPU, the reference: the same document, on footage it decodes, drawn both
 //! ways. Each scene also has to be one the GPU really draws, so a fallback cannot pass for a match.
 //! On a machine without a GPU there is nothing to compare.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_compose::{Accel, ComposeOptions, Compositor, Frame};
 use kerf_lang::parse_document;
@@ -17,6 +13,10 @@ fn ffmpeg() -> String {
 }
 
 /// Moving test footage, 320x180 at 24 fps for a second.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn footage(dir: &Path) -> String {
     let path = dir.join("footage.mp4");
     let output = Command::new(ffmpeg())
@@ -584,6 +584,10 @@ fn kerf_gpu_missing() -> bool {
 }
 
 /// A second of test footage in `pixel` format, with what `args` says of its color.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn made_as(dir: &Path, name: &str, codec: &[&str], filter: &str) -> Option<String> {
     let path = dir.join(name);
     let output = Command::new(ffmpeg())

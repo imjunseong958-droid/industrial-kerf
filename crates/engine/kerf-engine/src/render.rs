@@ -882,8 +882,9 @@ fn sound_args(
     range: Option<(Time, Time)>,
     sample_rate: u32,
     output: &Path,
+    cancellation: &CancellationToken,
 ) -> Result<Vec<String>> {
-    let heard = crate::render::ramps::with_sound(project);
+    let heard = crate::render::ramps::with_sound(project, cancellation);
     let sound = compile_program(
         &heard,
         kerf_model::Catalog::builtin(),
@@ -922,7 +923,14 @@ pub fn render_sound(
         return Err(EngineError::Cancelled);
     }
     let mut command = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin());
-    command.args(sound_args(project, sequence, range, sample_rate, output)?);
+    command.args(sound_args(
+        project,
+        sequence,
+        range,
+        sample_rate,
+        output,
+        cancellation,
+    )?);
     let finished = sidecar::run(command, cancellation, |_| {})?;
     if !finished.status.success() {
         return Err(EngineError::Ffmpeg {
@@ -1023,11 +1031,12 @@ fn composited_render(
     range: Option<(Time, Time)>,
     opts: &RenderOptions,
     canvas: (u32, u32),
+    cancellation: &CancellationToken,
 ) -> Result<CompositedRender> {
     // The graph mixes the sound; the picture comes from stdin.
     let mut mixed = None;
     let (mut args, duration, own_rate) = if opts.sound {
-        let heard = crate::render::ramps::with_sound(project);
+        let heard = crate::render::ramps::with_sound(project, cancellation);
         let sound = compile_program(
             &heard,
             kerf_model::Catalog::builtin(),
@@ -1257,7 +1266,14 @@ where
     } else {
         opts
     };
-    let render = composited_render(project, sequence, range, opts, compositor.size())?;
+    let render = composited_render(
+        project,
+        sequence,
+        range,
+        opts,
+        compositor.size(),
+        cancellation,
+    )?;
     let total = render.times.len();
     if let Some((sections, kept)) = render
         .sections
@@ -1705,7 +1721,14 @@ fn measure_light(
     opts: &RenderOptions,
     cancellation: &CancellationToken,
 ) -> Result<ContentLight> {
-    let render = composited_render(project, sequence, range, opts, compositor.size())?;
+    let render = composited_render(
+        project,
+        sequence,
+        range,
+        opts,
+        compositor.size(),
+        cancellation,
+    )?;
     let mut meter = LightMeter::new();
     draw_in_order(
         render.times.len(),

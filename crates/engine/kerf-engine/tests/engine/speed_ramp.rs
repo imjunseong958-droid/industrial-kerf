@@ -1,8 +1,4 @@
 //! A speed ramp through a whole render: the picture on its frames and the sound in time with them.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, RenderOptions};
@@ -11,6 +7,10 @@ use kerf_model::{Catalog, Project, Time};
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn run(args: &[&str]) -> Vec<u8> {
     let output = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])

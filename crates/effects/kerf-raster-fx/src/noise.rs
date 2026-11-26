@@ -1097,10 +1097,6 @@ pub fn specs() -> Vec<EffectSpec> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 mod tests {
     use super::*;
 
@@ -1177,6 +1173,10 @@ mod tests {
 
     /// A frame of the real footage `scripts/fetch-real-footage.sh` fetches, its code values 0 to 1, or
     /// `None` when `KERF_REAL_FOOTAGE` does not say where it is.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn footage(name: &str) -> Option<Image> {
         let path = std::path::Path::new(&std::env::var_os("KERF_REAL_FOOTAGE")?).join(name);
         let decoded = std::process::Command::new("ffmpeg")

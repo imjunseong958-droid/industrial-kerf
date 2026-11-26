@@ -425,7 +425,7 @@ fn non_interactive_env(
 
 #[expect(
     clippy::disallowed_methods,
-    reason = "waited on, and bounded by git's own network timeouts; as a sidecar it would end the helpers git leaves running for its next commands (a credential cache, a shared ssh connection)"
+    reason = "waited on, and left in the terminal's process group: with KERF_GIT_INTERACTIVE git and ssh ask on the terminal, which a group of its own cannot, and git's credential cache is meant to outlive it"
 )]
 fn output(mut command: Command, what: &str) -> Result<Output> {
     command.output().map_err(|error| {

@@ -3,10 +3,6 @@
 //! The fixtures are encoded by the installed FFmpeg at test time. This keeps
 //! the gate useful on a clean checkout without committing large media files,
 //! while still exercising real 4K, VFR, audio, and long-GOP bitstreams.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_playback::{
     ClockSource, PlaybackConfig, PlaybackEvent, PlaybackSession, PlaybackTimeline,
@@ -40,6 +36,10 @@ fn ffprobe_binary() -> PathBuf {
         })
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn available(binary: &Path, version_arg: &str) -> bool {
     Command::new(binary)
         .arg(version_arg)
@@ -48,6 +48,10 @@ fn available(binary: &Path, version_arg: &str) -> bool {
         .unwrap_or(false)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn run(binary: &Path, args: &[&str]) -> Output {
     let output = Command::new(binary)
         .args(args)

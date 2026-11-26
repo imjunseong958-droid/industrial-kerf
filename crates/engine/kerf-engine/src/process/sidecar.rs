@@ -10,8 +10,8 @@
 //! and waited for on its own thread, while its [`Stopper`] stops it from
 //! any other.
 
-use std::io::{BufRead, BufReader};
-use std::process::{ChildStderr, Command, ExitStatus, Stdio};
+use std::io::{BufRead, BufReader, Read};
+use std::process::{ChildStderr, Command, ExitStatus, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -157,6 +157,52 @@ fn run_within(
     })
 }
 
+/// [`output`] of a run that `cancellation` stops: when it is asked for, the child is asked to
+/// end, killed if it has not within [`GRACE`], and `EngineError::Cancelled` returned.
+pub fn output_cancellable(
+    command: &mut Command,
+    cancellation: &CancellationToken,
+) -> Result<Output> {
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
+    let mut sidecar = Sidecar::start(
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )?;
+    let stdout = read_to_end(sidecar.stdout.take());
+    let stderr = read_to_end(sidecar.stderr.take());
+    let stopper = sidecar.stopper();
+    loop {
+        if cancellation.is_cancelled() {
+            stopper.stop(GRACE);
+            sidecar.kill();
+            return Err(EngineError::Cancelled);
+        }
+        if let Some(status) = sidecar.try_wait()? {
+            return Ok(Output {
+                status,
+                stdout: stdout.join().unwrap_or_default(),
+                stderr: stderr.join().unwrap_or_default(),
+            });
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+/// Read `pipe` to its end on a thread of its own: what was read before an error is what there is.
+fn read_to_end<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
+}
+
 /// Read a child's stderr, `pipe`, to its end on a thread of its own, keeping
 /// the last of it to report.
 pub(crate) fn drain_stderr(pipe: Option<ChildStderr>) -> thread::JoinHandle<String> {
@@ -189,10 +235,6 @@ pub(crate) fn append_bounded(tail: &mut String, line: &str) {
 }
 
 #[cfg(all(test, unix))]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 mod tests {
     use super::*;
     use std::time::Instant;
@@ -221,6 +263,10 @@ mod tests {
 
     /// Whether process `pid` ends within `limit`; a zombie awaiting its new
     /// parent counts as ended.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn ends_within(pid: &str, limit: Duration) -> bool {
         let start = Instant::now();
         while start.elapsed() < limit {
@@ -294,6 +340,38 @@ mod tests {
         // The shell may say that the `sleep` it waited on was ended too.
         let said: Vec<String> = lines.try_iter().collect();
         assert!(said.iter().any(|line| line == "not yet"), "{said:?}");
+    }
+
+    #[test]
+    fn a_cancellable_output_returns_what_was_written_or_ends_when_cancelled() {
+        let ran = output_cancellable(
+            Command::new("sh").args(["-c", "echo said; echo warned >&2; exit 3"]),
+            &CancellationToken::new(),
+        )
+        .expect("the shell ends by itself");
+        assert_eq!(ran.status.code(), Some(3));
+        assert_eq!(
+            (&ran.stdout[..], &ran.stderr[..]),
+            (&b"said\n"[..], &b"warned\n"[..])
+        );
+
+        let token = CancellationToken::new();
+        let runner = {
+            let token = token.clone();
+            thread::spawn(move || {
+                output_cancellable(Command::new("sh").args(["-c", "sleep 30"]), &token)
+            })
+        };
+        thread::sleep(Duration::from_millis(300));
+        let asked = Instant::now();
+        token.cancel();
+        let result = runner.join().expect("runner");
+        assert!(matches!(result, Err(EngineError::Cancelled)));
+        assert!(
+            asked.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            asked.elapsed()
+        );
     }
 
     #[test]

@@ -421,10 +421,6 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 mod tests {
     use super::*;
     use crate::{git, scaffold};
@@ -443,6 +439,10 @@ mod tests {
         git::init(directory).unwrap();
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn untracked(directory: &Path) -> String {
         let output = Command::new("git")
             .arg("-C")

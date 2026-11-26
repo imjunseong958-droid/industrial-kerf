@@ -1,9 +1,5 @@
 //! Collaboration through real repositories: two clones of one bare remote
 //! standing in for GitHub.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_collab::git;
 use kerf_collab::scaffold::{self, NewProject, Template};
@@ -84,6 +80,10 @@ fn sparse_file(path: &Path, len: u64) {
     fs::File::create(path).unwrap().set_len(len).unwrap();
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn sh(dir: &Path, args: &[&str]) -> String {
     let mut command = Command::new("git");
     for (name, value) in hermetic_env() {
@@ -455,6 +455,10 @@ fn files_too_large_for_github_are_refused_unless_lfs_stores_them() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn large_media_counts_as_lfs_only_when_git_lfs_stored_it() {
     let team = team();
     fs::write(

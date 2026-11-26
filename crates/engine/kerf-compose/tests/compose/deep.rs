@@ -1,9 +1,5 @@
 //! Footage deeper than 8 bits, and footage whose code values mean something else: real files,
 //! encoded by FFmpeg, read back through the compositor.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_compose::{Accel, ComposeOptions, Compositor, Frame};
 use kerf_lang::parse_document;
@@ -11,6 +7,10 @@ use kerf_model::{Catalog, Rate};
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg(args: &[&str], out: &Path) {
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
     let output = Command::new(program)

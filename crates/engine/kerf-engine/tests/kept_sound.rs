@@ -11,10 +11,6 @@
 //!
 //! The only test of this file, since renders are counted for the whole process
 //! (`section_stats`).
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
 use kerf_engine::render::sections::{section_stats, SectionStats};
@@ -77,6 +73,10 @@ fn render_whole(project: &Project, out: &Path, options: RenderOptions) {
     assert_eq!(section_stats(), before, "a whole render keeps nothing");
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn run(program: &str, args: &[&str]) -> Vec<u8> {
     let output = Command::new(program).args(args).output().expect("it runs");
     assert!(
@@ -224,6 +224,10 @@ fn since(before: SectionStats) -> SectionStats {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_sound_made_of_kept_pieces_is_the_whole_renders_within_what_aac_differs_from_itself() {
     let dir = tempfile::tempdir().expect("a folder");
     let source = dir.path().join("source.mp4");

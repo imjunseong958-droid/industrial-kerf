@@ -1,9 +1,5 @@
 //! Media the compositor reads: a frame drawn again, at another size or by
 //! another layer, is the same picture.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_compose::{ComposeOptions, Compositor, Frame};
 use kerf_lang::parse_document;
@@ -16,6 +12,10 @@ fn ffmpeg() -> String {
 }
 
 /// Color bars, 64x36 at 24 fps for a second.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn bars(dir: &Path) -> String {
     let path = dir.join("bars.mp4");
     let output = Command::new(ffmpeg())
@@ -111,6 +111,10 @@ fn two_layers_of_one_file_both_show_it() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn audio_waveform_draws_the_sound_track_it_names() {
     let dir = tempfile::tempdir().unwrap();
     let sound = |name: &str, source: &str| {

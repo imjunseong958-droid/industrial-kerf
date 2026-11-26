@@ -5,10 +5,6 @@
 //! The media is a sound whose every sample says which it is, so a sample
 //! lost, doubled, or a sample late shows. The sequence runs at 29.97 frames
 //! a second, where a frame is not a whole number of samples.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::render_sound;
@@ -71,6 +67,10 @@ fn sample_of(frame: i64) -> i64 {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn every_sample_of_a_mix_is_the_one_the_document_puts_there() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("told.wav");

@@ -1,10 +1,6 @@
 //! The full QC check against generated sound and picture: R128 loudness,
 //! true peak and loudness range, and the picture's gamut, levels,
 //! flashing and black, each placed at its worst sample.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_mcp::{check_full, check_full_with, CheckReport, Finding, QcLimits, Row, Severity};
@@ -13,10 +9,18 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg_available() -> bool {
     Command::new("ffmpeg").arg("-version").output().is_ok()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg(directory: &Path, args: &[&str]) {
     let status = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])

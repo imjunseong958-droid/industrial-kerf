@@ -1,8 +1,4 @@
 //! Where the eye is either side of a cut, read from the guides of the two shots.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use std::collections::BTreeMap;
 
@@ -855,6 +851,10 @@ fn a_take_that_is_not_there_or_cannot_be_read_is_told_from_one_that_is() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_frame_of_a_take_is_read_from_its_file_by_its_number() {
     // A white box 16 across on black, 160 by 90 at 24 a second, four pixels further right
     // on each frame: which frame a picture is of is where its box is.

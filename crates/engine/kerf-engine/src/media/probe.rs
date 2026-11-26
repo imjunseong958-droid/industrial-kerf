@@ -1203,8 +1203,8 @@ fn decode_waveform_buckets(
     let start = start.to_string();
     let duration = duration.to_string();
     // It reads the whole of a stretch that may be hours long: a sidecar, ended with the work
-    // whichever way that ends.
-    let mut child = Sidecar::start(
+    // whichever way that ends. No token reaches it, so a held Ctrl-C reaches it instead.
+    let mut child = Sidecar::start_uncancellable(
         crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
             .args([
                 "-hide_banner",

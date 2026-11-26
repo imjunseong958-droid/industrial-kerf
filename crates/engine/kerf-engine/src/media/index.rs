@@ -293,7 +293,8 @@ fn frames_with(
     mut each: impl FnMut(f64, &[u8]),
 ) -> Result<()> {
     // It decodes the whole of the file: a sidecar, ended with the work whichever way that ends.
-    let mut child = sidecar::Sidecar::start(
+    // No token reaches it, so a held Ctrl-C reaches it instead.
+    let mut child = sidecar::Sidecar::start_uncancellable(
         crate::process::ffmpeg::hidden_command(ffmpeg)
             .args(video_decode_prefix())
             .args(["-hide_banner", "-loglevel", "error", "-i"])

@@ -156,7 +156,7 @@ pub fn measure_program_with_progress(
     if cancellation.is_cancelled() {
         return Err(EngineError::Cancelled);
     }
-    let heard = crate::render::ramps::with_sound(project);
+    let heard = crate::render::ramps::with_sound(project, cancellation);
     let compiled = compile_program(
         &heard,
         kerf_model::Catalog::builtin(),

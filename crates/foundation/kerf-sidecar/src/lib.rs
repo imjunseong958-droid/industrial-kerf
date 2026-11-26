@@ -23,7 +23,8 @@
 //!
 //! A terminal's Ctrl-C ends the binary that runs sidecars, and what they started with it,
 //! unless the binary holds [`stop_on_termination`]: then the first one cancels that work, and
-//! so stops its sidecar as above.
+//! so stops its sidecar as above. A sidecar no cancellation reaches
+//! ([`Sidecar::start_uncancellable`], [`output`]) is passed that first signal all the same.
 
 use std::io::{self, Read};
 use std::process::{
@@ -284,9 +285,11 @@ impl Drop for Sidecar {
 }
 
 /// Run `command` to its end as a sidecar that no cancellation reaches
-/// ([`Sidecar::start_uncancellable`]), as [`Command::output`] runs a plain child: its stdin is
-/// null, and what it writes to stdout and stderr is returned with how it exited. What it left
-/// running is ended once it exits, so its pipes close then.
+/// ([`Sidecar::start_uncancellable`]), as [`Command::output`] runs a plain child, and return
+/// how it exited with what it wrote to stdout and stderr, as far as they could be read. Its
+/// stdin is null and its stdout and stderr are piped, whatever `command` had set. What it left
+/// running in its process group (job) is ended once it exits, so its pipes close then, unless
+/// something outside that holds them too.
 pub fn output(command: &mut Command) -> io::Result<Output> {
     let mut sidecar = Sidecar::start_uncancellable(
         command
@@ -542,9 +545,10 @@ fn stopped_instead(signal: libc::c_int) -> bool {
 /// While this is held, the first Ctrl-C, SIGTERM, or hangup cancels the
 /// token it was made with in place of ending the process: the sidecar
 /// running is asked to end and has [`GRACE`] to, as a stopped one does,
-/// and what it says on the way out is heard. A second ends the process as
-/// [`forward_termination_signals`] does. It has an effect only in a binary
-/// that called that, on Unix.
+/// and what it says on the way out is heard. A sidecar no cancellation
+/// reaches is passed the first signal all the same. A second ends the
+/// process as [`forward_termination_signals`] does. It has an effect only in
+/// a binary that called that, on Unix.
 #[must_use = "the first signal stops the work only while this is held"]
 pub struct StopOnTermination(());
 
@@ -569,10 +573,6 @@ impl Drop for StopOnTermination {
 }
 
 #[cfg(all(test, unix))]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
@@ -605,6 +605,10 @@ mod tests {
 
     /// Whether process `pid` ends within `limit`; a zombie awaiting its new
     /// parent counts as ended.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn ends_within(pid: &str, limit: Duration) -> bool {
         let start = Instant::now();
         while start.elapsed() < limit {

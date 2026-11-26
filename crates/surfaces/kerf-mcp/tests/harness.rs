@@ -1,9 +1,5 @@
 //! `look`, `edit`, `render`, and `note` against a real kerfd and real
 //! footage.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_mcp::{KerfMcpRouter, McpCode, McpServer, PresetInspection, ToolError};
 use serde_json::{json, Value};
@@ -17,11 +13,19 @@ use tempfile::TempDir;
 #[path = "../../../vfx/kerf-track/src/camera/scene.rs"]
 mod scene;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg_available() -> bool {
     Command::new("ffmpeg").arg("-version").output().is_ok()
 }
 
 /// Four seconds of picture with a cut at 2s, and a tone that stops at 3s.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn footage(directory: &Path) {
     let status = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])
@@ -126,6 +130,10 @@ fn is_jpeg(value: &Value) -> bool {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn presets_share_native_edit_code_and_apply_replacement_media_as_a_proposal() {
     let Some((source_directory, source)) = router() else {
         return;
@@ -1008,6 +1016,10 @@ fn a_host_is_asked_before_anything_begins_and_holds_what_it_gave_until_it_is_ove
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn look_scans_with_sheets_and_indexes_sound() {
     let Some((_directory, router)) = router() else {
         return;
@@ -1071,6 +1083,10 @@ fn look_scans_with_sheets_and_indexes_sound() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn imported_media_is_indexed_and_proxied_in_the_background() {
     let Some((directory, router)) = router() else {
         return;
@@ -1295,6 +1311,10 @@ fn edits_are_checked_like_an_editor_would() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn any_sequence_can_be_seen_and_rendered() {
     let Some((_directory, router)) = router() else {
         return;
@@ -1961,6 +1981,10 @@ fn look_follows_a_point_and_gives_a_line_that_makes_a_clip_follow_it() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
     let Some((directory, router)) = router() else {
         return;
@@ -2208,6 +2232,10 @@ fn look_says_which_text_is_too_faint_from_the_frames() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn look_gives_a_fact_sheet_of_media_and_says_what_it_leaves_out() {
     let Some((directory, router)) = router() else {
         return;
@@ -2450,6 +2478,10 @@ fn look_cuts_out_an_object_and_gives_a_line_that_masks_it() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn look_lines_recordings_up_by_their_sound_and_gives_a_multicam() {
     let Some((directory, router)) = router() else {
         return;
@@ -4332,6 +4364,10 @@ fn look_says_what_stands_on_what_and_its_line_sets_a_clip_down() {
 
 /// Two seconds of a red box 64 by 36 on a dark ground 320 by 180, its left edge at `left`: a
 /// take of a guide that has a box a fifth of the frame each way.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn take_with_a_box(file: &Path, left: u32) {
     let status = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i"])

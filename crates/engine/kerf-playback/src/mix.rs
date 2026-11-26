@@ -619,10 +619,6 @@ fn audio_error(error: PlaybackError) -> PlaybackError {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 mod tests {
     use super::{Mixer, CHANNELS};
     use crate::timeline::PlaybackTimeline;
@@ -631,12 +627,20 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn ffmpeg() -> Option<PathBuf> {
         let binary = std::env::var_os("KERF_FFMPEG").map_or_else(|| "ffmpeg".into(), PathBuf::from);
         let output = Command::new(&binary).arg("-version").output().ok()?;
         output.status.success().then_some(binary)
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn run(ffmpeg: &Path, args: &[&str]) {
         let output = Command::new(ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])

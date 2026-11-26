@@ -3,10 +3,6 @@
 //! and live, and a project started from a preset by the launcher.
 //!
 //! These need Unix sockets (kerfd), git, and ffmpeg for the media parts.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 #![cfg(unix)]
 
 use kerf_bridge::{preset_inspect, project_inspect, Bridge, Task, TaskDone, TaskStatus};
@@ -52,6 +48,10 @@ const HERMETIC: &str = "KERF_BRIDGE_SHARING_HERMETIC";
 /// places (the Kerf account, the models, the caches) and the kerfd and git it starts read
 /// both, so the environment it starts with is what reaches them all. True in that process,
 /// where the test goes on; false in this one, once the test has passed there.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn hermetic(test: &str) -> bool {
     if std::env::var_os(HERMETIC).is_some() {
         return true;
@@ -106,6 +106,10 @@ impl Drop for Root {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn sh(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .arg("-C")
@@ -121,6 +125,10 @@ fn sh(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn has_ffmpeg() -> bool {
     Command::new("ffmpeg")
         .arg("-version")
@@ -129,6 +137,10 @@ fn has_ffmpeg() -> bool {
 }
 
 /// Three seconds of 24 fps picture.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn footage(path: &Path) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let status = Command::new("ffmpeg")

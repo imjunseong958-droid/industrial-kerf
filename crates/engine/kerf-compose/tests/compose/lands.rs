@@ -1,9 +1,5 @@
 //! Where a clip of footage has its picture on the frame, said from its numbers: it is where
 //! the frame is drawn.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_lang::parse_document;
@@ -19,6 +15,10 @@ fn ffmpeg() -> String {
 const BOX: [f64; 4] = [0.625, 0.25, 0.875, 0.5];
 
 /// A second of black, 160 by 120 at 24 a second, with a white box 40 by 30 at 100, 30.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn boxed(dir: &Path) -> String {
     let path = dir.join("boxed.mp4");
     let output = Command::new(ffmpeg())

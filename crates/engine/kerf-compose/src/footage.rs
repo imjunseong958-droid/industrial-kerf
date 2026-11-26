@@ -949,10 +949,6 @@ fn packed(rgba: &frame::Video) -> Vec<u8> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 mod tests {
     use super::*;
 
@@ -973,6 +969,10 @@ mod tests {
     }
 
     /// A small H.264 file with a keyframe every half second, or none where FFmpeg is not installed.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn encoded(directory: &std::path::Path) -> Option<String> {
         let path = directory.join("clip.mp4");
         let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());

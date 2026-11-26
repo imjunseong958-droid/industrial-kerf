@@ -389,7 +389,8 @@ const CLOSING: std::time::Duration = std::time::Duration::from_millis(500);
 fn asked_inputs(program: &str, named: &str) -> Result<Value, ShotError> {
     use kerf_engine::process::sidecar::{Sidecar, GRACE};
     use std::process::Stdio;
-    let mut sidecar = Sidecar::start(
+    // No token reaches it, only its own time limit, so a held Ctrl-C reaches it instead.
+    let mut sidecar = Sidecar::start_uncancellable(
         kerf_engine::recipe::model::program(program)
             .args([FLAG, named, "--inputs"])
             .stdin(Stdio::null())

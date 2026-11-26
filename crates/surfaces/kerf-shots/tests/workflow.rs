@@ -1,10 +1,6 @@
 //! What a workflow's model program says its inputs take ([`kerf_shots::workflow::taken`]),
 //! asked of a stand-in for `kerf-comfy`: a shell script of that name. One leaves a process
 //! outside its group with Perl, which macOS has where it has no `setsid`.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 #![cfg(unix)]
 
 use kerf_engine::recipe::model::Models;
@@ -44,6 +40,10 @@ fn taken(dir: &Path, script: &str) -> Result<Value, String> {
 
 /// Whether process `pid` ends within `limit`; a zombie awaiting its new parent counts as
 /// ended.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ends_within(pid: &str, limit: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < limit {
@@ -89,6 +89,10 @@ fn an_answer_longer_than_a_pipe_holds_is_read_whole() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn an_answer_is_heard_though_what_the_program_left_outside_its_group_holds_its_pipes() {
     let folder = tempfile::tempdir().unwrap();
     let dir = folder.path();
@@ -113,6 +117,10 @@ echo '{"KSampler": {"seed": {"min": 0}}}'
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_program_that_does_not_answer_in_time_is_stopped_with_what_it_started() {
     let folder = tempfile::tempdir().unwrap();
     let dir = folder.path();

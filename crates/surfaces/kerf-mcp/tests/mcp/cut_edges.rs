@@ -31,10 +31,6 @@
 //! might be put in the dip between them instead are scored on those cuts
 //! ([`ways`]). None of them is built: each puts cuts inside words, taking a
 //! closure or a hiss for where two words part, or finds next to no dips.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{cached_media_sound, media_index, CancellationToken};
@@ -296,6 +292,10 @@ fn write_wav(path: &Path, samples: &[f32]) {
 
 /// The pauses the index found before it kept levels: silence under
 /// -35 dBFS for 0.35 s or more, on a mono copy at 8 kHz.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn pauses_before(path: &Path) -> Option<Vec<(f64, f64)>> {
     let output = Command::new("ffmpeg")
         .args(["-hide_banner", "-nostats", "-i"])

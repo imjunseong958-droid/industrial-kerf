@@ -1,9 +1,5 @@
 //! Delivery measurements on generated media: programme R128 loudness, the
 //! picture QC pass, and the ProRes 422 HQ master probed back.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::analysis::loudness::measure_program;
 use kerf_engine::analysis::qc::picture_qc;
@@ -15,6 +11,10 @@ use kerf_model::{Catalog, Project};
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg_present() -> bool {
     let present = Command::new(resolve_ffmpeg_bin())
         .arg("-version")
@@ -26,6 +26,10 @@ fn ffmpeg_present() -> bool {
     present
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn generate(args: &[&str], output: &Path) {
     let result = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])
@@ -346,6 +350,10 @@ fn a_sound_measurement_is_kept_until_the_programme_or_its_files_change() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_prores_master_probes_back_as_prores_hq_with_24_bit_pcm() {
     if !ffmpeg_present() {
         return;
@@ -504,6 +512,10 @@ fn an_hdr_sequence_masters_as_hdr_and_comes_back_as_it() {
 }
 
 /// What ffprobe finds of a video's first frame and stream, as `key=value` lines.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn probed(path: &Path) -> String {
     let output = Command::new(kerf_engine::process::ffmpeg::resolve_ffprobe_bin())
         .args(["-v", "error", "-select_streams", "v:0"])
@@ -536,6 +548,10 @@ fn number_after(text: &str, name: &str) -> f64 {
 
 /// A sequence finished in `color` holding one flat clip of 10-bit `transfer` footage and a white
 /// solid under a mask over part of it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn hdr_project(dir: &Path, color: &str, transfer: &str, gray: u8) -> kerf_model::Project {
     let source = dir.join(format!("{transfer}.mov"));
     let made = Command::new(resolve_ffmpeg_bin())
@@ -567,6 +583,10 @@ fn hdr_project(dir: &Path, color: &str, transfer: &str, gray: u8) -> kerf_model:
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn hdr10_delivery_says_what_it_was_mastered_on_and_how_bright_it_is() {
     if !encoder_available("libx265") {
         eprintln!("skipping: this FFmpeg has no libx265");

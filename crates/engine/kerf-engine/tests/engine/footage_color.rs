@@ -1,13 +1,13 @@
 //! What importing finds out about real files: depth and color, from what FFmpeg wrote in them.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_model::ColorSpace;
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn encode(path: &Path, args: &[&str]) {
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
     let output = Command::new(program)
@@ -72,6 +72,10 @@ fn importing_finds_depth_and_color_in_real_files() {
 
 /// The widest step between luma levels along the middle row of a video's first frame, read at 10
 /// bits: how wide its bands are.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn widest_step(path: &Path) -> u16 {
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
     let output = Command::new(program)
@@ -105,6 +109,10 @@ fn widest_step(path: &Path) -> u16 {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_master_keeps_the_depth_of_its_footage() {
     let dir = tempfile::tempdir().expect("a folder");
     let ramp = dir.path().join("ramp.mov");

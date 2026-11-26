@@ -5,10 +5,6 @@
 //!
 //! Needs kerfd built beside this test (`cargo build -p kerf-runtime --bin
 //! kerfd`) and FFmpeg; without FFmpeg it says so and passes.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_bridge::Bridge;
 use serde_json::{json, Value};
@@ -104,6 +100,10 @@ impl Editor {
 
 /// Two seconds of picture that cuts from dark grey to light grey at 1 s,
 /// under a tone that starts after half a second of silence.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn media(path: &Path) -> bool {
     Command::new(ffmpeg())
         .args(["-hide_banner", "-loglevel", "error", "-y"])

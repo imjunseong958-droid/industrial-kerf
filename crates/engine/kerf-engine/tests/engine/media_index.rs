@@ -1,8 +1,4 @@
 //! The media index and proxies against real footage.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{
@@ -14,6 +10,10 @@ use tempfile::TempDir;
 
 /// Ten seconds at 1280x720: red, then blue from 5s; a click every half
 /// second for six seconds, then silence.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn footage(directory: &Path) -> Option<std::path::PathBuf> {
     let path = directory.join("clicks.mp4");
     let status = Command::new("ffmpeg")
@@ -102,6 +102,10 @@ fn one_pass_finds_cuts_pauses_onsets_and_tempo_and_a_proxy_is_made() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_single_shot_has_no_cuts() {
     let directory = TempDir::new().unwrap();
     let path = directory.path().join("shot.mp4");

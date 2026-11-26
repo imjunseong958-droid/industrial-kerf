@@ -1,9 +1,5 @@
 //! A `render` step draws a guide at a model's size and rate: the
 //! file made is inspected. The model is `cp`, so these run on Unix only.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 #![cfg(unix)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
@@ -15,6 +11,10 @@ use kerf_model::Catalog;
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn run(command: &mut Command) -> String {
     let output = command.output().expect("runs");
     assert!(
@@ -34,6 +34,10 @@ fn probe(file: &Path, select: &str, entries: &str) -> String {
 }
 
 /// The RGB of the pixel at `x`, `y` of the first frame of `file`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn pixel(file: &Path, x: u32, y: u32) -> [u8; 3] {
     let output = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-i"])
@@ -212,6 +216,10 @@ fn a_pass_of_a_guide_is_a_file_of_its_own() {
 }
 
 /// Every frame of `file`, decoded to `pix_fmt`, one after another.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn decoded(file: &Path, pix_fmt: &str) -> Vec<u8> {
     let output = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-i"])

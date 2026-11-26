@@ -1,9 +1,5 @@
 //! Rendering again after a small edit: only what changed is drawn, and the file comes out the same.
 //! And where a render keeps what it drew when nothing names a folder.
-#![expect(
-    clippy::disallowed_methods,
-    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
-)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, CacheFolder, RenderOptions};
@@ -29,6 +25,10 @@ fn render(project: &Project, out: &Path, frames: &Path) {
 }
 
 /// The file's frames, as FFmpeg decodes them.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn frames(path: &Path) -> Vec<u8> {
     let output = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-i"])
@@ -41,6 +41,10 @@ fn frames(path: &Path) -> Vec<u8> {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn rendering_again_reads_what_was_drawn() {
     let dir = tempfile::tempdir().expect("a folder");
     let folder = dir.path().join("frames");
@@ -109,6 +113,10 @@ fn rendering_again_reads_what_was_drawn() {
 /// Every variable Kerf's cache folder is found by, set to nothing, names no folder: a render keeps no
 /// frames and no stretches in the folder it was started from.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_cache_variable_set_to_nothing_keeps_nothing_where_a_render_starts() {
     let dir = tempfile::tempdir().expect("a folder");
     let start = dir.path().join("start");
