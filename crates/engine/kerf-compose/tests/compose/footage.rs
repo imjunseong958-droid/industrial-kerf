@@ -115,7 +115,7 @@ fn two_layers_of_one_file_both_show_it() {
     clippy::disallowed_methods,
     reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
 )]
-fn audio_waveform_draws_the_sound_track_it_names() {
+fn a_sound_clip_draws_the_track_it_names() {
     let dir = tempfile::tempdir().unwrap();
     let sound = |name: &str, source: &str| {
         let path = dir.path().join(name);
@@ -134,16 +134,16 @@ fn audio_waveform_draws_the_sound_track_it_names() {
     };
     let tone = sound("tone.wav", "sine=frequency=220:sample_rate=48000");
     let quiet = sound("quiet.wav", "anullsrc=r=48000:cl=stereo");
-    // The rows a white line crosses on black.
-    let rows = |path: &str| {
+    // What a `gen=sound` clip a frame wide and most of one high draws of the track on black, as
+    // the rows and the columns it lights.
+    let lit = |path: &str, set: &str| {
         let text = format!(
             "kerf 1\nproject name=\"t\"\n\
              media a path=\"{path}\" rate=24 dur=24f audio=2ch@48000\n\
              sequence s1 rate=24 size=320x180 audio=48000\n\
              \x20 track V1 video\n\
-             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
-             \x20     set color=#000000\n\
-             \x20     fx generate.audiowaveform audioLayer=A1 maximumHeight=160 thickness=2\n\
+             \x20   clip v1 gen=sound@1 at=0f dur=24f\n\
+             \x20     set track=A1 width=1.7 height=0.9 {set}\n\
              \x20 track A1 audio\n\
              \x20   clip a1 media=a src=0f at=0f dur=24f\n"
         );
@@ -158,14 +158,27 @@ fn audio_waveform_draws_the_sound_track_it_names() {
         let frame = Compositor::new(&project, Catalog::builtin(), &options)
             .unwrap()
             .frame(Rate::FPS_24.time_of(12), 1.0);
-        (0..frame.height)
-            .filter(|y| {
-                (0..frame.width).any(|x| frame.rgba[((y * frame.width + x) * 4) as usize] > 128)
-            })
-            .count()
+        let on = |x: u32, y: u32| frame.rgba[((y * frame.width + x) * 4) as usize] > 128;
+        let rows = (0..frame.height)
+            .filter(|y| (0..frame.width).any(|x| on(x, *y)))
+            .count();
+        let columns: Vec<u32> = (0..frame.width)
+            .filter(|x| (0..frame.height).any(|y| on(*x, y)))
+            .collect();
+        (rows, columns)
     };
-    // Silence is a flat line; the tone swings well above and below it.
-    let (flat, swinging) = (rows(&quiet), rows(&tone));
+    // A wave: silence is a flat line, and the tone swings well above and below it.
+    let wave = "kind=waveform window=0.02 bars=200";
+    let ((flat, _), (swinging, _)) = (lit(&quiet, wave), lit(&tone, wave));
     assert!(flat > 0 && flat < 12, "{flat}");
     assert!(swinging > flat * 3, "{swinging} vs {flat}");
+    // A spectrum: silence draws no bar, and the tone's lands about a quarter of the way along,
+    // where 220 hertz is between 40 and 16000 by octave.
+    let spectrum = "kind=spectrum bars=32";
+    assert_eq!(lit(&quiet, spectrum).0, 0);
+    let (tall, columns) = lit(&tone, spectrum);
+    assert!(tall > 80, "{tall}");
+    let (first, last) = (columns[0], columns[columns.len() - 1]);
+    let along = |x: u32| (f64::from(x) - 160.0 + 153.0) / 306.0;
+    assert!(along(first) > 0.2 && along(last) < 0.4, "{columns:?}");
 }

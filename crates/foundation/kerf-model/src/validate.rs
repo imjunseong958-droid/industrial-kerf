@@ -383,9 +383,9 @@ impl Validator<'_> {
         }
     }
 
-    /// Effects' and transitions' track parameters name another picture
-    /// track of the sequence, and no tracks read each other in a loop: a
-    /// track an effect reads is drawn on its own for it. Sound parameters
+    /// Effects', transitions', and generators' track parameters name another
+    /// picture track of the sequence, and no tracks read each other in a loop:
+    /// a track an effect reads is drawn on its own for it. Sound parameters
     /// name a sound track.
     fn track_reads(&mut self, sequence: &Sequence) {
         let of_kind = |kind: TrackKind, id: &str| {
@@ -407,6 +407,9 @@ impl Validator<'_> {
                         .iter()
                         .map(|effect| (&clip.id, &effect.fx, &effect.params)),
                 );
+                if let Content::Generator { fx, params, .. } = &clip.content {
+                    uses.push((&clip.id, fx, params));
+                }
             }
             uses.extend(track.transitions.iter().map(|t| (&t.id, &t.fx, &t.params)));
             for (id, fx, params) in uses {

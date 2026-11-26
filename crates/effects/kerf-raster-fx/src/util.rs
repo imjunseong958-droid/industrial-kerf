@@ -435,49 +435,6 @@ pub fn layer_rect_at(ctx: &crate::EffectCtx, offset: [f64; 2], scale: f64) -> (f
     )
 }
 
-/// Total length of a polyline.
-pub fn poly_length(pts: &[[f64; 2]], closed: bool) -> f64 {
-    let n = pts.len();
-    if n < 2 {
-        return 0.0;
-    }
-    let segs = if closed { n } else { n - 1 };
-    (0..segs)
-        .map(|i| {
-            let (a, b) = (pts[i], pts[(i + 1) % n]);
-            ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt()
-        })
-        .sum()
-}
-
-/// Point and unit tangent at arc length `s` along a polyline.
-pub fn poly_point_at(pts: &[[f64; 2]], closed: bool, s: f64) -> ([f64; 2], [f64; 2]) {
-    let n = pts.len();
-    if n == 0 {
-        return ([0.0; 2], [1.0, 0.0]);
-    }
-    if n == 1 {
-        return (pts[0], [1.0, 0.0]);
-    }
-    let segs = if closed { n } else { n - 1 };
-    let mut rem = s.max(0.0);
-    for i in 0..segs {
-        let (a, b) = (pts[i], pts[(i + 1) % n]);
-        let l = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
-        if rem <= l || i == segs - 1 {
-            let t = if l > 0.0 { (rem / l).min(1.0) } else { 0.0 };
-            let d = if l > 0.0 {
-                [(b[0] - a[0]) / l, (b[1] - a[1]) / l]
-            } else {
-                [1.0, 0.0]
-            };
-            return ([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t], d);
-        }
-        rem -= l;
-    }
-    (pts[n - 1], [1.0, 0.0])
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

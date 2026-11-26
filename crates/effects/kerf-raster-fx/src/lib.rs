@@ -26,7 +26,6 @@ mod distort2;
 mod distort3;
 mod distort4;
 mod generate;
-mod generate3;
 mod keying;
 mod keying2;
 mod matte;
@@ -353,7 +352,6 @@ pub fn registry() -> &'static [EffectSpec] {
         v.extend(noise::specs());
         v.extend(distort2::specs());
         v.extend(distort3::specs());
-        v.extend(generate3::specs());
         v.extend(keying2::specs());
         v.extend(blur3::specs());
         v.extend(distort4::specs());

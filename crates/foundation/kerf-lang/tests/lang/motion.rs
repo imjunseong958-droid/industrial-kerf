@@ -265,3 +265,32 @@ fn a_lights_size_round_trips_and_a_bad_one_is_refused() {
         "size",
     );
 }
+
+const SOUND: &str = r##"kerf 1
+project name="t"
+media a path="tone.wav" rate=24 dur=48f audio=2ch@48000
+sequence s1 rate=24 size=1280x720 audio=48000
+  track V1 video
+    clip c1 gen=sound@1 at=0f dur=48f
+      set bars=64 kind=waveform track=A1 window=0.02
+  track A1 audio
+    clip a1 media=a src=0f at=0f dur=48f
+"##;
+
+#[test]
+fn a_sound_clip_round_trips_and_one_that_names_no_sound_track_is_refused() {
+    let once =
+        parse_document(SOUND, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    let printed = print_document(&once.project, Catalog::builtin(), PrintOptions::default());
+    let twice =
+        parse_document(&printed, Catalog::builtin()).unwrap_or_else(|errors| panic!("{errors:?}"));
+    assert_eq!(once.project, twice.project);
+    assert!(printed.contains("track=A1"), "{printed}");
+    // A picture track, or one there is not, is no sound to draw.
+    for other in ["V1", "A2"] {
+        refused(
+            &SOUND.replace("track=A1", &format!("track={other}")),
+            "not a sound track",
+        );
+    }
+}

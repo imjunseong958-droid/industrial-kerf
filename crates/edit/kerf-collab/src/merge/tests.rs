@@ -641,7 +641,7 @@ fn a_track_one_side_removed_comes_back_whole_for_an_effect_the_other_reads_it_wi
             "theirs"
         )]
     );
-    // A sound track an audio spectrum draws comes back the same way.
+    // A sound track a sound clip draws comes back the same way.
     let base = edit(
         BASE,
         &[(
@@ -651,8 +651,8 @@ fn a_track_one_side_removed_comes_back_whole_for_an_effect_the_other_reads_it_wi
         )],
     );
     let spectrum = (
-        "link=L1\n    clip c2",
-        "link=L1\n      fx generate.audiospectrum@1 audioLayer=A2\n    clip c2",
+        C2_END,
+        "dur=00:00:03:00\n    clip v9 gen=sound@1 at=01:00:07:00 dur=00:00:01:00\n      set track=A2\n",
     );
     let theirs = edit(&base, &[spectrum]);
     let merged = merge(&base, BASE, &theirs);

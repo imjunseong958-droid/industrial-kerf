@@ -528,7 +528,7 @@ impl Drawing {
     ) -> Shape {
         let canvas = output_size(sequence.width, sequence.height, scale);
         let past = match &plan.source {
-            Source::Title(_) | Source::Drawn(_) => {
+            Source::Title(_) | Source::Sound(_) | Source::Drawn(_) => {
                 reach.map(|reach| reach.run(time, canvas, scale))
             }
             _ => None,
@@ -547,10 +547,12 @@ impl Drawing {
                 let size = output_size(inner.width, inner.height, scale);
                 (size, size.0 as f64 / f64::from(inner.width))
             }
-            Source::Solid(_) | Source::Title(_) | Source::Drawn(_) => match (past, reach) {
-                (Some(run), Some(reach)) => (run.picture(), scale * reach.per),
-                _ => (canvas, scale),
-            },
+            Source::Solid(_) | Source::Title(_) | Source::Sound(_) | Source::Drawn(_) => {
+                match (past, reach) {
+                    (Some(run), Some(reach)) => (run.picture(), scale * reach.per),
+                    _ => (canvas, scale),
+                }
+            }
             // It works on the canvas beneath it, unplaced.
             Source::Adjustment | Source::Nothing | Source::Mesh => {
                 return Shape {
@@ -1419,6 +1421,7 @@ impl Drawing {
                 let key = title_key(title, &run);
                 frame.image_kept(&key, || title_on(title, &run))
             }
+            Source::Sound(show) => frame.image(&self.sound_on(sequence, plan, show, &run)),
             Source::Drawn(source) => frame.image(&source.draw(&plan.clip, &run)),
             Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         }))

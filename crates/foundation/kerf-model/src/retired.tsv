@@ -261,3 +261,6 @@ generate.grid	a `gen=shape@1` clip with `fill_kind=grid`
 distort.transform	the clip's `x`, `y`, `scale`, `rotation`, `anchor_x`, `anchor_y`, `skew`, `skew_axis`, `opacity` and `shutter`
 # And an outline that a title and a shape draw of their own.
 utility.stroke	a title's `outline` and `outline_width`, or a `gen=shape@1` clip's `stroke`
+# And what drew a sound track over a picture, which a sound clip draws.
+generate.audiospectrum	a `gen=sound@1` clip with `kind=spectrum`
+generate.audiowaveform	a `gen=sound@1` clip with `kind=waveform`

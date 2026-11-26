@@ -31,8 +31,6 @@ pub const KEPT: &[&str] = &[
     "distort.opticscompensation",
     "distort.rollingshutterrepair",
     "distort.upscale",
-    "generate.audiospectrum",
-    "generate.audiowaveform",
     "key.advancedspill",
     "key.keycleaner",
     "key.unmult",

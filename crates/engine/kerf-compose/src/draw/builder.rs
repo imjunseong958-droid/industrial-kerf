@@ -504,6 +504,12 @@ impl<'a> Builder<'a> {
                 false,
                 true,
             ),
+            "sound" => (
+                Source::Sound(self.sound_show(clip, params)?),
+                canvas,
+                false,
+                true,
+            ),
             "adjustment" => (Source::Adjustment, canvas, false, true),
             "mesh" => (Source::Mesh, canvas, false, true),
             "null" | "camera" | "light" | kerf_model::SIGNAL => {
@@ -540,6 +546,46 @@ impl<'a> Builder<'a> {
             }
         }
         Ok(effects)
+    }
+
+    /// A sound track drawn, as its parameters say, which do not animate.
+    fn sound_show(&self, clip: &Clip, params: &kerf_model::Params) -> Result<SoundShow> {
+        let def = self.catalog.fx("sound").expect(
+            "Kerf draws with the bundled catalog, looks perhaps added, which defines `sound`",
+        );
+        let get = |name: &str| -> Result<Value> {
+            match params.get(name) {
+                None => Ok(def
+                    .find(name)
+                    .expect("the bundled `sound` defines every parameter read here")
+                    .default
+                    .clone()),
+                Some(Param::Static(value)) => Ok(value.clone()),
+                Some(Param::Animated(_) | Param::Expr(_)) => {
+                    Err(unsupported(&clip.id, format!("animated sound `{name}`")))
+                }
+            }
+        };
+        let number = |name: &str| -> Result<f64> { Ok(get(name)?.as_number().unwrap_or(0.0)) };
+        Ok(SoundShow {
+            track: match get("track")? {
+                Value::Text(track) => track,
+                _ => String::new(),
+            },
+            heard: match get("kind")? {
+                Value::Enum(kind) if kind == "waveform" => Heard::Waveform,
+                _ => Heard::Spectrum,
+            },
+            width: number("width")?,
+            height: number("height")?,
+            bars: number("bars")?.round().max(2.0) as usize,
+            color: match get("color")? {
+                Value::Color(color) => color,
+                _ => Rgba::WHITE,
+            },
+            line: number("line")?,
+            window: number("window")?,
+        })
     }
 
     /// A title's text and look, which do not animate.
