@@ -693,6 +693,122 @@ fn a_motion_pass_says_how_far_each_clip_goes_in_a_frame() {
         slower.frame_key(at, 1.0),
         compositor(body, Pass::Motion).frame_key(at, 1.0)
     );
+    // And it is true of the file the frames fill. One twice as wide in shape keeps half the
+    // frame's height, at twice the size: there the square goes 8 pixels, by that file's height.
+    let wide = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass: Pass::Motion,
+            shape: Some((640, 180)),
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes");
+    let (across, _) = motion_at(&wide.frame(at, 1.0), 160 - 84, 45).expect("the square");
+    assert!((across - 8.0).abs() < 0.4, "{across}");
+    assert_ne!(
+        wide.frame_key(at, 1.0),
+        compositor(body, Pass::Motion).frame_key(at, 1.0)
+    );
+}
+
+/// How many pixels of a motion pass's frame say something is there, and how many of those say
+/// it goes anywhere.
+fn there_and_going(frame: &Frame) -> (usize, usize) {
+    let (mut there, mut going) = (0, 0);
+    for y in 0..frame.height {
+        for x in 0..frame.width {
+            if let Some((across, down)) = motion_at(frame, x, y) {
+                there += 1;
+                going += usize::from(across.abs() > 0.1 || down.abs() > 0.1);
+            }
+        }
+    }
+    (there, going)
+}
+
+#[test]
+fn what_holds_still_is_said_to_hold_still_to_its_last_frame() {
+    let at = |frame: i64| Rate::FPS_24.time_of(frame);
+    let still = |body: &str, frames: &[i64]| {
+        let drawn = compositor(body, Pass::Motion);
+        for frame in frames {
+            let (there, going) = there_and_going(&drawn.frame(at(*frame), 1.0));
+            assert!(
+                there > 500 && going == 0,
+                "frame {frame}: {going} of {there}"
+            );
+        }
+    };
+    // A wall before a camera that holds still, off to a side and turned. No camera shows a
+    // frame after the last, and the one that shows is the one the wall is seen through.
+    let camera = concat!(
+        "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n",
+        "      set color=#c0c0c0 three_d=true z=1 scale=0.6\n",
+        "  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n",
+        "      set x=0.2 z=-0.3 pan=10\n",
+    );
+    still(camera, &[0, 10, 22, 23]);
+    // What a parent turned in depth carries, a mesh among it, and one of them ending before
+    // the others: a frame after a clip's last it does not show, and is where its parent has it.
+    let parent = concat!(
+        "  track V1 video\n    clip rig gen=null@1 at=0f dur=24f\n      set rotate_y=40 z=0.5\n",
+        "  track V2 video\n    clip card gen=solid@1 at=0f dur=24f parent=rig\n",
+        "      set three_d=true scale=0.3 x=0.2\n",
+        "  track V3 video\n    clip plate gen=mesh@1 at=0f dur=24f parent=rig\n",
+        "      set kind=box width=0.2 height=0.2 length=0.002 x=-0.25 y=0.2\n",
+        "  track V4 video\n    clip short gen=solid@1 at=0f dur=12f parent=rig\n",
+        "      set three_d=true scale=0.2 x=-0.2 y=-0.25\n",
+    );
+    still(parent, &[5, 10, 11, 23]);
+    // The frame before another camera takes over is as the camera that shows has it,
+    // whatever the next one is: the same picture under the same number.
+    let cameras = |next: &str| {
+        format!(
+            concat!(
+                "  track V1 video\n    clip wall gen=solid@1 at=0f dur=24f\n",
+                "      set color=#c0c0c0 three_d=true z=1 scale=0.4\n",
+                "  track V2 video\n    clip one gen=camera@1 at=0f dur=12f\n      set x=-0.1\n",
+                "    clip two gen=camera@1 at=12f dur=12f\n      set x={}\n",
+            ),
+            next
+        )
+    };
+    still(&cameras("0.1"), &[11]);
+    let (a, b) = (
+        compositor(&cameras("0.1"), Pass::Motion),
+        compositor(&cameras("-0.07"), Pass::Motion),
+    );
+    assert_eq!(a.frame(at(11), 1.0), b.frame(at(11), 1.0));
+    assert_eq!(a.frame_key(at(11), 1.0), b.frame_key(at(11), 1.0));
+}
+
+#[test]
+fn a_motion_pass_says_of_each_pixel_a_thing_or_nothing() {
+    let nothing_between = |body: &str| {
+        let drawn = frame(body, Pass::Motion);
+        let (there, going) = there_and_going(&drawn);
+        assert!(there > 500 && going == 0, "{going} of {there}");
+        // Every pixel is nothing, black, or a thing's, blue full.
+        for pixel in drawn.rgba.as_chunks::<4>().0 {
+            assert!(pixel[2] == 0 || pixel[2] == 255, "{pixel:?}");
+        }
+        drawn
+    };
+    // A still clip seen through in part, over nothing: still, and there.
+    let half = nothing_between(
+        "  track V1 video\n    clip half gen=solid@1 at=0f dur=24f\n      set scale=0.4 opacity=0.6 x=0.2\n",
+    );
+    assert!(motion_at(&half, 224, 90).is_some());
+    // A still clip turned, whose edges cover pixels in part, and one with a soft mask.
+    nothing_between(
+        "  track V1 video\n    clip turned gen=solid@1 at=0f dur=24f\n      set scale=0.4 rotation=30\n",
+    );
+    nothing_between(concat!(
+        "  track V1 video\n    clip soft gen=solid@1 at=0f dur=24f\n      set scale=0.5\n",
+        "      mask k1 rect=0.2,0.2,0.8,0.8 feather=30\n",
+    ));
 }
 
 #[test]

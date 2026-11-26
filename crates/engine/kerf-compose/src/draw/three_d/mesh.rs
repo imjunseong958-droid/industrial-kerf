@@ -85,8 +85,8 @@ pub(in crate::draw) enum Shade<'a> {
     Facing,
     /// Colored by how far each place goes on the screen in a frame, as a motion pass has it:
     /// to where the scene `0` sees it a frame on, the clip placed as `1` has it then, a frame
-    /// being `2` long.
-    Moving(&'a Scene, &'a Affine, Time),
+    /// being `2` long, by a frame `3` tall.
+    Moving(&'a Scene, &'a Affine, Time, f64),
 }
 
 impl Mesh {
@@ -1355,7 +1355,7 @@ pub(in crate::draw) fn draw(
     // Where each point of the mesh is a frame on, for a motion pass. A file's animation that
     // gives it other points then tells nothing of where each went, and it is said to hold still.
     let then: Option<(&Scene, Vec<Vector>)> = match &shade {
-        Shade::Moving(next, to_output, step) => {
+        Shade::Moving(next, to_output, step, _) => {
             let later = Mesh::of(&plan.clip, plan.clip.start + time + *step);
             let plane = Plane::of(next, plan, size, to_output, time + *step);
             let (later, _) = in_world(&later, &plane, size);
@@ -1381,13 +1381,13 @@ pub(in crate::draw) fn draw(
     let colored = |triangle: u32, of: [f32; 2], ahead: f32| -> [f32; 3] {
         match &shade {
             Shade::Flat(color) => *color,
-            Shade::Moving(..) => {
+            Shade::Moving(_, _, _, height) => {
                 let moved = then.as_ref().and_then(|(next, later)| {
                     let from = scene.on_screen(place(triangle, of, &points))?;
                     let to = next.on_screen(place(triangle, of, later))?;
                     Some((to.0 - from.0, to.1 - from.1))
                 });
-                motion_color(moved.unwrap_or((0.0, 0.0)), scene.height)
+                motion_color(moved.unwrap_or((0.0, 0.0)), *height)
             }
             Shade::Near => [kerf_draw::color::to_linear(scene.nearness(f64::from(ahead))); 3],
             Shade::Facing => {

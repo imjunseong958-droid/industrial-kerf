@@ -5,6 +5,24 @@
 
 use super::*;
 
+/// A motion pass's picture with every pixel a thing's or nothing's. One that things cover half
+/// of or more says how far they go, as if they covered it all, and one they cover less of says
+/// nothing: left as it is drawn, a pixel part covered over nothing is a darker color, which reads
+/// as something going up and to the left.
+fn whole_or_nothing(image: &mut Image) {
+    image.px.par_chunks_mut(4).for_each(|pixel| {
+        let covered = pixel[3];
+        if covered >= 0.5 {
+            for channel in &mut pixel[..3] {
+                *channel /= covered;
+            }
+            pixel[3] = 1.0;
+        } else {
+            pixel.fill(0.0);
+        }
+    });
+}
+
 impl Drawing {
     /// The picture at sequence time `at` over black, at `scale` of the
     /// canvas (1 is full size).
@@ -85,7 +103,10 @@ impl Drawing {
         if let Some(frame) = self.gpu_frame16(at, scale) {
             return frame;
         }
-        let image = self.draw(0, at, scale);
+        let mut image = self.draw(0, at, scale);
+        if self.pass == Pass::Motion {
+            whole_or_nothing(&mut image);
+        }
         let mut rgba = match &self.hdr {
             Some(output) if self.pass == Pass::Picture => {
                 image.to_signal16_over_black(|c| output.signal(c))
@@ -134,6 +155,9 @@ impl Drawing {
             return frame;
         }
         let mut image = self.draw(0, at, scale);
+        if self.pass == Pass::Motion {
+            whole_or_nothing(&mut image);
+        }
         // A pass is numbers, which no display is to be fitted to.
         if let Some(output) = self.hdr.as_ref().filter(|_| self.pass == Pass::Picture) {
             image.px.par_chunks_mut(4).for_each(|pixel| {
@@ -171,9 +195,11 @@ impl Drawing {
         if self.pass != Pass::Picture {
             self.pass.hash(&mut hash);
         }
-        // A motion pass is of how far things go in a frame, however long that is.
+        // A motion pass is of how far things go in a frame, however long that is, by the
+        // height of what the file keeps of it.
         if self.pass == Pass::Motion {
             self.step.flicks().hash(&mut hash);
+            self.kept.to_bits().hash(&mut hash);
         }
         self.matte.hash(&mut hash);
         // Only where it is, so that a pass drawn soft has the number it had.

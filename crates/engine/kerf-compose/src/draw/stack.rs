@@ -634,14 +634,14 @@ impl Drawing {
             Pass::Normals => three_d::mesh::Shade::Facing,
             Pass::Motion => {
                 next = (
-                    three_d::Scene::at(sequence, at + self.step, size),
+                    three_d::Scene::ahead(sequence, at, self.step, size),
                     Affine::scale(scale, scale).then_apply(&self.geometry(
                         sequence,
                         plan,
                         time + self.step,
                     )),
                 );
-                three_d::mesh::Shade::Moving(&next.0, &next.1, self.step)
+                three_d::mesh::Shade::Moving(&next.0, &next.1, self.step, size.1 as f64 * self.kept)
             }
         };
         let (mut picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
