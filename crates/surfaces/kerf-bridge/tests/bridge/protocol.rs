@@ -58,6 +58,10 @@ struct Daemon(Child);
 
 impl Daemon {
     fn start(directory: &Path) -> Self {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "kerfd under test, killed and waited on when the test ends"
+        )]
         let child = Command::new(kerfd())
             .arg("--dir")
             .arg(directory)

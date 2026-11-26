@@ -930,7 +930,12 @@ impl RuntimeClient {
         // thread is forking holds it open for writing until its exec.
         let mut busy = 0;
         loop {
-            match command.spawn() {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "deliberately detached: kerfd outlives the client that starts it, so it is no sidecar of that client's"
+            )]
+            let started = command.spawn();
+            match started {
                 // In a job that lets nothing leave it, kerfd starts in it.
                 #[cfg(windows)]
                 Err(error) if breakaway && error.kind() == std::io::ErrorKind::PermissionDenied => {

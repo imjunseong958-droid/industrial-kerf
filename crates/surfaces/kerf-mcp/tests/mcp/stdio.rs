@@ -25,6 +25,10 @@ sequence s1 rate=30 size=320x180
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "kerf-mcp under test, talked to over its pipes and waited on"
+    )]
     let mut mcp = Command::new(env!("CARGO_BIN_EXE_kerf-mcp"))
         .arg("--dir")
         .arg(directory.path())

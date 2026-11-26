@@ -482,6 +482,10 @@ fn bridge_python() -> Option<PathBuf> {
 
 fn bridge(python: &Path, args: &[&str], stdin: Option<&str>) -> Value {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/interchange/otio_bridge.py");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test's OpenTimelineIO script, waited on"
+    )]
     let mut child = Command::new(python)
         .arg(script)
         .args(args)

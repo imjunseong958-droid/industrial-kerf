@@ -43,6 +43,8 @@ editor_timeline = { path = "crates/editor_timeline" }
 editor_ui = { path = "crates/editor_ui" }
 kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
 kerf-paths = { path = "../../crates/foundation/kerf-paths" }
+# FFmpeg run for a picture is a sidecar, stopped with what it started.
+kerf-sidecar = { path = "../../crates/foundation/kerf-sidecar" }
 # runtime_shaders: on macOS GPUI otherwise compiles its Metal shaders as it
 # builds, with a `metal` only Xcode has; with it the editor compiles them as it
 # opens, and builds with the Command Line Tools alone. Elsewhere it does nothing.

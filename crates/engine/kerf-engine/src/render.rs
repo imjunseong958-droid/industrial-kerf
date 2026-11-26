@@ -1313,15 +1313,17 @@ fn encode_frames(
     mut drawn: impl FnMut(),
     cancellation: &CancellationToken,
 ) -> Result<()> {
-    let mut child = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let mut stderr = child.stderr.take().expect("stderr is piped");
+    // A sidecar: it is ended with the render whichever way that ends, a panic while drawing too.
+    let mut ffmpeg = sidecar::Sidecar::start(
+        crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
+    let mut stdin = ffmpeg.stdin.take().expect("stdin is piped");
+    let mut stderr = ffmpeg.stderr.take().expect("stderr is piped");
     let reader = thread::spawn(move || {
         let mut text = String::new();
         if let Err(error) = stderr.read_to_string(&mut text) {
@@ -1360,10 +1362,11 @@ fn encode_frames(
     );
     drop(stdin);
     if result.is_err() {
-        // It may have ended already; the wait below reaps it either way.
-        let _ = child.kill();
+        // Killed at once, as what it has written is not wanted: nothing of it is waited for.
+        // It may have ended already; the wait below says how it ended either way.
+        ffmpeg.kill();
     }
-    let status = child.wait()?;
+    let status = ffmpeg.wait()?;
     let stderr = reader.join().unwrap_or_default();
     match result {
         Err(EngineError::Cancelled) => Err(EngineError::Cancelled),

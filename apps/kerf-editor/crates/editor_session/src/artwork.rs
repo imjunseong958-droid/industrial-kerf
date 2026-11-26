@@ -32,6 +32,7 @@ use editor_state::model::Source;
 use gpui::{
     point, px, Bounds, ContentMask, Corners, PathBuilder, Pixels, RenderImage, Rgba, Window,
 };
+use kerf_sidecar::Sidecar;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -1309,18 +1310,17 @@ fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&
         // No console window flashing up for each picture.
         command.creation_flags(0x0800_0000);
     }
-    let Ok(mut child) = command.spawn() else {
+    // A sidecar, so that stopping it stops what it started too.
+    let Ok(mut ffmpeg) = Sidecar::start(&mut command) else {
         return false;
     };
-    let Some(mut out) = child.stdout.take() else {
+    let Some(mut out) = ffmpeg.stdout.take() else {
         // Stopped and reaped, if it has not ended already: it is not read.
-        let _ = child.kill();
-        let _ = child.wait();
+        ffmpeg.kill();
         return false;
     };
-    let child = Arc::new(Mutex::new(child));
+    let stopper = ffmpeg.stopper();
     let (done, finished) = mpsc::channel::<()>();
-    let watched = child.clone();
     let stopping = shared.stop.clone();
     let watchdog = std::thread::spawn(move || {
         let mut waited = Duration::ZERO;
@@ -1331,12 +1331,10 @@ fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     waited += tick;
                     if waited >= limit || stopping.load(Ordering::Relaxed) {
-                        // One that has just ended needs no stopping; the wait
-                        // below says how it ended either way.
-                        let _ = watched
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .kill();
+                        // At once: it has nothing to undo, and what it wrote is
+                        // not wanted. One that has just ended needs no stopping;
+                        // the wait below says how it ended either way.
+                        stopper.kill();
                         return;
                     }
                 }
@@ -1356,6 +1354,6 @@ fn run(shared: &Shared, args: &[String], limit: Duration, mut sink: impl FnMut(&
     // kills, which does not panic.
     let _ = done.send(());
     let _ = watchdog.join();
-    let status = child.lock().unwrap_or_else(PoisonError::into_inner).wait();
+    let status = ffmpeg.wait();
     status.is_ok_and(|status| status.success()) && !shared.stop.load(Ordering::Relaxed)
 }

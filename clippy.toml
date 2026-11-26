@@ -6,9 +6,17 @@
 # `/` literally, so a project-relative `media/a.mov` joined to it names nothing; nor is
 # it equal to the same folder written plainly. kerf_paths::canonicalize returns a drive's
 # path plainly.
+#
+# A child started with a plain spawn outlives the cancellation of the work that started it,
+# and what it starts in turn outlives it: FFmpeg's helpers, a model program's workers. A
+# kerf_sidecar::Sidecar runs it in a process group (a job on Windows) of its own, asks it to
+# end on cancel and kills what is left after a grace. Where a plain spawn is right (a short
+# child waited on at once, or one meant to outlive us, as kerfd is), that line expects the
+# lint and says why.
 disallowed-methods = [
     { path = "std::fs::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
     { path = "std::path::Path::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
+    { path = "std::process::Command::spawn", reason = "a plain child outlives cancellation, and its own children outlive it; start it as a kerf_sidecar::Sidecar" },
 ]
 
 # The crates carried from EffectCraft and FilmCraft deny unwrap, expect and panics, and

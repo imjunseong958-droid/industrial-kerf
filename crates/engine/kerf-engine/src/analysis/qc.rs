@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{EngineError, Result};
 use crate::process::ffmpeg::{resolve_ffmpeg_bin, tail};
-use crate::process::sidecar::CancellationToken;
+use crate::process::sidecar::{CancellationToken, Sidecar};
 use crate::program::rate_arg;
 
 /// Frames are measured this tall (or at their own size when smaller).
@@ -266,15 +266,16 @@ fn measure(
     if dir.is_dir() {
         command.current_dir(dir);
     }
-    let mut child = command
-        .args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let stderr = child.stderr.take().expect("stderr is piped");
+    let mut ffmpeg = Sidecar::start(
+        command
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
+    let mut stdin = ffmpeg.stdin.take().expect("stdin is piped");
+    let stderr = ffmpeg.stderr.take().expect("stderr is piped");
     // Parse as FFmpeg writes, so the log of a long program is never held.
     let reader = thread::spawn(move || {
         let mut parser = StatsParser::default();
@@ -315,10 +316,11 @@ fn measure(
     }
     drop(stdin);
     if drawn.is_err() {
-        // It may have ended already; the wait below reaps it either way.
-        let _ = child.kill();
+        // Killed at once, as what it measures is not wanted. It may have ended already; the
+        // wait below says how it ended either way.
+        ffmpeg.kill();
     }
-    let status = child.wait()?;
+    let status = ffmpeg.wait()?;
     let parser = reader.join().unwrap_or_default();
     match drawn {
         Err(EngineError::Cancelled) => return Err(EngineError::Cancelled),
