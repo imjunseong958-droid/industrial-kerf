@@ -966,7 +966,7 @@ mod tests {
             "still",
         ];
         let held: BTreeMap<String, Vec<&str>> = [
-            ("wan2.1_vace_14B_fp16.safetensors", shots.clone()),
+            ("wan2.1_vace_1.3B_fp16.safetensors", shots.clone()),
             ("wan_2.1_vae.safetensors", shots.clone()),
             ("umt5_xxl_fp16.safetensors", shots),
             (
