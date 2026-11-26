@@ -59,11 +59,6 @@ pub enum Kernel {
     Lumetri(Box<Lumetri>),
     /// Add Grain, whose picture is encoded and decoded as a kept effect's is.
     Grain(Box<Grain>),
-    CornerPin {
-        /// From a pixel to where it comes from across the picture, 0 to 1, row by row.
-        map: [f32; 9],
-        size: [f32; 2],
-    },
     DropShadow {
         /// How far the shadow lies from what casts it, in pixels.
         offset: [f64; 2],

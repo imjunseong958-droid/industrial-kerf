@@ -71,16 +71,6 @@ fn kernels_match_the_effects() {
     let fl = ParamValue::Float;
     let on = ParamValue::Bool(true);
     let choice = ParamValue::Choice;
-    let pt = |x: f64, y: f64| ParamValue::Vec2(Vec2::new(x, y));
-    // A corner pin's four, clockwise from the upper left, in pixels.
-    let corners = |at: [(f64, f64); 4]| {
-        let names = ["upper_left", "upper_right", "lower_right", "lower_left"];
-        names
-            .into_iter()
-            .zip(at)
-            .map(|(name, (x, y))| (name, pt(x, y)))
-            .collect::<Vec<_>>()
-    };
     let cases: Vec<(&str, Vec<(&str, ParamValue)>)> = vec![
         ("noise", vec![("amount", fl(30.0))]),
         (
@@ -174,30 +164,6 @@ fn kernels_match_the_effects() {
                 ("output", choice(1)),
             ],
         ),
-        // Corners left where they are.
-        ("corner_pin", vec![]),
-        // Seen from the side, as a tracked surface is.
-        (
-            "corner_pin",
-            corners([(10.0, 6.0), (80.0, 2.0), (90.0, 50.0), (4.0, 44.0)]),
-        ),
-        // Small in the middle, where most of the picture is left clear.
-        (
-            "corner_pin",
-            corners([(30.0, 15.0), (60.0, 18.0), (58.0, 40.0), (28.0, 36.0)]),
-        ),
-        // Past every edge.
-        (
-            "corner_pin",
-            corners([(-20.0, -10.0), (110.0, -5.0), (120.0, 60.0), (-10.0, 70.0)]),
-        ),
-        // Turned over, left for right.
-        (
-            "corner_pin",
-            corners([(90.0, 5.0), (5.0, 5.0), (5.0, 50.0), (90.0, 50.0)]),
-        ),
-        // One corner alone, the others where the catalog starts them.
-        ("corner_pin", vec![("lower_right", pt(70.0, 30.0))]),
     ];
     let cases: Vec<_> = cases.into_iter().chain(shaped_cases()).collect();
     let image = picture(96, 54);

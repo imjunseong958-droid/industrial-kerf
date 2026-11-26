@@ -109,10 +109,6 @@ impl Kernel {
                 let numbers = U::grain(grain);
                 encoded_pass(stage, frame, picture, &stage.add_grain, &numbers)
             }
-            Kernel::CornerPin { map, size } => {
-                let numbers = U::corner_pin(*map, *size);
-                one_pass(stage, frame, picture, &stage.corner_pin, &numbers)
-            }
             Kernel::DropShadow {
                 offset,
                 color,
@@ -579,15 +575,6 @@ impl U {
                 grain.midpoint,
             ],
             p3: [grain.saturation, 0.0, 0.0, 0.0],
-            ..U::default()
-        }
-    }
-
-    fn corner_pin(map: [f32; 9], size: [f32; 2]) -> Self {
-        U {
-            p0: [map[0], map[1], map[2], map[3]],
-            p1: [map[4], map[5], map[6], map[7]],
-            p2: [map[8], size[0], size[1], 0.0],
             ..U::default()
         }
     }

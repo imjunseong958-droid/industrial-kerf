@@ -242,7 +242,7 @@ fn read(
             let (sx, sy) = (get(&x), get(&y));
             if sx.is_none() && sy.is_none() && !offset {
                 // Where the catalog starts it.
-                let (fx, fy) = start(def, param);
+                let (fx, fy) = start(param);
                 return Some(FxParam::new(ParamValue::Vec2(picture.source_point(fx, fy))));
             }
             let default = param.default.as_vec2().unwrap_or_default();
@@ -252,7 +252,7 @@ fn read(
                     if default.y.is_nan() { 0.0 } else { default.y },
                 )
             } else {
-                start(def, param)
+                start(param)
             };
             let sx = sx.unwrap_or(Param::Static(Value::Number(dx)));
             let sy = sy.unwrap_or(Param::Static(Value::Number(dy)));
@@ -327,13 +327,12 @@ fn over_time<const N: usize>(
 }
 
 /// Where the catalog starts a point, across the picture.
-fn start(def: &EffectDef, param: &ParamDef) -> (f64, f64) {
+fn start(param: &ParamDef) -> (f64, f64) {
     let v = param
         .default
         .as_vec2()
         .unwrap_or(Vec2::new(f64::NAN, f64::NAN));
-    let (ax, ay) = super::project::effect::auto_point(def.id, param.id)
-        .unwrap_or((0.5, if param.id == "end" { 1.0 } else { 0.5 }));
+    let (ax, ay) = (0.5, if param.id == "end" { 1.0 } else { 0.5 });
     (
         if v.x.is_nan() { ax } else { 0.0 },
         if v.y.is_nan() { ay } else { 0.0 },

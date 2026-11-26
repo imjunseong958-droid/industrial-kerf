@@ -13,7 +13,7 @@ use super::keyframe::{Param, ParamValue};
 
 mod vfx;
 pub use vfx::{
-    auto_point, ultra_key_setting, EASINGS, ECHO_OPERATORS, FRAME_LAYOUTS, LIGHT_IDS, SIMPLE_BLEND,
+    ultra_key_setting, EASINGS, ECHO_OPERATORS, FRAME_LAYOUTS, LIGHT_IDS, SIMPLE_BLEND,
     TRACK_CHOICES,
 };
 

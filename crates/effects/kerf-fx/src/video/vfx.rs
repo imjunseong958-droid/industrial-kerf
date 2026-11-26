@@ -105,15 +105,14 @@ pub(crate) fn tv(e: &EffectInstance, id: &str) -> String {
         _ => String::new(),
     }
 }
-/// A point parameter in working pixels. Auto (NaN) components use the effect's auto position
-/// (`crate::video::project::effect::auto_point`) or the layer centre.
+/// A point parameter in working pixels. Auto (NaN) components are the layer centre.
 pub(crate) fn pv(e: &EffectInstance, id: &str, cx: &FxCtx, img: &Image) -> Vec2 {
     let v = e
         .param(id)
         .map(|p| p.vec2_at(cx.t))
         .or_else(|| def_value(e, id).and_then(|v| v.as_vec2()))
         .unwrap_or(Vec2::new(f64::NAN, f64::NAN));
-    let (fx, fy) = crate::video::project::effect::auto_point(&e.effect, id).unwrap_or((0.5, 0.5));
+    let (fx, fy) = (0.5, 0.5);
     Vec2::new(
         if v.x.is_nan() {
             img.w as f64 * fx
@@ -209,7 +208,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         // Blur & Sharpen
         "reduce_interlace_flicker" => blur::interlace_flicker(img, e, cx),
         // Distort / Transform / Utility geometry
-        "corner_pin" => distort::corner_pin(img, e, cx),
         "mosaic" => distort::mosaic(img, e, cx),
         // Time / analysis
         "posterize_time" => temporal::posterize_time(img, e, cx),

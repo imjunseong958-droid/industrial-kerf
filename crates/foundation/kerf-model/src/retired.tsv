@@ -43,14 +43,14 @@ color.ociolook	color.lumetri@2
 color.arbitrarymap	color.curves@1
 color.tritone	color.tint@2
 color.vibrance	color.lumetri@2
-distort.bezierwarp	distort.cornerpin@2
+distort.bezierwarp	the clip in depth on the surface, as `look` with `track` and `corners` puts it
 distort.bendit	the prompt and references of the shot's recipe
 distort.bender	the prompt and references of the shot's recipe
 distort.blobbylize	the prompt and references of the shot's recipe
 distort.flomotion	
 distort.griddler	clips side by side, each scaled
 distort.pageturn	
-distort.powerpin	distort.cornerpin@2
+distort.powerpin	the clip in depth on the surface, as `look` with `track` and `corners` puts it
 distort.ripplepulse	the prompt and references of the shot's recipe
 distort.slant	the clip's `skew`
 distort.pullsmear	the prompt and references of the shot's recipe
@@ -59,7 +59,7 @@ distort.split2	clips side by side, each scaled
 distort.tiler	clips side by side, each scaled
 distort.displacementmap	the prompt and references of the shot's recipe
 distort.polar	vr.projection@1
-distort.reshape	distort.cornerpin@2
+distort.reshape	the clip in depth on the surface, as `look` with `track` and `corners` puts it
 distort.ripple	the prompt and references of the shot's recipe
 distort.smear	the prompt and references of the shot's recipe
 distort.twirllegacy	
@@ -264,3 +264,5 @@ utility.stroke	a title's `outline` and `outline_width`, or a `gen=shape@1` clip'
 # And what drew a sound track over a picture, which a sound clip draws.
 generate.audiospectrum	a `gen=sound@1` clip with `kind=spectrum`
 generate.audiowaveform	a `gen=sound@1` clip with `kind=waveform`
+# And what pinned a picture's corners, which a clip in depth on the surface does.
+distort.cornerpin	the clip in depth on the surface, as `look` with `track` and `corners` puts it

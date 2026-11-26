@@ -650,7 +650,6 @@ fn codes_apart(a: &Frame, b: &Frame) -> (f64, f64) {
 /// Effects an editor needs exact and no look or grade reaches: what a document writes under a clip
 /// for each.
 const EXACT_EFFECTS: &[&str] = &[
-    "      fx distort.cornerpin upper_left_x=0.1 upper_left_y=0.15 upper_right_x=0.85 upper_right_y=0.05 lower_right_x=0.95 lower_right_y=0.9 lower_left_x=0.05 lower_left_y=0.8\n",
     // A shadow shows past what casts it, so of a picture with an outline.
     "      mask k1 ellipse=0.5,0.5,0.4,0.4\n      fx perspective.dropshadow distance=6 softness=4 direction=120 color=#ffffff opacity=80\n",
     "      fx stylize.mosaic horizontal=12 vertical=7 softness=30\n",

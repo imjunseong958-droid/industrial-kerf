@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Corner Pin, Drop Shadow, Mosaic, Lens Distortion, the Cineon Converter, and the
+// the keys, Radial Zoom Blur, Drop Shadow, Mosaic, Lens Distortion, the Cineon Converter, and the
 // color effects kept from EffectCraft), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
@@ -866,26 +866,6 @@ fn add_grain(@builtin(global_invocation_id) id: vec3<u32>) {
 // ---------------------------------------------------------------------------------------------
 // What moves a picture's pixels: `distort.rs`.
 
-// `distort::corner_pin`. p0, p1, and p2.x: from a pixel to where it comes from across the picture,
-// 0 to 1, row by row; p2.yz: the picture's size.
-// By hand, not from `kerf_kernel`: the CPU maps each pixel in 64 bits, which WGSL has not got, so no
-// one source could draw what the reference draws; nor does `Num` read a picture yet.
-@compute @workgroup_size(16, 16)
-fn corner_pin(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let xy = vec2<f32>(id.xy) + 0.5;
-    let w = u.p1.z * xy.x + u.p1.w * xy.y + u.p2.x;
-    var out = vec4(0.0);
-    if abs(w) >= 1e-12 {
-        let across = (u.p0.x * xy.x + u.p0.y * xy.y + u.p0.z) / w;
-        let down = (u.p0.w * xy.x + u.p1.x * xy.y + u.p1.y) / w;
-        if across >= -1e-3 && down >= -1e-3 && across <= 1.0 + 1e-3 && down <= 1.0 + 1e-3 {
-            out = sample(across * u.p2.y, down * u.p2.z);
-        }
-    }
-    textureStore(dst, vec2<i32>(id.xy), out);
-}
-
 // `keying::key_cleaner`, on what `encode_kept` makes. a.x: whether aux has the picture blurred, the
 // colors around each pixel; p0: how far a soft edge's color goes toward them, and the matte's
 // contrast.
@@ -1061,8 +1041,8 @@ fn way_of(p: vec2<i32>, view: vec4<i32>, share: vec2<f32>) -> vec3<f32> {
 // `immersive`'s projection and its turning of the sphere. a.x: the frame's layout; p0, p1, p2: the
 // rows of what a way is turned by, and in p0.w and p1.w how much of the sphere the frame holds
 // across and down.
-// By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
-// where a pixel comes from.
+// By hand, not from `kerf_kernel`: the CPU works out in 64 bits where a pixel comes from, which WGSL
+// has not got, so no one source could draw what the reference draws.
 @compute @workgroup_size(16, 16)
 fn sphere(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside(id) { return; }
@@ -1107,8 +1087,8 @@ fn plane_to_sphere(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 // The lens distortion in `effects`. p0: its center, half of the picture's diagonal, and its curvature.
-// By hand, not from `kerf_kernel`, as `corner_pin` is and for its reason: the CPU works out in 64 bits
-// where a pixel comes from.
+// By hand, not from `kerf_kernel`: the CPU works out in 64 bits where a pixel comes from, which WGSL
+// has not got, so no one source could draw what the reference draws.
 @compute @workgroup_size(16, 16)
 fn lens(@builtin(global_invocation_id) id: vec3<u32>) {
     if !inside(id) { return; }

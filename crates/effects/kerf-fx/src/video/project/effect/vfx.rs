@@ -102,18 +102,6 @@ fn layout() -> ParamDef {
     ch("frame_layout", "Frame Layout", FRAME_LAYOUTS, 0)
 }
 
-/// Default position of auto (NaN) point parameters, as fractions of the frame, where the frame
-/// centre is not right (Corner Pin corners, Lightning endpoints…).
-pub fn auto_point(effect: &str, param: &str) -> Option<(f64, f64)> {
-    Some(match (effect, param) {
-        ("corner_pin", "upper_left") => (0.0, 0.0),
-        ("corner_pin", "upper_right") => (1.0, 0.0),
-        ("corner_pin", "lower_left") => (0.0, 1.0),
-        ("corner_pin", "lower_right") => (1.0, 1.0),
-        _ => return None,
-    })
-}
-
 fn immersive() -> Vec<EffectDef> {
     let vr = |id, name, mut ps: Vec<ParamDef>| {
         ps.insert(0, layout());
@@ -348,17 +336,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         // ---- Distort ----
-        video(
-            "corner_pin",
-            "Corner Pin",
-            DISTORT,
-            vec![
-                pt("upper_left", "Upper Left", f64::NAN, f64::NAN),
-                pt("upper_right", "Upper Right", f64::NAN, f64::NAN),
-                pt("lower_left", "Lower Left", f64::NAN, f64::NAN),
-                pt("lower_right", "Lower Right", f64::NAN, f64::NAN),
-            ],
-        ),
         video(
             "warp_stabilizer",
             "Warp Stabilizer",
