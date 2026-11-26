@@ -706,12 +706,8 @@ fn render_hands_the_sequence_to_another_editor_and_says_what_is_left_out() {
     let output = Path::new(handed["output"].as_str().unwrap());
     // In the project's deliveries, and an unnamed sequence's file takes its id.
     assert_eq!(
-        output.canonicalize().unwrap(),
-        directory
-            .path()
-            .join("deliveries/s1.fcpxml")
-            .canonicalize()
-            .unwrap()
+        kerf_paths::canonicalize(output).unwrap(),
+        kerf_paths::canonicalize(directory.path().join("deliveries/s1.fcpxml")).unwrap()
     );
     let text = std::fs::read_to_string(output).unwrap();
     assert!(text.contains("<fcpxml version=\"1.9\">"), "{text}");
@@ -5092,6 +5088,20 @@ fn a_making_is_asked_for_or_runs_as_the_persons_permissions_say() {
     let ask = asked["ask"].as_str().unwrap();
     assert!(ask.starts_with("Asks to make m9, as take 1"), "{ask}");
     assert!(ask.contains("the first take\n1. Kerf renders"), "{ask}");
+    // Its parts are kept for an editor to show as they are, not read back out of the words,
+    // for the ask those words are, whole or as a summary cuts them short.
+    let kept = kerf_mcp::kept_ask(dir, "m9", ask).expect("the ask's parts are kept");
+    assert_eq!(kept.why.as_deref(), Some("the first take"));
+    assert_eq!(json!(kept.steps), asked["steps"]);
+    assert_eq!((kept.take, kept.rolls), (1, 1));
+    assert_eq!(kept.text(), ask);
+    let cut = format!("{}…", &ask[..ask.find("1. Kerf").unwrap()]);
+    assert_eq!(kerf_mcp::kept_ask(dir, "m9", &cut), Some(kept));
+    assert_eq!(
+        kerf_mcp::kept_ask(dir, "m9", "Asks to make m9, as take 7"),
+        None
+    );
+    assert_eq!(kerf_mcp::kept_ask(dir, "m1", ask), None);
     assert!(!dir.join("shots/open.takes/001.mp4").exists());
 
     // Let through: it runs, and the media is the take once it is made. Whoever watches the

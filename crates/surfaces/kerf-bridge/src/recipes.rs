@@ -223,6 +223,7 @@ pub(crate) fn carry(
             tx,
             Event::Error(ErrorEvent {
                 message: format!("cannot carry {id}: {why}"),
+                why: Some(why.to_string()),
                 code: why.code(),
                 command: Some(CommandName::MediaCarry),
                 media: Some(id.to_owned()),

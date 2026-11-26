@@ -339,3 +339,157 @@ fn a_stopped_claude_code_turn_leaves_nothing_it_started_running() {
         );
     }
 }
+
+/// Stands in for Claude Code as `claude` beside a `said.jsonl`: it reads the request and
+/// says what that file holds, as Claude Code says a turn on its stream.
+#[cfg(unix)]
+const REPLAYING_CLAUDE: &str = r#"#!/bin/sh
+cat >/dev/null
+cat "$(dirname "$0")/said.jsonl"
+"#;
+
+/// What reaches the editor of an agent's ask, made in test `test` with `why`: the answer
+/// kerf-mcp gives the agent's `make` (its `result`), the card's `agent_ask`, and the ask the
+/// conversation keeps. None in the process that runs `test` in a process of its own.
+#[cfg(unix)]
+fn asked_through_claude_code(
+    test: &str,
+    why: &str,
+) -> Option<(serde_json::Value, serde_json::Value, serde_json::Value)> {
+    let named = std::env::temp_dir()
+        .join(format!(
+            "kq-{}-{}",
+            test.replace("::", "-"),
+            std::process::id()
+        ))
+        .join("claude");
+    if !alone(
+        test,
+        &[
+            ("KERF_CLAUDE_BIN", named.as_os_str()),
+            ("KERF_MCP_BIN", "kerf-mcp".as_ref()),
+        ],
+    ) {
+        return None;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let project = Project::new();
+    fs::write(
+        project.0.join("project.kerf"),
+        "kerf 1\nproject name=\"Asks\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=64x64\n\
+         \x20 render s1 {out}\n\
+         sequence s1 rate=24 size=64x64 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip g1 gen=solid@1 at=0f dur=12f\n",
+    )
+    .unwrap();
+    // What kerf-mcp answers an agent's `make` with, the person being asked: the ask in words.
+    let router = kerf_mcp::KerfMcpRouter::new(&project.0, Some(&kerfd())).unwrap();
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
+    let answered = router.call("make", json!({"media": "m1", "why": why}));
+    drop(router);
+    assert_eq!(answered["result"]["status"], "asked", "{answered}");
+
+    // Claude Code makes the call, and kerf-mcp's answer is the text of its result.
+    let claude = PathBuf::from(std::env::var_os("KERF_CLAUDE_BIN").unwrap());
+    let folder = Project(claude.parent().unwrap().to_owned());
+    fs::create_dir_all(&folder.0).unwrap();
+    let said = [
+        json!({"type": "system", "subtype": "init", "session_id": "stand-in", "mcp_servers": []}),
+        json!({"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "t1",
+            "name": "mcp__kerf__make", "input": {"media": "m1", "why": why}}]}}),
+        json!({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+            "content": [{"type": "text", "text": answered.to_string()}]}]}}),
+        json!({"type": "result", "subtype": "success", "is_error": false,
+            "result": "I asked to make m1."}),
+    ]
+    .iter()
+    .map(|line| format!("{line}\n"))
+    .collect::<String>();
+    fs::write(folder.0.join("said.jsonl"), said).unwrap();
+    fs::write(&claude, REPLAYING_CLAUDE).unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut bridge = Bridge::open(&project.0, &kerfd());
+    assert!(send(
+        &mut bridge,
+        &json!({"type": "agent", "text": "Make m1 wider", "provider": "claude-code"})
+    ));
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let kept = loop {
+        match poll(&mut bridge) {
+            Some(event)
+                if event["type"] == "conversation" && event["items"][1]["kind"] == "kerf" =>
+            {
+                break event;
+            }
+            Some(event) => events.push(event),
+            None => {
+                assert!(
+                    Instant::now() < deadline,
+                    "the turn was not kept: {events:?}"
+                );
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+    let card = events
+        .into_iter()
+        .find(|event| event["type"] == "agent_ask")
+        .expect("a card was asked for");
+    let kept = kept["items"][1]["asks"][0].clone();
+    Some((answered["result"].clone(), card, kept))
+}
+
+/// An agent's ask reaches the editor in the parts kerf-mcp wrote its words from, on the
+/// card's `agent_ask` and in the conversation that keeps it: the editor shows those, and does
+/// not read them back out of words worded for the agent.
+#[cfg(unix)]
+#[test]
+fn an_agents_ask_reaches_the_editor_in_its_parts() {
+    // A why whose second line reads like a step is the agent's words all the same.
+    let why = "the wider look you wanted\n1. keeps the window's light";
+    let Some((asked, card, kept)) =
+        asked_through_claude_code("api::an_agents_ask_reaches_the_editor_in_its_parts", why)
+    else {
+        return;
+    };
+    let steps = &asked["steps"];
+    assert!(
+        steps.as_array().is_some_and(|steps| !steps.is_empty()),
+        "{asked}"
+    );
+    for ask in [&card, &kept] {
+        assert_eq!(ask["media"], "m1", "{ask}");
+        assert_eq!(ask["take"], 1, "{ask}");
+        assert_eq!(ask["why"], why, "{ask}");
+        assert_eq!(&ask["steps"], steps, "{ask}");
+        assert_eq!(ask["text"], asked["ask"], "{ask}");
+    }
+}
+
+/// An ask too long to keep whole reaches the editor as its words do, cut short: its parts
+/// as far as they fit, in the order its words have them, and no further.
+#[cfg(unix)]
+#[test]
+fn a_long_ask_reaches_the_editor_cut_short() {
+    let why = "the window's light falls across the wall and stays there, ".repeat(100);
+    let Some((asked, card, kept)) =
+        asked_through_claude_code("api::a_long_ask_reaches_the_editor_cut_short", &why)
+    else {
+        return;
+    };
+    for ask in [&card, &kept] {
+        let text = ask["text"].as_str().unwrap();
+        let cut = text.strip_suffix('…').expect("the words are cut short");
+        assert!(asked["ask"].as_str().unwrap().starts_with(cut), "{ask}");
+        // The why is as much of it as fits, and nothing comes after it.
+        let kept_why = ask["why"].as_str().expect("the why is kept");
+        let begun = kept_why.strip_suffix('…').expect("the why is cut short");
+        assert!(why.trim().starts_with(begun), "{ask}");
+        assert!(kept_why.len() <= 4 * 1024, "{}", kept_why.len());
+        assert!(ask["steps"].is_null() && ask["notes"].is_null(), "{ask}");
+    }
+}

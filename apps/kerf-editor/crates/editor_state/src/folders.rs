@@ -5,7 +5,7 @@ use std::path::Path;
 
 /// Whether `a` and `b` are one folder, however written.
 pub fn same_folder(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
+    match (kerf_paths::canonicalize(a), kerf_paths::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
         _ => a == b,
     }

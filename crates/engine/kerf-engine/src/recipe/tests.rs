@@ -1,7 +1,6 @@
-use super::*;
-// Only the tests that run models use these, and their models are Unix programs.
 #[cfg(unix)]
 use super::model::Models;
+use super::*;
 #[cfg(unix)]
 use kerf_model::Project;
 

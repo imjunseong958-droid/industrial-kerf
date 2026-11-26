@@ -1,5 +1,7 @@
 //! A `render` step draws a guide at a model's size and rate: the
-//! file made is inspected.
+//! file made is inspected. The model is `cp`, so these run on Unix only.
+
+#![cfg(unix)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::recipe::model::Models;

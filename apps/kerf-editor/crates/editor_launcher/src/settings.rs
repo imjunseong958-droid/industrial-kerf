@@ -2375,7 +2375,7 @@ pub fn mcp_server_command(project: &Path) -> (String, Vec<String>) {
                 .into_iter()
                 .chain(built)
                 .find(|path| path.is_file())
-                .map(|path| path.canonicalize().unwrap_or(path))
+                .map(|path| kerf_paths::canonicalize(&path).unwrap_or(path))
         });
     match (found, exe) {
         (Some(mcp), _) => (mcp.display().to_string(), vec!["--dir".into(), project]),

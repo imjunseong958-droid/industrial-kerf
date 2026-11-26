@@ -1,0 +1,19 @@
+# Clippy's settings for every crate here, the editor's workspace (apps/kerf-editor)
+# included. Clippy reads only the clippy.toml nearest a crate, so a crate with one of
+# its own would lose all of these: a setting goes here.
+
+# On Windows, std's canonicalize returns a verbatim path, `\\?\C:\project`, which takes
+# `/` literally, so a project-relative `media/a.mov` joined to it names nothing; nor is
+# it equal to the same folder written plainly. kerf_paths::canonicalize returns a drive's
+# path plainly.
+disallowed-methods = [
+    { path = "std::fs::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
+    { path = "std::path::Path::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
+]
+
+# The crates carried from EffectCraft and FilmCraft deny unwrap, expect and panics, and
+# turn those lints on themselves; no other crate does. Their tests may use them.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

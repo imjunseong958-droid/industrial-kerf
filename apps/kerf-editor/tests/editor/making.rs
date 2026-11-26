@@ -787,7 +787,7 @@ fn a_make_card_made_already_stays_made() {
         media: "m4".into(),
         rolls: None,
         take: Some(2),
-        text: String::new(),
+        ..Ask::default()
     };
     let progress = |state, take| Progress {
         state,
