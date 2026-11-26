@@ -3,7 +3,7 @@
 //! frame works out once (a wipe's sweep, the cards of a scene), and a test holds each kernel to
 //! [`apply_scaled`](super::apply_scaled) value by value.
 
-use super::motion::{block_blur, card_scene, film_roll_blur, slice_blur, whip_layers, Layer};
+use super::motion::{card_scene, film_roll_blur, whip_layers, Layer};
 use super::wipe::{angle_dir, field_range, star_dist, threshold, WipeStyle};
 use super::{
     bell, disc_offsets, ease_in, ease_in_out, ease_out, hash, mid_mix, smoothstep, Fx, Tx,
@@ -832,19 +832,6 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
             let split = if fwd { len * e } else { len * (1.0 - e) };
             moves(1, vec![len, split, truth(axis_x), truth(fwd)])
         }
-        "block_motion" => {
-            let cols = t.num("blocks").round().clamp(2.0, 32.0);
-            let rows = (cols * h / w).round().clamp(1.0, 32.0);
-            let (lanes, cells) = if horiz { (rows, cols) } else { (cols, rows) };
-            let sgn = if horiz { dx } else { dy };
-            moves(2, vec![lanes, cells, sgn, truth(horiz)]).with_time(block_blur(
-                t,
-                lanes,
-                cells,
-                sgn,
-                if horiz { w } else { h },
-            ))
-        }
         "frame" => {
             let fw = t.px("frame_width");
             let smin = t.frac("scale").clamp(0.05, 1.0);
@@ -859,67 +846,6 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
                     t.color("frame_color"),
                     &[s, border, dx, dy, move_t * step, (move_t - 1.0) * step],
                 ),
-            )
-        }
-        "louver" => moves(
-            4,
-            vec![
-                t.num("slats").round().clamp(1.0, 64.0),
-                truth(t.choice("orientation") == 0),
-            ],
-        ),
-        "mirror_transition" => {
-            let refl = travel * 0.3;
-            let e = -refl + ease_in_out(p) * (travel + 2.0 * refl);
-            moves(5, vec![truth(horiz), truth(dx + dy < 0.0), refl, e])
-        }
-        "page_peel" => {
-            let r = t.px("radius").max(1.0);
-            let (ox, oy) = match t.choice("corner") {
-                0 => (0.0, 0.0),
-                1 => (w, 0.0),
-                3 => (0.0, h),
-                _ => (w, h),
-            };
-            let (mut nx, mut ny) = (w / 2.0 - ox, h / 2.0 - oy);
-            let nl = (nx * nx + ny * ny).sqrt().max(1e-3);
-            nx /= nl;
-            ny /= nl;
-            let smax = (w - 2.0 * ox).abs() * nx.abs() + (h - 2.0 * oy).abs() * ny.abs();
-            let f = -1.0 + p * (smax + r * 1.2 + 2.0);
-            moves(6, vec![r, truth(t.flag("shadow")), ox, oy, nx, ny, f])
-        }
-        "slice" => {
-            let count = t.num("slices").round().clamp(1.0, 64.0);
-            let ang = t.num("angle").to_radians();
-            let (ax, ay) = (ang.cos(), ang.sin());
-            let (px_, py_) = (-ay, ax);
-            let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
-            let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
-            for (cx, cy) in corners {
-                let v = cx * px_ + cy * py_;
-                lo = lo.min(v);
-                hi = hi.max(v);
-            }
-            let span = (hi - lo).max(1.0);
-            let dist = w.abs() * ax.abs() + h * ay.abs() + span * 0.2;
-            moves(7, vec![count, ax, ay, px_, py_, lo, span, dist])
-                .with_time(slice_blur(t, count, dist))
-        }
-        "wave" => {
-            let band = travel * 0.25;
-            let e = -band + p * (travel + 2.0 * band);
-            moves(
-                8,
-                vec![
-                    t.px("amplitude"),
-                    t.px("wavelength").max(4.0),
-                    truth(dx + dy < 0.0),
-                    truth(horiz),
-                    band,
-                    e,
-                    bell(p),
-                ],
             )
         }
         "stretch_wipe" => {

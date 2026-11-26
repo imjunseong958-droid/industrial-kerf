@@ -1136,8 +1136,6 @@ fn build_effects() -> Vec<EffectDef> {
                 ),
             ],
         ),
-        video("horizontal_flip", "Horizontal Flip", TRANSFORM, vec![]),
-        video("vertical_flip", "Vertical Flip", TRANSFORM, vec![]),
         video(
             "edge_feather",
             "Edge Feather",

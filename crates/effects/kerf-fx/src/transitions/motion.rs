@@ -4,9 +4,8 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use super::cards::{eye, focal_for, Card, V3};
 use super::{
-    averaged, bell, ease_in, ease_in_out, ease_out, exposure, following, hash, line_blur, mid_mix,
-    mix, over, paint, sample_times, samples_over, scale4, smoothstep, temporal, zoom_blur, Tx,
-    MOST_MOMENTS,
+    bell, ease_in, ease_in_out, ease_out, exposure, following, line_blur, mid_mix, mix, over,
+    paint, samples_over, scale4, smoothstep, temporal, zoom_blur, Tx, MOST_MOMENTS,
 };
 use kerf_draw::Image;
 
@@ -302,32 +301,6 @@ pub(crate) fn card_scene<'a, 'b>(id: &str, t: &'b Tx<'a>) -> Option<CardScene<'a
                 ]
             })
         }
-        "roll_3d" => {
-            // a cube: A on the front face, B on the face that turns to the front
-            let side = if horiz { w } else { h };
-            let cc: V3 = [w / 2.0, h / 2.0, side / 2.0];
-            let focal = focal_for(w, h, t.frac("perspective"));
-            let sign = if horiz { dx.signum() } else { -dy.signum() };
-            boxed(focal, 0.0, move |q| {
-                let a = ease_in_out(q) * FRAC_PI_2 * sign;
-                let back = side * 0.45 * bell(q);
-                let rot = |k: Card, ang: f32| {
-                    if horiz {
-                        k.rot_y(cc, ang)
-                    } else {
-                        k.rot_x(cc, ang)
-                    }
-                };
-                vec![
-                    Layer::new(rot(Card::flat(), a).translate([0.0, 0.0, back]), t.a).shaded(),
-                    Layer::new(
-                        rot(rot(Card::flat(), -FRAC_PI_2 * sign), a).translate([0.0, 0.0, back]),
-                        t.b,
-                    )
-                    .shaded(),
-                ]
-            })
-        }
         "flip_motion" | "spin_3d" => {
             let focal = focal_for(w, h, t.frac("perspective"));
             let flip = id == "flip_motion";
@@ -380,49 +353,6 @@ pub(crate) fn card_scene<'a, 'b>(id: &str, t: &'b Tx<'a>) -> Option<CardScene<'a
                     };
                     vec![Layer::new(k.translate([0.0, 0.0, z]), t.b).shaded()]
                 }
-            })
-        }
-        "fold_motion" => {
-            // The entry half folds over onto the exit half (showing its back), then the folded
-            // stack swings towards the viewer about the exit edge, revealing B.
-            let focal = focal_for(w, h, t.frac("perspective"));
-            let sg = if dx > 0.0 || dy > 0.0 { 1.0 } else { -1.0 };
-            let (entry, mid_axis, exit_axis): ([f32; 4], V3, V3) = match (horiz, sg > 0.0) {
-                (true, true) => ([0.0, 0.0, w / 2.0, h], [w / 2.0, 0.0, 0.0], [w, 0.0, 0.0]),
-                (true, false) => ([w / 2.0, 0.0, w, h], [w / 2.0, 0.0, 0.0], [0.0, 0.0, 0.0]),
-                (false, true) => ([0.0, 0.0, w, h / 2.0], [0.0, h / 2.0, 0.0], [0.0, h, 0.0]),
-                (false, false) => ([0.0, h / 2.0, w, h], [0.0, h / 2.0, 0.0], [0.0, 0.0, 0.0]),
-            };
-            let exit = match (horiz, sg > 0.0) {
-                (true, true) => [w / 2.0, 0.0, w, h],
-                (true, false) => [0.0, 0.0, w / 2.0, h],
-                (false, true) => [0.0, h / 2.0, w, h],
-                (false, false) => [0.0, 0.0, w, h / 2.0],
-            };
-            boxed(focal, 0.0, move |q| {
-                let phi = PI * ease_in_out((q * 2.0).min(1.0)) * sg;
-                let psi = FRAC_PI_2 * ease_in(((q - 0.5) * 2.0).clamp(0.0, 1.0)) * sg;
-                let rot = |k: Card, axis: V3, a: f32| {
-                    if horiz {
-                        k.rot_y(axis, a)
-                    } else {
-                        k.rot_x(axis, -a)
-                    }
-                };
-                let flap = rot(
-                    rot(Card::flat().translate([0.0, 0.0, -0.5]), mid_axis, phi),
-                    exit_axis,
-                    psi,
-                );
-                let base = rot(Card::flat(), exit_axis, psi);
-                vec![
-                    Layer::new(Card::flat().translate([0.0, 0.0, 1.0]), t.b),
-                    Layer::new(base, t.a).clipped(exit).shaded(),
-                    Layer::new(flap, t.a)
-                        .with_back(t.a, !horiz)
-                        .clipped(entry)
-                        .shaded(),
-                ]
             })
         }
         "pop_motion" => {
@@ -558,48 +488,6 @@ pub(crate) fn film_roll_blur(t: &Tx, step: f32) -> (f32, usize) {
     following(t, 0.1, |q| vec![Some([step * ease_in_out(q), 0.0])])
 }
 
-/// How far slice `i` of `count` has slid along its way at `q`: `dist` at most, the odd ones the other
-/// way, each a little after the one before.
-pub(crate) fn slice_offset(q: f32, i: f32, count: f32, dist: f32) -> f32 {
-    let sign = if (i as i32) % 2 == 0 { 1.0 } else { -1.0 };
-    let qi = ((q - 0.3 * i / count.max(1.0)) / 0.7).clamp(0.0, 1.0);
-    sign * dist * ease_in(qi)
-}
-
-/// Slice's motion blur: `count` slices sliding `dist` apart.
-pub(crate) fn slice_blur(t: &Tx, count: f32, dist: f32) -> (f32, usize) {
-    following(t, 0.08, |q| {
-        (0..count as i32)
-            .map(|i| Some([slice_offset(q, i as f32, count, dist), 0.0]))
-            .collect()
-    })
-}
-
-/// How far block `ci` of `cells` in `lane` of Block Motion is along its way at `q`, eased from 0 to 1:
-/// the leading blocks (towards the exit side, which `sgn` says) leave first.
-pub(crate) fn block_eased(q: f32, ci: i32, lane: f32, cells: f32, sgn: f32) -> f32 {
-    let order = if sgn > 0.0 {
-        (cells as i32 - 1 - ci) as f32
-    } else {
-        ci as f32
-    } / cells;
-    let delay = 0.6 * (0.6 * order + 0.4 * hash(ci, lane as i32, 17));
-    let qi = ((q - delay) / (1.0 - 0.6)).clamp(0.0, 1.0);
-    ease_in_out(qi)
-}
-
-/// Block Motion's motion blur: each of `cells` blocks in each of `lanes` moving `len` along its lane.
-pub(crate) fn block_blur(t: &Tx, lanes: f32, cells: f32, sgn: f32, len: f32) -> (f32, usize) {
-    following(t, 0.08, |q| {
-        (0..lanes as i32)
-            .flat_map(|lane| {
-                (0..cells as i32)
-                    .map(move |ci| Some([len * block_eased(q, ci, lane as f32, cells, sgn), 0.0]))
-            })
-            .collect()
-    })
-}
-
 pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
     if let Some(found) = card_scene(id, t) {
         return Some(scene(t, &found));
@@ -683,63 +571,6 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                 }
             })
         }
-        // ---------------- Animation ----------------
-        "block_motion" => {
-            let cols = t.num("blocks").round().clamp(2.0, 32.0);
-            let rows = (cols * h / w).round().clamp(1.0, 32.0);
-            let (lanes, cells) = if horiz { (rows, cols) } else { (cols, rows) };
-            let sgn = if horiz { dx } else { dy };
-            let (sh, n) = block_blur(t, lanes, cells, sgn, if horiz { w } else { h });
-            // Where each block of each lane is along its way at each moment, the same at every pixel.
-            let count = cells as usize;
-            let eased: Vec<Vec<f32>> = sample_times(t.p, sh, n)
-                .iter()
-                .map(|&q| {
-                    (0..lanes as i32)
-                        .flat_map(|lane| {
-                            (0..count as i32)
-                                .map(move |ci| block_eased(q, ci, lane as f32, cells, sgn))
-                        })
-                        .collect()
-                })
-                .collect();
-            paint(t.w, t.h, |x, y| {
-                let (along, across, len_al, len_ac) =
-                    if horiz { (x, y, w, h) } else { (y, x, h, w) };
-                let lane = (across / len_ac * lanes).floor().clamp(0.0, lanes - 1.0);
-                let cell_len = len_al / cells;
-                let at = |places: &[f32]| {
-                    let mut col = [0.0f32; 4];
-                    let mut got_a = false;
-                    let mut got_b = [0.0f32; 4];
-                    let mut has_b = false;
-                    for (ci, &e) in places.iter().enumerate() {
-                        let off_a = sgn * len_al * e;
-                        let off_b = sgn * len_al * (e - 1.0);
-                        let (lo, hi) = (ci as f32 * cell_len, (ci + 1) as f32 * cell_len);
-                        let pa = along - off_a;
-                        if !got_a && pa >= lo && pa < hi {
-                            let (sx, sy) = if horiz { (pa, y) } else { (x, pa) };
-                            col = t.sac(sx, sy);
-                            got_a = true;
-                        }
-                        let pb = along - off_b;
-                        if !has_b && pb >= lo && pb < hi {
-                            let (sx, sy) = if horiz { (pb, y) } else { (x, pb) };
-                            got_b = t.sbc(sx, sy);
-                            has_b = true;
-                        }
-                    }
-                    if got_a {
-                        over(got_b, col)
-                    } else {
-                        got_b
-                    }
-                };
-                let row = lane as usize * count;
-                averaged(eased.len(), |i| at(&eased[i][row..row + count]))
-            })
-        }
         // ---------------- Transformers ----------------
         "frame" => {
             let fw = t.px("frame_width");
@@ -774,155 +605,6 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                     out = over(out, c);
                 }
                 out
-            })
-        }
-        "louver" => {
-            let n = t.num("slats").round().clamp(1.0, 64.0);
-            let horizontal_slats = t.choice("orientation") == 0;
-            let p = t.p;
-            paint(t.w, t.h, |x, y| {
-                let (pos, len) = if horizontal_slats { (y, h) } else { (x, w) };
-                let sl = len / n;
-                let i = (pos / sl).floor().clamp(0.0, n - 1.0);
-                let mid = (i + 0.5) * sl;
-                let stagger = 0.4 * i / n.max(1.0);
-                let q = ((p - stagger) / 0.6).clamp(0.0, 1.0);
-                let th = ease_in_out(q) * PI;
-                let co = th.cos();
-                if co.abs() < 1e-3 {
-                    return [0.0, 0.0, 0.0, 1.0];
-                }
-                let d = pos - mid;
-                let local = d / co; // A (front) for cos > 0, B (back, re-flipped) for cos < 0
-                if local.abs() > sl / 2.0 {
-                    return [0.0, 0.0, 0.0, 1.0];
-                }
-                let src = mid + if co > 0.0 { local } else { -local };
-                let (sx, sy) = if horizontal_slats { (x, src) } else { (src, y) };
-                let c = if co > 0.0 {
-                    t.sac(sx, sy)
-                } else {
-                    t.sbc(sx, sy)
-                };
-                let light = 0.5 + 0.5 * co.abs();
-                [c[0] * light, c[1] * light, c[2] * light, c[3]]
-            })
-        }
-        "mirror_transition" => {
-            let (lo, hi) = (0.0f32, travel);
-            let refl = travel * 0.3;
-            let e = lo - refl + ease_in_out(t.p) * (hi - lo + 2.0 * refl);
-            let neg = dx + dy < 0.0;
-            paint(t.w, t.h, |x, y| {
-                // along-axis coordinate measured from the entry side
-                let s = if horiz {
-                    if neg {
-                        w - x
-                    } else {
-                        x
-                    }
-                } else if neg {
-                    h - y
-                } else {
-                    y
-                };
-                if s < e {
-                    return t.pb(x, y);
-                }
-                let a = t.pa(x, y);
-                let d = s - e;
-                if d < refl {
-                    let m = e - d; // mirror of s about the moving line
-                    let (sx, sy) = if horiz {
-                        (if neg { w - m } else { m }, y)
-                    } else {
-                        (x, if neg { h - m } else { m })
-                    };
-                    let r = t.sbc(sx, sy);
-                    return mix(a, r, 0.75 * (1.0 - d / refl));
-                }
-                a
-            })
-        }
-        "page_peel" => page_peel(t),
-        "slice" => {
-            let n = t.num("slices").round().clamp(1.0, 64.0);
-            let ang = t.num("angle").to_radians();
-            let (ax, ay) = (ang.cos(), ang.sin()); // slice direction (they slide along this)
-            let (px_, py_) = (-ay, ax); // across
-            let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)];
-            let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
-            for (cx, cy) in corners {
-                let v = cx * px_ + cy * py_;
-                lo = lo.min(v);
-                hi = hi.max(v);
-            }
-            let span = (hi - lo).max(1.0);
-            let dist = w.abs() * ax.abs() + h * ay.abs() + span * 0.2;
-            let (sh, ns) = slice_blur(t, n, dist);
-            // Where each slice is, and how far B is zoomed, at each moment: the same at every pixel.
-            let times = sample_times(t.p, sh, ns);
-            let offsets: Vec<Vec<f32>> = times
-                .iter()
-                .map(|&q| {
-                    (0..n as i32)
-                        .map(|i| slice_offset(q, i as f32, n, dist))
-                        .collect()
-                })
-                .collect();
-            let zooms: Vec<f32> = times.iter().map(|&q| 1.0 + 0.05 * (1.0 - q)).collect();
-            paint(t.w, t.h, |x, y| {
-                let i = (((x * px_ + y * py_) - lo) / span * n)
-                    .floor()
-                    .clamp(0.0, n - 1.0);
-                averaged(times.len(), |at| {
-                    let off = offsets[at][i as usize];
-                    let (sx, sy) = (x - ax * off, y - ay * off);
-                    let zb = zooms[at];
-                    let b = t.sbc((x - w / 2.0) / zb + w / 2.0, (y - h / 2.0) / zb + h / 2.0);
-                    if sx >= 0.0 && sx < w && sy >= 0.0 && sy < h {
-                        // keep the slice's own band only (slices do not bleed into each other)
-                        let j = (((sx * px_ + sy * py_) - lo) / span * n)
-                            .floor()
-                            .clamp(0.0, n - 1.0);
-                        if j == i {
-                            return over(b, t.sac(sx, sy));
-                        }
-                    }
-                    b
-                })
-            })
-        }
-        "wave" => {
-            let amp = t.px("amplitude");
-            let lambda = t.px("wavelength").max(4.0);
-            let neg = dx + dy < 0.0;
-            let len = travel;
-            let band = len * 0.25;
-            let e = -band + t.p * (len + 2.0 * band);
-            let env = bell(t.p);
-            paint(t.w, t.h, |x, y| {
-                let s = if horiz {
-                    if neg {
-                        w - x
-                    } else {
-                        x
-                    }
-                } else if neg {
-                    h - y
-                } else {
-                    y
-                };
-                let across = if horiz { y } else { x };
-                let near = (-((s - e) / band).powi(2)).exp();
-                let disp = amp * env * near * (2.0 * PI * (across / lambda) - t.p * 6.0).sin();
-                let (sx, sy) = if horiz {
-                    (x + disp, y + disp * 0.3)
-                } else {
-                    (x + disp * 0.3, y + disp)
-                };
-                let k = 1.0 - smoothstep(-band * 0.3, band * 0.3, s - e);
-                mix(t.sac(sx, sy), t.sbc(sx, sy), k)
             })
         }
         // ---------------- Smart Tools (camera-style) ----------------
@@ -972,75 +654,5 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
             })
         }
         _ => return None,
-    })
-}
-
-/// Page Peel: the corner lifts and rolls over a cylinder of radius `r`; the peeled part lies
-/// face-down on top of the page (its back shows a washed-out mirror of A) and B shows beneath.
-fn page_peel(t: &Tx) -> Image {
-    let (w, h) = (t.wf, t.hf);
-    let r = t.px("radius").max(1.0);
-    let shadow = t.flag("shadow");
-    let (ox, oy) = match t.choice("corner") {
-        0 => (0.0, 0.0),
-        1 => (w, 0.0),
-        3 => (0.0, h),
-        _ => (w, h),
-    };
-    let (mut nx, mut ny) = (w / 2.0 - ox, h / 2.0 - oy);
-    let nl = (nx * nx + ny * ny).sqrt().max(1e-3);
-    nx /= nl;
-    ny /= nl;
-    let smax = (w - 2.0 * ox).abs() * nx.abs() + (h - 2.0 * oy).abs() * ny.abs();
-    let f = -1.0 + t.p * (smax + r * 1.2 + 2.0);
-    let inside = |px: f32, py: f32| px >= 0.0 && py >= 0.0 && px < w && py < h;
-    paint(t.w, t.h, |x, y| {
-        let s = (x - ox) * nx + (y - oy) * ny;
-        let page_at = |so: f32| (x - nx * (s - so), y - ny * (s - so));
-        let back = |c: [f32; 4], light: f32| {
-            let m = mix(c, [c[3], c[3], c[3], c[3]], 0.6);
-            [m[0] * light, m[1] * light, m[2] * light, m[3]]
-        };
-        // 1. the flipped flat part (height 2r) over the unpeeled page
-        if s >= f {
-            let so = 2.0 * f - s - PI * r;
-            let (px, py) = page_at(so);
-            if inside(px, py) {
-                return back(t.sac(px, py), 0.95);
-            }
-        }
-        let d = f - s;
-        if (0.0..r).contains(&d) {
-            // 2. upper half of the cylinder (back side)
-            let phi = PI - (d / r).asin();
-            let so = f - r * phi;
-            let (px, py) = page_at(so);
-            if inside(px, py) {
-                return back(t.sac(px, py), 0.75 + 0.25 * phi.sin());
-            }
-            // 3. lower half (front side, shaded)
-            let phi = (d / r).asin();
-            let so = f - r * phi;
-            let (px, py) = page_at(so);
-            if inside(px, py) {
-                let c = t.sac(px, py);
-                let l = 1.0 - 0.45 * (phi / FRAC_PI_2);
-                return [c[0] * l, c[1] * l, c[2] * l, c[3]];
-            }
-        }
-        if s >= f {
-            return t.pa(x, y);
-        }
-        // 4. revealed incoming clip, with a soft shadow along the curl
-        let b = t.pb(x, y);
-        if shadow {
-            let k = 1.0
-                - 0.45
-                    * (-(d - r).max(0.0) / (r * 1.5)).exp()
-                    * smoothstep(0.0, 0.05, t.p)
-                    * (1.0 - smoothstep(0.9, 1.0, t.p));
-            return [b[0] * k, b[1] * k, b[2] * k, b[3]];
-        }
-        b
     })
 }

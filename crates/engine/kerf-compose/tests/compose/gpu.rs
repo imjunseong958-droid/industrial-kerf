@@ -339,7 +339,7 @@ fn a_transition_keeps_what_its_clips_are() {
         ),
         (
             "nested",
-            "  track V1 video\n    clip c1 seq=inner src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=roll-3d@1 dur=12f\n".to_owned(),
+            "  track V1 video\n    clip c1 seq=inner src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=roll@2 dur=12f\n".to_owned(),
         ),
     ];
     for (name, body) in cases {

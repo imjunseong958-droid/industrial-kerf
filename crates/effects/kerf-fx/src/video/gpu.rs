@@ -36,8 +36,6 @@ const OP_DIRECTIONAL: u32 = 22;
 const OP_UNSHARP: u32 = 23;
 const OP_CROP: u32 = 24;
 const OP_RESAMPLE: u32 = 25;
-const OP_HFLIP: u32 = 26;
-const OP_VFLIP: u32 = 27;
 const OP_VIDEO_LIMITER: u32 = 30;
 const OP_LUMETRI: u32 = 31;
 const OP_LUMETRI_LOOK: u32 = 32;
@@ -206,8 +204,6 @@ fn steps(op: &FxOp) -> Vec<Step> {
                 None => out.push(step(OP_RESAMPLE, [0; 4], &[0.0; 8])),
             }
         }
-        FxOp::HFlip => out.push(step(OP_HFLIP, [0; 4], &[])),
-        FxOp::VFlip => out.push(step(OP_VFLIP, [0; 4], &[])),
         FxOp::AscCdl {
             slope: s,
             offset: o,

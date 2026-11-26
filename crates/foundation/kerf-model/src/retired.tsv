@@ -49,7 +49,7 @@ distort.bender	the prompt and references of the shot's recipe
 distort.blobbylize	the prompt and references of the shot's recipe
 distort.flomotion	
 distort.griddler	clips side by side, each scaled
-distort.pageturn	page-peel@1
+distort.pageturn	
 distort.powerpin	distort.cornerpin@2
 distort.ripplepulse	the prompt and references of the shot's recipe
 distort.slant	distort.transform@2
@@ -154,14 +154,14 @@ transition.jaws	plateau-wipe@1
 transition.lightwipe	light-sweep@1
 transition.linesweep	wipe@1
 transition.radialscalewipe	iris-round@1
-transition.twister	wave@1
+transition.twister	liquid-distortion@1
 transition.warpomatic	liquid-distortion@1
-transition.cardwipe	louver@1
+transition.cardwipe	panel-wipe@1
 transition.gradientwipe	luma-fade@1
 transition.iriswipe	iris-round@1
 transition.linearwipe	wipe@1
 transition.radialwipe	clock-wipe@1
-transition.venetian	louver@1
+transition.venetian	panel-wipe@1
 utility.applylut	color.lumetri@2
 utility.overbrights	
 utility.colorprofileconverter	color.lumetri@2
@@ -230,3 +230,16 @@ look.vhs	the prompt and references of the shot's recipe
 look.glitch	the prompt and references of the shot's recipe
 look.dreamy	the prompt and references of the shot's recipe
 look.sparkle	the prompt and references of the shot's recipe
+# Cut when Kerf sorted what it does into the cut, the guide in depth, and the
+# model's finish: transitions that bend or break the picture, which no plane
+# in depth makes, and effects a clip's own properties do.
+transform.hflip	`scale_x=-1` on the clip
+transform.vflip	`scale_y=-1` on the clip
+block-motion	panel-wipe@1
+fold-motion	flip-motion@2
+roll-3d	roll@2
+louver	panel-wipe@1
+mirror	
+page-peel	
+slice	split@2
+wave	liquid-distortion@1

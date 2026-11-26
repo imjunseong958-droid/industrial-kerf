@@ -1,17 +1,10 @@
 # Transitions Kerf draws with its own renderer, carried from FilmCraft's
 # (crates/render/src/transitions), which kerf-fx runs. The same layout as
 # raster_effects.tsv; this table is written by hand.
-transition	block-motion	Animation	Block Motion	Slices the frame into blocks that slide in one after another; tech, data, and energetic list cuts.	2	1
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	blocks	6	2..32		Blocks
-	number	motion_blur	50	0..100	%	Motion Blur
 transition	flip-motion	Animation	Flip Motion	Flips the outgoing shot over like a card to show the next; reveals and before/after.	2	1
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	perspective	50	0..100	%	Perspective
 	number	motion_blur	50	0..100	%	Motion Blur
-transition	fold-motion	Animation	Fold Motion	Folds the outgoing shot away like paper; playful explainer and social cuts.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	perspective	50	0..100	%	Perspective
 transition	pop-motion	Animation	Pop Motion	Pops the incoming shot in with a springy overshoot; fun, punchy reveals.	2	1
 	number	overshoot	20	0..100	%	Overshoot
 	number	motion_blur	50	0..100	%	Motion Blur
@@ -136,9 +129,6 @@ transition	zoom-blur	Lights & Blurs	Zoom Blur	A zoom blur out of a point and int
 	number	center_x	0.5	-10..10	frame widths	Center X
 	number	center_y	0.5	-10..10	frame heights	Center Y
 	number	strength	50	0..100	%	Strength
-transition	roll-3d	Slide	3D Roll	Rolls the frame over like a cylinder to the next shot; playful and techy changes.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	perspective	50	0..100	%	Perspective
 transition	film-roll	Slide	Film Roll	Rolls the shots past like film frames with a gap between; retro and reel-like cuts.	2	1
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	gap	40	0..400	px	Gap
@@ -171,23 +161,6 @@ transition	frame	Transformers	Frame	Shrinks the shot into a framed card and grow
 	number	frame_width	24	0..200	px	Frame Width
 	color	frame_color	#ffffff			Frame Color
 	number	scale	60	10..95	%	Scale
-transition	louver	Transformers	Louver	Turns the frame on slats like louvers to the next shot; graphic, stylish changes.
-	number	slats	8	1..64		Slats
-	enum	orientation	horizontal	horizontal|vertical		Orientation
-transition	mirror	Transformers	Mirror	Mirrors the frame across the cut; symmetric, artful changes.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-transition	page-peel	Transformers	Page Peel	Peels the outgoing shot back like a page from a corner; storybooks and playful changes.
-	enum	corner	bottom-right	top-left|top-right|bottom-right|bottom-left		Corner
-	number	radius	60	0..500	px	Curl Radius
-	bool	shadow	true			Shadow
-transition	slice	Transformers	Slice	Slices the frame into strips that slide apart; dynamic, modern cuts.	2	1
-	number	slices	8	1..64		Slices
-	number	angle	20	-3600..3600	degrees	Angle
-	number	motion_blur	50	0..100	%	Motion Blur
-transition	wave	Transformers	Wave	Waves the frame like a flag into the next shot; playful, fluid changes.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	amplitude	60	0..500	px	Amplitude
-	number	wavelength	300	0..3000	px	Wavelength
 transition	clock-wipe	Wipe	Clock Wipe	Sweeps around a center like a clock hand; time passing and countdowns.
 	number	center_x	0.5	-10..10	frame widths	Center X
 	number	center_y	0.5	-10..10	frame heights	Center Y
