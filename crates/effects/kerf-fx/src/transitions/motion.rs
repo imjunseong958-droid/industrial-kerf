@@ -1,9 +1,9 @@
-//! Moving-frame transitions: Animation, Slide, Transformers and the camera-style Smart Tools.
+//! Moving-frame transitions: Animation, Slide and the camera-style Smart Tools.
 
 use super::cards::{eye, focal_for, Card, V3};
 use super::{
     bell, ease_in, ease_in_out, ease_out, exposure, following, line_blur, mid_mix, mix, over,
-    paint, samples_over, scale4, smoothstep, temporal, zoom_blur, Tx, MOST_MOMENTS,
+    paint, samples_over, scale4, temporal, zoom_blur, Tx, MOST_MOMENTS,
 };
 use kerf_draw::Image;
 
@@ -320,42 +320,6 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                         gcol
                     }
                 })
-            })
-        }
-        // ---------------- Transformers ----------------
-        "frame" => {
-            let fw = t.px("frame_width");
-            let fc = t.color("frame_color");
-            let smin = t.frac("scale").clamp(0.05, 1.0);
-            let p = t.p;
-            // phase: shrink into a frame, travel across, grow out of the frame
-            let shrink = smoothstep(0.0, 0.3, p) * (1.0 - smoothstep(0.7, 1.0, p));
-            let s = 1.0 - (1.0 - smin) * shrink;
-            let move_t = ease_in_out(((p - 0.25) / 0.5).clamp(0.0, 1.0));
-            let border = fw * shrink;
-            // just far enough that the off-stage frame (and its border) is fully out of view
-            let step = travel * 0.5 * (1.0 + s) + border * 2.0 + 2.0;
-            let layers = [(t.a, move_t * step), (t.b, (move_t - 1.0) * step)];
-            paint(t.w, t.h, |x, y| {
-                let mut out = [0.0; 4];
-                for (img, off) in layers {
-                    // inverse of: scale about centre, then translate along the direction
-                    let (ux, uy) = (x - dx * off, y - dy * off);
-                    let lx = (ux - w / 2.0) / s + w / 2.0;
-                    let ly = (uy - h / 2.0) / s + h / 2.0;
-                    let bpx = border / s;
-                    let inside = lx >= 0.0 && lx < w && ly >= 0.0 && ly < h;
-                    let in_frame = lx >= -bpx && lx < w + bpx && ly >= -bpx && ly < h + bpx;
-                    let c = if inside {
-                        img.sample_bilinear_clamped(lx, ly)
-                    } else if in_frame && bpx > 0.0 {
-                        fc
-                    } else {
-                        continue;
-                    };
-                    out = over(out, c);
-                }
-                out
             })
         }
         // ---------------- Smart Tools (camera-style) ----------------

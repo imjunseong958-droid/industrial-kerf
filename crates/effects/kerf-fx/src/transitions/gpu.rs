@@ -6,8 +6,7 @@
 use super::motion::{card_scene, film_roll_blur, whip_layers, Layer};
 use super::wipe::{angle_dir, field_range, star_dist, threshold, WipeStyle};
 use super::{
-    bell, disc_offsets, ease_in, ease_in_out, ease_out, hash, mid_mix, smoothstep, Fx, Tx,
-    MOST_MOMENTS,
+    bell, disc_offsets, ease_in, ease_out, hash, mid_mix, smoothstep, Fx, Tx, MOST_MOMENTS,
 };
 use crate::video::gpu::run as run_ops;
 use crate::video::gpufx::FxOp;
@@ -809,22 +808,6 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
                 ),
             )
             .with_time(film_roll_blur(t, travel + gap))
-        }
-        "frame" => {
-            let fw = t.px("frame_width");
-            let smin = t.frac("scale").clamp(0.05, 1.0);
-            let shrink = smoothstep(0.0, 0.3, p) * (1.0 - smoothstep(0.7, 1.0, p));
-            let s = 1.0 - (1.0 - smin) * shrink;
-            let move_t = ease_in_out(((p - 0.25) / 0.5).clamp(0.0, 1.0));
-            let border = fw * shrink;
-            let step = travel * 0.5 * (1.0 + s) + border * 2.0 + 2.0;
-            moves(
-                3,
-                with_color(
-                    t.color("frame_color"),
-                    &[s, border, dx, dy, move_t * step, (move_t - 1.0) * step],
-                ),
-            )
         }
         "stretch_wipe" => {
             let s_len = t.px("stretch").max(1.0);

@@ -508,6 +508,37 @@ fn a_clip_is_slanted_by_its_skew_along_its_axis() {
 }
 
 #[test]
+fn a_clip_sits_on_a_card_of_its_border_color_past_what_its_crop_leaves() {
+    // A white solid at half size, from 80 to 240 across and 45 to 135 down, on red.
+    let drawn = |set: &str| {
+        let body = format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ffffff scale=0.5 border_color=#ff0000 {set}\n"
+        );
+        frame(&body, 3, false)
+    };
+    let (red, white, black) = ([255, 0, 0], [255, 255, 255], [0, 0, 0]);
+    // A tenth of its height is 18 of its pixels: 9 of the frame's at half size.
+    let framed = drawn("border=0.1");
+    assert_eq!(pixel(&framed, 160, 90), white);
+    assert_eq!(pixel(&framed, 75, 90), red);
+    assert_eq!(pixel(&framed, 160, 40), red);
+    assert_eq!(pixel(&framed, 245, 130), red);
+    assert_eq!(pixel(&framed, 68, 90), black);
+    assert_eq!(pixel(&framed, 160, 33), black);
+    // A quarter cropped off its left, what is left fits the frame from 100 across, and the card
+    // is 9 past that.
+    let cropped = drawn("border=0.1 crop_l=0.25");
+    assert_eq!(pixel(&cropped, 102, 90), white);
+    assert_eq!(pixel(&cropped, 95, 90), red);
+    assert_eq!(pixel(&cropped, 88, 90), black);
+    // Without one it is drawn as it was, to the byte.
+    assert_eq!(drawn("border=0"), drawn(""));
+}
+
+#[test]
 fn a_clip_is_smeared_where_it_moves_while_its_shutter_is_open() {
     // A white solid a quarter the size of the frame, crossing it 11 pixels a frame.
     let drawn = |set: &str| {

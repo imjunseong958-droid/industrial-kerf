@@ -150,10 +150,10 @@ impl Drawing {
         let reach = self.reach(sequence, plan, time, scale, scene);
         let Input {
             mut picture,
-            to_output,
-            crop,
+            mut to_output,
+            mut crop,
             per_source,
-            frame,
+            mut frame,
         } = self.input(sequence, plan, time, scale, (w, h), reach)?;
         if !plan.effects.is_empty() {
             let placed = Placed {
@@ -172,6 +172,15 @@ impl Drawing {
                 &placed,
                 plan.effects.len(),
             );
+        }
+        let tall = frame.map_or(f64::from(plan.size.1) * per_source, |frame| frame.h);
+        if let Some((width, color)) = border(plan, time, tall) {
+            let (framed, pad, card) = bordered(&picture, crop, width, color);
+            picture = Arc::new(framed);
+            to_output = to_output.then_apply(&Affine::translate(-pad, -pad));
+            crop = Some(card);
+            // A wipe goes across the card.
+            frame = Some(card);
         }
         let reveal = shown
             .reveal
@@ -320,4 +329,56 @@ impl Drawing {
             Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         })
     }
+}
+
+/// How far past what its crop leaves on each side, in its picture's pixels, and of what color,
+/// linear and premultiplied, the card behind a clip's picture is at clip time `time`, for a
+/// picture whose frame is `tall` of its pixels: none without a `border`, or letterboxed, where its
+/// picture is the canvas.
+pub(super) fn border(plan: &ClipPlan, time: Time, tall: f64) -> Option<(f64, [f32; 4])> {
+    if plan.letterboxed {
+        return None;
+    }
+    let width = number(&param(&plan.clip, "border").value_at(time)) * tall;
+    if width.is_nan() || width <= 0.0 {
+        return None;
+    }
+    let color = match param(&plan.clip, "border_color").value_at(time) {
+        Value::Color(color) => color,
+        _ => Rgba::WHITE,
+    };
+    Some((width, kerf_draw::source::premultiplied(color)))
+}
+
+/// `picture` on a card of `color` `width` of its pixels past what `crop` leaves of it on each
+/// side: the picture that makes, how far into it `picture` moved across and down, and the card's
+/// place in it.
+fn bordered(
+    picture: &Image,
+    crop: Option<Rect>,
+    width: f64,
+    color: [f32; 4],
+) -> (Image, f64, Rect) {
+    let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
+    let kept = crop.unwrap_or(whole);
+    let pad = width.ceil();
+    let card = Rect::new(
+        kept.x + pad - width,
+        kept.y + pad - width,
+        kept.w + 2.0 * width,
+        kept.h + 2.0 * width,
+    );
+    let mut framed = Image::new(picture.w + 2 * pad as usize, picture.h + 2 * pad as usize);
+    let solid = Image::filled(framed.w, framed.h, color);
+    composite_placed(
+        &mut framed,
+        &solid,
+        &Affine::IDENTITY,
+        card,
+        1.0,
+        Blend::Normal,
+    );
+    let moved = Affine::translate(pad, pad);
+    composite_placed(&mut framed, picture, &moved, kept, 1.0, Blend::Normal);
+    (framed, pad, card)
 }

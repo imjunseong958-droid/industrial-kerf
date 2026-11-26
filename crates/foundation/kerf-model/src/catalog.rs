@@ -809,6 +809,7 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         "stretch.kerflook",
         include_str!("../looks/stretch.kerflook"),
     ),
+    ("frame.kerflook", include_str!("../looks/frame.kerflook")),
 ];
 
 fn mask_props() -> Vec<ParamDef> {
@@ -925,6 +926,11 @@ fn builtin_catalog() -> Catalog {
             .range(0.0, 1.0)
             .unit("fraction")
             .doc("Fraction of the source removed from the bottom."),
+        P::number("border", 0.0)
+            .range(0.0, 1.0)
+            .unit("clip heights")
+            .doc("A card of `border_color` behind it, this far past its crop on each side."),
+        P::color("border_color", Rgba::WHITE).doc("Its `border`'s color."),
         P::number("opacity", 1.0)
             .range(0.0, 1.0)
             .doc("Layer opacity."),
