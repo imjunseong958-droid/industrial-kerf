@@ -44,6 +44,7 @@ const VIDEO_GROUPS: &[Group] = &[
     ),
     ("Compositing", &["opacity", "blend"], true),
     ("Crop", &["crop_l", "crop_r", "crop_t", "crop_b"], true),
+    ("Border", &["border", "border_color"], false),
     (
         "3D",
         &[

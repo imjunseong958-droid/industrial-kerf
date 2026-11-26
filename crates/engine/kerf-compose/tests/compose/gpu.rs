@@ -98,6 +98,14 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("moved", clip("      set x=0.1 y=-0.05 scale=0.7\n")),
         ("turned", clip("      set rotation=17 scale=0.8\n")),
         (
+            "bordered",
+            clip("      set scale=0.6 rotation=12 crop_l=0.1 border=0.04 border_color=#3080ff\n"),
+        ),
+        (
+            "in depth, bordered",
+            clip("      set three_d=true rotate_y=30 scale=0.7 border=0.05\n"),
+        ),
+        (
             "smeared as it moves",
             over("      set x={0f:-0.3 23f:0.3} rotation={0f:0 23f:40} scale=0.7 shutter=180\n"),
         ),

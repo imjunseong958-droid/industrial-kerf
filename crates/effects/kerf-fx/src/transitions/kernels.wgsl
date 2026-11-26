@@ -790,7 +790,6 @@ fn blurs(@builtin(global_invocation_id) id: vec3<u32>) {
 // What moves the frames by arithmetic of its own, at each moment of `temporal`.
 
 const V_FILM_ROLL: u32 = 0u;
-const V_FRAME: u32 = 3u;
 const V_STRETCH_WIPE: u32 = 9u;
 const V_EARTHQUAKE: u32 = 10u;
 
@@ -825,29 +824,6 @@ fn film_roll(x: f32, y: f32, q: f32) -> vec4<f32> {
         return vec4(0.5, 0.5, 0.5, 1.0);
     }
     return n4(0);
-}
-
-fn frame_side(out: vec4<f32>, x: f32, y: f32, is_b: bool, off: f32) -> vec4<f32> {
-    let w = u.size.x;
-    let h = u.size.y;
-    let s = n(4);
-    let ux = x - n(6) * off;
-    let uy = y - n(7) * off;
-    let lx = (ux - w / 2.0) / s + w / 2.0;
-    let ly = (uy - h / 2.0) / s + h / 2.0;
-    let bpx = n(5) / s;
-    let shows = lx >= 0.0 && lx < w && ly >= 0.0 && ly < h;
-    let in_frame = lx >= -bpx && lx < w + bpx && ly >= -bpx && ly < h + bpx;
-    if shows {
-        if is_b {
-            return over(out, sbc(lx, ly));
-        }
-        return over(out, sac(lx, ly));
-    }
-    if in_frame && bpx > 0.0 {
-        return over(out, n4(0));
-    }
-    return out;
 }
 
 fn stretch_wipe(x: f32, y: f32) -> vec4<f32> {
@@ -899,10 +875,6 @@ fn moved_at(x: f32, y: f32, q: f32) -> vec4<f32> {
     switch u.kind {
         case V_FILM_ROLL: {
             return film_roll(x, y, q);
-        }
-        case V_FRAME: {
-            let out = frame_side(vec4(0.0), x, y, false, n(8));
-            return frame_side(out, x, y, true, n(9));
         }
         case V_STRETCH_WIPE: {
             return stretch_wipe(x, y);

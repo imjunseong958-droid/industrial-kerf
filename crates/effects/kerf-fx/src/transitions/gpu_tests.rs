@@ -159,7 +159,6 @@ fn which_transitions_have_kernels() {
         "flare",
         "flash",
         "flicker",
-        "frame",
         "glass",
         "glitch",
         "glow",
@@ -212,5 +211,5 @@ fn which_transitions_have_kernels() {
     without.sort_unstable();
     assert_eq!(with, KERNELS);
     assert_eq!(without, ON_THE_CPU);
-    assert_eq!(with.len() + without.len(), 55);
+    assert_eq!(with.len() + without.len(), 54);
 }

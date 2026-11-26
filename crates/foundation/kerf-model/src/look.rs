@@ -31,7 +31,9 @@ enum Mix {
     Add,
     Multiply,
     /// A switch, which the look's value stands for: a clip a turn puts in depth is in depth.
-    Replace,
+    Switch,
+    /// A color, which the look's value stands for.
+    Color,
 }
 
 /// The properties a look sets, and how it goes with the clip's own value.
@@ -44,10 +46,12 @@ const PROPS: &[(&str, Mix)] = &[
     ("scale_y", Mix::Multiply),
     ("opacity", Mix::Multiply),
     ("shutter", Mix::Add),
-    ("three_d", Mix::Replace),
+    ("three_d", Mix::Switch),
     ("z", Mix::Add),
     ("rotate_x", Mix::Add),
     ("rotate_y", Mix::Add),
+    ("border", Mix::Add),
+    ("border_color", Mix::Color),
 ];
 
 /// What a look applies to.
@@ -409,29 +413,21 @@ pub fn read(text: &str, source: &str) -> Result<Look, LookError> {
                     ));
                 }
                 let value = val(arg).map_err(|message| fail(n, at(arg), message))?;
-                let switch = PROPS
+                let how = PROPS
                     .iter()
-                    .any(|(p, how)| *p == prop && *how == Mix::Replace);
-                match &value {
-                    Val::Word(word)
-                        if switch
-                            && !word.starts_with('$')
-                            && word != "true"
-                            && word != "false" =>
-                    {
-                        return Err(fail(n, at(arg), format!("`{prop}` is true or false")));
-                    }
-                    Val::Word(word) if !switch && !word.starts_with('$') => {
-                        return Err(fail(
-                            n,
-                            at(arg),
-                            format!("`{prop}` is a number, not `{word}`"),
-                        ));
-                    }
-                    Val::Expr(_) | Val::Keys(_) if switch => {
-                        return Err(fail(n, at(arg), format!("`{prop}` is true or false")));
-                    }
-                    _ => {}
+                    .find(|(p, _)| *p == prop)
+                    .map_or(Mix::Add, |(_, how)| *how);
+                let wrong = match (&value, how) {
+                    (Val::Word(word), _) if word.starts_with('$') => None,
+                    (Val::Word(word), Mix::Switch) if word == "true" || word == "false" => None,
+                    (Val::Word(word), Mix::Color) if Rgba::parse(word).is_some() => None,
+                    (Val::Expr(_) | Val::Keys(_), Mix::Add | Mix::Multiply) => None,
+                    (_, Mix::Switch) => Some(format!("`{prop}` is true or false")),
+                    (_, Mix::Color) => Some(format!("`{prop}` is a color, like #ffffff")),
+                    (Val::Word(word), _) => Some(format!("`{prop}` is a number, not `{word}`")),
+                };
+                if let Some(wrong) = wrong {
+                    return Err(fail(n, at(arg), wrong));
                 }
                 look.lines.push(Line::Set {
                     side,
@@ -1093,7 +1089,45 @@ impl Look {
         };
         for line in &self.lines {
             match line {
-                Line::Set { value, line, .. } => check(*line, value, Kind::Number)?,
+                Line::Set {
+                    prop, value, line, ..
+                } => {
+                    // A lone `$param` is the parameter's own value: of the property's kind.
+                    let given = match value {
+                        Val::Word(word) => word
+                            .strip_prefix('$')
+                            .and_then(|name| self.params.iter().find(|p| p.def.name == name)),
+                        _ => None,
+                    };
+                    if let Some(given) = given {
+                        let how = PROPS
+                            .iter()
+                            .find(|(p, _)| p == prop)
+                            .map_or(Mix::Add, |(_, how)| *how);
+                        let fits = match how {
+                            Mix::Switch => given.def.ty == ParamType::Bool,
+                            Mix::Color => given.def.ty == ParamType::Color,
+                            Mix::Add | Mix::Multiply => {
+                                matches!(given.def.ty, ParamType::Number | ParamType::Time)
+                            }
+                        };
+                        if !fits {
+                            return Err(fail(
+                                *line,
+                                format!(
+                                    "`{prop}` cannot be `${}`, which is no {}",
+                                    given.def.name,
+                                    match how {
+                                        Mix::Switch => "switch",
+                                        Mix::Color => "color",
+                                        Mix::Add | Mix::Multiply => "number",
+                                    }
+                                ),
+                            ));
+                        }
+                    }
+                    check(*line, value, Kind::Number)?;
+                }
                 // An effect's numbers are checked against its definition when
                 // the look is defined in a catalog; here, only the names.
                 Line::Fx { params, line, .. } | Line::Mask { params, line, .. } => {
@@ -1842,9 +1876,20 @@ fn parts(
                 let def = catalog
                     .prop(Domain::Video, prop)
                     .ok_or_else(|| format!("no property `{prop}`"))?;
-                parts
-                    .props
-                    .push((prop.clone(), env.param(value, def, start)?));
+                let mut param = env.param(value, def, start)?;
+                // A transition's color is the clip's over the transition alone: held from its
+                // start to its end, where [`apply`] has the clip's own take over again.
+                if let (Some((from, to)), Param::Static(color @ Value::Color(_))) =
+                    (env.span, &param)
+                {
+                    let key = |at: f64| Keyframe {
+                        at: Time::from_seconds(at - clip_start).unwrap_or(Time::ZERO),
+                        value: color.clone(),
+                        interp: Interp::Hold,
+                    };
+                    param = Param::Animated(vec![key(from), key(to)]);
+                }
+                parts.props.push((prop.clone(), param));
             }
             Line::Fx {
                 side: s,
@@ -1896,7 +1941,39 @@ fn apply(clip: &mut Clip, parts: Parts, at: usize, catalog: &Catalog) -> Result<
             .iter()
             .find(|(name, _)| *name == prop)
             .map_or(Mix::Add, |(_, how)| *how);
-        if how == Mix::Replace {
+        if let (Mix::Color, Param::Animated(held)) = (how, &look) {
+            let own = match clip.props.get(&prop) {
+                Some(Param::Static(own)) => own.clone(),
+                None => catalog
+                    .prop(Domain::Video, &prop)
+                    .map_or(Value::Color(Rgba::WHITE), |d| d.default.clone()),
+                Some(_) => {
+                    return Err(format!(
+                        "clip `{}`: `{prop}` is animated, and a transition that sets it cannot go on top; take its keyframes off",
+                        clip.id
+                    ))
+                }
+            };
+            let (Some(first), Some(last)) = (held.first(), held.last()) else {
+                continue;
+            };
+            let mut keys = Vec::new();
+            if first.at > Time::ZERO {
+                keys.push(Keyframe {
+                    at: Time::ZERO,
+                    value: own.clone(),
+                    interp: Interp::Hold,
+                });
+            }
+            keys.push(first.clone());
+            keys.push(Keyframe {
+                value: own,
+                ..last.clone()
+            });
+            clip.props.insert(prop, Param::Animated(keys));
+            continue;
+        }
+        if matches!(how, Mix::Switch | Mix::Color) {
             clip.props.insert(prop, look);
             continue;
         }
@@ -2485,24 +2562,29 @@ mod tests {
     }
 
     /// A transition look changes the clips only across the transition: before it, the outgoing
-    /// clip has every number the look sets as the clip's own; after it, the incoming one does, for
-    /// every option of every choice.
+    /// clip has every number and color the look sets as the clip's own; after it, the incoming one
+    /// does, for every option of every choice.
     #[test]
     fn a_transition_look_leaves_the_clips_as_they_were_outside_it() {
         let catalog = Catalog::bundled();
         let rate = Rate::FPS_24;
+        // A color of the clips' own, which no look sets.
+        let mine = Value::Color(Rgba::parse("#102030").unwrap());
         let solid = |id: &str, at: i64| {
             let solid = Content::Generator {
                 fx: Id::new("solid").unwrap(),
                 version: 1,
                 params: Params::new(),
             };
-            Clip::new(
+            let mut clip = Clip::new(
                 Id::new(id).unwrap(),
                 solid,
                 rate.time_of(at),
                 rate.time_of(48),
-            )
+            );
+            clip.props
+                .insert("border_color".into(), Param::Static(mine.clone()));
+            clip
         };
         for look in catalog.looks().filter(|look| look.on == On::Transition) {
             let mut choices = vec![Params::new()];
@@ -2559,15 +2641,23 @@ mod tests {
                     (&clips[1], cut + after + one),
                 ] {
                     for (prop, param) in &clip.props {
-                        let own = catalog.prop(Domain::Video, prop).unwrap().default.clone();
-                        if let Value::Number(own) = own {
-                            let value = param.value_at(time - clip.start).as_number().unwrap();
-                            assert!(
-                                (value - own).abs() < 1e-9,
-                                "{} {params:?} `{}` {prop}: {value}",
-                                look.id,
-                                clip.id
-                            );
+                        let value = param.value_at(time - clip.start);
+                        match catalog.prop(Domain::Video, prop).unwrap().default.clone() {
+                            Value::Number(own) => {
+                                let value = value.as_number().unwrap();
+                                assert!(
+                                    (value - own).abs() < 1e-9,
+                                    "{} {params:?} `{}` {prop}: {value}",
+                                    look.id,
+                                    clip.id
+                                );
+                            }
+                            Value::Color(_) => assert_eq!(
+                                value, mine,
+                                "{} {params:?} `{}` {prop}",
+                                look.id, clip.id
+                            ),
+                            _ => {}
                         }
                     }
                 }
@@ -2578,19 +2668,40 @@ mod tests {
     /// A look's switch stands for the clip's, its choice picks one number for each option, and
     /// what cannot be either is refused where it is written.
     #[test]
-    fn a_look_writes_a_switch_as_a_word_and_picks_a_number_for_each_option() {
+    fn a_look_writes_a_switch_or_a_color_as_a_word_and_picks_a_number_for_each_option() {
         let look = |lines: &str| {
             read(
                 &format!(
-                    "kerf-look 1\nlook look.t version=1 on=transition\n  doc \"Turns.\"\n  param way choice options=left|right\n  param size number default=1\n{lines}\n"
+                    "kerf-look 1\nlook look.t version=1 on=transition\n  doc \"Turns.\"\n  param way choice options=left|right\n  param size number default=1\n  param card color default=#ff0000\n{lines}\n"
                 ),
                 "t",
             )
         };
         assert!(look("  a set three_d=true\n  a set rotate_y={0%:0 100%:$way[90,-90]}").is_ok());
+        assert!(look("  a set border_color=$card\n  b set border_color=#00ff00").is_ok());
         for (line, error) in [
             ("  a set three_d=1", "`three_d` is true or false"),
             ("  a set x=true", "`x` is a number, not `true`"),
+            (
+                "  a set border_color=1",
+                "`border_color` is a color, like #ffffff",
+            ),
+            (
+                "  a set border_color=white",
+                "`border_color` is a color, like #ffffff",
+            ),
+            (
+                "  a set border_color=$size",
+                "`border_color` cannot be `$size`, which is no color",
+            ),
+            (
+                "  a set three_d=$card",
+                "`three_d` cannot be `$card`, which is no switch",
+            ),
+            (
+                "  a set border=$card",
+                "`border` cannot be `$card`, which is no number",
+            ),
             (
                 "  a set rotate_y=$way[90]",
                 "`$way` has 2 options, and picks from as many numbers, not 1",

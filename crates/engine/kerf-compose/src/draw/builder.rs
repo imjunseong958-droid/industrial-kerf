@@ -891,9 +891,11 @@ pub(super) fn letterboxed(plan: &ClipPlan, canvas: (u32, u32)) -> bool {
         _ => false,
     };
     clip.masks.is_empty()
-        && ["x", "y", "rotation", "skew", "anchor_x", "anchor_y"]
-            .iter()
-            .all(|name| static_number(name) == Some(0.0))
+        && [
+            "x", "y", "rotation", "skew", "anchor_x", "anchor_y", "border",
+        ]
+        .iter()
+        .all(|name| static_number(name) == Some(0.0))
         && unit("scale_x")
         && unit("scale_y")
 }
@@ -907,7 +909,7 @@ pub(super) fn untouched(plan: &ClipPlan) -> bool {
         && clip.masks.is_empty()
         && [
             "x", "y", "rotation", "skew", "anchor_x", "anchor_y", "crop_l", "crop_r", "crop_t",
-            "crop_b",
+            "crop_b", "border",
         ]
         .iter()
         .all(|name| is(name, 0.0))

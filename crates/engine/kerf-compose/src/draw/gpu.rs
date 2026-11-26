@@ -481,7 +481,11 @@ impl Drawing {
         }
         let reach = self.gpu_reach(sequence, plan, at, scale);
         let shape = self.gpu_shape(sequence, plan, time, scale, reach);
-        gpu.fits(shape.source.0, shape.source.1)
+        // A card behind it makes its picture larger.
+        let past = shape.past.as_ref().map(frame_in);
+        let tall = past.map_or(f64::from(plan.size.1) * shape.source_per, |past| past.h);
+        let pad = border(plan, time, tall).map_or(0, |(width, _)| 2 * width.ceil() as usize);
+        gpu.fits(shape.source.0 + pad, shape.source.1 + pad)
             && self
                 .gpu_ops(sequence, plan, time, at, scale, &shape)
                 .is_some()
@@ -1280,6 +1284,35 @@ impl Drawing {
                 }
             };
         }
+        let mut to_output = shape.to_output;
+        let mut past = past;
+        let tall = past.map_or(f64::from(plan.size.1) * source_per, |past| past.h);
+        let bordered = border(plan, time, tall);
+        if let Some((width, color)) = bordered {
+            let whole = Rect::new(0.0, 0.0, f64::from(picture.w), f64::from(picture.h));
+            let kept = crop.unwrap_or(whole);
+            let pad = width.ceil();
+            let card = Rect::new(
+                kept.x + pad - width,
+                kept.y + pad - width,
+                kept.w + 2.0 * width,
+                kept.h + 2.0 * width,
+            );
+            let (fw, fh) = (picture.w + 2 * pad as u32, picture.h + 2 * pad as u32);
+            let solid = frame.filled(fw, fh, color);
+            let framed = frame.clear(fw, fh);
+            let framed =
+                frame.composite(framed, &solid, &Affine::IDENTITY, card, 1.0, Blend::Normal);
+            frame.release(solid);
+            let moved = Affine::translate(pad, pad);
+            let framed = frame.composite(framed, &picture, &moved, kept, 1.0, Blend::Normal);
+            frame.release(picture);
+            picture = framed;
+            to_output = to_output.then_apply(&Affine::translate(-pad, -pad));
+            crop = Some(card);
+            // A wipe goes across the card.
+            past = Some(card);
+        }
         let reveal = shown
             .reveal
             .map(|(reveal, start, end)| (reveal, progress(at, start, end)));
@@ -1299,6 +1332,7 @@ impl Drawing {
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         let opaque = ops.is_empty()
             && reveal.is_none()
+            && bordered.is_none()
             && clip.masks.is_empty()
             && match &plan.source {
                 Source::Solid(color) => color.a == 255,
@@ -1306,7 +1340,7 @@ impl Drawing {
             };
         Some(Some(GpuReady {
             picture,
-            to_output: shape.to_output,
+            to_output,
             crop,
             opacity,
             opaque,

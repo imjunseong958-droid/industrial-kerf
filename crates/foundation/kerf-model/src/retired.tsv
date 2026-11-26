@@ -280,3 +280,5 @@ spin-motion	look.spin-motion@1
 spring-motion	look.spring-motion@1
 travel-motion	look.travel-motion@1
 stretch	look.stretch@1
+# And a frame around the two clips, which their `border` draws.
+frame	look.frame@1

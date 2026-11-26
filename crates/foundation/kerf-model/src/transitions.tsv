@@ -127,10 +127,6 @@ transition	split	Slide	Split	The outgoing shot splits apart down the middle to r
 transition	whip	Slide	Whip	A fast whip pan blur from one shot into the next; energetic, kinetic cuts and travel edits.
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	blur	80	0..100	%	Blur
-transition	frame	Transformers	Frame	Shrinks the shot into a framed card and grows the next; photo albums and recaps.
-	number	frame_width	24	0..200	px	Frame Width
-	color	frame_color	#ffffff			Frame Color
-	number	scale	60	10..95	%	Scale
 transition	clock-wipe	Wipe	Clock Wipe	Sweeps around a center like a clock hand; time passing and countdowns.
 	number	center_x	0.5	-10..10	frame widths	Center X
 	number	center_y	0.5	-10..10	frame heights	Center Y
