@@ -159,7 +159,6 @@ fn which_transitions_have_kernels() {
         "flare",
         "flash",
         "flicker",
-        "flip-motion",
         "frame",
         "glass",
         "glitch",
@@ -191,9 +190,7 @@ fn which_transitions_have_kernels() {
         "slide",
         "soft-wipe",
         "solarize",
-        "spin-3d",
         "spin-motion",
-        "spinback-3d",
         "split",
         "spring-motion",
         "star-wipe",
@@ -221,5 +218,5 @@ fn which_transitions_have_kernels() {
     without.sort_unstable();
     assert_eq!(with, KERNELS);
     assert_eq!(without, ON_THE_CPU);
-    assert_eq!(with.len() + without.len(), 64);
+    assert_eq!(with.len() + without.len(), 61);
 }

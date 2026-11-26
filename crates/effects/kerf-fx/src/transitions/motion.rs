@@ -1,6 +1,6 @@
 //! Moving-frame transitions: Animation, Slide, Transformers and the camera-style Smart Tools.
 
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::PI;
 
 use super::cards::{eye, focal_for, Card, V3};
 use super::{
@@ -14,13 +14,8 @@ use kerf_draw::Image;
 pub(crate) struct Layer<'a> {
     pub card: Card,
     pub front: &'a Image,
-    /// Image on the back face (mirrored so it reads correctly after a half turn about
-    /// the y axis (`mirror_y = false`) or the x axis (`mirror_y = true`)); `None` = one-sided.
-    pub back: Option<&'a Image>,
-    pub mirror_y: bool,
     /// Visible part of the card in image pixels (x0, y0, x1, y1).
     pub clip: [f32; 4],
-    pub shade: bool,
     pub opacity: f32,
 }
 
@@ -29,24 +24,12 @@ impl<'a> Layer<'a> {
         Layer {
             card,
             front,
-            back: None,
-            mirror_y: false,
             clip: [0.0, 0.0, front.w as f32, front.h as f32],
-            shade: false,
             opacity: 1.0,
         }
     }
-    fn with_back(mut self, back: &'a Image, mirror_y: bool) -> Self {
-        self.back = Some(back);
-        self.mirror_y = mirror_y;
-        self
-    }
     fn clipped(mut self, c: [f32; 4]) -> Self {
         self.clip = c;
-        self
-    }
-    fn shaded(mut self) -> Self {
-        self.shade = true;
         self
     }
     /// Where the corners of the card's visible part are on the screen, seen from `eye`.
@@ -75,27 +58,12 @@ fn composite(layers: &[Layer], bounds: &[[f32; 4]], eye: V3, x: f32, y: f32) -> 
         if cov <= 0.0 {
             continue;
         }
-        let (img, sx, sy) = if front {
-            (l.front, lx, ly)
-        } else if let Some(b) = l.back {
-            if l.mirror_y {
-                (b, lx, b.h as f32 - ly)
-            } else {
-                (b, b.w as f32 - lx, ly)
-            }
-        } else {
+        // A card is one-sided: turned away, it is not seen.
+        if !front {
             continue;
-        };
-        let mut c = img.sample_bilinear_clamped(sx, sy);
-        let mut k = cov * l.opacity;
-        if l.shade {
-            let n = cross(l.card.ex, l.card.ey);
-            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-9);
-            let facing = (n[2] / len).abs();
-            let light = 0.45 + 0.55 * facing;
-            c = [c[0] * light, c[1] * light, c[2] * light, c[3]];
         }
-        k = k.clamp(0.0, 1.0);
+        let c = l.front.sample_bilinear_clamped(lx, ly);
+        let k = (cov * l.opacity).clamp(0.0, 1.0);
         if nh < MAX {
             hits[nh] = (depth, scale4(c, k));
             nh += 1;
@@ -104,14 +72,6 @@ fn composite(layers: &[Layer], bounds: &[[f32; 4]], eye: V3, x: f32, y: f32) -> 
     let hits = &mut hits[..nh];
     hits.sort_by(|a, b| b.0.total_cmp(&a.0));
     hits.iter().fold([0.0; 4], |acc, (_, c)| over(acc, *c))
-}
-
-fn cross(a: V3, b: V3) -> V3 {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
 }
 
 /// The box on the screen outside which nothing of a layer shows, seen from `eye`: around the corners of
@@ -299,60 +259,6 @@ pub(crate) fn card_scene<'a, 'b>(id: &str, t: &'b Tx<'a>) -> Option<CardScene<'a
                     Layer::new(Card::flat().rot_z(hub, a), t.a),
                     Layer::new(Card::flat().rot_z(hub, a - gap * sign), t.b),
                 ]
-            })
-        }
-        "flip_motion" | "spin_3d" => {
-            let focal = focal_for(w, h, t.frac("perspective"));
-            let flip = id == "flip_motion";
-            let sign = if horiz { dx.signum() } else { -dy.signum() };
-            let blur = if flip { exposure(t, 0.06) } else { 0.0 };
-            boxed(focal, blur, move |q| {
-                let (e, back) = if flip {
-                    // ease in, then settle with a small overshoot
-                    (
-                        if q < 0.5 {
-                            ease_in(q * 2.0) * 0.5
-                        } else {
-                            0.5 + back_out(q * 2.0 - 1.0, 1.2) * 0.5
-                        },
-                        0.25 * bell(q),
-                    )
-                } else {
-                    (ease_in_out(q), 0.8 * bell(q))
-                };
-                let a = e * PI * sign;
-                let card = if horiz {
-                    Card::flat().rot_y(c, a)
-                } else {
-                    Card::flat().rot_x(c, a)
-                };
-                let card = card.translate([0.0, 0.0, back * w.max(h)]);
-                vec![Layer::new(card, t.a).with_back(t.b, !horiz).shaded()]
-            })
-        }
-        "spinback_3d" => {
-            let depth = t.frac("depth");
-            let focal = focal_for(w, h, 0.6);
-            let sign = if horiz { dx.signum() } else { -dy.signum() };
-            boxed(focal, 0.0, move |q| {
-                let z = depth * w.max(h) * 1.5 * bell(q);
-                if q < 0.5 {
-                    let a = ease_in(q * 2.0) * FRAC_PI_2 * sign;
-                    let k = if horiz {
-                        Card::flat().rot_x(c, a)
-                    } else {
-                        Card::flat().rot_y(c, a)
-                    };
-                    vec![Layer::new(k.translate([0.0, 0.0, z]), t.a).shaded()]
-                } else {
-                    let a = -(1.0 - ease_out((q - 0.5) * 2.0)) * FRAC_PI_2 * sign;
-                    let k = if horiz {
-                        Card::flat().rot_x(c, a)
-                    } else {
-                        Card::flat().rot_y(c, a)
-                    };
-                    vec![Layer::new(k.translate([0.0, 0.0, z]), t.b).shaded()]
-                }
             })
         }
         "pop_motion" => {

@@ -64,18 +64,6 @@ impl Card {
             |v| [v[0] * s, v[1] * s, v[2] * s],
         )
     }
-    /// Rotate about the vertical (y) axis through `c` by `a` radians (positive turns the right edge away).
-    pub fn rot_y(self, c: V3, a: f32) -> Self {
-        let (s, co) = a.sin_cos();
-        let r = move |v: V3| [v[0] * co - v[2] * s, v[1], v[0] * s + v[2] * co];
-        self.map(move |p| add(c, r(sub(p, c))), r)
-    }
-    /// Rotate about the horizontal (x) axis through `c` (positive turns the bottom edge away).
-    pub fn rot_x(self, c: V3, a: f32) -> Self {
-        let (s, co) = a.sin_cos();
-        let r = move |v: V3| [v[0], v[1] * co - v[2] * s, v[1] * s + v[2] * co];
-        self.map(move |p| add(c, r(sub(p, c))), r)
-    }
     /// Rotate in the screen plane about `c` (positive = clockwise on screen).
     pub fn rot_z(self, c: V3, a: f32) -> Self {
         let (s, co) = a.sin_cos();
