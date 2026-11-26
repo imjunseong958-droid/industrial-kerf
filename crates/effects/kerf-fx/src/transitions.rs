@@ -107,6 +107,41 @@ impl<'a> Fx<'a> {
             _ => None,
         }
     }
+
+    /// Whether the transition takes `side`'s picture as a share of it: what its mix shows of
+    /// that picture is the picture as it is, moved, warped, or blurred, by as much of a pixel
+    /// in each channel and in alpha, and how much is set by where the two pictures are and by
+    /// what the other one shows, not by what this one shows. Where a model films that clip, the
+    /// take laid under it can then show in its place by exactly that share ([`split_filmed`]).
+    pub fn shares(&self, side: Side) -> bool {
+        match self.id.as_str() {
+            // These go by how bright the outgoing picture is: where it burns first, or glows.
+            "burn_alpha" | "phosphor" => side == Side::Incoming,
+            // This by how bright the picture `source` names is.
+            "luma_fade" => match self.choice("source") {
+                Some(1) => side == Side::Outgoing,
+                _ => side == Side::Incoming,
+            },
+            // These go by how bright both pictures are (rays, a glow, solarizing, a morph's
+            // flow), add or blend them in a curve (additive, film), brighten or tint them
+            // (flicker, glass's facets, burn chroma), or move their channels apart (chaos,
+            // glitch, VHS damage).
+            "additive_dissolve" | "burn_chroma" | "chaos" | "film_dissolve" | "flicker"
+            | "glass" | "glitch" | "glow" | "morph_cut" | "ray" | "solarize" | "vhs_damage" => {
+                false
+            }
+            _ => true,
+        }
+    }
+}
+
+/// One of the two pictures a transition mixes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Side {
+    /// The clip it leaves (A).
+    Outgoing,
+    /// The clip it enters (B).
+    Incoming,
 }
 
 /// The FilmCraft transition that draws Kerf's transition `id`, if Kerf's renderer draws it.
@@ -176,6 +211,106 @@ pub fn apply_scaled(e: &Fx, a: &Image, b: &Image, p: f32, scale: f32) -> Image {
         .or_else(|| grunge::apply(id, &t))
         .or_else(|| special::apply(id, &t))
         .unwrap_or_else(|| paint(t.w, t.h, |x, y| mix(t.sa(x, y), t.sb(x, y), p)))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Beside a clip a model films
+
+/// [`apply_scaled`] where `filmed` is the picture of a clip a model films, whose take, laid
+/// under it, is to show in its place. A transition that does not take that picture as a share
+/// of it ([`Fx::shares`]) goes by what the picture shows, and the take is not that: such a mix
+/// is a plain cross dissolve of the two pictures here, which does take each as a share.
+pub fn apply_filmed(e: &Fx, a: &Image, b: &Image, p: f32, scale: f32, filmed: Side) -> Image {
+    if e.shares(filmed) {
+        return apply_scaled(e, a, b, p, scale);
+    }
+    let p = if p.is_finite() {
+        p.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    a.clone().lerp(b, p)
+}
+
+/// [`apply_filmed`] split into what Kerf draws of it and what it leaves to the take.
+pub struct Split {
+    /// What the mix shows of the picture beside the filmed one, premultiplied, its alpha that
+    /// picture's share of each pixel.
+    pub drawn: Image,
+    /// How much of each pixel the whole mix covers, both pictures' shares.
+    pub covered: Vec<f32>,
+}
+
+impl Split {
+    /// What the mix covers of `under` made clear by as much, and what Kerf draws of it laid
+    /// there: the filmed picture's share of each pixel is left clear, for the take to show.
+    pub fn lay(&self, under: &mut Image) {
+        under
+            .px
+            .par_chunks_mut(4)
+            .zip(self.drawn.px.par_chunks(4))
+            .zip(self.covered.par_iter())
+            .for_each(|((to, drawn), &covered)| {
+                if covered <= 0.0 {
+                    return;
+                }
+                for channel in 0..4 {
+                    to[channel] = to[channel] * (1.0 - covered) + drawn[channel];
+                }
+            });
+    }
+}
+
+/// [`apply_filmed`] of `a` and `b`, where `filmed`'s is the picture of a clip a model films,
+/// split ([`Split`]). It is made from the mix with that picture black where it is, which leaves
+/// the other's part, and white, which says how much of each pixel is the filmed one's: what the
+/// filmed picture shows does not count, as the take shows in its place.
+pub fn split_filmed(e: &Fx, a: &Image, b: &Image, p: f32, scale: f32, filmed: Side) -> Split {
+    split(|a, b| apply_filmed(e, a, b, p, scale, filmed), a, b, filmed)
+}
+
+/// `mix` of `a` and `b` split as [`split_filmed`] does, exact for a mix that takes `filmed`'s
+/// picture as a share of it.
+fn split(mix: impl Fn(&Image, &Image) -> Image, a: &Image, b: &Image, filmed: Side) -> Split {
+    let (dark, lit) = match filmed {
+        Side::Outgoing => (mix(&in_grey(a, 0.0), b), mix(&in_grey(a, 1.0), b)),
+        Side::Incoming => (mix(a, &in_grey(b, 0.0)), mix(a, &in_grey(b, 1.0))),
+    };
+    let mut drawn = dark;
+    let mut covered = vec![0.0; drawn.px.len() / 4];
+    drawn
+        .px
+        .par_chunks_mut(4)
+        .zip(lit.px.par_chunks(4))
+        .zip(covered.par_iter_mut())
+        .for_each(|((pixel, lit), covered)| {
+            let whole = pixel[3].clamp(0.0, 1.0);
+            let filmed = (lit[0] - pixel[0]).clamp(0.0, whole);
+            *covered = whole;
+            pixel[3] = whole - filmed;
+            // Light the transition lays where the pixel is all the filmed picture's, a burn's
+            // edge or a leak, adds to the take there, as it adds to the picture in its own
+            // sequence. A pixel with no share of its own is laid as nothing
+            // (`kerf_draw::blend::mix`), so it keeps one too small to dim the take.
+            if pixel[3] <= 0.0 && pixel[..3].iter().any(|channel| *channel > 0.0) {
+                pixel[3] = LIGHT_ALONE;
+            }
+        });
+    Split { drawn, covered }
+}
+
+/// The share of a pixel that light Kerf draws keeps where it is alone over the take
+/// ([`split_filmed`]).
+const LIGHT_ALONE: f32 = 1e-6;
+
+/// `picture` with every pixel of it `grey`, as much as it is there.
+fn in_grey(picture: &Image, grey: f32) -> Image {
+    let mut out = picture.clone();
+    out.px.par_chunks_mut(4).for_each(|pixel| {
+        let value = grey * pixel[3];
+        pixel[..3].fill(value);
+    });
+    out
 }
 
 // ---------------------------------------------------------------------------------------------

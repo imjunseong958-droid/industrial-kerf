@@ -31,7 +31,7 @@ use kerf_draw::effect::{EffectHost, EffectRun, Files};
 use kerf_draw::source::{premultiplied, PictureSource, SourceRun};
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{mask, wipe, Affine, Blend, Image, Rect, Vec2};
-use kerf_fx::transitions::{apply_scaled, Fx};
+use kerf_fx::transitions::{apply_filmed, apply_scaled, split_filmed, Fx, Side};
 use kerf_fx::video::{self, catalog::Headroom};
 use kerf_model::time::format_timecode;
 use kerf_model::{
