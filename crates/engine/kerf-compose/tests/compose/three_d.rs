@@ -1267,6 +1267,40 @@ fn what_a_model_films_leaves_its_take_to_show_where_its_scene_is_laid_over_it() 
     }
 }
 
+/// A clip `a` and then a clip `b`, solids with what their `set` says, with the transition `fx`
+/// across their cut from frame 18 to 30, in a scene laid over a green take: the frame `at`.
+fn over_take(fx: &str, at: i64, a: &str, b: &str) -> Frame {
+    let project = parse_document(
+        &format!(
+            concat!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n",
+                "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n      set {a}\n",
+                "    clip b gen=solid@1 at=24f dur=24f\n      set {b}\n",
+                "    transition x1 from=a to=b fx={fx} dur=12f\n",
+                "sequence s2 rate=24 size=320x180 audio=48000\n",
+                "  track V1 video\n    clip take gen=solid@1 at=0f dur=48f\n      set color=#00ff00\n",
+                "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=48f\n",
+            ),
+            a = a,
+            b = b,
+            fx = fx
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: Some("s2".to_owned()),
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes")
+    .frame(Rate::FPS_24.time_of(at), 1.0)
+}
+
 #[test]
 fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
     const BLUE: [u8; 3] = [0, 0, 255];
@@ -1275,36 +1309,12 @@ fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
     // A red clip and then a blue one, with the transition `fx` across their cut from frame 18
     // to 30, in a scene laid over a green take: the frame `at`.
     let over = |fx: &str, at: i64, red: &str, blue: &str| {
-        let project = parse_document(
-            &format!(
-                concat!(
-                    "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n",
-                    "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n",
-                    "      set color=#ff0000{red}\n",
-                    "    clip b gen=solid@1 at=24f dur=24f\n      set color=#0000ff{blue}\n",
-                    "    transition x1 from=a to=b fx={fx} dur=12f\n",
-                    "sequence s2 rate=24 size=320x180 audio=48000\n",
-                    "  track V1 video\n    clip take gen=solid@1 at=0f dur=48f\n      set color=#00ff00\n",
-                    "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=48f\n",
-                ),
-                red = red,
-                blue = blue,
-                fx = fx
-            ),
-            Catalog::builtin(),
+        over_take(
+            fx,
+            at,
+            &format!("color=#ff0000{red}"),
+            &format!("color=#0000ff{blue}"),
         )
-        .unwrap_or_else(|errors| panic!("{errors:?}"))
-        .project;
-        Compositor::new(
-            &project,
-            Catalog::builtin(),
-            &ComposeOptions {
-                sequence: Some("s2".to_owned()),
-                ..ComposeOptions::default()
-            },
-        )
-        .expect("composes")
-        .frame(Rate::FPS_24.time_of(at), 1.0)
     };
     let filmed = " filmed=true";
     // A push, halfway: the blue has come in over the left half and the red is going out over
@@ -1331,4 +1341,71 @@ fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
         half[0].abs_diff(188) <= 3 && half[1].abs_diff(188) <= 3 && half[2] <= 3,
         "{half:?}"
     );
+}
+
+#[test]
+fn a_transition_that_goes_by_what_a_model_films_is_a_dissolve_beside_it() {
+    const RED: &str = "color=#ff0000";
+    const BLUE: &str = "color=#0000ff";
+    const FILMED: &str = " filmed=true";
+    // The two clips of `over_take`, red then blue, and which of them a model films.
+    let clips = |filmed_a: bool| {
+        let filmed = |is: bool| if is { FILMED } else { "" };
+        (
+            format!("{RED}{}", filmed(filmed_a)),
+            format!("{BLUE}{}", filmed(!filmed_a)),
+        )
+    };
+    // How far apart two frames are at most, in any channel of any pixel.
+    let apart = |x: &Frame, y: &Frame| {
+        x.rgba
+            .iter()
+            .zip(&y.rgba)
+            .map(|(x, y)| x.abs_diff(*y))
+            .max()
+            .unwrap_or(0)
+    };
+    // Where a transition takes the filmed clip's picture as a share of it, the take shows in
+    // its place by that share: as the same transition draws it with that clip the take's green.
+    // A burn and a luma fade go by how bright the red is, here Kerf's; a border, a light, and a
+    // picture collapsing to a line are Kerf's.
+    for (fx, at, filmed_a) in [
+        ("burn-alpha@1", 22, false),
+        ("luma-fade@1", 24, false),
+        ("iris-round@1 border_width=12", 24, true),
+        ("iris-round@1 border_width=12", 24, false),
+        ("light-leak@1", 27, false),
+        ("tv-power@1", 21, true),
+    ] {
+        let (a, b) = clips(filmed_a);
+        let (green_a, green_b) = match filmed_a {
+            true => ("color=#00ff00".to_owned(), b.clone()),
+            false => (a.clone(), "color=#00ff00".to_owned()),
+        };
+        let off = apart(
+            &over_take(fx, at, &a, &b),
+            &over_take(fx, at, &green_a, &green_b),
+        );
+        assert!(
+            off <= 2,
+            "{fx} at {at}, red filmed {filmed_a}: off by {off}"
+        );
+    }
+    // Where it goes by what that picture shows, which the take is not, it is a plain dissolve
+    // of the two: as Kerf's own `dissolve` draws them. So a burn shows nothing but the blue
+    // and the take, and a ray and a luma fade half of each at the cut.
+    for (fx, at, filmed_a) in [
+        ("burn-alpha@1", 27, true),
+        ("ray@1", 24, true),
+        ("ray@1", 24, false),
+        ("luma-fade@1", 24, true),
+    ] {
+        let (a, b) = clips(filmed_a);
+        let mixed = over_take(fx, at, &a, &b);
+        let off = apart(&mixed, &over_take("dissolve", at, &a, &b));
+        assert!(
+            off <= 2,
+            "{fx} at {at}, red filmed {filmed_a}: off by {off}"
+        );
+    }
 }

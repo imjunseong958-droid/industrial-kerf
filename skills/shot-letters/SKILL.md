@@ -20,6 +20,12 @@ description: Keep what has to be exact in a shot a model films, a sign's letters
   and scaled as the shot's clip is. There the scene shows only what no model
   films, through its own camera and lights, cut by whatever a model films
   before it. In its own sequence the scene shows every clip as ever.
+- A transition between a clip a model films and one Kerf draws shows the
+  take where it would show the filmed clip, moved, wiped, blurred, or lit as
+  the transition has it. One that goes by how bright the filmed clip is (a
+  burn or a luma fade read from it, a ray, a glow, a morph cut), or tints or
+  splits its colors, is a plain dissolve there: pick another if its look
+  matters.
 - The cut is where the guide's solid ends, so a take that strays from its
   guide shows at it: hold the take to the guide (`look` with `follows`)
   before laying the scene over it.

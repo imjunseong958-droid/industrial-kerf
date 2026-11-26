@@ -223,3 +223,139 @@ fn golden_fingerprints() {
     }
     assert!(bad.is_empty(), "transition goldens differ: {bad:?}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Beside a clip a model films
+
+/// Every other pixel of `picture` each way: a test of every setting of every transition is many
+/// mixes.
+fn halved(picture: &Image) -> Image {
+    let mut out = Image::new(picture.w / 2, picture.h / 2);
+    for y in 0..out.h {
+        for x in 0..out.w {
+            let at = (y * out.w + x) * 4;
+            out.px[at..at + 4].copy_from_slice(&picture.get(x * 2, y * 2));
+        }
+    }
+    out
+}
+
+/// `picture` in a box with soft edges (fractions of the frame), as a clip that does not fill it.
+fn boxed(picture: &Image, (x0, x1, y0, y1): (f32, f32, f32, f32)) -> Image {
+    let mut out = picture.clone();
+    let (w, h) = (out.w, out.h);
+    for (i, pixel) in out.px.chunks_mut(4).enumerate() {
+        let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+        let inside = (x - x0).min(x1 - x).min(y - y0).min(y1 - y);
+        let k = (inside * 20.0).clamp(0.0, 1.0);
+        pixel.iter_mut().for_each(|channel| *channel *= k);
+    }
+    out
+}
+
+/// `color` where `shape` is, as much as it is there.
+fn in_color(shape: &Image, color: [f32; 3]) -> Image {
+    let mut out = shape.clone();
+    for pixel in out.px.chunks_mut(4) {
+        let a = pixel[3];
+        pixel[..3].copy_from_slice(&color.map(|channel| channel * a));
+    }
+    out
+}
+
+/// `over` laid on `under`, as Kerf's renderer lays a picture on another.
+fn laid(over: &Image, under: &Image) -> Image {
+    let mut out = under.clone();
+    kerf_draw::blend::composite(&mut out, over, 1.0, kerf_draw::Blend::Normal);
+    out
+}
+
+/// How far apart `a` and `b` are at most, in any channel of any pixel.
+fn apart(a: &Image, b: &Image) -> f32 {
+    a.px.iter()
+        .zip(&b.px)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max)
+}
+
+#[test]
+fn a_mix_beside_a_filmed_picture_splits_into_kerfs_part_and_the_takes() {
+    // A take all one color shows the same wherever a transition moves the filmed picture, so
+    // there the split, laid over a half-clear picture under the pair and then over the take,
+    // comes to the mix of the take in that picture's shape with the other picture, laid so.
+    let take = [0.2, 0.8, 0.4];
+    let (a, b) = (halved(&frame_a()), halved(&frame_b()));
+    let (w, h) = (a.w, a.h);
+    let take_picture = Image::filled(w, h, [take[0], take[1], take[2], 1.0]);
+    let under = Image::filled(w, h, [0.3, 0.1, 0.0, 0.5]);
+    let pictures = [
+        (
+            boxed(&a, (0.1, 0.7, 0.2, 0.9)),
+            boxed(&b, (0.3, 0.95, 0.05, 0.6)),
+        ),
+        (a, b),
+    ];
+    let mut wrong = Vec::new();
+    for d in transitions() {
+        // As it comes, and with each of its parameters changed.
+        let mut settings = vec![Params::new()];
+        for param in &d.params {
+            if let Some(value) = changed(param) {
+                settings.push(Params::from([(param.name.clone(), value)]));
+            }
+        }
+        for (setting, params) in settings.iter().enumerate() {
+            let e = Fx::new(d, params).expect("Kerf's renderer draws it");
+            for side in [Side::Outgoing, Side::Incoming] {
+                // How far the split is from the mix, and how far it would be with the
+                // transition's own mix where it goes by what the filmed picture shows.
+                let (mut split_off, mut own_off) = (0f32, 0f32);
+                for (a, b) in &pictures {
+                    let (taken_a, taken_b) = match side {
+                        Side::Outgoing => (in_color(a, take), b.clone()),
+                        Side::Incoming => (a.clone(), in_color(b, take)),
+                    };
+                    // As it comes, at more moments: some brighten a picture at some only.
+                    let moments: &[f32] = match setting {
+                        0 => &[0.1, 0.25, 0.4, 0.6, 0.85],
+                        _ => &[0.3, 0.6],
+                    };
+                    for &p in moments {
+                        let as_laid = |split: Split| {
+                            let mut s = under.clone();
+                            split.lay(&mut s);
+                            laid(&s, &take_picture)
+                        };
+                        let due = |mixed: Image| laid(&laid(&mixed, &under), &take_picture);
+                        let mixed = apply_filmed(&e, &taken_a, &taken_b, p, 1.0, side);
+                        let split = split_filmed(&e, a, b, p, 1.0, side);
+                        split_off = split_off.max(apart(&as_laid(split), &due(mixed)));
+                        if setting != 0 {
+                            continue;
+                        }
+                        let own = |a: &Image, b: &Image| apply(&e, a, b, p);
+                        own_off = own_off.max(apart(
+                            &as_laid(super::split(own, a, b, side)),
+                            &due(own(&taken_a, &taken_b)),
+                        ));
+                    }
+                }
+                if split_off > 1e-3 {
+                    wrong.push(format!(
+                        "{} {side:?} setting {setting}: off by {split_off}",
+                        d.id
+                    ));
+                }
+                // As it comes, a transition says it shares a picture exactly where it does.
+                if setting == 0 && e.shares(side) != (own_off <= 1e-3) {
+                    wrong.push(format!(
+                        "{} {side:?}: says it shares it {}, off by {own_off}",
+                        d.id,
+                        e.shares(side)
+                    ));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
