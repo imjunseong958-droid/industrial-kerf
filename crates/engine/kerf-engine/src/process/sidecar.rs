@@ -84,22 +84,32 @@ fn run_within(
     });
 
     let mut tail = String::new();
-    let mut drain = |tail: &mut String| {
-        for line in receiver.try_iter() {
+    // What it has said, waiting up to `wait` for it to say something: lines are taken as they
+    // come, or a sidecar that says more than the queue holds in a poll waits on its stderr.
+    let mut drain = |tail: &mut String, wait: Duration| {
+        let first = match receiver.recv_timeout(wait) {
+            Ok(line) => Some(line),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            // Its stderr is closed, perhaps while it runs on: there is nothing to wait for.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                thread::sleep(wait);
+                None
+            }
+        };
+        for line in first.into_iter().chain(receiver.try_iter()) {
             append_bounded(tail, &line);
             on_line(&line);
         }
     };
     let outcome = loop {
-        drain(&mut tail);
+        drain(&mut tail, Duration::ZERO);
         if cancellation.is_cancelled() {
             // Asked first, so that it can undo what it has under way and say so. It is
             // not reaped while it is waited for: its group stays its own to signal.
             let asked = Instant::now();
             stopper.ask_to_end();
             while asked.elapsed() < grace && !stopper.has_ended() {
-                drain(&mut tail);
-                thread::sleep(POLL_INTERVAL);
+                drain(&mut tail, POLL_INTERVAL);
             }
             // What it said on its way out may not have been read from its stderr yet: it is,
             // to the end. Its stderr closes once nothing of its group is left writing to it:
@@ -108,10 +118,9 @@ fn run_within(
             let mut read_out = || {
                 let since = Instant::now();
                 while !reader.is_finished() && since.elapsed() < LAST_WORDS {
-                    drain(&mut tail);
-                    thread::sleep(POLL_INTERVAL);
+                    drain(&mut tail, POLL_INTERVAL);
                 }
-                drain(&mut tail);
+                drain(&mut tail, Duration::ZERO);
             };
             if stopper.has_ended() {
                 read_out();
@@ -122,7 +131,7 @@ fn run_within(
         }
         match sidecar.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None) => thread::sleep(POLL_INTERVAL),
+            Ok(None) => drain(&mut tail, POLL_INTERVAL),
             Err(error) => {
                 sidecar.kill();
                 break Err(error.into());
@@ -136,12 +145,11 @@ fn run_within(
     // closes or the queue is dropped.
     if outcome.is_ok() {
         while !reader.is_finished() {
-            drain(&mut tail);
-            thread::sleep(POLL_INTERVAL);
+            drain(&mut tail, POLL_INTERVAL);
         }
         // It only forwards lines: what it sent is drained below, whether or not it panicked.
         let _ = reader.join();
-        drain(&mut tail);
+        drain(&mut tail, Duration::ZERO);
     }
     outcome.map(|status| Finished {
         status,
@@ -282,6 +290,24 @@ mod tests {
         // The shell may say that the `sleep` it waited on was ended too.
         let said: Vec<String> = lines.try_iter().collect();
         assert!(said.iter().any(|line| line == "not yet"), "{said:?}");
+    }
+
+    #[test]
+    fn a_sidecar_that_says_a_lot_is_heard_as_fast_as_it_says_it() {
+        // As many lines as a peak pass says of an hour and a half of sound.
+        let mut command = Command::new("sh");
+        command.args(["-c", "seq 100000 >&2"]);
+        let mut heard = 0;
+        let started = Instant::now();
+        let finished = run(command, &CancellationToken::new(), |_| heard += 1)
+            .expect("the shell ends by itself");
+        assert!(finished.status.success());
+        assert_eq!(heard, 100_000);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     #[test]
