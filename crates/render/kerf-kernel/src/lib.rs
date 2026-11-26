@@ -343,7 +343,7 @@ pub fn iris_round<N: Num>(x: N, y: N, cx: N, cy: N) -> N {
 
 // ------------------------------------------------------------------------------------- More grades
 //
-// As the rounded rectangle below, these run on the GPU only, and the CPU's code stays the reference:
+// As the shadow below, these run on the GPU only, and the CPU's code stays the reference:
 // `kept::tests` and `vfx::gpu::tests` in `kerf-fx` hold each, as `f32`, to that code's very values.
 
 /// What a photo filter is told.
@@ -521,111 +521,10 @@ pub fn cineon_px<N: Num>(p: [N; 4], way: u32, told: &Cineon<N>) -> [N; 4] {
     )
 }
 
-// ------------------------------------------------------------------------------ A rounded rectangle
+// ----------------------------------------------------------------------------------------- A shadow
 //
-// These run on the GPU only: the CPU's code in `kerf-fx` stays where it is, as the reference, and
-// `kernels_from_one_source_are_the_effects_to_the_bit` there holds these, as `f32`, to its very values.
-
-/// How far the point `x`, `y` is outside a rectangle, given by its left, top, right, and bottom, with
-/// its corners rounded by `r`: below 0 inside it.
-#[inline(always)]
-pub fn round_rect<N: Num>(x: N, y: N, edges: [N; 4], r: N) -> N {
-    let [x0, y0, x1, y1] = edges;
-    let (zero, two) = (N::lit(0.0), N::lit(2.0));
-    let (cx, cy) = ((x0 + x1) / two, (y0 + y1) / two);
-    let (hx, hy) = ((x1 - x0) / two - r, (y1 - y0) / two - r);
-    let (qx, qy) = ((x - cx).abs() - hx, (y - cy).abs() - hy);
-    qx.max(zero).hypot(qy.max(zero)) + qx.max(qy).min(zero) - r
-}
-
-/// A premultiplied pixel with `a` of it kept, where that is less than all of it.
-#[inline(always)]
-fn kept<N: Num>(p: [N; 4], a: N) -> [N; 4] {
-    N::lit(1.0).if_at_most(a, || p, || p.map(|value| value * a))
-}
-
-/// What a rounded crop is told, in pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct RoundedCrop<N> {
-    /// Its left, top, right, and bottom.
-    pub edges: [N; 4],
-    pub radius: N,
-    /// How far in from its edge it fades; at 0 its edge is a pixel wide.
-    pub feather: N,
-    /// How wide a band just inside its edge is drawn in `border_color`.
-    pub border: N,
-    pub border_color: [N; 3],
-}
-
-/// The premultiplied pixel whose middle is at `x`, `y`, cropped to a rounded rectangle.
-#[inline(always)]
-pub fn rounded_crop<N: Num>(p: [N; 4], x: N, y: N, told: &RoundedCrop<N>) -> [N; 4] {
-    let (zero, half, one) = (N::lit(0.0), N::lit(0.5), N::lit(1.0));
-    let d = round_rect(x, y, told.edges, told.radius);
-    let p = told.border.if_at_most(
-        zero,
-        || p,
-        || {
-            // How much of the pixel the band covers, which goes over what is there.
-            let k = (half - d).clamp(zero, one) - (half - d - told.border).clamp(zero, one);
-            k.if_at_most(
-                zero,
-                || p,
-                || {
-                    let under = one - k;
-                    let [r, g, b] = told.border_color;
-                    [
-                        r * k + p[0] * under,
-                        g * k + p[1] * under,
-                        b * k + p[2] * under,
-                        k + p[3] * under,
-                    ]
-                },
-            )
-        },
-    );
-    let [a] = told.feather.if_at_most(
-        zero,
-        || [(half - d).clamp(zero, one)],
-        || [(-d / told.feather).clamp(zero, one)],
-    );
-    kept(p, a)
-}
-
-/// What a spacer is told of the picture it has placed, in pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Spacer<N> {
-    /// The placed picture's left, top, right, and bottom.
-    pub edges: [N; 4],
-    pub radius: N,
-    /// 1 to put `color` behind the picture, 0 not to.
-    pub fill: N,
-    pub color: [N; 3],
-}
-
-/// The premultiplied pixel whose middle is at `x`, `y` of a picture a spacer has placed: its corners
-/// rounded, and a color behind it.
-#[inline(always)]
-pub fn spacer<N: Num>(p: [N; 4], x: N, y: N, told: &Spacer<N>) -> [N; 4] {
-    let (zero, half, one) = (N::lit(0.0), N::lit(0.5), N::lit(1.0));
-    let p = told.radius.if_at_most(
-        zero,
-        || p,
-        || {
-            let d = round_rect(x, y, told.edges, told.radius);
-            kept(p, (half - d).clamp(zero, one))
-        },
-    );
-    told.fill.if_at_most(
-        zero,
-        || p,
-        || {
-            let k = one - p[3];
-            let [r, g, b] = told.color;
-            [p[0] + r * k, p[1] + g * k, p[2] + b * k, one]
-        },
-    )
-}
+// This runs on the GPU only: the CPU's code in `kerf-fx` stays where it is, as the reference, and
+// `kernels_from_one_source_are_the_effects_to_the_bit` there holds it, as `f32`, to its very values.
 
 /// A pixel of the shadow a premultiplied pixel casts: `color` by how much of the pixel is there and by
 /// how dark the shadow is.
@@ -1156,38 +1055,13 @@ pub fn generated_wgsl() -> String {
     format!("{gradient}{lines}")
 }
 
-/// `rounded_crop`, `spacer`, and `shadow` as `fn rounded_crop_px`, `fn spacer_px`, and `fn shadow_px`,
-/// for the effects' `vfx/kernels.wgsl`: each takes a premultiplied pixel and where its middle is. A
-/// rounded crop's edges are in `u.p0`, its radius, feather, and border in `u.p1`, and its border's color in
-/// `u.p2`; a spacer's edges in `u.p0`, its radius and whether it fills in `u.p1`, and its color in `u.p2`; a
-/// shadow's color in `u.p0` with how dark it is.
-pub fn rounded_wgsl() -> String {
+/// `shadow` as `fn shadow_px`, for the effects' `vfx/kernels.wgsl`: it takes a premultiplied pixel and
+/// where its middle is, and the shadow's color in `u.p0` with how dark it is.
+pub fn shadow_wgsl() -> String {
     let v = Traced::named;
-    let edges = || [v("u.p0.x"), v("u.p0.y"), v("u.p0.z"), v("u.p0.w")];
-    let color = || [v("u.p2.x"), v("u.p2.y"), v("u.p2.z")];
-    let crop = at_a_pixel("rounded_crop_px", |q, x, y| {
-        let told = RoundedCrop {
-            edges: edges(),
-            radius: v("u.p1.x"),
-            feather: v("u.p1.y"),
-            border: v("u.p1.z"),
-            border_color: color(),
-        };
-        rounded_crop(q, x, y, &told)
-    });
-    let spaced = at_a_pixel("spacer_px", |q, x, y| {
-        let told = Spacer {
-            edges: edges(),
-            radius: v("u.p1.x"),
-            fill: v("u.p1.y"),
-            color: color(),
-        };
-        spacer(q, x, y, &told)
-    });
-    let cast = at_a_pixel("shadow_px", |q, _, _| {
+    at_a_pixel("shadow_px", |q, _, _| {
         shadow(q, [v("u.p0.x"), v("u.p0.y"), v("u.p0.z")], v("u.p0.w"))
-    });
-    format!("{crop}{spaced}{cast}")
+    })
 }
 
 #[cfg(test)]
@@ -1412,7 +1286,7 @@ mod tests {
             color_balance_wgsl(),
             box_line_wgsl(),
             wipe_wgsl(),
-            rounded_wgsl(),
+            shadow_wgsl(),
             color_wgsl(),
             generated_wgsl(),
         ];

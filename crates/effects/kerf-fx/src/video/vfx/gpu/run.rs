@@ -126,11 +126,6 @@ impl Kernel {
                 let shadow = [color[0], color[1], color[2], *opacity];
                 drop_shadow(stage, frame, picture, *offset, shadow, blur.as_ref(), *only)?
             }
-            Kernel::RoundedCrop(told) => {
-                let numbers = U::rounded_crop(told);
-                one_pass(stage, frame, picture, &stage.rounded_crop, &numbers)
-            }
-            Kernel::Spacer { place, told } => spacer(stage, frame, picture, *place, told),
             Kernel::Mosaic {
                 block,
                 blocks,
@@ -183,26 +178,6 @@ impl Kernel {
             } => {
                 let numbers = U::floats([center[0], center[1], *reach, *curvature]);
                 one_pass(stage, frame, picture, &stage.lens, &numbers)
-            }
-            Kernel::Magnify {
-                center,
-                magnification,
-                size,
-                feather,
-                opacity,
-                square,
-                mode,
-            } => {
-                let numbers = U::magnify(
-                    *center,
-                    *magnification,
-                    *size,
-                    *feather,
-                    *opacity,
-                    *square,
-                    *mode,
-                );
-                one_pass(stage, frame, picture, &stage.magnify, &numbers)
             }
             Kernel::FourColors(told) => {
                 let numbers = U::four_colors(told);
@@ -349,38 +324,6 @@ fn drop_shadow(
     }
     frame.release(picture);
     Some(cast)
-}
-
-/// Spacer: the picture put where `place` says, and `told`'s edges drawn around it.
-fn spacer(
-    stage: &Stage,
-    frame: &mut Frame<'static>,
-    picture: Picture,
-    place: [f64; 3],
-    told: &kerf_kernel::Spacer<f32>,
-) -> Picture {
-    let (w, h) = (picture.w, picture.h);
-    let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
-    let [x0, y0, s] = place;
-    let to = Affine::translate(x0, y0).then_apply(&Affine::scale(s, s));
-    let empty = frame.clear(w, h);
-    let placed = frame.composite(empty, &picture, &to, whole, 1.0, Blend::Normal);
-    frame.release(picture);
-    let [r, g, b] = told.color;
-    let out = stage.pass(
-        frame,
-        &stage.spacer,
-        &placed,
-        None,
-        &U {
-            p0: told.edges,
-            p1: [told.radius, told.fill, 0.0, 0.0],
-            p2: [r, g, b, 0.0],
-            ..U::default()
-        },
-    );
-    frame.release(placed);
-    out
 }
 
 /// Mosaic, of `blocks` blocks each `block` in size.
@@ -686,16 +629,6 @@ impl U {
         }
     }
 
-    fn rounded_crop(told: &kerf_kernel::RoundedCrop<f32>) -> Self {
-        let [r, g, b] = told.border_color;
-        U {
-            p0: told.edges,
-            p1: [told.radius, told.feather, told.border, 0.0],
-            p2: [r, g, b, 0.0],
-            ..U::default()
-        }
-    }
-
     fn optics(
         center: [f32; 2],
         fit: f32,
@@ -728,23 +661,6 @@ impl U {
             p0: [turn[0][0], turn[0][1], turn[0][2], half],
             p1: [turn[1][0], turn[1][1], turn[1][2], feather],
             p2: [turn[2][0], turn[2][1], turn[2][2], 0.0],
-            ..U::default()
-        }
-    }
-
-    fn magnify(
-        center: [f32; 2],
-        magnification: f32,
-        size: f32,
-        feather: f32,
-        opacity: f32,
-        square: bool,
-        mode: u32,
-    ) -> Self {
-        U {
-            a: [u32::from(square), mode, 0, 0],
-            p0: [center[0], center[1], magnification, size],
-            p1: [feather, opacity, 0.0, 0.0],
             ..U::default()
         }
     }

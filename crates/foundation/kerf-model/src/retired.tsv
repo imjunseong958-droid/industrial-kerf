@@ -71,7 +71,7 @@ generate.lightburst
 generate.lightrays	
 generate.lightsweep	the prompt and references of the shot's recipe
 generate.threads	generate.grid@2
-generate.eyedropperfill	generate.paintbucket@2
+generate.eyedropperfill	a `gen=solid@1` clip over it
 generate.fill	a solid (gen=solid@1)
 generate.fractal	
 generate.radiowaves	a `gen=shape@1` clip
@@ -243,3 +243,11 @@ mirror
 page-peel	
 slice	split@2
 wave	liquid-distortion@1
+# And effects that draw what a shape, a title, or a clip's own properties draw
+# in the guide.
+transform.spacer	a `gen=shape@1` rect behind the clip, with `round=` for its corners
+utility.roundedcrop	a `gen=shape@1` rect with `round=` as the clip's matte (`key.trackmatte@1`), and one with `stroke=` for a border
+text.simple	a `gen=title@1` clip, with a `gen=shape@1` rect behind it for a box
+utility.autoalign	the clip's `x` and `y`
+distort.magnify	a copy of the clip above it, scaled with `scale` about the spot its `anchor_x` and `anchor_y` name, under an ellipse or rect mask
+generate.paintbucket	a `gen=shape@1` clip over the region

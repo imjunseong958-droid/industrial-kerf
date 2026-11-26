@@ -1395,7 +1395,6 @@ fn build_effects() -> Vec<EffectDef> {
                 fs("size", "Size", 15.0, (1.0, 100.0), (1.0, 50.0), "%", 1),
             ],
         ),
-        video("simple_text", "Simple Text", vfx::UTILITY, vec![]),
         // ---- audio effects ----
         // (defined in effect/audio.rs; appended below)
         EffectDef {

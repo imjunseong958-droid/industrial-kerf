@@ -369,28 +369,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         video(
-            "magnify",
-            "Magnify",
-            DISTORT,
-            vec![
-                ch("shape", "Shape", &["Circle", "Square"], 0),
-                pt("center", "Center", f64::NAN, f64::NAN),
-                fs(
-                    "magnification",
-                    "Magnification",
-                    200.0,
-                    (100.0, 600.0),
-                    (100.0, 600.0),
-                    "",
-                    1,
-                ),
-                px("size", "Size", 100.0, 4000.0, 600.0),
-                px("feather", "Feather", 0.0, 1000.0, 200.0),
-                pct("opacity", "Opacity", 100.0),
-                ch("mode", "Blending Mode", SIMPLE_BLEND, 0),
-            ],
-        ),
-        video(
             "warp_stabilizer",
             "Warp Stabilizer",
             DISTORT,
@@ -528,21 +506,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                 col("replace", "Replace Color", [0.0, 0.0, 1.0, 1.0]),
             ],
         ),
-        video(
-            "rounded_crop",
-            "Rounded Crop",
-            IMAGE_CONTROL,
-            vec![
-                pct("left", "Left", 0.0),
-                pct("top", "Top", 0.0),
-                pct("right", "Right", 0.0),
-                pct("bottom", "Bottom", 0.0),
-                px("radius", "Roundness", 40.0, 2000.0, 400.0),
-                px("feather", "Feather", 0.0, 500.0, 100.0),
-                px("border", "Border Width", 0.0, 500.0, 100.0),
-                col("border_color", "Border Color", [1.0, 1.0, 1.0, 1.0]),
-            ],
-        ),
         // ---- Keying ----
         video(
             "alpha_adjust",
@@ -627,43 +590,7 @@ pub(super) fn defs() -> Vec<EffectDef> {
                 ),
             ],
         ),
-        video(
-            "spacer",
-            "Spacer",
-            TRANSFORM,
-            vec![
-                px("left", "Left", 40.0, 4000.0, 400.0),
-                px("top", "Top", 40.0, 4000.0, 400.0),
-                px("right", "Right", 40.0, 4000.0, 400.0),
-                px("bottom", "Bottom", 40.0, 4000.0, 400.0),
-                b("uniform", "Uniform Spacing", true),
-                px("radius", "Corner Radius", 0.0, 2000.0, 200.0),
-                b("fill", "Fill Background", false),
-                col("color", "Background Color", [0.0, 0.0, 0.0, 1.0]),
-            ],
-        ),
         // ---- Utility ----
-        video(
-            "auto_align",
-            "Auto Align",
-            UTILITY,
-            vec![
-                ch(
-                    "horizontal",
-                    "Horizontal Alignment",
-                    &["None", "Left", "Center", "Right"],
-                    2,
-                ),
-                ch(
-                    "vertical",
-                    "Vertical Alignment",
-                    &["None", "Top", "Center", "Bottom"],
-                    2,
-                ),
-                px("margin_x", "Horizontal Margin", 0.0, 4000.0, 400.0),
-                px("margin_y", "Vertical Margin", 0.0, 4000.0, 400.0),
-            ],
-        ),
         video(
             "cineon_converter",
             "Cineon Converter",
@@ -796,38 +723,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                 ),
             ],
         ),
-        video(
-            "paint_bucket",
-            "Paint Bucket",
-            OBSOLETE,
-            vec![
-                pt("point", "Fill Point", f64::NAN, f64::NAN),
-                ch(
-                    "selector",
-                    "Fill Selector",
-                    &["Color & Alpha", "Straight Color", "Transparency", "Opacity"],
-                    0,
-                ),
-                fs(
-                    "tolerance",
-                    "Tolerance",
-                    10.0,
-                    (0.0, 255.0),
-                    (0.0, 100.0),
-                    "",
-                    1,
-                ),
-                b("invert", "Invert Fill", false),
-                col("color", "Color", [1.0, 0.0, 0.0, 1.0]),
-                pct("opacity", "Opacity", 100.0),
-                ch(
-                    "mode",
-                    "Blending Mode",
-                    &["Normal", "Behind", "Add", "Multiply", "Screen"],
-                    0,
-                ),
-            ],
-        ),
         // ---- Legacy bin ----
     ];
     v.extend(immersive());
@@ -955,18 +850,6 @@ pub(super) fn extend_core(v: &mut [EffectDef]) {
                 1,
             )),
             "mosaic" => e.params.push(pct("softness", "Softness", 0.0)),
-            "simple_text" => e.params.extend([
-                ParamDef {
-                    default: ParamValue::Text("Simple Text".into()),
-                    ..txt("text", "Text")
-                },
-                pt("position", "Position", f64::NAN, f64::NAN),
-                fs("size", "Size", 64.0, (1.0, 1000.0), (4.0, 300.0), "", 0),
-                ch("font", "Font", &["Inter", "JetBrains Mono"], 0),
-                ch("alignment", "Alignment", &["Left", "Center", "Right"], 1),
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                pct("bg_opacity", "Background Opacity", 0.0),
-            ]),
             _ => {}
         }
     }
@@ -988,16 +871,13 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
                 | "lumetri"
                 | "video_limiter"
                 | "vignette"
-                | "magnify"
                 | "gradient"
                 | "channel_mix"
-                | "rounded_crop"
                 | "logo_cutout"
                 | "luma_key"
                 | "track_matte"
                 | "noise"
                 | "mosaic"
-                | "spacer"
                 | "proc_amp"
         );
         let yuv = matches!(

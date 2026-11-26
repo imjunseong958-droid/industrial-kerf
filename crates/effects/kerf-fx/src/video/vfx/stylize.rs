@@ -1,7 +1,5 @@
 //! Stylize, Perspective and generator effects (plus the Legacy and obsolete generators).
 
-use std::collections::VecDeque;
-
 use crate::video::project::EffectInstance;
 use rayon::prelude::*;
 
@@ -195,91 +193,4 @@ pub fn checkerboard(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
             }
         }
     });
-}
-
-/// Paint Bucket (obsolete): flood fill from Fill Point within Tolerance.
-pub fn paint_bucket(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
-    let pt = pv(e, "point", cx, img);
-    let (w, h) = (img.w, img.h);
-    let (sx, sy) = (pt.x.floor() as isize, pt.y.floor() as isize);
-    if sx < 0 || sy < 0 || sx as usize >= w || sy as usize >= h {
-        return;
-    }
-    let sel = chv(e, "selector");
-    let tol = fv(e, "tolerance", cx) / 255.0;
-    let col = lin(cv(e, "color", cx));
-    let op = fv(e, "opacity", cx) / 100.0;
-    let mode = chv(e, "mode");
-    let px = |i: usize| -> [f32; 4] {
-        let p = &img.px[i * 4..i * 4 + 4];
-        let c = enc(Image::unpremul([p[0], p[1], p[2], p[3]]));
-        [c[0], c[1], c[2], p[3]]
-    };
-    let seed = px(sy as usize * w + sx as usize);
-    let similar = |q: [f32; 4]| -> bool {
-        match sel {
-            0 => (0..4).all(|k| (q[k] - seed[k]).abs() <= tol),
-            1 => (0..3).all(|k| (q[k] - seed[k]).abs() <= tol),
-            2 => q[3] <= tol.max(1e-3),
-            _ => (q[3] - seed[3]).abs() <= tol,
-        }
-    };
-    let mut fill = vec![0f32; w * h];
-    let mut queue = VecDeque::new();
-    let start = sy as usize * w + sx as usize;
-    if similar(seed) {
-        fill[start] = 1.0;
-        queue.push_back(start);
-    }
-    while let Some(i) = queue.pop_front() {
-        let (x, y) = (i % w, i / w);
-        let mut visit = |j: usize| {
-            if fill[j] == 0.0 && similar(px(j)) {
-                fill[j] = 1.0;
-                queue.push_back(j);
-            }
-        };
-        if x > 0 {
-            visit(i - 1);
-        }
-        if x + 1 < w {
-            visit(i + 1);
-        }
-        if y > 0 {
-            visit(i - w);
-        }
-        if y + 1 < h {
-            visit(i + w);
-        }
-    }
-    if bv(e, "invert") {
-        fill.iter_mut().for_each(|v| *v = 1.0 - *v);
-    }
-    let fill = blur_plane(&fill, w, h, 0.5);
-    img.px
-        .par_chunks_mut(4)
-        .zip(fill.par_iter())
-        .for_each(|(p, &f)| {
-            let k = f * op;
-            if k <= 0.0 {
-                return;
-            }
-            let s = [col[0] * k, col[1] * k, col[2] * k, k];
-            match mode {
-                1 => {
-                    let mut q = s;
-                    over(&mut q, [p[0], p[1], p[2], p[3]]);
-                    p.copy_from_slice(&q);
-                }
-                2..=4 => {
-                    let base = Image::unpremul([p[0], p[1], p[2], p[3]]);
-                    let bm = [0u32, 0, 1, 3, 2][mode as usize];
-                    let o = lerp3(base, blend_simple(bm, base, col), k);
-                    for c in 0..3 {
-                        p[c] = o[c] * p[3];
-                    }
-                }
-                _ => over(p, s),
-            }
-        });
 }

@@ -73,12 +73,6 @@ pub enum Kernel {
         blur: Option<FxOp>,
         only: bool,
     },
-    RoundedCrop(kerf_kernel::RoundedCrop<f32>),
-    Spacer {
-        /// Where the picture is put: its left, its top, and how much smaller it is.
-        place: [f64; 3],
-        told: kerf_kernel::Spacer<f32>,
-    },
     Mosaic {
         /// A block's width and height, in pixels.
         block: [f32; 2],
@@ -142,16 +136,6 @@ pub enum Kernel {
         /// Half of the picture's diagonal, which its curvature is measured by.
         reach: f32,
         curvature: f32,
-    },
-    Magnify {
-        center: [f32; 2],
-        magnification: f32,
-        /// How far from its center the glass reaches, and over how much of that it fades.
-        size: f32,
-        feather: f32,
-        opacity: f32,
-        square: bool,
-        mode: u32,
     },
     FourColors(kerf_kernel::FourColors<f32>),
     Grid(kerf_kernel::Grid<f32>),
