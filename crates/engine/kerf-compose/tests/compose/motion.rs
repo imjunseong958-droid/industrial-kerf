@@ -351,6 +351,80 @@ fn a_shape_has_the_color_a_solid_of_that_color_has() {
 }
 
 #[test]
+fn a_shape_is_filled_as_its_fill_kind_says() {
+    // A square 90 pixels across, from 115 to 205 and from 45 to 135.
+    let drawn = |set: &str| frame(&clip("shape", &format!("width=0.5 height=0.5 {set}")), 3);
+    let near = |found: [u8; 3], wanted: [u8; 3], what: &str| {
+        let apart = found.iter().zip(wanted).map(|(a, b)| a.abs_diff(b));
+        assert!(
+            apart.max().unwrap() <= 3,
+            "{what}: {found:?}, not {wanted:?}"
+        );
+    };
+    // Black at its top to white at its bottom, blended as an sRGB picture is: half way is half way.
+    let linear =
+        drawn("fill_kind=linear fill=#000000 fill_2=#ffffff fill_start_y=-0.25 fill_end_y=0.25");
+    near(pixel(&linear, 160, 46), [4, 4, 4], "linear, at its start");
+    near(pixel(&linear, 160, 90), [129, 129, 129], "linear, half way");
+    near(
+        pixel(&linear, 160, 134),
+        [253, 253, 253],
+        "linear, at its end",
+    );
+    // White in its middle to black 45 pixels out.
+    let radial = drawn(
+        "fill_kind=radial fill=#ffffff fill_2=#000000 fill_start_y=0 fill_end_x=0.25 fill_end_y=0",
+    );
+    near(
+        pixel(&radial, 182, 90),
+        [128, 128, 128],
+        "radial, half way out",
+    );
+    near(pixel(&radial, 204, 90), [2, 2, 2], "radial, at its end");
+    // A color at each corner, in reading order.
+    let corners =
+        drawn("fill_kind=corners fill=#ff0000 fill_2=#00ff00 fill_3=#0000ff fill_4=#ffffff");
+    near(pixel(&corners, 115, 45), [254, 1, 0], "top left");
+    near(pixel(&corners, 204, 45), [1, 254, 0], "top right");
+    near(pixel(&corners, 115, 134), [0, 1, 254], "bottom left");
+    near(pixel(&corners, 204, 134), [255, 255, 255], "bottom right");
+    // Squares 9 pixels across from its top left corner.
+    let checker = drawn(
+        "fill_kind=checker fill=#ffffff fill_2=#000000 fill_cell=0.05 fill_start_x=-0.25 fill_start_y=-0.25",
+    );
+    near(pixel(&checker, 115, 45), [255, 255, 255], "first square");
+    near(pixel(&checker, 124, 45), [0, 0, 0], "the one beside it");
+    near(
+        pixel(&checker, 124, 54),
+        [255, 255, 255],
+        "the one below that",
+    );
+    // Lines 2 pixels wide every 18, crossing in its middle, on black.
+    let grid = drawn(
+        "fill_kind=grid fill=#ffffff fill_2=#000000 fill_cell=0.1 fill_line=0.0111 fill_start_y=0",
+    );
+    near(
+        pixel(&grid, 160, 99),
+        [255, 255, 255],
+        "on a line down its middle",
+    );
+    near(pixel(&grid, 169, 99), [0, 0, 0], "between lines");
+    near(pixel(&grid, 178, 95), [255, 255, 255], "on the next line");
+    // With nothing between its lines, what is under it shows there.
+    let over_red = frame(
+        &format!(
+            "    clip r1 gen=solid@1 at=0f dur=96f\n      set color=#ff0000\n  track V2 video\n{}",
+            clip(
+                "shape",
+                "width=0.5 height=0.5 fill_kind=grid fill=#ffffff fill_2=#00000000 fill_cell=0.1 fill_line=0.0111 fill_start_y=0",
+            )
+        ),
+        3,
+    );
+    near(pixel(&over_red, 169, 99), [255, 0, 0], "under a grid");
+}
+
+#[test]
 fn a_path_comes_from_the_document_and_is_measured_from_the_center() {
     let triangle = frame(
         &clip(
