@@ -434,6 +434,25 @@ impl Recipe {
     }
 
     /// The sequences its steps have Kerf draw.
+    /// Whether the guide drawn of `sequence` is of only what a model films of it: every
+    /// `render` step that draws it says `only=filmed`, and one draws it. What goes with
+    /// such a guide, and what a take of it is held to, is read as the guide is drawn.
+    pub fn only_filmed(&self, sequence: &str) -> bool {
+        let mut drawn = self
+            .steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Render {
+                    sequence: drawn,
+                    only_filmed,
+                    ..
+                } if drawn == sequence => Some(*only_filmed),
+                _ => None,
+            })
+            .peekable();
+        drawn.peek().is_some() && drawn.all(|only| only)
+    }
+
     pub fn sequences(&self) -> impl Iterator<Item = &str> {
         self.steps.iter().filter_map(|step| match step {
             Step::Render { sequence, .. } => Some(sequence.as_str()),
@@ -698,6 +717,23 @@ pub fn plan_rolled(
     for clip in recipe.moves() {
         Moves::sequence_of(project, clip).map_err(EngineError::msg)?;
     }
+    // A guide of only what a model films, of a sequence none of whose clips one films, is
+    // of nothing: said before anything is made, as drawing it would say.
+    for step in &recipe.steps {
+        if let Step::Render {
+            sequence,
+            only_filmed: true,
+            ..
+        } = step
+            && project
+                .sequence(sequence)
+                .is_some_and(|drawn| !drawn.draws_filmed())
+        {
+            return Err(EngineError::msg(format!(
+                "`only=filmed` draws the clips of sequence `{sequence}` a model films, and it has none: a clip that draws says so with `filmed=true`"
+            )));
+        }
+    }
     for model in recipe.models() {
         models.command(model)?;
     }
@@ -810,6 +846,26 @@ fn plain(number: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
+/// Whether a guide of `sequence` of `project` is drawn of only what a model films of it: a
+/// `render` step of one of the project's media draws it so (`only=filmed`). What holds a
+/// take to its guide draws the guide as that step does.
+pub fn guide_only_filmed(project: &kerf_model::Project, sequence: &str) -> bool {
+    project
+        .media
+        .iter()
+        .flat_map(|media| &media.steps)
+        .any(|step| {
+            matches!(
+                step,
+                Step::Render {
+                    sequence: drawn,
+                    only_filmed: true,
+                    ..
+                } if drawn == sequence
+            )
+        })
+}
+
 /// What `recipe` asks of its models that they have said they do not take,
 /// each as a line for whoever is about to make it, and what it hands one
 /// that says nothing. A model that has not said what it takes
@@ -820,7 +876,11 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
     // depth is black on every frame: what a model is then handed tells it nothing.
     for step in &recipe.steps {
         let Step::Render {
-            sequence, to, pass, ..
+            sequence,
+            to,
+            pass,
+            only_filmed,
+            ..
         } = step
         else {
             continue;
@@ -830,6 +890,11 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
         }
         let Some(drawn) = project.sequence(sequence) else {
             continue;
+        };
+        // As the step draws it: without what no model films, where it says so.
+        let drawn = match only_filmed {
+            true => std::borrow::Cow::Owned(drawn.only_filmed()),
+            false => std::borrow::Cow::Borrowed(drawn),
         };
         let clips = || drawn.tracks.iter().flat_map(|track| &track.clips);
         if clips().any(kerf_model::Clip::in_depth) {
@@ -1212,7 +1277,13 @@ impl Making<'_> {
                         on_line("reading where what moves goes");
                         ask.moves
                             .iter()
-                            .map(|clip| Moves::read(&resolved, clip))
+                            .map(|clip| {
+                                // As the guide shows it, where that is of only what a
+                                // model films.
+                                let only_filmed = Moves::sequence_of(&resolved, clip)
+                                    .is_ok_and(|sequence| recipe.only_filmed(&sequence));
+                                Moves::read(&resolved, clip, only_filmed)
+                            })
                             .collect::<std::result::Result<Vec<_>, _>>()
                             .map_err(EngineError::msg)?
                     };

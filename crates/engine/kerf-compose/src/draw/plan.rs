@@ -288,18 +288,24 @@ impl Shown {
 }
 
 /// Leave out of `sequence` every clip that draws and that no model films, so that only those
-/// one films (`filmed=true`) are drawn: its cameras, its lights, and what its clips move with
-/// draw nothing, and stay. Refused where it has no clip a model films.
+/// one films (`filmed=true`) are drawn, as [`kerf_model::Sequence::only_filmed`] has it: its
+/// cameras, its lights, and what its clips move with draw nothing, and stay, and so does a
+/// clip on a hidden track, which draws nothing itself and is there for the light or the
+/// effect that reads it. Refused where it has no clip that draws which a model films.
 pub(super) fn only_filmed(sequence: &mut SequencePlan, id: &Id) -> Result<()> {
     let mut any = false;
     for shown in sequence
         .tracks
         .iter_mut()
+        .filter(|track| track.shows)
         .flat_map(|track| &mut track.shown)
     {
+        if matches!(shown.plan.source, Source::Nothing) {
+            continue;
+        }
         if shown.plan.filmed {
             any = true;
-        } else if !matches!(shown.plan.source, Source::Nothing) {
+        } else {
             // It shows at no time, and is in its place for the transitions that name it.
             shown.to = shown.from;
         }

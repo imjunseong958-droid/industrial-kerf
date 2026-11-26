@@ -98,8 +98,6 @@ pub(crate) struct Drawing {
     hard: bool,
     /// The color each clip that draws has in an ids pass, in the order they are told in.
     ids: Vec<(Id, Rgba)>,
-    /// Only the clips a model films are drawn ([`ComposeOptions::only_filmed`]).
-    only_filmed: bool,
     /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
     /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
     clear: std::sync::Mutex<Vec<Image>>,
@@ -167,7 +165,6 @@ impl Drawing {
             matte,
             hard: options.hard_edges && pass == Pass::Ids,
             ids,
-            only_filmed: options.only_filmed,
             clear: std::sync::Mutex::default(),
         })
     }

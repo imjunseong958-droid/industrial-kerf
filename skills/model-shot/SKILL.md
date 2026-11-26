@@ -51,17 +51,6 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   directional light's `x y z` is the way it shines. With a light that casts
   a `shadow`, add an `ambient` one, or what faces away is black. A guide may
   go without lights: a model lights the shot itself, and made as good a take.
-- What has to be exact, a sign's letters, a logo, a count, is Kerf's to
-  draw and not the model's, which draws letters wrong. Put it in the scene
-  as any clip, in depth where it stands there, and say `filmed=true` on
-  every other clip that draws: the floor, the backdrop, each solid. Write
-  the guide's step with `only=filmed`, so the model is handed the scene
-  without it and draws nothing in its place. Where the shot is cut in, lay a
-  clip of the scene (`seq=<scene>`) on the track over the shot's clip, for
-  as long: there the scene shows only what no model films, in the scene's
-  camera and lights, cut by whatever a model films before it. The cut is
-  where the guide's solid ends, so a take that strays from its guide shows
-  it. The scene's own sequence shows every clip as ever.
 - When something has to happen on a frame, a ball landing, a flash, and
   the model's `reads` has `signal`, say when with a signal: a
   `gen=signal@1` clip on a track of its own in the guide's sequence, from

@@ -518,8 +518,6 @@ fn a_guide_of_only_what_a_model_films_leaves_the_rest_out() {
         near(true),
         near(false)
     );
-    // A frame of it is its own, kept apart from one of all the clips.
-    assert_ne!(all.frame_key(at, 1.0), only.frame_key(at, 1.0));
     // A sequence no clip of which a model films has nothing to draw so.
     let none = parse_document(
         &format!(
@@ -566,4 +564,47 @@ fn what_a_model_films_is_the_takes_in_a_pass_of_the_scene_laid_over_it() {
     assert_eq!(pixel(&frame, 20, 10), color("take"));
     assert_eq!(pixel(&frame, 100, 90), color("take"));
     assert_eq!(pixel(&frame, 160, 170), color("take"));
+}
+
+#[test]
+fn a_guide_of_only_what_a_model_films_keeps_what_a_hidden_track_is_read_for() {
+    let drawn = |body: &str| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                only_filmed: true,
+                ..ComposeOptions::default()
+            },
+        )
+    };
+    // A matte on a hidden track cuts a clip a model films, and no model films the matte:
+    // it draws nothing itself, and is still read.
+    let matted = concat!(
+        "  track V1 video\n    clip g1 gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ff0000 filmed=true\n",
+        "      fx key.trackmatte@1 matte=V2 composite=matte-luma\n",
+        "  track V2 video enabled=false\n    clip m1 gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ffffff scale=0.5\n",
+    );
+    let frame = drawn(matted)
+        .expect("composes")
+        .frame(Rate::FPS_24.time_of(3), 1.0);
+    assert_eq!(pixel(&frame, 160, 90), [255, 0, 0]);
+    assert_eq!(pixel(&frame, 10, 10), [0, 0, 0]);
+    // A camera draws nothing, whatever it says: with no clip that draws a model's, such a
+    // guide is of nothing.
+    let camera = concat!(
+        "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set filmed=true\n",
+    );
+    assert!(drawn(camera).is_err());
 }

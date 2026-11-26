@@ -161,6 +161,65 @@ impl Bus {
 }
 
 impl Sequence {
+    /// The clips a guide of only what a model films leaves out (`only=filmed`): those of its
+    /// picture tracks that show which draw and which no model films. A clip on a hidden
+    /// track draws nothing itself, and stays for the light or the effect that reads it.
+    fn left_out_of_filmed(&self) -> impl Iterator<Item = &Clip> {
+        self.tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Video && track.enabled)
+            .flat_map(|track| &track.clips)
+            .filter(|clip| clip.draws() && !clip.filmed())
+    }
+
+    /// Whether a guide of only what a model films has anything of it to draw: a clip of a
+    /// picture track that shows which draws and which a model films.
+    pub fn draws_filmed(&self) -> bool {
+        self.tracks
+            .iter()
+            .filter(|track| track.kind == TrackKind::Video && track.enabled)
+            .flat_map(|track| &track.clips)
+            .any(|clip| clip.draws() && clip.filmed())
+    }
+
+    /// The sequence as a guide of only what a model films is drawn from (`only=filmed`):
+    /// without the clips such a guide leaves out, but for one a clip that stays moves with,
+    /// which places it. What changes in a clip left out changes nothing of the guide.
+    pub fn only_filmed(&self) -> Self {
+        let mut out: std::collections::HashSet<&Id> =
+            self.left_out_of_filmed().map(|clip| &clip.id).collect();
+        // What stays may move with one left out, and that one with another.
+        let parent_of = |id: &Id| {
+            self.tracks
+                .iter()
+                .flat_map(|track| &track.clips)
+                .find(|clip| clip.id == *id)
+                .and_then(|clip| clip.parent.as_ref())
+        };
+        let stays: Vec<&Id> = self
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .filter(|clip| !out.contains(&clip.id))
+            .map(|clip| &clip.id)
+            .collect();
+        for id in stays {
+            let mut next = parent_of(id);
+            while let Some(parent) = next {
+                if !out.remove(parent) {
+                    break;
+                }
+                next = parent_of(parent);
+            }
+        }
+        let out: std::collections::HashSet<Id> = out.into_iter().cloned().collect();
+        let mut sequence = self.clone();
+        for track in &mut sequence.tracks {
+            track.clips.retain(|clip| !out.contains(&clip.id));
+        }
+        sequence
+    }
+
     /// The end of the last clip on any track.
     pub fn duration(&self) -> Time {
         self.tracks
@@ -448,6 +507,26 @@ impl Clip {
             self.props.get("three_d"),
             Some(Param::Static(Value::Bool(true)))
         ) || matches!(&self.content, Content::Generator { fx, .. } if fx.as_str() == "mesh")
+    }
+
+    /// Whether a model films it (`filmed=true`).
+    pub fn filmed(&self) -> bool {
+        matches!(
+            self.props.get("filmed"),
+            Some(Param::Static(Value::Bool(true)))
+        )
+    }
+
+    /// Whether it draws a picture: not a null, a camera, a light, or a signal, which draw
+    /// nothing, nor a caption, which its sequence burns in.
+    pub fn draws(&self) -> bool {
+        match &self.content {
+            Content::Generator { fx, .. } => {
+                !matches!(fx.as_str(), "null" | "camera" | "light" | crate::SIGNAL)
+            }
+            Content::Caption { .. } => false,
+            Content::Media { .. } | Content::Sequence { .. } => true,
+        }
     }
 
     pub fn speed(&self) -> &Speed {

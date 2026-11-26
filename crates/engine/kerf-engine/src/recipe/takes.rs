@@ -320,6 +320,8 @@ pub fn mark_carried(
         .ok()
         .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok());
     let cast = super::cast::Cast::read(directory).ok();
+    // A sequence is held as its guide is drawn, which the steps say.
+    let drawn = Recipe::of_steps(&now.steps);
     let stands = |key: &str| -> Option<String> {
         if key == RECIPE {
             let mut hasher = Sha256::new();
@@ -329,7 +331,12 @@ pub fn mark_carried(
         let (kind, name) = key.split_once(' ')?;
         match kind {
             "file" => Some(file_hash(&directory.join(name))),
-            "sequence" => Some(sequence_hash(before, directory, name)),
+            "sequence" => Some(sequence_hash(
+                before,
+                directory,
+                name,
+                drawn.only_filmed(name),
+            )),
             "signal" => Signal::read(before, name).ok().map(|signal| signal.hash()),
             _ => cast.as_ref()?.held(kind, name),
         }
@@ -398,8 +405,11 @@ fn file_hash(file: &Path) -> String {
 /// A hash of what drawing sequence `id` of `project` reads of the
 /// document: the sequence, the sequences its clips nest, and the media
 /// lines they play, with how long each media's file is. A media's file
-/// changed in place to another of the same length is not seen.
-fn sequence_hash(project: &Project, directory: &Path, id: &str) -> String {
+/// changed in place to another of the same length is not seen. With `only_filmed`, the
+/// sequence is as a guide of only what a model films is drawn from
+/// ([`kerf_model::Sequence::only_filmed`]), so what changes in a clip Kerf draws itself
+/// changes nothing here.
+fn sequence_hash(project: &Project, directory: &Path, id: &str, only_filmed: bool) -> String {
     let mut part = Project::default();
     let mut waiting = vec![id.to_owned()];
     let mut media: BTreeSet<String> = BTreeSet::new();
@@ -414,6 +424,10 @@ fn sequence_hash(project: &Project, directory: &Path, id: &str) -> String {
         let Some(sequence) = project.sequence(&next) else {
             continue;
         };
+        let sequence = match only_filmed && next == id {
+            true => sequence.only_filmed(),
+            false => sequence.clone(),
+        };
         for clip in sequence.tracks.iter().flat_map(|track| &track.clips) {
             match &clip.content {
                 Content::Media { media: played, .. } => {
@@ -425,7 +439,7 @@ fn sequence_hash(project: &Project, directory: &Path, id: &str) -> String {
                 _ => {}
             }
         }
-        part.sequences.push(sequence.clone());
+        part.sequences.push(sequence);
     }
     part.sequences
         .sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -520,7 +534,7 @@ pub(crate) fn from(
     for sequence in recipe.sequences() {
         from.insert(
             format!("sequence {sequence}"),
-            sequence_hash(project, directory, sequence),
+            sequence_hash(project, directory, sequence, recipe.only_filmed(sequence)),
         );
     }
     // Where a clip goes is what its sequence draws of it, so a take is held to that sequence.
@@ -528,7 +542,7 @@ pub(crate) fn from(
         let sequence = Moves::sequence_of(project, clip).map_err(EngineError::msg)?;
         from.insert(
             format!("sequence {sequence}"),
-            sequence_hash(project, directory, &sequence),
+            sequence_hash(project, directory, &sequence, recipe.only_filmed(&sequence)),
         );
     }
     for signal in recipe.signals() {

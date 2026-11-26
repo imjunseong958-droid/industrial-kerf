@@ -447,32 +447,50 @@ impl Drawing {
             return;
         };
         let p = progress(at, pair.start, pair.end) as f32;
-        let mut mixed = apply_scaled(&fx, &a, &b, p, scale as f32);
-        // A model films both, or the one there is: their mix leaves its place clear as each
-        // would. One a model films mixed with one it does not is drawn, as neither alone says.
-        let filmed = [from, to]
-            .iter()
-            .filter(|shown| shown.shows(at))
-            .all(|shown| shown.plan.filmed);
-        if moment.clears && filmed {
-            clear_under(canvas, &mut mixed, self.hard);
-            return;
-        }
-        if self.hard {
-            // Each pixel is the one of the two clips it is the more of.
-            let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
-            lay_hard(canvas, &mut mixed, &colors);
-            return;
-        }
-        // A fade from or to nothing keeps the one clip's blend mode;
-        // between two they mix normally.
-        let blend = match (from.shows(at), to.shows(at)) {
-            (true, false) => from.plan.blend,
-            (false, true) => to.plan.blend,
-            _ if pair.from == pair.to => from.plan.blend,
-            _ => Blend::Normal,
+        let mix = |a: &Image, b: &Image| apply_scaled(&fx, a, b, p, scale as f32);
+        let lay = |canvas: &mut Image, mut mixed: Image| {
+            if self.hard {
+                // Each pixel is the one of the two clips it is the more of.
+                let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
+                lay_hard(canvas, &mut mixed, &colors);
+                return;
+            }
+            // A fade from or to nothing keeps the one clip's blend mode;
+            // between two they mix normally.
+            let blend = match (from.shows(at), to.shows(at)) {
+                (true, false) => from.plan.blend,
+                (false, true) => to.plan.blend,
+                _ if pair.from == pair.to => from.plan.blend,
+                _ => Blend::Normal,
+            };
+            composite(canvas, &mixed, 1.0, self.blend(blend));
         };
-        composite(canvas, &mixed, 1.0, self.blend(blend));
+        // Which side is a clip a model films, where such clips leave their place clear: the
+        // nothing one enters from or leaves into is no clip's.
+        let clears = |shown: &Shown| moment.clears && shown.shows(at) && shown.plan.filmed;
+        let (a_clears, b_clears) = match (pair.from == pair.to, pair.from_nothing) {
+            (false, _) => (clears(from), clears(to)),
+            (true, true) => (false, clears(to)),
+            (true, false) => (clears(from), false),
+        };
+        match (a_clears, b_clears) {
+            (false, false) => lay(canvas, mix(&a, &b)),
+            (true, true) => clear_under(canvas, &mut mix(&a, &b), self.hard),
+            // One side is a model's and the other Kerf's: what the mix shows of the first is
+            // left clear, and what it shows of the other is drawn, each mixed with nothing in
+            // the other's place. The side it comes from goes down first, as it lies under the
+            // one it goes to.
+            (true, false) => {
+                let nothing = Image::new(w, h);
+                clear_under(canvas, &mut mix(&a, &nothing), self.hard);
+                lay(canvas, mix(&nothing, &b));
+            }
+            (false, true) => {
+                let nothing = Image::new(w, h);
+                lay(canvas, mix(&a, &nothing));
+                clear_under(canvas, &mut mix(&nothing, &b), self.hard);
+            }
+        }
     }
 
     /// Draw a shown clip over `canvas` at `moment` with `blend`. Drawn hard, it is drawn by itself

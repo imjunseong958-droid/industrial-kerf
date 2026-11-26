@@ -1266,3 +1266,50 @@ fn what_a_model_films_leaves_its_take_to_show_where_its_scene_is_laid_over_it() 
         assert_eq!(at(&over, past), GREEN, "{car}");
     }
 }
+
+#[test]
+fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
+    const BLUE: [u8; 3] = [0, 0, 255];
+    const RED: [u8; 3] = [255, 0, 0];
+    const GREEN: [u8; 3] = [0, 255, 0];
+    // A push from a red clip to a blue one in a scene laid over a green take, halfway: the
+    // blue has come in over the left half and the red is going out over the right.
+    let halves = |red: &str, blue: &str| {
+        let project = parse_document(
+            &format!(
+                concat!(
+                    "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n",
+                    "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n",
+                    "      set color=#ff0000{red}\n",
+                    "    clip b gen=solid@1 at=24f dur=24f\n      set color=#0000ff{blue}\n",
+                    "    transition x1 from=a to=b fx=push@2 dur=12f motion_blur=0\n",
+                    "sequence s2 rate=24 size=320x180 audio=48000\n",
+                    "  track V1 video\n    clip take gen=solid@1 at=0f dur=48f\n      set color=#00ff00\n",
+                    "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=48f\n",
+                ),
+                red = red,
+                blue = blue
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let frame = Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                sequence: Some("s2".to_owned()),
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+        .frame(Rate::FPS_24.time_of(24), 1.0);
+        (pixel(&frame, 80, 90), pixel(&frame, 240, 90))
+    };
+    let filmed = " filmed=true";
+    assert_eq!(halves("", ""), (BLUE, RED));
+    // What a model films of the two is the take's, and the other is drawn where it is.
+    assert_eq!(halves(filmed, ""), (BLUE, GREEN));
+    assert_eq!(halves("", filmed), (GREEN, RED));
+    assert_eq!(halves(filmed, filmed), (GREEN, GREEN));
+}

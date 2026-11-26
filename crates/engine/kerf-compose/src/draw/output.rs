@@ -176,10 +176,6 @@ impl Drawing {
         if self.hard {
             self.hard.hash(&mut hash);
         }
-        // And so with this: each clip left out keeps its color, which the clips drawn do not say.
-        if self.only_filmed {
-            self.only_filmed.hash(&mut hash);
-        }
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
     }
