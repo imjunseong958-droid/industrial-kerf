@@ -361,7 +361,25 @@ pub(super) struct Scene {
 impl Scene {
     /// The scene of `sequence` at `at`: its topmost camera, or the default one, its lights, and
     /// where the parents in depth have taken what moves with them.
-    pub fn at(sequence: &SequencePlan, at: Time, (w, h): (usize, usize)) -> Self {
+    pub fn at(sequence: &SequencePlan, at: Time, size: (usize, usize)) -> Self {
+        Self::of_those_showing(sequence, at, at, size)
+    }
+
+    /// The scene of `sequence` a `step` after `at`, of the camera, the lights and the parents
+    /// that show at `at`, each as it is by then, whether it still shows then or not: where
+    /// what is seen at `at` is a frame on, which the camera that sees it and what carries it
+    /// say, and no clip that takes over from them.
+    pub fn ahead(sequence: &SequencePlan, at: Time, step: Time, size: (usize, usize)) -> Self {
+        Self::of_those_showing(sequence, at, at + step, size)
+    }
+
+    /// [`Scene::at`] `at`, of the clips that show at `showing`.
+    fn of_those_showing(
+        sequence: &SequencePlan,
+        showing: Time,
+        at: Time,
+        (w, h): (usize, usize),
+    ) -> Self {
         let (width, height) = (w as f64, h as f64);
         let catalog = Catalog::builtin();
         let canvas = (f64::from(sequence.width), f64::from(sequence.height));
@@ -401,7 +419,7 @@ impl Scene {
         let mut camera = None;
         let mut lights = Vec::new();
         for track in sequence.tracks.iter().filter(|track| track.shows) {
-            for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
+            for shown in track.shown.iter().filter(|shown| shown.shows(showing)) {
                 let clip = &shown.plan.clip;
                 if is_generator(clip, "camera") {
                     camera = Some(clip);
@@ -503,7 +521,7 @@ impl Scene {
             let Some(parent) = clip.parent.as_ref() else {
                 continue;
             };
-            if !shown.plan.three_d || !shown.shows(at) {
+            if !shown.plan.three_d || !shown.shows(showing) {
                 continue;
             }
             if let Some(by) = *taken.entry(parent).or_insert_with(|| carried_by(clip)) {
@@ -947,13 +965,15 @@ pub(super) fn shade_by_motion_flat(
 /// `picture`, a clip in depth's own, as a motion pass has it: each of its pixels by how far the
 /// place of the clip it shows goes on the screen in a frame, from where the scene `now` sees it,
 /// the clip placed as `to_output.0` has it, to where the scene a frame on sees it, placed as
-/// `to_output.1` has it. A place behind either camera is said to hold still.
+/// `to_output.1` has it, of a frame `height` tall. A place behind either camera is said to hold
+/// still.
 pub(super) fn shade_by_motion(
     (now, next): (&Scene, &Scene),
     plan: &ClipPlan,
     picture: &mut Image,
     to_output: (&Affine, &Affine),
     (time, step): (Time, Time),
+    height: f64,
 ) {
     let (w, h) = (picture.w, picture.h);
     let size = (w as f64, h as f64);
@@ -973,7 +993,7 @@ pub(super) fn shade_by_motion(
                     (Some(from), Some(to)) => (to.0 - from.0, to.1 - from.1),
                     _ => (0.0, 0.0),
                 };
-                let color = motion_color(moved, now.height);
+                let color = motion_color(moved, height);
                 let alpha = pixel[3];
                 for (channel, color) in pixel[..3].iter_mut().zip(color) {
                     *channel = color * alpha;

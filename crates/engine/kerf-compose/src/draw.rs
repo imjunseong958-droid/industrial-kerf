@@ -102,6 +102,9 @@ pub(crate) struct Drawing {
     only_filmed: bool,
     /// How long a frame is, for a motion pass: the sequence's, or [`ComposeOptions::rate`]'s.
     step: Time,
+    /// How much of a frame's height a file of [`ComposeOptions::shape`] keeps, which a motion
+    /// pass measures by: all of it for a file of the sequence's shape or a taller one.
+    kept: f64,
     /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
     /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
     clear: std::sync::Mutex<Vec<Image>>,
@@ -171,6 +174,10 @@ impl Drawing {
             ids,
             only_filmed: options.only_filmed,
             step: options.rate.unwrap_or(top.rate).time_of(1),
+            kept: options.shape.map_or(1.0, |(wide, tall)| {
+                let frame = f64::from(top.width.max(1)) / f64::from(top.height.max(1));
+                (frame * f64::from(tall.max(1)) / f64::from(wide.max(1))).min(1.0)
+            }),
             clear: std::sync::Mutex::default(),
         })
     }
@@ -237,9 +244,10 @@ impl Drawing {
                     three_d::shade_still(picture);
                     return;
                 };
+                let height = size.1 as f64 * self.kept;
                 if plan.three_d {
                     let now = three_d::Scene::at(sequence, at, size);
-                    let next = three_d::Scene::at(sequence, at + self.step, size);
+                    let next = three_d::Scene::ahead(sequence, at, self.step, size);
                     let to_output_next = moved.then_apply(to_output);
                     three_d::shade_by_motion(
                         (&now, &next),
@@ -247,9 +255,10 @@ impl Drawing {
                         picture,
                         (to_output, &to_output_next),
                         (time, self.step),
+                        height,
                     );
                 } else {
-                    three_d::shade_by_motion_flat(picture, to_output, &moved, size.1 as f64);
+                    three_d::shade_by_motion_flat(picture, to_output, &moved, height);
                 }
             }
             Pass::Ids => {

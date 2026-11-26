@@ -1254,6 +1254,8 @@ where
             only_filmed: opts.only_filmed,
             // A motion pass says how far things go from one frame of the file to the next.
             rate: opts.rate,
+            // And is true of the file, whose shape may not be the sequence's.
+            shape: opts.size,
             // A file of the pass is read a pixel at a time, each taken for one clip's.
             hard_edges: true,
             ..Default::default()

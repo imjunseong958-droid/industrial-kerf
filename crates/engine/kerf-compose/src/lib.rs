@@ -80,6 +80,10 @@ pub struct ComposeOptions {
     /// The rate frames are asked for at, where it is not the sequence's: a motion pass says how
     /// far things go from one frame to the next, and a frame is this long.
     pub rate: Option<Rate>,
+    /// The size of the file the frames are fitted into, filling it and cut to its shape, where
+    /// that is not the sequence's shape: a motion pass measures by the height of what such a
+    /// file keeps of a frame, so that what it says is true of the file.
+    pub shape: Option<(u32, u32)>,
     /// Draw only the clips of the sequence a model films (`filmed=true`), with its cameras and
     /// lights and what its clips move with: a guide without what Kerf draws over the take.
     /// Refused where the sequence has no such clip.
