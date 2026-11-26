@@ -1227,6 +1227,32 @@ fn only_what_is_a_thing_in_depth_stands_and_the_rest_is_said_not_to_be_measured(
 }
 
 #[test]
+fn a_shape_filled_with_holes_is_said_to_be_measured_as_its_box() {
+    // A square sign whose checker has clear squares, and one whose checker has none.
+    let sign = |second: &str| {
+        [
+            level(),
+            on_track(
+                2,
+                "sign",
+                "shape",
+                &format!(
+                    "width=0.2 height=0.2 fill_kind=checker fill=#ffffff fill_2={second} three_d=true depth=0.1 z=1 y=0.3"
+                ),
+            ),
+        ]
+        .concat()
+    };
+    let holed = read(&sign("#00000000")).not_measured.join("\n");
+    assert!(
+        holed.contains("the outline of `sign` within the box around it"),
+        "{holed}"
+    );
+    let whole = read(&sign("#000000")).not_measured.join("\n");
+    assert!(!whole.contains("sign"), "{whole}");
+}
+
+#[test]
 fn a_sequence_of_any_size_says_the_same() {
     // Nothing here is on a whole pixel of any of them, and a clip that holds still is
     // drawn on whole pixels: what is read is where the document puts it.

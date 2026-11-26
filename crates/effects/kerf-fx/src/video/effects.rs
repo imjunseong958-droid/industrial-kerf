@@ -264,87 +264,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                 }
             });
         }
-        "four_color_gradient" => {
-            let cs = [
-                color(e, "c1", cx),
-                color(e, "c2", cx),
-                color(e, "c3", cx),
-                color(e, "c4", cx),
-            ];
-            let op = f(e, "opacity", cx) / 100.0;
-            let (w, h) = (img.w as f32, img.h as f32);
-            let pts = [
-                (0.25 * w, 0.25 * h),
-                (0.75 * w, 0.25 * h),
-                (0.25 * w, 0.75 * h),
-                (0.75 * w, 0.75 * h),
-            ];
-            let blend_exp = 1.0 + f(e, "blend", cx) / 100.0;
-            fill_over(img, op, |x, y| {
-                let mut acc = [0.0f32; 3];
-                let mut wsum = 0.0;
-                for (i, p) in pts.iter().enumerate() {
-                    let d = ((x - p.0).powi(2) + (y - p.1).powi(2)).sqrt().max(1.0);
-                    let wgt = 1.0 / d.powf(blend_exp);
-                    for k in 0..3 {
-                        acc[k] += cs[i][k] * wgt;
-                    }
-                    wsum += wgt;
-                }
-                dec(acc.map(|v| v / wsum))
-            });
-        }
-        "ramp" => {
-            let s = point(e, "start", cx, img);
-            let en = point(e, "end", cx, img);
-            let sc = color(e, "start_color", cx);
-            let ec = color(e, "end_color", cx);
-            let radial = choice(e, "shape") == 1;
-            let blend = f(e, "blend", cx) / 100.0;
-            let (vx, vy) = (en.x - s.x, en.y - s.y);
-            let len2 = (vx * vx + vy * vy).max(1e-9);
-            fill_over(img, 1.0 - blend, |x, y| {
-                let t = if radial {
-                    ((x as f64 - s.x).hypot(y as f64 - s.y) / len2.sqrt()) as f32
-                } else {
-                    (((x as f64 - s.x) * vx + (y as f64 - s.y) * vy) / len2) as f32
-                }
-                .clamp(0.0, 1.0);
-                dec([
-                    sc[0] + (ec[0] - sc[0]) * t,
-                    sc[1] + (ec[1] - sc[1]) * t,
-                    sc[2] + (ec[2] - sc[2]) * t,
-                ])
-            });
-        }
-        "grid" => {
-            let size = (f(e, "size", cx) * cx.px_scale).max(1.0);
-            let border = f(e, "border", cx) * cx.px_scale;
-            let col = color(e, "color", cx);
-            let op = f(e, "opacity", cx) / 100.0;
-            let lc = dec([col[0], col[1], col[2]]);
-            let w = img.w;
-            let (ox, oy) = (img.w as f32 / 2.0, img.h as f32 / 2.0);
-            img.px
-                .par_chunks_mut(w * 4)
-                .enumerate()
-                .for_each(|(y, row)| {
-                    for x in 0..w {
-                        let gx = ((x as f32 - ox).rem_euclid(size))
-                            .min(size - (x as f32 - ox).rem_euclid(size));
-                        let gy = ((y as f32 - oy).rem_euclid(size))
-                            .min(size - (y as f32 - oy).rem_euclid(size));
-                        let a = ((border * 0.5 - gx.min(gy) + 0.5).clamp(0.0, 1.0)) * op;
-                        if a > 0.0 {
-                            let p = &mut row[x * 4..x * 4 + 4];
-                            for k in 0..3 {
-                                p[k] = lc[k] * a + p[k] * (1.0 - a);
-                            }
-                            p[3] = a + p[3] * (1.0 - a);
-                        }
-                    }
-                });
-        }
         "timecode" | "clip_name" => {
             let (text, family) = if e.effect == "timecode" {
                 (cx.timecode.to_string(), "JetBrains Mono")
@@ -362,24 +281,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
         }
         _ => {}
     }
-}
-
-/// Fill an opaque generated colour over the image at `op` opacity (Generate category).
-pub(crate) fn fill_over(img: &mut Image, op: f32, f: impl Fn(f32, f32) -> [f32; 3] + Sync) {
-    let w = img.w;
-    img.px
-        .par_chunks_mut(w * 4)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..w {
-                let c = f(x as f32 + 0.5, y as f32 + 0.5);
-                let p = &mut row[x * 4..x * 4 + 4];
-                for k in 0..3 {
-                    p[k] = c[k] * op + p[k] * (1.0 - op);
-                }
-                p[3] = op + p[3] * (1.0 - op);
-            }
-        });
 }
 
 pub(crate) fn warp(img: &mut Image, f: impl Fn(f64, f64) -> (f64, f64) + Sync) {

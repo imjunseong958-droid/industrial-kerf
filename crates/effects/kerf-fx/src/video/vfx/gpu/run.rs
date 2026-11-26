@@ -10,9 +10,6 @@ use kerf_draw::blend::Blend;
 use kerf_geom::Rect;
 use kerf_gpu::{wgpu, Frame, Picture};
 
-/// `hash_u`'s constant on its seed.
-const HASH_SEED: u64 = 0x27D4_EB2F_1656_67C5;
-
 impl Kernel {
     /// `effect` on a picture brought under 1 and put back, as a picture holding values over 1
     /// needs for an effect written for 0 to 1: `src` is the picture, and `effect` runs on it with
@@ -178,40 +175,6 @@ impl Kernel {
             } => {
                 let numbers = U::floats([center[0], center[1], *reach, *curvature]);
                 one_pass(stage, frame, picture, &stage.lens, &numbers)
-            }
-            Kernel::FourColors(told) => {
-                let numbers = U::four_colors(told);
-                one_pass(stage, frame, picture, &stage.four_colors, &numbers)
-            }
-            Kernel::Grid(told) => {
-                let numbers = U::grid(told);
-                one_pass(stage, frame, picture, &stage.grid, &numbers)
-            }
-            Kernel::Ramp {
-                start,
-                along,
-                length2,
-                colors,
-                radial,
-                opacity,
-            } => {
-                let numbers = U::ramp(*start, *along, *length2, *colors, *radial, *opacity);
-                one_pass(stage, frame, picture, &stage.ramp, &numbers)
-            }
-            Kernel::Gradient(told) => {
-                let numbers = U::gradient(told);
-                one_pass(stage, frame, picture, &stage.gradient, &numbers)
-            }
-            Kernel::Checkerboard {
-                anchor,
-                cell,
-                feather,
-                color,
-                opacity,
-                mode,
-            } => {
-                let numbers = U::checkerboard(*anchor, *cell, *feather, *color, *opacity, *mode);
-                one_pass(stage, frame, picture, &stage.checkerboard, &numbers)
             }
             Kernel::Cineon { way, told } => {
                 let numbers = U::cineon(*way, told);
@@ -661,76 +624,6 @@ impl U {
             p0: [turn[0][0], turn[0][1], turn[0][2], half],
             p1: [turn[1][0], turn[1][1], turn[1][2], feather],
             p2: [turn[2][0], turn[2][1], turn[2][2], 0.0],
-            ..U::default()
-        }
-    }
-
-    fn four_colors(told: &kerf_kernel::FourColors<f32>) -> Self {
-        let [a, b, c, d] = told.colors;
-        U {
-            p0: [a[0], a[1], a[2], told.power],
-            p1: [b[0], b[1], b[2], told.opacity],
-            p2: [c[0], c[1], c[2], told.size[0]],
-            p3: [d[0], d[1], d[2], told.size[1]],
-            ..U::default()
-        }
-    }
-
-    fn grid(told: &kerf_kernel::Grid<f32>) -> Self {
-        let [r, g, b] = told.color;
-        U {
-            p0: [told.middle[0], told.middle[1], told.size, told.border],
-            p1: [r, g, b, told.opacity],
-            ..U::default()
-        }
-    }
-
-    fn ramp(
-        start: [f32; 2],
-        along: [f32; 2],
-        length2: f32,
-        colors: [[f32; 3]; 2],
-        radial: bool,
-        opacity: f32,
-    ) -> Self {
-        let [from, to] = colors;
-        U {
-            a: [u32::from(radial), 0, 0, 0],
-            p0: [start[0], start[1], along[0], along[1]],
-            p1: [length2, opacity, 0.0, 0.0],
-            p2: [from[0], from[1], from[2], 0.0],
-            p3: [to[0], to[1], to[2], 0.0],
-            ..U::default()
-        }
-    }
-
-    fn gradient(told: &Gradient) -> Self {
-        // What `hash01` scatters by: its seed of 13, by `hash_u`'s constant.
-        let seed = 13u64.wrapping_mul(HASH_SEED);
-        U {
-            a: [told.shape, 0, seed as u32, (seed >> 32) as u32],
-            p0: [told.start[0], told.start[1], told.along[0], told.along[1]],
-            p1: [told.length2, told.length, told.scatter, told.gamma],
-            p2: told.colors[0],
-            p3: told.colors[1],
-            p4: [told.blend, 0.0, 0.0, 0.0],
-            ..U::default()
-        }
-    }
-
-    fn checkerboard(
-        anchor: [f32; 2],
-        cell: [f32; 2],
-        feather: f32,
-        color: [f32; 3],
-        opacity: f32,
-        mode: u32,
-    ) -> Self {
-        U {
-            a: [mode, 0, 0, 0],
-            p0: [anchor[0], anchor[1], cell[0], cell[1]],
-            p1: [feather, opacity, 0.0, 0.0],
-            p2: [color[0], color[1], color[2], 0.0],
             ..U::default()
         }
     }

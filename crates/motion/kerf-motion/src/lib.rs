@@ -8,5 +8,5 @@ mod sources;
 
 pub use outline::Combine;
 pub use particles::Emitter;
-pub use shape::{Figure, Outline, Shape};
+pub use shape::{Figure, Outline, Paint, Shape};
 pub use sources::SOURCES;

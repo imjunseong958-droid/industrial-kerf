@@ -2,6 +2,7 @@
 //! stroke trimmed along its length, as a line that draws itself on is, and tapered, as a pen's is.
 
 use crate::outline::{self, Combine, Contour};
+use kerf_draw::color::{to_encoded, to_linear};
 use kerf_draw::Image;
 use rayon::prelude::*;
 
@@ -75,8 +76,7 @@ pub struct Shape {
     pub outlines: Vec<Outline>,
     /// How far what they come to is grown, or with a negative shrunk, in pixels.
     pub offset: f32,
-    /// Premultiplied linear light.
-    pub fill: [f32; 4],
+    pub fill: Paint,
     pub stroke: [f32; 4],
     /// In pixels.
     pub stroke_width: f32,
@@ -86,6 +86,161 @@ pub struct Shape {
     /// How much of the stroke's length it takes to widen from nothing at its start and to narrow
     /// to nothing at its end, 0 to 1 of what the trim leaves.
     pub taper: (f32, f32),
+}
+
+/// What fills a shape: a color, colors blended across it, or a pattern of two. Places are from the
+/// shape's center, in pixels; colors are premultiplied linear light, and blended as an sRGB
+/// picture's are.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Paint {
+    Solid([f32; 4]),
+    /// The first color at `from` and the second at `to`, blended along the line between them and
+    /// held past its ends.
+    Linear {
+        from: [f32; 2],
+        to: [f32; 2],
+        colors: [[f32; 4]; 2],
+    },
+    /// The first color at `from` and the second as far from it as `to` is, and on past that.
+    Radial {
+        from: [f32; 2],
+        to: [f32; 2],
+        colors: [[f32; 4]; 2],
+    },
+    /// A color at each corner of the box around the shape, top left, top right, bottom left, and
+    /// bottom right, blended between them.
+    Corners([[f32; 4]; 4]),
+    /// Squares `cell` across, of the two colors in turn, one with its top left corner at `from`.
+    Checker {
+        from: [f32; 2],
+        cell: f32,
+        colors: [[f32; 4]; 2],
+    },
+    /// Lines `line` wide of the first color, `cell` apart and crossing at `from`, on the second.
+    Grid {
+        from: [f32; 2],
+        cell: f32,
+        line: f32,
+        colors: [[f32; 4]; 2],
+    },
+}
+
+impl Paint {
+    fn colors(&self) -> &[[f32; 4]] {
+        match self {
+            Self::Solid(color) => std::slice::from_ref(color),
+            Self::Corners(colors) => colors,
+            Self::Linear { colors, .. }
+            | Self::Radial { colors, .. }
+            | Self::Checker { colors, .. }
+            | Self::Grid { colors, .. } => colors,
+        }
+    }
+
+    /// Whether it puts anything down.
+    pub fn shows(&self) -> bool {
+        self.colors().iter().any(|color| color[3] > 0.0)
+    }
+
+    /// Whether it puts something down everywhere it fills.
+    pub fn covers(&self) -> bool {
+        self.colors().iter().all(|color| color[3] > 0.0)
+    }
+
+    /// Its color at `x`, `y` from the shape's center, in a shape whose box is `bounds` (left, top,
+    /// right, bottom) from its center.
+    fn at(&self, x: f32, y: f32, bounds: [f32; 4]) -> [f32; 4] {
+        match self {
+            Self::Solid(color) => *color,
+            Self::Linear { from, to, colors } => {
+                let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+                let length = dx * dx + dy * dy;
+                let along = if length > 0.0 {
+                    ((x - from[0]) * dx + (y - from[1]) * dy) / length
+                } else {
+                    1.0
+                };
+                blended(colors[0], colors[1], along)
+            }
+            Self::Radial { from, to, colors } => {
+                let reach = (to[0] - from[0]).hypot(to[1] - from[1]);
+                let out = if reach > 0.0 {
+                    (x - from[0]).hypot(y - from[1]) / reach
+                } else {
+                    1.0
+                };
+                blended(colors[0], colors[1], out)
+            }
+            Self::Corners(colors) => {
+                let share = |at: f32, low: f32, high: f32| {
+                    if high > low {
+                        (at - low) / (high - low)
+                    } else {
+                        0.5
+                    }
+                };
+                let across = share(x, bounds[0], bounds[2]).clamp(0.0, 1.0);
+                let down = share(y, bounds[1], bounds[3]).clamp(0.0, 1.0);
+                let [top_left, top_right, bottom_left, bottom_right] = colors.map(encoded);
+                decoded(mixed(
+                    mixed(top_left, top_right, across),
+                    mixed(bottom_left, bottom_right, across),
+                    down,
+                ))
+            }
+            Self::Checker { from, cell, colors } => {
+                let cell = cell.max(1.0);
+                let square = ((x - from[0]) / cell).floor() + ((y - from[1]) / cell).floor();
+                colors[usize::from(square.rem_euclid(2.0) >= 1.0)]
+            }
+            Self::Grid {
+                from,
+                cell,
+                line,
+                colors,
+            } => {
+                let cell = cell.max(1.0);
+                // How much of the pixel the nearest line across or down covers.
+                let near = |at: f32| {
+                    let into = at.rem_euclid(cell);
+                    into.min(cell - into)
+                };
+                let covered = |distance: f32| (line / 2.0 - distance + 0.5).clamp(0.0, 1.0);
+                let on = covered(near(x - from[0])).max(covered(near(y - from[1])));
+                let [lines, ground] = colors;
+                std::array::from_fn(|at| ground[at] + (lines[at] - ground[at]) * on)
+            }
+        }
+    }
+}
+
+/// A premultiplied linear color as a blend is worked out on it: sRGB-encoded, still premultiplied.
+fn encoded(color: [f32; 4]) -> [f32; 4] {
+    let alpha = color[3];
+    if alpha <= 0.0 {
+        return [0.0; 4];
+    }
+    let to = |value: f32| to_encoded(value / alpha) * alpha;
+    [to(color[0]), to(color[1]), to(color[2]), alpha]
+}
+
+/// [`encoded`] undone.
+fn decoded(color: [f32; 4]) -> [f32; 4] {
+    let alpha = color[3];
+    if alpha <= 0.0 {
+        return [0.0; 4];
+    }
+    let to = |value: f32| to_linear(value / alpha) * alpha;
+    [to(color[0]), to(color[1]), to(color[2]), alpha]
+}
+
+fn mixed(from: [f32; 4], to: [f32; 4], share: f32) -> [f32; 4] {
+    std::array::from_fn(|at| from[at] + (to[at] - from[at]) * share)
+}
+
+/// `from` to `to` by `share`, held at either end.
+fn blended(from: [f32; 4], to: [f32; 4], share: f32) -> [f32; 4] {
+    decoded(mixed(encoded(from), encoded(to), share.clamp(0.0, 1.0)))
 }
 
 /// Corners on a curve closely enough that it reads as one at any size drawn.
@@ -512,8 +667,23 @@ impl Shape {
                 ((high + margin).ceil().max(0.0) as usize).min(h),
             )
         };
-        if self.fill[3] > 0.0 && closed && placed.iter().any(|contour| contour.len() >= 3) {
+        if self.fill.shows() && closed && placed.iter().any(|contour| contour.len() >= 3) {
             let (top, bottom) = bounds(&placed, 1.0);
+            // The box around the shape, from its center, which a paint by its corners is laid on.
+            let mut around = [
+                f32::INFINITY,
+                f32::INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+            ];
+            for point in contours.iter().flatten() {
+                around = [
+                    around[0].min(point[0]),
+                    around[1].min(point[1]),
+                    around[2].max(point[0]),
+                    around[3].max(point[1]),
+                ];
+            }
             image
                 .px
                 .par_chunks_mut(w * 4)
@@ -523,9 +693,12 @@ impl Shape {
                 .for_each(|(y, row)| {
                     let mut covered = vec![0.0f32; w];
                     fill_row(&placed, y as f32, &mut covered);
-                    for (pixel, covered) in row.as_chunks_mut::<4>().0.iter_mut().zip(&covered) {
+                    let down = y as f32 + 0.5 - center[1];
+                    let pixels = row.as_chunks_mut::<4>().0.iter_mut().zip(&covered);
+                    for (x, (pixel, covered)) in pixels.enumerate() {
                         if *covered > 0.0 {
-                            over(pixel, self.fill, covered.min(1.0));
+                            let paint = self.fill.at(x as f32 + 0.5 - center[0], down, around);
+                            over(pixel, paint, covered.min(1.0));
                         }
                     }
                 });
@@ -573,7 +746,7 @@ mod tests {
             figure,
             outlines: Vec::new(),
             offset: 0.0,
-            fill: WHITE,
+            fill: Paint::Solid(WHITE),
             stroke: NONE,
             stroke_width: 0.0,
             trim: (0.0, 1.0, 0.0),

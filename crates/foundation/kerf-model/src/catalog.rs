@@ -1173,6 +1173,56 @@ fn builtin_catalog() -> Catalog {
                 .doc("Grows it; a negative shrinks it."),
         )
         .param(P::color("fill", Rgba::WHITE))
+        .param(
+            P::choice(
+                "fill_kind",
+                &["solid", "linear", "radial", "corners", "checker", "grid"],
+            )
+            .doc(
+                "What fills it: `fill` alone; `fill` at the fill's start blended to `fill_2` at its \
+                 end, along the line between (`linear`) or out from the start (`radial`); `fill` \
+                 to `fill_4` at the corners of the box around it, top left, top right, bottom \
+                 left, bottom right (`corners`); squares of `fill` and `fill_2` (`checker`); or \
+                 lines of `fill` on `fill_2` (`grid`).",
+            ),
+        )
+        .param(P::color("fill_2", Rgba::BLACK))
+        .param(P::color("fill_3", Rgba::BLACK))
+        .param(P::color("fill_4", Rgba::BLACK))
+        .param(
+            P::number("fill_start_x", 0.0)
+                .range(-100.0, 100.0)
+                .unit("frame heights")
+                .doc("From its center: where a blend starts, and where a checker's or a grid's lines cross."),
+        )
+        .param(
+            P::number("fill_start_y", -0.5)
+                .range(-100.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("fill_end_x", 0.0)
+                .range(-100.0, 100.0)
+                .unit("frame heights")
+                .doc("From its center: where a blend ends."),
+        )
+        .param(
+            P::number("fill_end_y", 0.5)
+                .range(-100.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("fill_cell", 0.1)
+                .range(0.0, 100.0)
+                .unit("frame heights")
+                .doc("A checker's squares, and how far apart a grid's lines are."),
+        )
+        .param(
+            P::number("fill_line", 0.004)
+                .range(0.0, 100.0)
+                .unit("frame heights")
+                .doc("How wide a grid's lines are."),
+        )
         .param(P::color("stroke", Rgba::WHITE))
         .param(
             P::number("stroke_width", 0.0)

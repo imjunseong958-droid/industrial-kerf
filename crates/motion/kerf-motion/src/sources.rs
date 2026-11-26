@@ -2,7 +2,7 @@
 //! [`PictureSource`]: a shape and particles, read from their clip's
 //! parameters at the moment drawn. Sizes are in frame heights.
 
-use crate::{Combine, Emitter, Figure, Outline, Shape};
+use crate::{Combine, Emitter, Figure, Outline, Paint, Shape};
 use kerf_draw::source::{Extent, PictureSource, Reading, SourceRun};
 use kerf_draw::{Image, Rect};
 use kerf_model::{Catalog, Clip, Time, SHAPE_OUTLINE};
@@ -34,7 +34,7 @@ impl PictureSource for ShapeSource {
         let (contours, closed) = shape.contours();
         // What `Shape::draw` puts down: a fill inside a closed outline, and a stroke along it.
         let fills =
-            shape.fill[3] > 0.0 && closed && contours.iter().any(|contour| contour.len() >= 3);
+            shape.fill.shows() && closed && contours.iter().any(|contour| contour.len() >= 3);
         let strokes = shape.stroke[3] > 0.0 && shape.stroke_width > 0.0;
         if !fills && !strokes {
             return None;
@@ -69,7 +69,7 @@ impl PictureSource for ShapeSource {
                 most[0] - least[0] + 2.0 * grown,
                 most[1] - least[1] + 2.0 * grown,
             ),
-            filled: fills && !strokes && plain,
+            filled: fills && shape.fill.covers() && !strokes && plain,
         })
     }
 }
@@ -84,7 +84,7 @@ fn shape_of(clip: &Clip, run: &SourceRun) -> (Shape, f64) {
         figure: figure_of(&read, height),
         outlines: outlines_of(clip, height, run.at),
         offset: size("offset"),
-        fill: read.color("fill"),
+        fill: paint_of(&read, height),
         stroke: read.color("stroke"),
         stroke_width: size("stroke_width"),
         trim: (
@@ -171,6 +171,36 @@ impl PictureSource for Particles {
         }
         .draw(&mut image, run.at.seconds());
         image
+    }
+}
+
+/// What fills a shape, as it draws it, in pixels of a picture `height` high.
+fn paint_of(read: &Reading, height: f64) -> Paint {
+    let size = |name: &str| (read.number(name) * height) as f32;
+    let from = [size("fill_start_x"), size("fill_start_y")];
+    let to = [size("fill_end_x"), size("fill_end_y")];
+    let colors = [read.color("fill"), read.color("fill_2")];
+    match read.word("fill_kind").as_str() {
+        "linear" => Paint::Linear { from, to, colors },
+        "radial" => Paint::Radial { from, to, colors },
+        "corners" => Paint::Corners([
+            colors[0],
+            colors[1],
+            read.color("fill_3"),
+            read.color("fill_4"),
+        ]),
+        "checker" => Paint::Checker {
+            from,
+            cell: size("fill_cell"),
+            colors,
+        },
+        "grid" => Paint::Grid {
+            from,
+            cell: size("fill_cell"),
+            line: size("fill_line"),
+            colors,
+        },
+        _ => Paint::Solid(colors[0]),
     }
 }
 

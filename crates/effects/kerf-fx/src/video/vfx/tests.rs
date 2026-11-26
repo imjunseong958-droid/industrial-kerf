@@ -3,6 +3,7 @@
 //! frame/track environment works through the real compositor.
 
 use crate::video::project::{find_effect, Param, ParamKind};
+use rayon::prelude::*;
 
 use super::*;
 
@@ -60,6 +61,23 @@ fn grad3(h: u64, x: f32, y: f32, z: f32) -> f32 {
         10 => y - z,
         _ => -y - z,
     }
+}
+
+fn hash_u(x: i64, y: i64, z: i64, seed: u64) -> u64 {
+    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ (z as u64).wrapping_mul(0x1656_67B1_9E37_79F9)
+        ^ seed.wrapping_mul(0x27D4_EB2F_1656_67C5);
+    h ^= h >> 31;
+    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    h ^= h >> 29;
+    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
+    h ^ (h >> 32)
+}
+
+/// Uniform 0..1 from integer coordinates.
+fn hash01(x: i64, y: i64, z: i64, seed: u64) -> f32 {
+    (hash_u(x, y, z, seed) >> 40) as f32 / (1u64 << 24) as f32
 }
 
 /// 3-D gradient noise in about −1..1 (our own hash; Perlin's interpolant and gradient set).
@@ -155,7 +173,6 @@ const NEW_IDS: &[&str] = &[
     "vignette",
     "corner_pin",
     "warp_stabilizer",
-    "gradient",
     "channel_mix",
     "color_replace",
     "vr_blur",
@@ -171,7 +188,6 @@ const NEW_IDS: &[&str] = &[
     "cineon_converter",
     "stroke",
     "metadata_burnin",
-    "checkerboard",
     // rebuilt
     "ultra_key",
     "track_matte",

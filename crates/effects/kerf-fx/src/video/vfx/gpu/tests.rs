@@ -221,8 +221,7 @@ fn kernels_match_the_effects() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Drop Shadow, Mosaic, Lens Distortion, the five that generate a picture, and the Cineon Converter,
-/// each way they can be set.
+/// Drop Shadow, Mosaic, Lens Distortion, and the Cineon Converter, each way they can be set.
 fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
     let fl = ParamValue::Float;
     let on = ParamValue::Bool(true);
@@ -316,123 +315,6 @@ fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
                 ("v_decentering", fl(-45.0)),
             ],
         ),
-        // What is generated: four colors, a grid, a ramp, a gradient, a checkerboard.
-        ("four_color_gradient", vec![]),
-        (
-            "four_color_gradient",
-            vec![
-                ("blend", fl(300.0)),
-                ("opacity", fl(70.0)),
-                ("c2", color(0.9, 0.4, 0.1)),
-            ],
-        ),
-        ("grid", vec![]),
-        (
-            "grid",
-            vec![
-                ("size", fl(13.0)),
-                ("border", fl(4.0)),
-                ("color", color(0.2, 0.8, 0.5)),
-                ("opacity", fl(60.0)),
-            ],
-        ),
-        ("grid", vec![("size", fl(7.5)), ("border", fl(0.0))]),
-        ("ramp", vec![]),
-        (
-            "ramp",
-            vec![
-                ("start", ParamValue::Vec2(Vec2::new(10.0, 5.0))),
-                ("end", ParamValue::Vec2(Vec2::new(80.0, 45.0))),
-                ("start_color", color(0.9, 0.2, 0.1)),
-                ("end_color", color(0.1, 0.3, 0.9)),
-                ("blend", fl(30.0)),
-            ],
-        ),
-        (
-            "ramp",
-            vec![
-                ("shape", ParamValue::Choice(1)),
-                ("start", ParamValue::Vec2(Vec2::new(40.0, 25.0))),
-                ("end", ParamValue::Vec2(Vec2::new(70.0, 30.0))),
-            ],
-        ),
-        ("gradient", vec![]),
-        (
-            "gradient",
-            vec![
-                ("shape", ParamValue::Choice(1)),
-                ("start", ParamValue::Vec2(Vec2::new(40.0, 20.0))),
-                ("end", ParamValue::Vec2(Vec2::new(75.0, 40.0))),
-                ("midpoint", fl(30.0)),
-                ("start_color", ParamValue::Color([0.9, 0.7, 0.1, 0.4])),
-            ],
-        ),
-        (
-            "gradient",
-            vec![
-                ("shape", ParamValue::Choice(2)),
-                ("start", ParamValue::Vec2(Vec2::new(48.0, 27.0))),
-                ("end", ParamValue::Vec2(Vec2::new(90.0, 10.0))),
-                ("scatter", fl(60.0)),
-                ("blend", fl(25.0)),
-            ],
-        ),
-        (
-            "gradient",
-            vec![
-                ("shape", ParamValue::Choice(3)),
-                ("start", ParamValue::Vec2(Vec2::new(48.0, 27.0))),
-                ("end", ParamValue::Vec2(Vec2::new(70.0, 44.0))),
-                ("midpoint", fl(70.0)),
-                ("scatter", fl(100.0)),
-            ],
-        ),
-        ("checkerboard", vec![("width", fl(12.0))]),
-        (
-            "checkerboard",
-            vec![
-                ("width", fl(14.0)),
-                ("height", fl(9.0)),
-                ("square", ParamValue::Bool(false)),
-                ("feather", fl(3.0)),
-                ("anchor", ParamValue::Vec2(Vec2::new(5.0, 3.0))),
-                ("mode", ParamValue::Choice(1)),
-                ("opacity", fl(70.0)),
-                ("color", color(0.9, 0.5, 0.1)),
-            ],
-        ),
-        (
-            "checkerboard",
-            vec![
-                ("width", fl(11.0)),
-                ("mode", ParamValue::Choice(2)),
-                ("color", color(0.3, 0.2, 0.6)),
-            ],
-        ),
-        (
-            "checkerboard",
-            vec![
-                ("width", fl(11.0)),
-                ("mode", ParamValue::Choice(3)),
-                ("color", color(0.3, 0.2, 0.6)),
-            ],
-        ),
-        (
-            "checkerboard",
-            vec![
-                ("width", fl(11.0)),
-                ("mode", ParamValue::Choice(4)),
-                ("feather", fl(2.0)),
-            ],
-        ),
-        (
-            "checkerboard",
-            vec![
-                ("width", fl(11.0)),
-                ("mode", ParamValue::Choice(5)),
-                ("color", color(0.7, 0.6, 0.2)),
-            ],
-        ),
         // The Cineon Converter, each way it goes.
         ("cineon_converter", vec![]),
         (
@@ -495,11 +377,6 @@ fn from_one_source(kernel: &Kernel, image: &Image) -> Option<Image> {
         Kernel::Cineon { way, told } => {
             each(image, &|p, _, _| kerf_kernel::cineon_px(p, *way, told))
         }
-        Kernel::FourColors(told) => each(image, &|p, x, y| kerf_kernel::four_colors(p, x, y, told)),
-        // A grid counts in whole pixels, where the others go by a pixel's middle.
-        Kernel::Grid(told) => each(image, &|p, x, y| {
-            kerf_kernel::grid(p, x - 0.5, y - 0.5, told)
-        }),
         _ => return None,
     })
 }
@@ -521,9 +398,6 @@ fn kernels_from_one_source_are_the_effects_to_the_bit() {
                 "vr_rotate_sphere",
                 "vr_projection",
                 "vr_plane_to_sphere",
-                "ramp",
-                "gradient",
-                "checkerboard",
             ];
             assert!(by_hand.contains(&id), "{id} is written by hand");
             continue;
@@ -535,7 +409,7 @@ fn kernels_from_one_source_are_the_effects_to_the_bit() {
         assert_ne!(cpu.px, image.px, "{id} {params:?} changes nothing");
         held += 1;
     }
-    assert_eq!(held, 3 + 4 + 5);
+    assert_eq!(held, 3 + 4);
 }
 
 /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes

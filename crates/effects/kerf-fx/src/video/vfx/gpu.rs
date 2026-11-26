@@ -137,46 +137,6 @@ pub enum Kernel {
         reach: f32,
         curvature: f32,
     },
-    FourColors(kerf_kernel::FourColors<f32>),
-    Grid(kerf_kernel::Grid<f32>),
-    Ramp {
-        start: [f32; 2],
-        /// From its start to its end, and that length squared.
-        along: [f32; 2],
-        length2: f32,
-        /// Its two colors, sRGB-encoded.
-        colors: [[f32; 3]; 2],
-        radial: bool,
-        opacity: f32,
-    },
-    Gradient(Box<Gradient>),
-    Checkerboard {
-        anchor: [f32; 2],
-        /// A square's width and height.
-        cell: [f32; 2],
-        feather: f32,
-        /// Its color in linear light.
-        color: [f32; 3],
-        opacity: f32,
-        mode: u32,
-    },
-}
-
-/// `stylize::gradient`'s numbers.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Gradient {
-    start: [f32; 2],
-    /// From its start to its end, that length squared, and that length.
-    along: [f32; 2],
-    length2: f32,
-    length: f32,
-    /// Its two colors, sRGB-encoded, each with its alpha.
-    colors: [[f32; 4]; 2],
-    shape: u32,
-    scatter: f32,
-    /// The power that puts its midpoint where it is told.
-    gamma: f32,
-    blend: f32,
 }
 
 /// What [`Kernel::Kept`] does between the way there and the way back.

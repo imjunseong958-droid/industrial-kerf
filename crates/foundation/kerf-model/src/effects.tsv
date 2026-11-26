@@ -200,48 +200,6 @@ effect	distort.warpstabilizer	Distort	Warp Stabilizer	Smooths or removes camera 
 	number	additional_scale	100	50..400	%	Borders: Additional Scale
 	bool	detailed	false			Advanced: Detailed Analysis
 	number	crop_less	50	0..100	%	Advanced: Crop Less <-> Smooth More
-effect	generate.checkerboard	Generate	Checkerboard	A checkerboard; backgrounds and patterns.	2
-	number	anchor_x	0	-10..10	picture widths	Anchor (0 left, 1 right)
-	number	anchor_y	0	-10..10	picture heights	Anchor (0 top, 1 bottom)
-	number	width	64	0..4000		Width
-	number	height	64	0..4000		Height
-	bool	square	true			Square (Width Only)
-	number	feather	0	0..100		Feather
-	color	color	#ffffff			Color
-	number	opacity	100	0..100	%	Opacity
-	enum	mode	none	none|normal|add|multiply|screen|overlay		Blending Mode
-effect	generate.fourcolor	Generate	4-Color Gradient	A gradient from four colored points; backgrounds and color washes.	2
-	color	c1	#ffff00			Color 1
-	color	c2	#00ff00			Color 2
-	color	c3	#ff00ff			Color 3
-	color	c4	#0000ff			Color 4
-	number	blend	100	1..1000		Blend
-	number	opacity	100	0..100	%	Opacity
-effect	generate.gradient	Generate	Gradient	A smooth linear or radial gradient between two colors, dithered against banding; skies, backgrounds, shading.
-	number	start_x	0.5	-10..10	picture widths	Gradient Start (0 left, 1 right)
-	number	start_y	0	-10..10	picture heights	Gradient Start (0 top, 1 bottom)
-	color	start_color	#000000			Start Color
-	number	end_x	0.5	-10..10	picture widths	Gradient End (0 left, 1 right)
-	number	end_y	1	-10..10	picture heights	Gradient End (0 top, 1 bottom)
-	color	end_color	#ffffff			End Color
-	enum	shape	linear	linear|radial|reflected|diamond		Gradient Shape
-	number	scatter	0	0..100	%	Gradient Scatter
-	number	midpoint	50	0..100	%	Midpoint
-	number	blend	0	0..100	%	Blend With Original
-effect	generate.gradientramp	Generate	Ramp	A linear or radial ramp between two colors; skies, backgrounds, shading.	2
-	number	start_x	0.5	-10..10	picture widths	Start of Ramp (0 left, 1 right)
-	number	start_y	0	-10..10	picture heights	Start of Ramp (0 top, 1 bottom)
-	color	start_color	#000000			Start Color
-	number	end_x	0.5	-10..10	picture widths	End of Ramp (0 left, 1 right)
-	number	end_y	1	-10..10	picture heights	End of Ramp (0 top, 1 bottom)
-	color	end_color	#ffffff			End Color
-	enum	shape	linear-ramp	linear-ramp|radial-ramp		Ramp Shape
-	number	blend	0	0..100	%	Blend With Original
-effect	generate.grid	Generate	Grid	Draws a grid of lines; layouts, tech overlays, and backgrounds.	2
-	number	size	60	1..4000		Width
-	number	border	2	0..100		Border
-	color	color	#ffffff			Color
-	number	opacity	100	0..100	%	Opacity
 effect	vr.blur	Immersive Video	VR Blur	Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds.	2
 	enum	frame_layout	monoscopic	monoscopic|stereoscopic-over-under|stereoscopic-side-by-side		Frame Layout
 	number	blurriness	0	0..1000		Blurriness
