@@ -500,9 +500,9 @@ fn a_clip_made_smaller_and_moved_on_the_program_is_read_where_it_is_put() {
     let clear = with_second_clip("      set opacity=0\n", "").unwrap_err();
     assert!(clear.contains("`c2` is clear where it starts"), "{clear}");
     // An effect that may move the picture is named; a grade is read through.
-    let flipped = with_second_clip("      fx transform.hflip@1\n", "x=0.2").unwrap_err();
+    let flipped = with_second_clip("      fx distort.transform@2\n", "x=0.2").unwrap_err();
     assert!(
-        flipped.contains("`c2` has `transform.hflip` on it"),
+        flipped.contains("`c2` has `distort.transform` on it"),
         "{flipped}"
     );
     let graded = with_second_clip("      fx color.basic@1 exposure=0.3\n", "x=0.2")

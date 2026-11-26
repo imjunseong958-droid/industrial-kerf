@@ -122,8 +122,6 @@ pub enum FxOp {
         feather: f32,
     },
     Resample(Resample),
-    HFlip,
-    VFlip,
     /// ASC CDL on display-encoded colour (slope, offset, power, saturation).
     AscCdl {
         slope: [f32; 3],
@@ -267,8 +265,6 @@ impl FxOp {
                 FxOp::crop_rect(w, h, 0.0, 0.0, 0.0, 0.0, amt)
             }
             "transform" => eval_transform(e, cx, w, h),
-            "horizontal_flip" => FxOp::HFlip,
-            "vertical_flip" => FxOp::VFlip,
             "asc_cdl" => eval_asc_cdl(e, cx),
             "channel_mix" => eval_channel_mix(e, cx),
             "color_replace" => eval_color_replace(e, cx),
@@ -342,7 +338,7 @@ impl FxOp {
                 white,
                 amount,
             } => fin(black) && fin(white) && amount.is_finite(),
-            FxOp::BlackWhite | FxOp::HFlip | FxOp::VFlip => true,
+            FxOp::BlackWhite => true,
             FxOp::ColorBalance { sh, md, hi, .. } => fin(sh) && fin(md) && fin(hi),
             FxOp::LeaveColor {
                 amount,
@@ -515,8 +511,6 @@ impl FxOp {
                 feather,
             } => crate::video::effects::crop_px(img, *x0, *x1, *y0, *y1, *feather),
             FxOp::Resample(r) => apply_resample(img, r),
-            FxOp::HFlip => apply_hflip(img),
-            FxOp::VFlip => apply_vflip(img),
             FxOp::AscCdl {
                 slope,
                 offset,
@@ -1205,25 +1199,6 @@ fn apply_resample(img: &mut Image, r: &Resample) {
     };
     *img = out;
     img.scale_alpha(r.opacity);
-}
-
-fn apply_hflip(img: &mut Image) {
-    let w = img.w;
-    img.px.par_chunks_mut(w * 4).for_each(|row| {
-        for x in 0..w / 2 {
-            for k in 0..4 {
-                row.swap(x * 4 + k, (w - 1 - x) * 4 + k);
-            }
-        }
-    });
-}
-
-fn apply_vflip(img: &mut Image) {
-    let (w, h) = (img.w, img.h);
-    for y in 0..h / 2 {
-        let (a, bb) = img.px.split_at_mut((h - 1 - y) * w * 4);
-        a[y * w * 4..(y + 1) * w * 4].swap_with_slice(&mut bb[..w * 4]);
-    }
 }
 
 fn apply_channel_mix(img: &mut Image, m: [[f32; 4]; 3]) {

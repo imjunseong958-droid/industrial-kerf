@@ -399,7 +399,6 @@ effect	transform.autoreframe	Transform	Auto Reframe	Keeps the moving subject in 
 	number	offset_y	0	-100000..100000	pixels	Reframe Offset (down)
 	number	zoom	100	100..400	%	Reframe Zoom
 	enum	aspect	sequence	sequence|vertical-9-16|square-1-1|vertical-4-5|horizontal-16-9		Target Aspect
-effect	transform.hflip	Transform	Horizontal Flip	Mirrors the picture left to right; flipping a shot's direction.
 effect	transform.spacer	Transform	Spacer	Pads the picture with a border of color, rounded if you like; framed cards and picture-in-picture.
 	number	left	40	0..4000		Left
 	number	top	40	0..4000		Top
@@ -409,7 +408,6 @@ effect	transform.spacer	Transform	Spacer	Pads the picture with a border of color
 	number	radius	0	0..2000		Corner Radius
 	bool	fill	false			Fill Background
 	color	color	#000000			Background Color
-effect	transform.vflip	Transform	Vertical Flip	Turns the picture upside down; reflections and surreal flips.
 effect	utility.autoalign	Utility	Auto Align	Moves the picture's visible content to an edge or the center with a margin; aligning cutouts and logos.
 	enum	horizontal	center	none|left|center|right		Horizontal Alignment
 	enum	vertical	center	none|top|center|bottom		Vertical Alignment

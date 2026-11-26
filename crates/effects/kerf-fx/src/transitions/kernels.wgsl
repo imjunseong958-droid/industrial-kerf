@@ -130,11 +130,6 @@ fn ease_in_out(v: f32) -> f32 {
     return 1.0 - far * far * far / 2.0;
 }
 
-fn ease_in(v: f32) -> f32 {
-    let t = clamp(v, 0.0, 1.0);
-    return t * t * t;
-}
-
 fn ease_out(v: f32) -> f32 {
     let t = 1.0 - clamp(v, 0.0, 1.0);
     return 1.0 - t * t * t;
@@ -814,13 +809,7 @@ fn blurs(@builtin(global_invocation_id) id: vec3<u32>) {
 
 const V_FILM_ROLL: u32 = 0u;
 const V_STRETCH: u32 = 1u;
-const V_BLOCK: u32 = 2u;
 const V_FRAME: u32 = 3u;
-const V_LOUVER: u32 = 4u;
-const V_MIRROR: u32 = 5u;
-const V_PEEL: u32 = 6u;
-const V_SLICE: u32 = 7u;
-const V_WAVE: u32 = 8u;
 const V_STRETCH_WIPE: u32 = 9u;
 const V_EARTHQUAKE: u32 = 10u;
 
@@ -881,48 +870,6 @@ fn stretch(x: f32, y: f32) -> vec4<f32> {
     return sac(sx, sy);
 }
 
-fn block_motion(x: f32, y: f32, q: f32) -> vec4<f32> {
-    let lanes = n(0);
-    let cells = n(1);
-    let sgn = n(2);
-    let horiz = on(3);
-    let along = select(y, x, horiz);
-    let across = select(x, y, horiz);
-    let len_al = select(u.size.y, u.size.x, horiz);
-    let len_ac = select(u.size.x, u.size.y, horiz);
-    let lane = clamp(floor(across / len_ac * lanes), 0.0, lanes - 1.0);
-    let cell_len = len_al / cells;
-    var col = vec4(0.0);
-    var got_a = false;
-    var got_b = vec4(0.0);
-    var has_b = false;
-    let count = i32(cells);
-    for (var ci = 0; ci < count; ci++) {
-        let order = f32(select(ci, count - 1 - ci, sgn > 0.0)) / cells;
-        let delay = 0.6 * (0.6 * order + 0.4 * hash(ci, i32(lane), 17u));
-        let qi = clamp((q - delay) / (1.0 - 0.6), 0.0, 1.0);
-        let e = ease_in_out(qi);
-        let off_a = sgn * len_al * e;
-        let off_b = sgn * len_al * (e - 1.0);
-        let lo = f32(ci) * cell_len;
-        let hi = f32(ci + 1) * cell_len;
-        let at_a = along - off_a;
-        if !got_a && at_a >= lo && at_a < hi {
-            col = sac(select(x, at_a, horiz), select(at_a, y, horiz));
-            got_a = true;
-        }
-        let at_b = along - off_b;
-        if !has_b && at_b >= lo && at_b < hi {
-            got_b = sbc(select(x, at_b, horiz), select(at_b, y, horiz));
-            has_b = true;
-        }
-    }
-    if got_a {
-        return over(got_b, col);
-    }
-    return got_b;
-}
-
 fn frame_side(out: vec4<f32>, x: f32, y: f32, is_b: bool, off: f32) -> vec4<f32> {
     let w = u.size.x;
     let h = u.size.y;
@@ -944,163 +891,6 @@ fn frame_side(out: vec4<f32>, x: f32, y: f32, is_b: bool, off: f32) -> vec4<f32>
         return over(out, n4(0));
     }
     return out;
-}
-
-fn louver(x: f32, y: f32) -> vec4<f32> {
-    let count = n(0);
-    let horizontal = on(1);
-    let pos = select(x, y, horizontal);
-    let len = select(u.size.x, u.size.y, horizontal);
-    let sl = len / count;
-    let i = clamp(floor(pos / sl), 0.0, count - 1.0);
-    let mid = (i + 0.5) * sl;
-    let stagger = 0.4 * i / max(count, 1.0);
-    let q = clamp((u.p - stagger) / 0.6, 0.0, 1.0);
-    let co = cos(ease_in_out(q) * PI);
-    if abs(co) < 1e-3 {
-        return vec4(0.0, 0.0, 0.0, 1.0);
-    }
-    let local = (pos - mid) / co;
-    if abs(local) > sl / 2.0 {
-        return vec4(0.0, 0.0, 0.0, 1.0);
-    }
-    let read = mid + select(-local, local, co > 0.0);
-    let sx = select(read, x, horizontal);
-    let sy = select(y, read, horizontal);
-    var c: vec4<f32>;
-    if co > 0.0 {
-        c = sac(sx, sy);
-    } else {
-        c = sbc(sx, sy);
-    }
-    return vec4(c.xyz * (0.5 + 0.5 * abs(co)), c.w);
-}
-
-// How far along the frame from its entry side, for a mirror and a wave.
-fn from_entry(x: f32, y: f32, horiz: bool, neg: bool) -> f32 {
-    if horiz {
-        return select(x, u.size.x - x, neg);
-    }
-    return select(y, u.size.y - y, neg);
-}
-
-fn mirror(x: f32, y: f32) -> vec4<f32> {
-    let horiz = on(0);
-    let neg = on(1);
-    let refl = n(2);
-    let e = n(3);
-    let s = from_entry(x, y, horiz, neg);
-    if s < e {
-        return pb(x, y);
-    }
-    let a = pa(x, y);
-    let d = s - e;
-    if d < refl {
-        let m = e - d;
-        var r: vec4<f32>;
-        if horiz {
-            r = sbc(select(m, u.size.x - m, neg), y);
-        } else {
-            r = sbc(x, select(m, u.size.y - m, neg));
-        }
-        return lerp4(a, r, 0.75 * (1.0 - d / refl));
-    }
-    return a;
-}
-
-fn page_back(c: vec4<f32>, light: f32) -> vec4<f32> {
-    let m = lerp4(c, vec4(c.w), 0.6);
-    return vec4(m.xyz * light, m.w);
-}
-
-fn page_peel(x: f32, y: f32) -> vec4<f32> {
-    let r = n(0);
-    let nx = n(4);
-    let ny = n(5);
-    let f = n(6);
-    let s = (x - n(2)) * nx + (y - n(3)) * ny;
-    if s >= f {
-        let so = 2.0 * f - s - PI * r;
-        let px = x - nx * (s - so);
-        let py = y - ny * (s - so);
-        if within(px, py) {
-            return page_back(sac(px, py), 0.95);
-        }
-    }
-    let d = f - s;
-    if d >= 0.0 && d < r {
-        let upper = PI - asin(d / r);
-        let upper_so = f - r * upper;
-        let ux = x - nx * (s - upper_so);
-        let uy = y - ny * (s - upper_so);
-        if within(ux, uy) {
-            return page_back(sac(ux, uy), 0.75 + 0.25 * sin(upper));
-        }
-        let lower = asin(d / r);
-        let lower_so = f - r * lower;
-        let lx = x - nx * (s - lower_so);
-        let ly = y - ny * (s - lower_so);
-        if within(lx, ly) {
-            let c = sac(lx, ly);
-            let l = 1.0 - 0.45 * (lower / FRAC_PI_2);
-            return vec4(c.xyz * l, c.w);
-        }
-    }
-    if s >= f {
-        return pa(x, y);
-    }
-    let b = pb(x, y);
-    if on(1) {
-        let k = 1.0
-            - 0.45
-                * exp(-max(d - r, 0.0) / (r * 1.5))
-                * sstep(0.0, 0.05, u.p)
-                * (1.0 - sstep(0.9, 1.0, u.p));
-        return vec4(b.xyz * k, b.w);
-    }
-    return b;
-}
-
-fn slice(x: f32, y: f32, q: f32) -> vec4<f32> {
-    let count = n(0);
-    let ax = n(1);
-    let ay = n(2);
-    let px = n(3);
-    let py = n(4);
-    let lo = n(5);
-    let span = n(6);
-    let dist = n(7);
-    let w = u.size.x;
-    let h = u.size.y;
-    let i = clamp(floor(((x * px + y * py) - lo) / span * count), 0.0, count - 1.0);
-    let sign_of = select(-1.0, 1.0, i32(i) % 2 == 0);
-    let qi = clamp((q - 0.3 * i / max(count, 1.0)) / 0.7, 0.0, 1.0);
-    let off = sign_of * dist * ease_in(qi);
-    let sx = x - ax * off;
-    let sy = y - ay * off;
-    let zb = 1.0 + 0.05 * (1.0 - q);
-    let b = sbc((x - w / 2.0) / zb + w / 2.0, (y - h / 2.0) / zb + h / 2.0);
-    if within(sx, sy) {
-        let j = clamp(floor(((sx * px + sy * py) - lo) / span * count), 0.0, count - 1.0);
-        if j == i {
-            return over(b, sac(sx, sy));
-        }
-    }
-    return b;
-}
-
-fn wave(x: f32, y: f32) -> vec4<f32> {
-    let horiz = on(3);
-    let band = n(4);
-    let e = n(5);
-    let s = from_entry(x, y, horiz, on(2));
-    let across = select(x, y, horiz);
-    let near = exp(-squared((s - e) / band));
-    let disp = n(0) * n(6) * near * sin(2.0 * PI * (across / n(1)) - u.p * 6.0);
-    let sx = select(x + disp * 0.3, x + disp, horiz);
-    let sy = select(y + disp, y + disp * 0.3, horiz);
-    let k = 1.0 - sstep(-band * 0.3, band * 0.3, s - e);
-    return lerp4(sac(sx, sy), sbc(sx, sy), k);
 }
 
 fn stretch_wipe(x: f32, y: f32) -> vec4<f32> {
@@ -1156,27 +946,9 @@ fn moved_at(x: f32, y: f32, q: f32) -> vec4<f32> {
         case V_STRETCH: {
             return stretch(x, y);
         }
-        case V_BLOCK: {
-            return block_motion(x, y, q);
-        }
         case V_FRAME: {
             let out = frame_side(vec4(0.0), x, y, false, n(8));
             return frame_side(out, x, y, true, n(9));
-        }
-        case V_LOUVER: {
-            return louver(x, y);
-        }
-        case V_MIRROR: {
-            return mirror(x, y);
-        }
-        case V_PEEL: {
-            return page_peel(x, y);
-        }
-        case V_SLICE: {
-            return slice(x, y, q);
-        }
-        case V_WAVE: {
-            return wave(x, y);
         }
         case V_STRETCH_WIPE: {
             return stretch_wipe(x, y);

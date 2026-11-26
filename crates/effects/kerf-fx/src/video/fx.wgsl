@@ -43,8 +43,6 @@ const OP_DIRECTIONAL: u32 = 22u;
 const OP_UNSHARP: u32 = 23u;
 const OP_CROP: u32 = 24u;
 const OP_RESAMPLE: u32 = 25u;
-const OP_HFLIP: u32 = 26u;
-const OP_VFLIP: u32 = 27u;
 const OP_VIDEO_LIMITER: u32 = 30u;
 const OP_LUMETRI: u32 = 31u;
 const OP_LUMETRI_LOOK: u32 = 32u;
@@ -659,12 +657,6 @@ fn pixel(op: u32, p: vec2<i32>) -> vec4<f32> {
                 return vec4(0.0);
             }
             return sample_bilinear(uu, vv) * m1.z;
-        }
-        case OP_HFLIP: {
-            return ld(vec2(s.x - 1 - p.x, p.y));
-        }
-        case OP_VFLIP: {
-            return ld(vec2(p.x, s.y - 1 - p.y));
         }
         case OP_VIGNETTE: {
             let o = ld(p);

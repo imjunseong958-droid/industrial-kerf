@@ -144,7 +144,6 @@ fn which_transitions_have_kernels() {
     const KERNELS: &[&str] = &[
         "additive-dissolve",
         "barn-doors",
-        "block-motion",
         "blur-dissolve",
         "burn-alpha",
         "burn-chroma",
@@ -161,7 +160,6 @@ fn which_transitions_have_kernels() {
         "flash",
         "flicker",
         "flip-motion",
-        "fold-motion",
         "frame",
         "glass",
         "glitch",
@@ -177,12 +175,9 @@ fn which_transitions_have_kernels() {
         "light-leak",
         "light-sweep",
         "liquid-distortion",
-        "louver",
         "luma-fade",
-        "mirror",
         "mosaic",
         "neon-wipe",
-        "page-peel",
         "panel-wipe",
         "phosphor",
         "plateau-wipe",
@@ -193,8 +188,6 @@ fn which_transitions_have_kernels() {
         "radial-wipe",
         "ray",
         "roll",
-        "roll-3d",
-        "slice",
         "slide",
         "soft-wipe",
         "solarize",
@@ -210,7 +203,6 @@ fn which_transitions_have_kernels() {
         "travel-motion",
         "tv-power",
         "vhs-damage",
-        "wave",
         "whip",
         "zoom-blur",
     ];
@@ -229,5 +221,5 @@ fn which_transitions_have_kernels() {
     without.sort_unstable();
     assert_eq!(with, KERNELS);
     assert_eq!(without, ON_THE_CPU);
-    assert_eq!(with.len() + without.len(), 72);
+    assert_eq!(with.len() + without.len(), 64);
 }

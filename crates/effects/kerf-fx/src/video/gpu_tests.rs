@@ -441,8 +441,6 @@ fn cases() -> Vec<Case> {
             ],
             false,
         ),
-        ("horizontal_flip", vec![], false),
-        ("vertical_flip", vec![], false),
         (
             "asc_cdl",
             vec![
@@ -881,7 +879,6 @@ fn gpu_effect_chains_match_cpu() {
                 "transform",
                 &[("rotation", fl(-15.0)), ("scale_height", fl(110.0))],
             ),
-            effect("horizontal_flip", &[]),
             effect("levels", &[("in_black", fl(15.0)), ("gamma", fl(80.0))]),
             effect("invert", &[("channel", ParamValue::Choice(4))]),
             effect(

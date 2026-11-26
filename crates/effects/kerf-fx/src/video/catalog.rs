@@ -83,9 +83,7 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("posterize_time", "time.posterizetime", 2, "Holds frames to play at a lower frame rate; choppy, stop-motion, or stylized movement."),
     // Transform
     ("auto_reframe", "transform.autoreframe", 1, "Keeps the moving subject in frame when the sequence's aspect differs from the clip's; vertical and square versions."),
-    ("horizontal_flip", "transform.hflip", 1, "Mirrors the picture left to right; flipping a shot's direction."),
     ("spacer", "transform.spacer", 1, "Pads the picture with a border of color, rounded if you like; framed cards and picture-in-picture."),
-    ("vertical_flip", "transform.vflip", 1, "Turns the picture upside down; reflections and surreal flips."),
     // Utility
     ("auto_align", "utility.autoalign", 1, "Moves the picture's visible content to an edge or the center with a margin; aligning cutouts and logos."),
     ("edge_feather", "utility.edgefeather", 1, "Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture."),

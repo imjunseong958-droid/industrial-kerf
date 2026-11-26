@@ -157,7 +157,7 @@ pub fn filmcraft_id(id: &str) -> Option<String> {
     let id = id.replace('-', "_");
     Some(match id.as_str() {
         // FilmCraft names these apart from the effects of the same name.
-        "directional_blur" | "mirror" | "mosaic" => format!("{id}_transition"),
+        "directional_blur" | "mosaic" => format!("{id}_transition"),
         _ => id,
     })
 }
@@ -715,8 +715,8 @@ pub(crate) const BLUR_STEP: f32 = 4.0;
 pub(crate) const MOST_MOMENTS: usize = 80;
 
 /// The most samples a pixel's motion blur takes of a transition that works out where the picture is
-/// at each, for what drawing it costs: at 1080p, with the motion blur as it comes, Block Motion's
-/// blocks, which move fastest, are then under 5 pixels apart.
+/// at each, for what drawing it costs: at 1080p, with the motion blur at its most, Film Roll's frames
+/// are then under 5 pixels apart.
 pub(crate) const MOST_SAMPLES: usize = 120;
 
 /// How many stretches of the shutter [`samples_over`] follows what moves over to see how fast it goes.
@@ -778,31 +778,6 @@ pub(crate) fn following(
     (open, samples_over(t.p, open, MOST_SAMPLES, points))
 }
 
-/// The moments [`temporal`] evaluates a pixel at, for what is the same at every pixel to be worked out
-/// once a frame; [`averaged`] then takes a pixel at each.
-pub(crate) fn sample_times(p: f32, shutter: f32, n: usize) -> Vec<f32> {
-    if n <= 1 || shutter <= 1e-5 {
-        return vec![p];
-    }
-    (0..n)
-        .map(|i| (p + (i as f32 / (n - 1) as f32 - 0.5) * shutter).clamp(0.0, 1.0))
-        .collect()
-}
-
-/// A pixel at each of `n` of [`sample_times`] (`f` takes which), averaged as [`temporal`] averages them.
-pub(crate) fn averaged(n: usize, f: impl Fn(usize) -> [f32; 4]) -> [f32; 4] {
-    if n <= 1 {
-        return f(0);
-    }
-    let mut acc = [0.0; 4];
-    for i in 0..n {
-        let c = f(i);
-        for k in 0..4 {
-            acc[k] += c[k];
-        }
-    }
-    scale4(acc, 1.0 / n as f32)
-}
 /// Motion-blur settings from the `motion_blur` param: (shutter in progress units, samples), a number
 /// of samples that does not follow how far the picture moves.
 pub(crate) fn shutter(t: &Tx, max: f32) -> (f32, usize) {
