@@ -176,6 +176,12 @@ impl Drawing {
         if self.hard {
             self.hard.hash(&mut hash);
         }
+        // And so with this. Each clip left out keeps its place among the colors of an ids
+        // pass, which the clips drawn do not say: a frame of the same clips with no other
+        // in the sequence has other colors.
+        if self.only_filmed {
+            self.only_filmed.hash(&mut hash);
+        }
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())
     }

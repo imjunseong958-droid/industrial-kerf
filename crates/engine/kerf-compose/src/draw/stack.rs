@@ -465,30 +465,42 @@ impl Drawing {
             };
             composite(canvas, &mixed, 1.0, self.blend(blend));
         };
-        // Which side is a clip a model films, where such clips leave their place clear: the
-        // nothing one enters from or leaves into is no clip's.
+        // Which side is a clip a model films, where such clips leave their place clear. One
+        // clip that enters from nothing or leaves into it is all there is of its pair.
         let clears = |shown: &Shown| moment.clears && shown.shows(at) && shown.plan.filmed;
-        let (a_clears, b_clears) = match (pair.from == pair.to, pair.from_nothing) {
-            (false, _) => (clears(from), clears(to)),
-            (true, true) => (false, clears(to)),
-            (true, false) => (clears(from), false),
+        let (a_clears, b_clears) = match pair.from == pair.to {
+            true => (clears(from), clears(from)),
+            false => (clears(from), clears(to)),
         };
         match (a_clears, b_clears) {
             (false, false) => lay(canvas, mix(&a, &b)),
             (true, true) => clear_under(canvas, &mut mix(&a, &b), self.hard),
-            // One side is a model's and the other Kerf's: what the mix shows of the first is
-            // left clear, and what it shows of the other is drawn, each mixed with nothing in
-            // the other's place. The side it comes from goes down first, as it lies under the
-            // one it goes to.
-            (true, false) => {
-                let nothing = Image::new(w, h);
-                clear_under(canvas, &mut mix(&a, &nothing), self.hard);
-                lay(canvas, mix(&nothing, &b));
+            // One side is a model's and the other Kerf's. Drawn hard, each pixel of the mix is
+            // the one of the two it is the more of: left clear, or laid down.
+            (a_filmed, _) if self.hard => {
+                let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
+                let models = usize::from(!a_filmed);
+                lay_hard_or_clear(canvas, &mut mix(&a, &b), &colors, models);
             }
-            (false, true) => {
-                let nothing = Image::new(w, h);
-                lay(canvas, mix(&a, &nothing));
-                clear_under(canvas, &mut mix(&nothing, &b), self.hard);
+            // Else the mix is made of pictures that say whose each part of it is, whichever
+            // of the two lies over the other in it and however it blends them: once with the
+            // model's side black where it is, which leaves the colors Kerf's side comes to,
+            // and once with Kerf's side white beside it, which says how much of each pixel is
+            // Kerf's. What the mix covers is left clear, and Kerf's part is laid there. A mix
+            // that goes by how bright its two pictures are takes these for them.
+            (a_filmed, _) => {
+                let grey = |filmed: bool, picture: &Image| in_grey(picture, f32::from(!filmed));
+                let (colors, share) = match a_filmed {
+                    true => (
+                        mix(&in_grey(&a, 0.0), &b),
+                        mix(&grey(true, &a), &grey(false, &b)),
+                    ),
+                    false => (
+                        mix(&a, &in_grey(&b, 0.0)),
+                        mix(&grey(false, &a), &grey(true, &b)),
+                    ),
+                };
+                lay_share(canvas, &colors, &share);
             }
         }
     }
@@ -658,4 +670,35 @@ impl Drawing {
             Pass::Normals => three_d::mesh::Shade::Facing,
         }
     }
+}
+
+/// `picture` with every pixel of it `grey`, as much as it is there.
+fn in_grey(picture: &Image, grey: f32) -> Image {
+    let mut out = picture.clone();
+    out.px.par_chunks_mut(4).for_each(|pixel| {
+        let value = grey * pixel[3];
+        pixel[..3].fill(value);
+    });
+    out
+}
+
+/// What `share` covers of `canvas` made clear by as much, and the colors of `colors` laid
+/// there, for as much of each pixel as `share` is white: the mix of a clip a model films and
+/// one Kerf draws, in a sequence drawn as a clip of another.
+fn lay_share(canvas: &mut Image, colors: &Image, share: &Image) {
+    canvas
+        .px
+        .par_chunks_mut(4)
+        .zip(colors.px.par_chunks(4))
+        .zip(share.px.par_chunks(4))
+        .for_each(|((to, colors), share)| {
+            let covered = share[3].clamp(0.0, 1.0);
+            if covered <= 0.0 {
+                return;
+            }
+            for channel in 0..3 {
+                to[channel] = to[channel] * (1.0 - covered) + colors[channel];
+            }
+            to[3] = to[3] * (1.0 - covered) + share[0].clamp(0.0, covered);
+        });
 }

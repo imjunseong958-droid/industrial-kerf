@@ -173,13 +173,13 @@ impl Sequence {
     }
 
     /// Whether a guide of only what a model films has anything of it to draw: a clip of a
-    /// picture track that shows which draws and which a model films.
+    /// picture track that shows which is on, draws, and which a model films.
     pub fn draws_filmed(&self) -> bool {
         self.tracks
             .iter()
             .filter(|track| track.kind == TrackKind::Video && track.enabled)
             .flat_map(|track| &track.clips)
-            .any(|clip| clip.draws() && clip.filmed())
+            .any(|clip| clip.enabled && clip.draws() && clip.filmed())
     }
 
     /// The sequence as a guide of only what a model films is drawn from (`only=filmed`):

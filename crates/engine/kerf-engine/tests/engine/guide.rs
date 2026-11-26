@@ -524,8 +524,7 @@ fn a_guide_of_only_what_a_model_films_is_held_to_those_clips_alone() {
         clip.props.remove("filmed");
     }
     let refused = plan(&none, directory, "m1", &models)
-        .err()
-        .expect("refused")
+        .expect_err("refused")
         .to_string();
     assert!(refused.contains("`filmed=true`"), "{refused}");
 }

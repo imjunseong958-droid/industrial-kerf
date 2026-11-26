@@ -518,6 +518,34 @@ fn a_guide_of_only_what_a_model_films_leaves_the_rest_out() {
         near(true),
         near(false)
     );
+    // A frame of it is its own, kept apart from one of the same clips with no other in the
+    // sequence, where each has another color.
+    let ids_of = |body: &str, only_filmed: bool| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let drawn = Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass: Pass::Ids,
+                only_filmed,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes");
+        (drawn.frame(at, 1.0), drawn.frame_key(at, 1.0))
+    };
+    let sky = "  track V2 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set filmed=true\n";
+    let sign = "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n      set scale=0.5\n";
+    let (with_a_sign, alone) = (ids_of(&format!("{sign}{sky}"), true), ids_of(sky, false));
+    assert_ne!(with_a_sign.0, alone.0);
+    assert_ne!(with_a_sign.1, alone.1);
     // A sequence no clip of which a model films has nothing to draw so.
     let none = parse_document(
         &format!(

@@ -255,7 +255,7 @@ pub fn carry(project: &kerf_model::Project, directory: &Path, id: &str) -> Resul
     let recipe = Recipe::of_steps(&steps);
     let meshes: Vec<String> = recipe
         .sequences()
-        .flat_map(|sequence| takes::mesh_files(project, sequence))
+        .flat_map(|sequence| takes::mesh_files(project, sequence, recipe.only_filmed(sequence)))
         .collect();
     for file in needs.iter().filter(|file| !meshes.contains(file)) {
         notes.push(format!(
@@ -433,7 +433,6 @@ impl Recipe {
         signals
     }
 
-    /// The sequences its steps have Kerf draw.
     /// Whether the guide drawn of `sequence` is of only what a model films of it: every
     /// `render` step that draws it says `only=filmed`, and one draws it. What goes with
     /// such a guide, and what a take of it is held to, is read as the guide is drawn.
@@ -453,6 +452,7 @@ impl Recipe {
         drawn.peek().is_some() && drawn.all(|only| only)
     }
 
+    /// The sequences its steps have Kerf draw.
     pub fn sequences(&self) -> impl Iterator<Item = &str> {
         self.steps.iter().filter_map(|step| match step {
             Step::Render { sequence, .. } => Some(sequence.as_str()),
@@ -846,24 +846,26 @@ fn plain(number: f64) -> String {
     text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
-/// Whether a guide of `sequence` of `project` is drawn of only what a model films of it: a
-/// `render` step of one of the project's media draws it so (`only=filmed`). What holds a
-/// take to its guide draws the guide as that step does.
+/// Whether the guides of `sequence` of `project` are drawn of only what a model films of
+/// it: every `render` step of the project's media that draws it says so (`only=filmed`),
+/// and one draws it, as [`Recipe::only_filmed`] has it of one media's steps. What holds a
+/// take to its guide is asked of a sequence and not of a media, and draws the guide so;
+/// where a project draws one sequence both ways, it draws it whole.
 pub fn guide_only_filmed(project: &kerf_model::Project, sequence: &str) -> bool {
-    project
+    let mut drawn = project
         .media
         .iter()
         .flat_map(|media| &media.steps)
-        .any(|step| {
-            matches!(
-                step,
-                Step::Render {
-                    sequence: drawn,
-                    only_filmed: true,
-                    ..
-                } if drawn == sequence
-            )
+        .filter_map(|step| match step {
+            Step::Render {
+                sequence: drawn,
+                only_filmed,
+                ..
+            } if drawn == sequence => Some(*only_filmed),
+            _ => None,
         })
+        .peekable();
+    drawn.peek().is_some() && drawn.all(|only| only)
 }
 
 /// What `recipe` asks of its models that they have said they do not take,
@@ -900,6 +902,11 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
         if clips().any(kerf_model::Clip::in_depth) {
             continue;
         }
+        // What the step draws of it, as the note says it.
+        let its_clips = match only_filmed {
+            true => "none of the clips of it a model films is in depth",
+            false => "none of its clips is in depth",
+        };
         let nested: Vec<&str> = clips()
             .filter_map(|clip| match &clip.content {
                 kerf_model::Content::Sequence { sequence, .. } => Some(sequence.as_str()),
@@ -908,11 +915,11 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
             .collect();
         notes.push(match nested.first() {
             Some(inner) => format!(
-                "the {} of sequence `{sequence}` into `{{{to}}}` is black: none of its clips is in depth, and a nested sequence is drawn flat, as one clip: render `{inner}` itself",
+                "the {} of sequence `{sequence}` into `{{{to}}}` is black: {its_clips}, and a nested sequence is drawn flat, as one clip: render `{inner}` itself",
                 pass.name()
             ),
             None => format!(
-                "the {} of sequence `{sequence}` into `{{{to}}}` is black: none of its clips is in depth (`three_d=true`, or a `gen=mesh` clip)",
+                "the {} of sequence `{sequence}` into `{{{to}}}` is black: {its_clips} (`three_d=true`, or a `gen=mesh` clip)",
                 pass.name()
             ),
         });

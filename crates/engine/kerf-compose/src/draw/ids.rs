@@ -177,6 +177,35 @@ pub(super) fn lay_hard(canvas: &mut Image, layer: &mut Image, colors: &[[f32; 4]
         });
 }
 
+/// [`lay_hard`] of the mix of two clips, the one whose color is `colors[models]` a clip a
+/// model films, in a sequence drawn as a clip of another: a pixel that is the more that
+/// clip's is made clear on `canvas`, and one the more the other's is laid down.
+pub(super) fn lay_hard_or_clear(
+    canvas: &mut Image,
+    layer: &mut Image,
+    colors: &[[f32; 4]; 2],
+    models: usize,
+) {
+    canvas
+        .px
+        .par_chunks_mut(4)
+        .zip(layer.px.par_chunks_mut(4))
+        .for_each(|(to, from)| {
+            if from.iter().all(|channel| *channel == 0.0) {
+                return;
+            }
+            if from[3] >= 0.5
+                && let Some(color) = nearest(from, colors)
+            {
+                match std::ptr::eq(color, &colors[models]) {
+                    true => to.fill(0.0),
+                    false => to.copy_from_slice(color),
+                }
+            }
+            from.fill(0.0);
+        });
+}
+
 /// What `layer` covers of `canvas` made clear by as much as it covers it, or wholly where it covers
 /// half a pixel or more when `hard`, as [`lay_hard`] lays one down: a clip a model films, in a
 /// sequence drawn as a clip of another. It leaves `layer` clear.

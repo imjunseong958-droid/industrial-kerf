@@ -1272,9 +1272,9 @@ fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
     const BLUE: [u8; 3] = [0, 0, 255];
     const RED: [u8; 3] = [255, 0, 0];
     const GREEN: [u8; 3] = [0, 255, 0];
-    // A push from a red clip to a blue one in a scene laid over a green take, halfway: the
-    // blue has come in over the left half and the red is going out over the right.
-    let halves = |red: &str, blue: &str| {
+    // A red clip and then a blue one, with the transition `fx` across their cut from frame 18
+    // to 30, in a scene laid over a green take: the frame `at`.
+    let over = |fx: &str, at: i64, red: &str, blue: &str| {
         let project = parse_document(
             &format!(
                 concat!(
@@ -1282,19 +1282,20 @@ fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
                     "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n",
                     "      set color=#ff0000{red}\n",
                     "    clip b gen=solid@1 at=24f dur=24f\n      set color=#0000ff{blue}\n",
-                    "    transition x1 from=a to=b fx=push@2 dur=12f motion_blur=0\n",
+                    "    transition x1 from=a to=b fx={fx} dur=12f\n",
                     "sequence s2 rate=24 size=320x180 audio=48000\n",
                     "  track V1 video\n    clip take gen=solid@1 at=0f dur=48f\n      set color=#00ff00\n",
                     "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=48f\n",
                 ),
                 red = red,
-                blue = blue
+                blue = blue,
+                fx = fx
             ),
             Catalog::builtin(),
         )
         .unwrap_or_else(|errors| panic!("{errors:?}"))
         .project;
-        let frame = Compositor::new(
+        Compositor::new(
             &project,
             Catalog::builtin(),
             &ComposeOptions {
@@ -1303,13 +1304,31 @@ fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
             },
         )
         .expect("composes")
-        .frame(Rate::FPS_24.time_of(24), 1.0);
-        (pixel(&frame, 80, 90), pixel(&frame, 240, 90))
+        .frame(Rate::FPS_24.time_of(at), 1.0)
     };
     let filmed = " filmed=true";
+    // A push, halfway: the blue has come in over the left half and the red is going out over
+    // the right. What a model films of the two is the take's, and the other is drawn.
+    let halves = |red: &str, blue: &str| {
+        let frame = over("push@2 motion_blur=0", 24, red, blue);
+        (pixel(&frame, 80, 90), pixel(&frame, 240, 90))
+    };
     assert_eq!(halves("", ""), (BLUE, RED));
-    // What a model films of the two is the take's, and the other is drawn where it is.
     assert_eq!(halves(filmed, ""), (BLUE, GREEN));
     assert_eq!(halves("", filmed), (GREEN, RED));
     assert_eq!(halves(filmed, filmed), (GREEN, GREEN));
+    // A split opens the red over the blue, so that early on the red is still at the corners:
+    // whichever lies over the other, each is whose it is.
+    let corner = |red: &str, blue: &str| pixel(&over("split@2", 19, red, blue), 5, 5);
+    assert_eq!(corner("", ""), RED);
+    assert_eq!(corner(filmed, ""), GREEN);
+    assert_eq!(corner("", filmed), RED);
+    // A dissolve through a blur, halfway from the red Kerf draws to what a model films: half
+    // the red and half the take, as the same dissolve of the red and a green clip is.
+    let middle = |fx: &str, blue: &str| pixel(&over(fx, 24, "", blue), 160, 90);
+    let half = middle("blur-dissolve@1", filmed);
+    assert!(
+        half[0].abs_diff(188) <= 3 && half[1].abs_diff(188) <= 3 && half[2] <= 3,
+        "{half:?}"
+    );
 }

@@ -460,13 +460,17 @@ fn sequence_hash(project: &Project, directory: &Path, id: &str, only_filmed: boo
             std::fs::metadata(directory.join(&played.path)).map_or(0, |metadata| metadata.len());
         hasher.update(length.to_le_bytes());
     }
+    // A guide is as long as its sequence, which a clip left out of it may be the last of.
+    if only_filmed && let Some(sequence) = project.sequence(id) {
+        hasher.update(sequence.duration().seconds().to_bits().to_le_bytes());
+    }
     hex_of(hasher)
 }
 
 /// The files the mesh clips of sequence `id` of `project` take their meshes from
 /// (`file=`), and those of the sequences it nests, as the document names them. Drawing
 /// the sequence reads them, and nothing of the document says when one changes.
-pub(crate) fn mesh_files(project: &Project, id: &str) -> BTreeSet<String> {
+pub(crate) fn mesh_files(project: &Project, id: &str, only_filmed: bool) -> BTreeSet<String> {
     let mut files = BTreeSet::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut waiting = vec![id.to_owned()];
@@ -476,6 +480,12 @@ pub(crate) fn mesh_files(project: &Project, id: &str) -> BTreeSet<String> {
         }
         let Some(sequence) = project.sequence(&next) else {
             continue;
+        };
+        // As a guide of only what a model films is drawn from it: a mesh Kerf draws
+        // itself is none of the guide's.
+        let sequence = match only_filmed && next == id {
+            true => std::borrow::Cow::Owned(sequence.only_filmed()),
+            false => std::borrow::Cow::Borrowed(sequence),
         };
         for clip in sequence.tracks.iter().flat_map(|track| &track.clips) {
             match &clip.content {
@@ -515,7 +525,7 @@ pub(crate) fn from(
     // document says when one changes: a take is held to them, found from the clips.
     for file in recipe
         .sequences()
-        .flat_map(|sequence| mesh_files(project, sequence))
+        .flat_map(|sequence| mesh_files(project, sequence, recipe.only_filmed(sequence)))
     {
         if let Ok(inside) = within(Path::new(""), &file, "mesh") {
             from.insert(

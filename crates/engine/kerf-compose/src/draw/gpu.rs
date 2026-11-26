@@ -414,8 +414,8 @@ impl Drawing {
     }
 
     /// Whether the sequence clip `plan` holds shows, at the clip's time `time`, a clip a model
-    /// films: it leaves its place clear in a sequence drawn as a clip of another, which the
-    /// CPU does.
+    /// films, or a clip of a sequence that does: it leaves its place clear in a sequence drawn
+    /// as a clip of another, which the CPU does.
     fn nests_filmed(&self, plan: &ClipPlan, time: Time) -> bool {
         let Source::Nested {
             sequence,
@@ -434,7 +434,11 @@ impl Drawing {
             .iter()
             .filter(|track| track.drawn(angle.as_ref()))
             .flat_map(|track| &track.shown)
-            .any(|clip| clip.shows(shown) && clip.plan.filmed)
+            .any(|clip| {
+                clip.shows(shown)
+                    && (clip.plan.filmed
+                        || self.nests_filmed(&clip.plan, shown - clip.plan.clip.start))
+            })
     }
 
     fn gpu_can_draw_clip(
