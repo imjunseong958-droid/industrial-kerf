@@ -175,7 +175,6 @@ const NEW_IDS: &[&str] = &[
     "posterize_time",
     "auto_reframe",
     "cineon_converter",
-    "stroke",
     "metadata_burnin",
     // rebuilt
     "ultra_key",
@@ -264,7 +263,6 @@ fn neutral_parameters_are_identity() {
                 ("similarity", ParamValue::Float(0.0)),
             ],
         ),
-        ("stroke", vec![("width", ParamValue::Float(0.0))]),
         ("posterize_time", vec![]),
         ("warp_stabilizer", vec![]),
         ("track_matte", vec![]),

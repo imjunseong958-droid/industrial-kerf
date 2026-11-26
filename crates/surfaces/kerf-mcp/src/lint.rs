@@ -783,15 +783,9 @@ const KEEPS_WHOLE: [&str; 5] = [
 ];
 
 /// Effects that only take away from a picture or draw at its edge: a keyer, a choker, a drop
-/// shadow, a feather, an outline. A picture that does not cover the frame
+/// shadow, a feather. A picture that does not cover the frame
 /// without them does not with them. The first three are categories of the catalog.
-const TRIMS: [&str; 5] = [
-    "Keying",
-    "Matte",
-    "Perspective",
-    "utility.edgefeather",
-    "utility.stroke",
-];
+const TRIMS: [&str; 4] = ["Keying", "Matte", "Perspective", "utility.edgefeather"];
 
 /// How a clip lies over what is under it.
 #[derive(Clone, Copy, PartialEq, Eq)]

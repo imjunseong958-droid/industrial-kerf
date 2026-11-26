@@ -326,9 +326,3 @@ effect	utility.cineon	Utility	Cineon Converter	Converts log Cineon footage to vi
 	number	rolloff	20	0..255		Highlight Rolloff
 effect	utility.edgefeather	Utility	Edge Feather	Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture.
 	number	amount	0	0..100		Amount
-effect	utility.stroke	Utility	Stroke	An outline around the picture's alpha, inside, outside, or centered; stickers and outlined cutouts.
-	color	color	#ffffff			Color
-	number	width	4	0..500		Width
-	enum	position	outside	outside|center|inside		Position
-	number	opacity	100	0..100	%	Opacity
-	bool	only	false			Stroke Only

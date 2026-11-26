@@ -76,7 +76,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("auto_reframe", "transform.autoreframe", 1, "Keeps the moving subject in frame when the sequence's aspect differs from the clip's; vertical and square versions."),
     // Utility
     ("edge_feather", "utility.edgefeather", 1, "Softens the picture's outer edges into transparency; blending cutouts and picture-in-picture."),
-    ("stroke", "utility.stroke", 1, "An outline around the picture's alpha, inside, outside, or centered; stickers and outlined cutouts."),
 ];
 
 /// Point parameters that are offsets in pixels rather than places across the picture.
