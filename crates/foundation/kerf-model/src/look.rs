@@ -1619,9 +1619,16 @@ impl Env {
                     }
                 }
                 // Keys land on frames, which hold what the look's curve is there and not where the
-                // key fell between them: the frames drawn are the look's own.
-                for key in &mut out {
-                    key.value = Value::Number(along(&exact, key.at.seconds()));
+                // key fell between them: the frames drawn are the look's own. The first and the
+                // last hold their own values, which the frames before and after them keep.
+                let last = out.len() - 1;
+                for (index, key) in out.iter_mut().enumerate() {
+                    let value = match index {
+                        _ if index == last => exact[exact.len() - 1].1,
+                        0 => exact[0].1,
+                        _ => along(&exact, key.at.seconds()),
+                    };
+                    key.value = Value::Number(value);
                 }
                 if out.len() > MAX_KEYS {
                     return Err(format!(
@@ -2472,6 +2479,97 @@ mod tests {
                     assert_eq!(at(a, "opacity", cut), 0.0, "{case}");
                     assert_eq!(at(b, turns, cut).abs(), 90.0, "{case}");
                     assert_eq!(at(b, still, cut), 0.0, "{case}");
+                }
+            }
+        }
+    }
+
+    /// A transition look changes the clips only across the transition: before it, the outgoing
+    /// clip has every number the look sets as the clip's own; after it, the incoming one does, for
+    /// every option of every choice.
+    #[test]
+    fn a_transition_look_leaves_the_clips_as_they_were_outside_it() {
+        let catalog = Catalog::bundled();
+        let rate = Rate::FPS_24;
+        let solid = |id: &str, at: i64| {
+            let solid = Content::Generator {
+                fx: Id::new("solid").unwrap(),
+                version: 1,
+                params: Params::new(),
+            };
+            Clip::new(
+                Id::new(id).unwrap(),
+                solid,
+                rate.time_of(at),
+                rate.time_of(48),
+            )
+        };
+        for look in catalog.looks().filter(|look| look.on == On::Transition) {
+            let mut choices = vec![Params::new()];
+            for param in &look.params {
+                if let ParamType::Enum(options) = &param.def.ty {
+                    choices = options
+                        .iter()
+                        .map(|option| {
+                            [(
+                                param.def.name.clone(),
+                                Param::Static(Value::Enum(option.clone())),
+                            )]
+                            .into()
+                        })
+                        .collect();
+                }
+            }
+            for params in choices {
+                let transition = crate::Transition {
+                    id: Id::new("t1").unwrap(),
+                    from: Id::new("c1").unwrap(),
+                    to: Id::new("c2").unwrap(),
+                    fx: look.id.clone(),
+                    version: look.version,
+                    duration: rate.time_of(12),
+                    align: crate::Align::Center,
+                    params: params.clone(),
+                };
+                let (before, after) = transition.split_at_cut(rate);
+                let mut track = crate::Track::new(Id::new("V1").unwrap(), crate::TrackKind::Video);
+                track.clips = vec![solid("c1", 0), solid("c2", 48)];
+                track.transitions.push(transition);
+                let mut project = Project::new("p");
+                project.sequences.push(crate::Sequence {
+                    buses: Vec::new(),
+                    id: Id::new("s1").unwrap(),
+                    name: "s1".into(),
+                    rate,
+                    drop_frame: false,
+                    width: 320,
+                    height: 180,
+                    sample_rate: 48_000,
+                    color: Default::default(),
+                    start: Time::ZERO,
+                    tracks: vec![track],
+                    markers: Vec::new(),
+                });
+                let expanded = expand(&project, catalog).unwrap();
+                let clips = &expanded.sequences[0].tracks[0].clips;
+                let cut = rate.time_of(48);
+                let one = rate.time_of(1);
+                for (clip, time) in [
+                    (&clips[0], cut - before - one),
+                    (&clips[1], cut + after + one),
+                ] {
+                    for (prop, param) in &clip.props {
+                        let own = catalog.prop(Domain::Video, prop).unwrap().default.clone();
+                        if let Value::Number(own) = own {
+                            let value = param.value_at(time - clip.start).as_number().unwrap();
+                            assert!(
+                                (value - own).abs() < 1e-9,
+                                "{} {params:?} `{}` {prop}: {value}",
+                                look.id,
+                                clip.id
+                            );
+                        }
+                    }
                 }
             }
         }
