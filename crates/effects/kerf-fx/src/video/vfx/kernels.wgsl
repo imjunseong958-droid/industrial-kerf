@@ -1,5 +1,5 @@
 // The GPU's side of effects in `vfx` and `effects` (Wonder Glow, Glint, RGB Split, Noise, Wave Warp,
-// the keys, Radial Zoom Blur, Drop Shadow, Mosaic, Lens Distortion, the Cineon Converter, and the
+// the keys, Radial Zoom Blur, Mosaic, Lens Distortion, the Cineon Converter, and the
 // color effects kept from EffectCraft), and of holding values over 1 for them, with the arithmetic of the CPU code they mirror, which is the reference.
 
 struct U {
@@ -1122,18 +1122,6 @@ fn mosaic(@builtin(global_invocation_id) id: vec3<u32>) {
         out += (bilinear_clamped(aux, at.x, at.y) - out) * u.p0.z;
     }
     textureStore(dst, vec2<i32>(id.xy), out);
-}
-
-// The one below takes its arithmetic from `kerf_kernel`, which writes `shadow_px` out from what the CPU
-// can run too; it goes on the end of this.
-
-// The shadow of `effects`' Drop Shadow, from the picture moved to where it falls. p0: its color, and
-// how dark it is.
-@compute @workgroup_size(16, 16)
-fn shadow(@builtin(global_invocation_id) id: vec3<u32>) {
-    if !inside(id) { return; }
-    let p = vec2<i32>(id.xy);
-    textureStore(dst, p, shadow_px(textureLoad(src, p, 0), 0.0, 0.0));
 }
 
 // ---------------------------------------------------------------------------------------------

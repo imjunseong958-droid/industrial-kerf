@@ -338,7 +338,6 @@ const DISTORT: &[&str] = &["Video Effects", "Distort"];
 const IMAGE_CONTROL: &[&str] = &["Video Effects", "Image Control"];
 const KEYING: &[&str] = &["Video Effects", "Keying"];
 const NOISE: &[&str] = &["Video Effects", "Noise & Grain"];
-const PERSPECTIVE: &[&str] = &["Video Effects", "Perspective"];
 const STYLIZE: &[&str] = &["Video Effects", "Stylize"];
 const TRANSFORM: &[&str] = &["Video Effects", "Transform"];
 const VIDEO: &[&str] = &["Video Effects", "Video"];
@@ -1171,35 +1170,6 @@ fn build_effects() -> Vec<EffectDef> {
                     100.0,
                     "",
                 ),
-            ],
-        ),
-        video(
-            "drop_shadow",
-            "Drop Shadow",
-            PERSPECTIVE,
-            vec![
-                col("color", "Shadow Color", [0.0, 0.0, 0.0, 1.0]),
-                f("opacity", "Opacity", 50.0, 0.0, 100.0, "%"),
-                ang("direction", "Direction", 135.0),
-                fs(
-                    "distance",
-                    "Distance",
-                    5.0,
-                    (0.0, 4000.0),
-                    (0.0, 120.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "softness",
-                    "Softness",
-                    0.0,
-                    (0.0, 1000.0),
-                    (0.0, 250.0),
-                    "",
-                    1,
-                ),
-                b("only", "Shadow Only", false),
             ],
         ),
         video(

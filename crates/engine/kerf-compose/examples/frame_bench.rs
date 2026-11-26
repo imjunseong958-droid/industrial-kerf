@@ -117,10 +117,6 @@ const SCENES: &[(&str, &str)] = &[
         "      fx stylize.mosaic@2 horizontal=60 vertical=34 softness=50\n",
     ),
     // A cutout and its shadow, as a title or a picture in a picture has one.
-    (
-        "drop shadow",
-        "      set scale=0.7\n      mask k1 ellipse=0.5,0.5,0.4,0.45\n      fx perspective.dropshadow@2 distance=40 softness=30 opacity=70\n",
-    ),
     ("lens", "      fx distort.lens@2 curvature=30\n"),
     ("optics", "      fx distort.opticscompensation fieldOfView=80\n"),
     ("sphere", "      fx vr.rotatesphere tilt=20 pan=-70 roll=10\n"),

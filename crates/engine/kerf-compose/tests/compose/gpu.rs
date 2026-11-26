@@ -157,8 +157,6 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("lumetri HSL", clip("      fx color.lumetri hsl_on=true hsl_hue=120 hsl_hue_range=60 hsl_sat=150 hsl_blur=20\n")),
         ("grain", clip("      fx noise.addgrain tweaking/intensity=2\n")),
         ("look.film", clip("      fx look.film\n")),
-        ("drop shadow", clip("      set scale=0.7\n      mask k1 ellipse=0.5,0.5,0.4,0.45\n      fx perspective.dropshadow distance=14 softness=10 opacity=70\n")),
-        ("drop shadow alone", clip("      set scale=0.8\n      mask k1 rect=0.2,0.2,0.8,0.8\n      fx perspective.dropshadow color=#3050c0 direction=250 distance=9 only=true\n")),
         ("mosaic", clip("      fx stylize.mosaic horizontal=24 vertical=14\n")),
         ("mosaic soft", clip("      set scale=0.9\n      fx stylize.mosaic horizontal=17 vertical=9 softness=70\n")),
         ("curves", clip("      fx color.curves rgb=\"0,0 0.3,0.2 0.7,0.85 1,1\" red=\"0,0 0.5,0.6 1,1\"\n")),

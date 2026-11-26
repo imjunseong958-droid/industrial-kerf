@@ -40,9 +40,8 @@ impl U {
 /// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
 fn source() -> String {
     format!(
-        "{}{}{}",
+        "{}{}",
         include_str!("../kernels.wgsl"),
-        kerf_kernel::shadow_wgsl(),
         kerf_kernel::color_wgsl()
     )
 }
@@ -70,7 +69,6 @@ pub(super) struct Stage {
     pub(super) from_unit: wgpu::ComputePipeline,
     pub(super) to_gamut: wgpu::ComputePipeline,
     pub(super) from_gamut: wgpu::ComputePipeline,
-    pub(super) shadow: wgpu::ComputePipeline,
     pub(super) mosaic_blocks: wgpu::ComputePipeline,
     pub(super) mosaic: wgpu::ComputePipeline,
     pub(super) kept_through: wgpu::ComputePipeline,
@@ -135,7 +133,6 @@ impl Stage {
                 from_unit: kernel("from_unit"),
                 to_gamut: kernel("to_gamut"),
                 from_gamut: kernel("from_gamut"),
-                shadow: kernel("shadow"),
                 mosaic_blocks: kernel("mosaic_blocks"),
                 mosaic: kernel("mosaic"),
                 kept_through: kernel("kept_through"),

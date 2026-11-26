@@ -62,7 +62,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("median", "noise.median", 2, "A median filter; removes noise, painterly smoothing."),
     ("noise", "noise.noise", 2, "Adds random noise, in color or not; film texture and analog grit."),
     // Perspective
-    ("drop_shadow", "perspective.dropshadow", 2, "A drop shadow; separates text and cutouts from the background."),
     // Stylize
     ("mosaic", "stylize.mosaic", 2, "Pixelates into blocks; censoring and retro 8-bit."),
     // Text
