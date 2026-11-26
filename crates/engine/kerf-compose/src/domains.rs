@@ -30,6 +30,7 @@ pub(crate) fn source(id: &str) -> Option<&'static dyn PictureSource> {
 const OWN_GENERATORS: &[&str] = &[
     "solid",
     "title",
+    "sound",
     "adjustment",
     "null",
     "camera",

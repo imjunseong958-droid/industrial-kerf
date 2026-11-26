@@ -292,38 +292,8 @@ impl EffectHost for ClipEnv<'_> {
     }
 
     fn sound(&self, track: &str, start: f64, frames: usize, rate: u32) -> Option<Vec<f32>> {
-        let track = self.placed.sequence.sounds.iter().find(|t| t.id == track)?;
-        let mut mixed = vec![0.0; frames * 2];
-        let kept = f64::from(crate::sound::RATE);
-        for clip in &track.clips {
-            let Some(sound) = self.drawing.sounds.of(&clip.path) else {
-                continue;
-            };
-            let length = sound.len() / 2;
-            let (from, duration) = (clip.start.seconds(), clip.duration.seconds());
-            for (index, out) in mixed.as_chunks_mut::<2>().0.iter_mut().enumerate() {
-                let offset = start + index as f64 / f64::from(rate.max(1)) - from;
-                if !(0.0..duration).contains(&offset) {
-                    continue;
-                }
-                let played = clip.speed.played_seconds(offset);
-                let played = if clip.speed.is_reverse() {
-                    clip.speed.played_seconds(duration) - played
-                } else {
-                    played
-                };
-                let at = (clip.source_in.seconds() + played) * kept;
-                match at as usize {
-                    _ if at < 0.0 => {}
-                    sample if sample < length => {
-                        out[0] += sound[2 * sample];
-                        out[1] += sound[2 * sample + 1];
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Some(mixed)
+        self.drawing
+            .heard(self.placed.sequence, track, start, frames, rate)
     }
 
     fn source_at(&self, at: Time, scale: f32) -> Option<Image> {

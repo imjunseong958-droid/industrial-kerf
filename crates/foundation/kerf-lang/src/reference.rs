@@ -118,7 +118,7 @@ step <media> set <n> <step>  ·  step <media> set <n> <name>=<value> …
 
 Masks combine in order by `mode` (add, subtract, intersect, lighten,
 darken, difference); `mode=none` cuts nothing and leaves a path that
-effects such as `generate.audiowaveform path=<name>` read. Linked clips (a picture
+effects such as `image.fill path=<name>` read. Linked clips (a picture
 and its sound) move, trim, split, slip, and delete together. Ripple edits act on every unlocked track so sync holds; lock one
 to leave it out. An edit that would cut through another track's clip is
 refused, naming it.
@@ -229,11 +229,8 @@ so order matters, and each with its own `amount`, which animates
 const RASTER: &str = "## Effects kept from EffectCraft
 The EffectCraft effects Kerf keeps, which FilmCraft has nothing like:
 restoration (grain, dust, rolling shutter, lens, upscaling), key and matte
-clean-up, curves and finer color, a few blurs and distortions, and the
-audio visualizers. They run in stack order beside FilmCraft's effects. A
-file parameter is a quoted path, relative to the project; a sound parameter
-names a sound track whose sound the effect draws (`audioLayer=A1`); a mask
-parameter names one of the clip's masks (`path=k1`). `look` with
+clean-up, curves and finer color, and a few blurs and distortions. They run
+in stack order beside FilmCraft's effects. `look` with
 `effects: \"<words>\"` finds entries by the look or moment you want, and with
 `effect: \"<id>\"` lists one's parameters. An id EffectCraft had that Kerf no longer does is an error
 that names what to use instead.";
@@ -267,6 +264,7 @@ const BRIEF: &[(&str, &[&str])] = &[
             "trim_end",
         ],
     ),
+    ("sound", &["track", "kind"]),
     (
         "title",
         &[

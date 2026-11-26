@@ -1171,6 +1171,43 @@ fn builtin_catalog() -> Catalog {
         )
         .param(P::choice("align", &["center", "left", "right"])),
         FxDef::new(
+            "sound",
+            FxKind::Generator,
+            Domain::Video,
+            "A sound track: how loud at each pitch as bars, or its wave as a line.",
+        )
+        .category("Generate")
+        .param(P::sound("track"))
+        .param(P::choice("kind", &["spectrum", "waveform"]))
+        .param(
+            P::number("width", 1.0)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("height", 0.25)
+                .range(0.0, 100.0)
+                .unit("frame heights"),
+        )
+        .param(
+            P::number("bars", 48.0)
+                .range(2.0, 512.0)
+                .doc("A spectrum's bars, or the points a wave's line goes through."),
+        )
+        .param(P::color("color", Rgba::WHITE))
+        .param(
+            P::number("line", 0.006)
+                .range(0.0, 1.0)
+                .unit("frame heights")
+                .doc("How thick a wave's line is."),
+        )
+        .param(
+            P::number("window", 0.1)
+                .range(0.005, 5.0)
+                .unit("seconds")
+                .doc("How much of the sound about the frame it draws."),
+        ),
+        FxDef::new(
             "adjustment",
             FxKind::Generator,
             Domain::Video,

@@ -87,6 +87,7 @@ impl Drawing {
         let size = (plan.size.0 as usize, plan.size.1 as usize);
         let own = match &plan.source {
             Source::Title(title) => title_extent(title, size, time)?,
+            Source::Sound(show) => sound_extent(show, size),
             Source::Drawn(source) => source.extent(&plan.clip, &SourceRun::new(time, size))?.rect,
             _ => return None,
         };
@@ -314,6 +315,7 @@ impl Drawing {
                 scale,
             ),
             Source::Title(title) => (Arc::new(title_on(title, &run)), per),
+            Source::Sound(show) => (Arc::new(self.sound_on(sequence, plan, show, &run)), per),
             Source::Drawn(source) => (Arc::new(source.draw(&plan.clip, &run)), per),
             Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         })

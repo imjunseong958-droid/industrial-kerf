@@ -198,6 +198,8 @@ pub(super) enum Source {
     },
     Solid(Rgba),
     Title(TitlePlan),
+    /// A sound track drawn.
+    Sound(SoundShow),
     /// A generator a crate draws (`crate::domains`).
     Drawn(&'static dyn PictureSource),
     Adjustment,

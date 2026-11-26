@@ -58,15 +58,6 @@ pub(crate) const GUIDE: &[(&str, &str)] = &[
         "distort.opticscompensation",
         "Adds or removes lens barrel distortion; fisheye looks or wide-lens fixes.",
     ),
-    // Generate
-    (
-        "generate.audiospectrum",
-        "Draws a sound track's frequencies as bars or lines (audioLayer=A1), along a mask if one is named; music visualizers and podcast clips.",
-    ),
-    (
-        "generate.audiowaveform",
-        "Draws a sound track's waveform as a line (audioLayer=A1), along a mask if one is named; voice clips and music visualizers.",
-    ),
     // Keying
     (
         "key.advancedspill",
