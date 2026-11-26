@@ -15,15 +15,135 @@ use crate::harness::operation_key;
 use kerf_engine::recipe::{self, model::Models};
 use kerf_engine::{CancellationToken, EngineError};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 /// How a making's asking starts.
 const ASKS: &str = "Asks to make ";
+/// Where the latest ask of each media is kept in a project ([`kept_ask`]). Like the rest of
+/// `.kerf/cache` it is nobody's to keep: each ask of a media writes over the one before.
+const KEPT_ASKS: &str = ".kerf/cache/asks";
+
+/// A making the person is asked to run, in its parts. `make` answers the agent with the
+/// words written from them ([`MakingAsk::text`]) and keeps them in the project, so that
+/// whoever shows the ask, an editor's card, shows the parts themselves ([`kept_ask`]) and
+/// never reads them back out of words that are worded for the agent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct MakingAsk {
+    pub media: String,
+    /// The first take it writes.
+    pub take: u32,
+    /// How many takes it makes, one after another.
+    pub rolls: u32,
+    /// What the making is for, as the agent said it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// Each step as it would run, in order.
+    pub steps: Vec<String>,
+    /// What its model has said it does not take.
+    pub notes: Vec<String>,
+}
+
+impl MakingAsk {
+    /// The ask as the agent is answered with it, to say to the person: what it makes, why,
+    /// the steps numbered, the notes, and where else the person makes it.
+    pub fn text(&self) -> String {
+        let (media, take, rolls) = (&self.media, self.take, self.rolls);
+        let takes = if rolls > 1 {
+            format!("takes {take} to {}", take + rolls - 1)
+        } else {
+            format!("take {take}")
+        };
+        let mut text =
+            format!("{ASKS}{media}, as {takes}, from the steps under its line in the document:");
+        if let Some(why) = &self.why {
+            text.push_str(&format!("\n{why}"));
+        }
+        for (number, step) in self.steps.iter().enumerate() {
+            text.push_str(&format!("\n{}. {step}", number + 1));
+        }
+        for note in &self.notes {
+            text.push_str(&format!("\nNote: {note}"));
+        }
+        text.push_str(&if rolls > 1 {
+            format!(
+                "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several in the editor's bin."
+            )
+        } else {
+            format!("\nMake it with `kerf make {media}`, or Make… in the editor's bin.")
+        });
+        text
+    }
+}
+
+/// An ask as a project keeps it: its parts, and the words `make` answered with.
+#[derive(Serialize, Deserialize)]
+struct Kept {
+    text: String,
+    ask: MakingAsk,
+}
+
+/// The file the latest ask of `media` is kept in. Ids are letters, digits, `_` and `-`;
+/// anything else a document got past that is not let near a path.
+fn kept_file(directory: &Path, media: &str) -> PathBuf {
+    let named: String = media
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    directory.join(KEPT_ASKS).join(format!("{named}.json"))
+}
+
+/// Keep `ask`, answered with `text`, whole or not at all. The agent's answer is the same
+/// either way; an ask that is not kept shows without its parts.
+fn keep_ask(directory: &Path, ask: &MakingAsk, text: &str) {
+    let file = kept_file(directory, &ask.media);
+    let kept = Kept {
+        text: text.to_owned(),
+        ask: ask.clone(),
+    };
+    let partial = file.with_extension(format!("{}.partial", std::process::id()));
+    let written = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| serde_json::to_vec(&kept).map_err(std::io::Error::other))
+        .and_then(|bytes| std::fs::write(&partial, bytes))
+        .and_then(|()| std::fs::rename(&partial, &file));
+    if let Err(error) = written {
+        // There may be no partial to take away; nothing reads one that stays.
+        let _ = std::fs::remove_file(&partial);
+        log::warn!(
+            "the ask to make {} was not kept in {}: {error}",
+            ask.media,
+            file.display()
+        );
+    }
+}
+
+/// The parts of the ask `make` answered with `said` for `media`, in the project in
+/// `directory`: `said` is that answer's `ask`, whole or cut short and ended with `…`, as a
+/// summary of the answer keeps a long one. None when no ask of the media is kept, or the one
+/// kept is another.
+pub fn kept_ask(directory: &Path, media: &str, said: &str) -> Option<MakingAsk> {
+    let bytes = std::fs::read(kept_file(directory, media)).ok()?;
+    let kept: Kept = serde_json::from_slice(&bytes).ok()?;
+    let answered = kept.text == said
+        || said
+            .strip_suffix('…')
+            .is_some_and(|cut| !cut.is_empty() && kept.text.starts_with(cut));
+    (answered && kept.ask.media == media).then_some(kept.ask)
+}
 
 /// The lines a job keeps of what its steps say: the latest.
 const KEPT_LINES: usize = 20;
@@ -305,33 +425,23 @@ impl KerfMcpRouter {
         // the person is asked for them all.
         if !permissions.runs_makings(makings.started + rolls - 1) {
             drop(makings);
-            let takes = if rolls > 1 {
-                format!("takes {} to {}", plan.take, plan.take + rolls - 1)
-            } else {
-                format!("take {}", plan.take)
+            let ask = MakingAsk {
+                media: media.to_owned(),
+                take: plan.take,
+                rolls,
+                why: why
+                    .map(str::trim)
+                    .filter(|why| !why.is_empty())
+                    .map(str::to_owned),
+                steps: plan.steps.clone(),
+                notes: plan.notes.clone(),
             };
-            let mut body = format!(
-                "{ASKS}{media}, as {takes}, from the steps under its line in the document:"
-            );
-            if let Some(why) = why.map(str::trim).filter(|why| !why.is_empty()) {
-                body = format!("{body}\n{why}");
-            }
-            for (number, step) in plan.steps.iter().enumerate() {
-                body.push_str(&format!("\n{}. {step}", number + 1));
-            }
-            for note in &plan.notes {
-                body.push_str(&format!("\nNote: {note}"));
-            }
-            body.push_str(&if rolls > 1 {
-                format!(
-                    "\nEach take after the first runs the same steps with every seed one on from the last.\nMake them with `kerf make {media} --rolls {rolls}`, or Make Several in the editor's bin."
-                )
-            } else {
-                format!("\nMake it with `kerf make {media}`, or Make… in the editor's bin.")
-            });
-            // What the person is asked, for the agent to say in the conversation.
+            // What the person is asked, for the agent to say in the conversation; its parts
+            // are kept for an editor to show.
+            let text = ask.text();
+            keep_ask(&self.dir, &ask, &text);
             answer["status"] = json!("asked");
-            answer["ask"] = json!(body);
+            answer["ask"] = json!(text);
             answer["make"] = json!(if rolls > 1 {
                 format!(
                     "say `ask` to the person, who makes them with `kerf make {media} --rolls \

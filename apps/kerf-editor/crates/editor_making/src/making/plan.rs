@@ -65,46 +65,6 @@ pub fn takes_words(take: u32, rolls: u32) -> String {
     }
 }
 
-/// What an ask's own words hold beside its first line: why Kerf asks, the
-/// steps as it read them, and its notes. Where else to make it is left out:
-/// the card's own Make says that.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct AskWords {
-    pub why: Vec<String>,
-    pub steps: Vec<String>,
-    pub notes: Vec<String>,
-}
-
-/// Reads an ask as `make` writes it ("Asks to make m4, as take 2, from …:",
-/// why, "1. step", "Note: …", where else to make it).
-pub fn ask_words(text: &str) -> AskWords {
-    let mut words = AskWords::default();
-    for (index, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || (index == 0 && line.starts_with("Asks to make ")) {
-            continue;
-        }
-        if line.starts_with("Make it with ") || line.starts_with("Make them with ") {
-            continue;
-        }
-        if line.starts_with("Each take after the first ") {
-            continue;
-        }
-        if let Some(note) = line.strip_prefix("Note: ") {
-            words.notes.push(note.to_owned());
-            continue;
-        }
-        let numbered = line
-            .split_once(". ")
-            .filter(|(number, _)| !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()));
-        match numbered {
-            Some((_, step)) => words.steps.push(step.to_owned()),
-            None => words.why.push(line.to_owned()),
-        }
-    }
-    words
-}
-
 /// Where a make card's words can be chosen and copied, as the
 /// conversation's can: the conversation's selections, and the run the
 /// words are pieces of. None: plain labels.
@@ -204,8 +164,6 @@ pub(super) fn notes_block_in(
     )
 }
 
-/// The message of a refused making without the "cannot make m1: " the
-/// bridge puts first, which the panel's title says already.
 /// Whether what refused a making or a shot's graph is its media's steps being still in a
 /// recipe file, which Carry Steps into the Document mends: the bridge says so by the
 /// error's code. Its words are for the person, and are not read for this.
@@ -213,11 +171,11 @@ pub fn wants_carrying(error: &ErrorEvent) -> bool {
     error.code == Some(ErrorCode::StepsNotCarried)
 }
 
-pub(super) fn refusal(message: &str, media: &str) -> String {
-    let said = message
-        .strip_prefix(&format!("cannot make {media}: "))
-        .or_else(|| message.strip_prefix(&format!("cannot carry {media}: ")))
-        .unwrap_or(message);
+/// Why a making or a carry was refused, said under a title that names the media already:
+/// the bridge's `why`, which leaves out the "cannot make m1: " its message starts with, or
+/// the whole message where it gives none.
+pub(super) fn refusal(error: &ErrorEvent) -> String {
+    let said = error.why.as_deref().unwrap_or(&error.message);
     let mut letters = said.chars();
     match letters.next() {
         Some(first) => first.to_uppercase().chain(letters).collect(),
@@ -356,7 +314,7 @@ impl MakePlan {
                     && matches!(self.stage, Stage::Asking) =>
             {
                 self.stage = Stage::Refused {
-                    why: refusal(&error.message, &self.media),
+                    why: refusal(error),
                     uncarried: wants_carrying(error),
                 };
             }
@@ -373,7 +331,7 @@ impl MakePlan {
                 };
             }
             Event::Error(error) if error.command == Some(CommandName::MediaCarry) => {
-                self.stage = Stage::CarryRefused(refusal(&error.message, &self.media));
+                self.stage = Stage::CarryRefused(refusal(error));
             }
             Event::MediaCarried { recipe, held, .. } => {
                 let held = *held;

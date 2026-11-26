@@ -26,7 +26,7 @@ mod set_scale;
 mod stands;
 mod text_lint;
 
-pub use making::{MakingEvent, MakingWatcher};
+pub use making::{kept_ask, MakingAsk, MakingEvent, MakingWatcher};
 pub use presets::{
     keep_looks, InspectedMade, InspectedSlot, PresetInspection, PresetLook, SlotClip, SlotFit,
     PRESET_FOLDERS,

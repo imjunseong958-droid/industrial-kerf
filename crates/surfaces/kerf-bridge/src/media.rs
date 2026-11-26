@@ -391,6 +391,7 @@ fn make_failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
         tx,
         Event::Error(ErrorEvent {
             message: format!("cannot make {id}: {why}"),
+            why: Some(why.to_string()),
             code: why.code(),
             command: Some(CommandName::MediaMake),
             media: Some(id.to_owned()),
