@@ -434,3 +434,147 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
     assert_eq!(first.iter().max().copied(), Some(u16::MAX));
     assert!(distinct(first) > 256, "{} greys", distinct(first));
 }
+
+/// A scene of a backdrop a model films and a sign over its middle that Kerf draws, with the
+/// colors given, and a media made from it as `steps` say after `render s2 {out}`.
+fn scene_with_a_sign(back: &str, sign: &str, steps: &str, path: &str) -> kerf_model::Project {
+    parse_document(
+        &format!(
+            "kerf 1\nproject name=\"shots\"\n\
+             media m1 path=\"{path}\" rate=24 dur=12f video=160x90\n\
+             \x20 render s2 {{out}}{steps}\n\
+             sequence s1 rate=24 size=160x90 audio=48000\n\
+             \x20 track V1 video\n\
+             sequence s2 rate=24 size=160x90 audio=48000\n\
+             \x20 track V1 video\n\
+             \x20   clip back gen=solid@1 at=0f dur=12f\n\
+             \x20     set color={back} filmed=true\n\
+             \x20 track V2 video\n\
+             \x20   clip sign gen=solid@1 at=0f dur=12f\n\
+             \x20     set color={sign} scale=0.5\n"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project
+}
+
+#[test]
+fn a_guide_of_only_what_a_model_films_is_held_to_those_clips_alone() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let directory = folder.path();
+    let only = " only=filmed";
+    let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 8);
+    let project = scene_with_a_sign("#ff0000", "#0000ff", only, "shots/guide.mp4");
+    let models = Models::default();
+    let planned = plan(&project, directory, "m1", &models).expect("a plan");
+    assert!(
+        planned.steps[0].contains("what a model films of sequence s2"),
+        "{:?}",
+        planned.steps
+    );
+    let made = make(
+        &project,
+        directory,
+        &planned,
+        &models,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("a take");
+    // The sign no model films is not in it: the backdrop is where the sign would be.
+    let middle = pixel(&directory.join(&made.stored), 80, 45);
+    assert!(near(middle, [255, 0, 0]), "{middle:?}");
+    // With the media that take, what it wants: nothing as things stand, and nothing when
+    // what Kerf draws changes, the guide being as it was. A change to what a model films
+    // wants a new take.
+    let wants = |back: &str, sign: &str| {
+        let project = scene_with_a_sign(back, sign, only, &made.stored);
+        let media = project.media("m1").expect("the media").clone();
+        kerf_engine::recipe::unmade(&project, directory, &media)
+    };
+    assert_eq!(wants("#ff0000", "#0000ff"), None);
+    assert_eq!(wants("#ff0000", "#00ffff"), None);
+    assert!(wants("#00ff00", "#0000ff").is_some());
+    // The guide is as long as its sequence, so a clip Kerf draws that makes the sequence
+    // longer wants one too.
+    let mut longer = scene_with_a_sign("#ff0000", "#0000ff", only, &made.stored);
+    for clip in longer.sequences[1]
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| clip.id.as_str() == "sign")
+    {
+        clip.duration = clip.duration + clip.duration;
+    }
+    let media = longer.media("m1").expect("the media").clone();
+    assert!(kerf_engine::recipe::unmade(&longer, directory, &media).is_some());
+    // And a guide of all of it is held to all of it.
+    let whole = scene_with_a_sign("#ff0000", "#0000ff", "", "shots/whole.mp4");
+    let planned = plan(&whole, directory, "m1", &models).expect("a plan");
+    let made = make(
+        &whole,
+        directory,
+        &planned,
+        &models,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("a take");
+    let middle = pixel(&directory.join(&made.stored), 80, 45);
+    assert!(near(middle, [0, 0, 255]), "{middle:?}");
+    let changed = scene_with_a_sign("#ff0000", "#00ffff", "", &made.stored);
+    let media = changed.media("m1").expect("the media").clone();
+    assert!(kerf_engine::recipe::unmade(&changed, directory, &media).is_some());
+    // A sequence none of whose clips a model films has no such guide, which is said before
+    // anything is made.
+    let mut none = scene_with_a_sign("#ff0000", "#0000ff", only, "shots/none.mp4");
+    for clip in none.sequences[1]
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+    {
+        clip.props.remove("filmed");
+    }
+    let refused = plan(&none, directory, "m1", &models)
+        .expect_err("refused")
+        .to_string();
+    assert!(refused.contains("`filmed=true`"), "{refused}");
+    // Nor has one whose only such clip is off, which draws nothing.
+    let mut off = scene_with_a_sign("#ff0000", "#0000ff", only, "shots/off.mp4");
+    for clip in off.sequences[1]
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| clip.id.as_str() == "back")
+    {
+        clip.enabled = false;
+    }
+    assert!(plan(&off, directory, "m1", &models).is_err());
+}
+
+#[test]
+fn where_a_clip_goes_is_read_as_a_guide_of_only_what_a_model_films_shows_it() {
+    // A car a model films passes behind a sign Kerf draws.
+    let project = parse_document(
+        "kerf 1\nproject name=\"shots\"\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip car gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#ff0000 filmed=true three_d=true z=1 scale=0.2 x={0f:-0.3 23f:0.3}\n\
+         \x20 track V2 video\n\
+         \x20   clip sign gen=solid@1 at=0f dur=24f\n\
+         \x20     set color=#ffffff three_d=true scale=0.5\n",
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let middle = |only_filmed: bool| {
+        kerf_engine::recipe::moves::Moves::read(&project, "car", only_filmed)
+            .expect("its way")
+            .places[12]
+    };
+    // Behind the sign it does not show, and the guide without the sign shows it there.
+    assert_eq!(middle(false), None);
+    assert!(middle(true).is_some());
+}

@@ -55,9 +55,15 @@ impl Moves {
         Ok(project.sequences[at.sequence].id.to_string())
     }
 
-    /// Where the clip `id` of `project` goes. Media is read from where the project's paths
-    /// say, so resolve them first.
-    pub fn read(project: &Project, id: &str) -> std::result::Result<Self, String> {
+    /// Where the clip `id` of `project` goes, as a guide of its sequence shows it: one of
+    /// only what a model films (`only=filmed`) when `only_filmed`, which what no model
+    /// films does not hide it in. Media is read from where the project's paths say, so
+    /// resolve them first.
+    pub fn read(
+        project: &Project,
+        id: &str,
+        only_filmed: bool,
+    ) -> std::result::Result<Self, String> {
         let sequence = Self::sequence_of(project, id)?;
         let ids = Compositor::new(
             project,
@@ -65,6 +71,7 @@ impl Moves {
             &ComposeOptions {
                 sequence: Some(sequence),
                 pass: Pass::Ids,
+                only_filmed,
                 ..ComposeOptions::default()
             },
         )

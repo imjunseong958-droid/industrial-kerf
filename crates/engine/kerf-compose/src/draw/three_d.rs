@@ -2036,6 +2036,9 @@ pub(super) struct Layer {
     pub depth: Vec<f32>,
     pub opacity: f32,
     pub blend: Blend,
+    /// It draws nothing, and what is behind it at a pixel is made clear by as much of the pixel
+    /// as it covers: a clip a model films, in a sequence drawn as a clip of another.
+    pub clears: bool,
 }
 
 /// How much of a pixel the nearer of two planes covers in front of the farther: all of it, but for a
@@ -2114,6 +2117,13 @@ pub(super) fn composite_by_depth(canvas: &mut Image, layers: &[Layer], hard: boo
                     };
                     let picture = &layer.picture.px[at * 4..at * 4 + 4];
                     let by = layer.opacity * shared;
+                    if layer.clears {
+                        let left = 1.0 - (picture[3] * by).clamp(0.0, 1.0);
+                        for channel in &mut row[x * 4..x * 4 + 4] {
+                            *channel *= left;
+                        }
+                        continue;
+                    }
                     let source = [
                         picture[0] * by,
                         picture[1] * by,

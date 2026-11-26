@@ -456,3 +456,183 @@ fn an_ids_pass_drawn_hard_gives_every_pixel_to_one_clip() {
     };
     assert_eq!(picture(false), picture(true));
 }
+
+/// [`SCENE`] with a model filming all of it but the box, and `s2`, the scene laid over a take.
+fn filmed_scene() -> kerf_model::Project {
+    let scene = SCENE
+        .replace("set color=#88aaff", "set color=#88aaff filmed=true")
+        .replace("set color=#404040", "set color=#404040 filmed=true")
+        .replace("set color=#c0c0c0", "set color=#c0c0c0 filmed=true");
+    assert_eq!(scene.matches("filmed=true").count(), 3);
+    parse_document(
+        &format!(
+            concat!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}",
+                "sequence s2 rate=24 size=320x180 audio=48000\n",
+                "  track V1 video\n    clip take gen=solid@1 at=0f dur=24f\n      set color=#00ff00\n",
+                "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=24f\n",
+            ),
+            scene
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project
+}
+
+#[test]
+fn a_guide_of_only_what_a_model_films_leaves_the_rest_out() {
+    let project = filmed_scene();
+    let drawn = |pass: Pass, only_filmed: bool| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass,
+                only_filmed,
+                hard_edges: true,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+    };
+    let at = Rate::FPS_24.time_of(3);
+    let (all, only) = (drawn(Pass::Ids, false), drawn(Pass::Ids, true));
+    // Each clip has the color it has with all of them drawn, the one left out too.
+    assert_eq!(all.ids(), only.ids());
+    let color = |id: &str| all.ids().iter().find(|(told, _)| told == id).unwrap().1;
+    let (all_frame, only_frame) = (all.frame(at, 1.0), only.frame(at, 1.0));
+    // The box no model films is before the wall, and with it left out the wall is there.
+    assert_eq!(pixel(&all_frame, 160, 90), color("box"));
+    assert_eq!(pixel(&only_frame, 160, 90), color("wall"));
+    // What a model films is where it was.
+    assert_eq!(pixel(&all_frame, 20, 10), color("sky"));
+    assert_eq!(pixel(&only_frame, 20, 10), color("sky"));
+    assert_eq!(pixel(&only_frame, 160, 170), pixel(&all_frame, 160, 170));
+    // And so in the pass a model follows: the box is nearer than the wall behind it.
+    let near =
+        |only_filmed: bool| pixel(&drawn(Pass::Depth, only_filmed).frame(at, 1.0), 160, 90)[0];
+    assert!(
+        near(true) < near(false),
+        "{} and {}",
+        near(true),
+        near(false)
+    );
+    // A frame of it is its own, kept apart from one of the same clips with no other in the
+    // sequence, where each has another color.
+    let ids_of = |body: &str, only_filmed: bool| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let drawn = Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass: Pass::Ids,
+                only_filmed,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes");
+        (drawn.frame(at, 1.0), drawn.frame_key(at, 1.0))
+    };
+    let sky = "  track V2 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set filmed=true\n";
+    let sign = "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n      set scale=0.5\n";
+    let (with_a_sign, alone) = (ids_of(&format!("{sign}{sky}"), true), ids_of(sky, false));
+    assert_ne!(with_a_sign.0, alone.0);
+    assert_ne!(with_a_sign.1, alone.1);
+    // A sequence no clip of which a model films has nothing to draw so.
+    let none = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{SCENE}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let refused = Compositor::new(
+        &none,
+        Catalog::builtin(),
+        &ComposeOptions {
+            only_filmed: true,
+            ..ComposeOptions::default()
+        },
+    )
+    .err()
+    .expect("refused")
+    .to_string();
+    assert!(refused.contains("`filmed=true`"), "{refused}");
+}
+
+#[test]
+fn what_a_model_films_is_the_takes_in_a_pass_of_the_scene_laid_over_it() {
+    let project = filmed_scene();
+    let drawn = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: Some("s2".to_owned()),
+            pass: Pass::Ids,
+            hard_edges: true,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes");
+    let ids = drawn.ids();
+    let color = |id: &str| ids.iter().find(|(told, _)| told == id).unwrap().1;
+    let frame = drawn.frame(Rate::FPS_24.time_of(3), 1.0);
+    // The scene's clip is where the box Kerf draws is, and the take everywhere else, the sky
+    // out of depth and the wall behind the box among it.
+    assert_eq!(pixel(&frame, 160, 90), color("world"));
+    assert_eq!(pixel(&frame, 20, 10), color("take"));
+    assert_eq!(pixel(&frame, 100, 90), color("take"));
+    assert_eq!(pixel(&frame, 160, 170), color("take"));
+}
+
+#[test]
+fn a_guide_of_only_what_a_model_films_keeps_what_a_hidden_track_is_read_for() {
+    let drawn = |body: &str| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                only_filmed: true,
+                ..ComposeOptions::default()
+            },
+        )
+    };
+    // A matte on a hidden track cuts a clip a model films, and no model films the matte:
+    // it draws nothing itself, and is still read.
+    let matted = concat!(
+        "  track V1 video\n    clip g1 gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ff0000 filmed=true\n",
+        "      fx key.trackmatte@1 matte=V2 composite=matte-luma\n",
+        "  track V2 video enabled=false\n    clip m1 gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ffffff scale=0.5\n",
+    );
+    let frame = drawn(matted)
+        .expect("composes")
+        .frame(Rate::FPS_24.time_of(3), 1.0);
+    assert_eq!(pixel(&frame, 160, 90), [255, 0, 0]);
+    assert_eq!(pixel(&frame, 10, 10), [0, 0, 0]);
+    // A camera draws nothing, whatever it says: with no clip that draws a model's, such a
+    // guide is of nothing.
+    let camera = concat!(
+        "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set filmed=true\n",
+    );
+    assert!(drawn(camera).is_err());
+}

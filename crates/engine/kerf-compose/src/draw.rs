@@ -98,6 +98,8 @@ pub(crate) struct Drawing {
     hard: bool,
     /// The color each clip that draws has in an ids pass, in the order they are told in.
     ids: Vec<(Id, Rgba)>,
+    /// Only the clips a model films are drawn ([`ComposeOptions::only_filmed`]).
+    only_filmed: bool,
     /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
     /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
     clear: std::sync::Mutex<Vec<Image>>,
@@ -133,15 +135,19 @@ impl Drawing {
         let plan = builder.sequence(top)?;
         builder.sequences[0] = Some(plan);
         let files = files_named(&builder.effects)?;
-        let sequences: Vec<SequencePlan> = builder
+        let mut sequences: Vec<SequencePlan> = builder
             .sequences
             .into_iter()
             .map(|plan| {
                 plan.expect("a sequence that could not be planned fails the build, hidden or not")
             })
             .collect();
+        // Each clip keeps the color it has with all of them drawn, whichever are left out.
         let ids = told_ids(&sequences);
         let matte = matte_color(options.matte.as_deref(), &ids)?;
+        if options.only_filmed {
+            only_filmed(&mut sequences[0], &top.id)?;
+        }
         Ok(Self {
             hdr: HdrOutput::new(top.color),
             sequences,
@@ -161,6 +167,7 @@ impl Drawing {
             matte,
             hard: options.hard_edges && pass == Pass::Ids,
             ids,
+            only_filmed: options.only_filmed,
             clear: std::sync::Mutex::default(),
         })
     }

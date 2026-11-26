@@ -438,6 +438,7 @@ impl<'a> Reader<'a> {
             &ComposeOptions {
                 sequence: Some(sequence.to_owned()),
                 pass,
+                only_filmed: crate::recipe::guide_only_filmed(self.project, sequence),
                 ..ComposeOptions::default()
             },
         )

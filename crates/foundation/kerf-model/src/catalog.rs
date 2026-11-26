@@ -894,6 +894,8 @@ fn builtin_catalog() -> Catalog {
             ],
         )
         .doc("How it combines with what is beneath it."),
+        P::toggle("filmed", false)
+            .doc("A model films it: its sequence, laid over the take, leaves it clear."),
     ];
     let audio_props = vec![
         P::number("gain", 0.0)

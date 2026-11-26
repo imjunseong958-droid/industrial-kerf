@@ -257,6 +257,8 @@ pub struct RenderOptions {
     pub pass: kerf_compose::Pass,
     /// A clip of the sequence to draw alone, white on black, in place of the picture.
     pub matte: Option<String>,
+    /// Draw only the clips of the sequence a model films ([`ComposeOptions::only_filmed`]).
+    pub only_filmed: bool,
     /// Where the frames drawn are kept, and read back from when they are drawn again.
     pub frame_cache: CacheFolder,
     /// Where the stretches encoded are kept, and joined again where nothing in them changed.
@@ -405,6 +407,7 @@ impl Default for RenderOptions {
             sound: true,
             pass: kerf_compose::Pass::Picture,
             matte: None,
+            only_filmed: false,
             frame_cache: CacheFolder::Default,
             section_cache: CacheFolder::Default,
         }
@@ -1248,6 +1251,7 @@ where
             frame_folder: opts.frame_cache.folder(kerf_compose::default_frame_folder),
             pass: opts.pass,
             matte: opts.matte.clone(),
+            only_filmed: opts.only_filmed,
             // A file of the pass is read a pixel at a time, each taken for one clip's.
             hard_edges: true,
             ..Default::default()

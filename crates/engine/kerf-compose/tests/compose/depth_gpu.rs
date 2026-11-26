@@ -417,6 +417,42 @@ fn what_goes_into_a_clip_in_depth_holds_to_the_cpu() {
 }
 
 #[test]
+fn a_scene_laid_over_its_take_is_the_cpus_where_a_model_films_of_it() {
+    if kerf_gpu::shared().is_none() {
+        eprintln!("no GPU here");
+        return;
+    }
+    // A take, and over it a scene of a sign with a car before it, the car as `car` says.
+    let over = |car: &str| {
+        format!(
+            concat!(
+                "sequence s2 rate=24 size=960x540 audio=48000\n",
+                "  track V1 video\n    clip take gen=solid@1 at=0f dur=24f\n      set color=#00ff00\n",
+                "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=24f\n",
+                "sequence s1 rate=24 size=960x540 audio=48000\n",
+                "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n",
+                "      set color=#ffff00 three_d=true z=1 scale=0.5\n",
+                "  track V2 video\n    clip car gen=solid@1 at=0f dur=24f\n",
+                "      set color=#ff0000 three_d=true x=0.12 scale=0.2{}\n",
+            ),
+            car
+        )
+    };
+    let at = Rate::FPS_24.time_of(12);
+    // With nothing of it a model's, the GPU draws it.
+    assert!(compositor(&over(""), Accel::Always).draws_on_gpu(at, 1.0));
+    // What a model films leaves its place clear, which the CPU does: the frame is the CPU's,
+    // and the take shows where the car is.
+    let filmed = over(" filmed=true");
+    let gpu = compositor(&filmed, Accel::Always);
+    assert!(!gpu.draws_on_gpu(at, 1.0));
+    let frame = gpu.frame(at, 1.0);
+    assert_eq!(frame, compositor(&filmed, Accel::Never).frame(at, 1.0));
+    let car = ((540 * 960 / 2 + 480 + 115) * 4) as usize;
+    assert_eq!(frame.rgba[car..car + 3], [0, 255, 0]);
+}
+
+#[test]
 fn a_clip_in_depth_in_hdr_holds_to_the_cpu() {
     for color in ["rec2100-pq", "rec2100-hlg"] {
         holds(

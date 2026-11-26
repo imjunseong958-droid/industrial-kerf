@@ -77,6 +77,10 @@ pub struct ComposeOptions {
     /// clip covers as much of a pixel as it does, and where two share a pixel it is between
     /// their colors, as measuring how much of each clip shows reads it.
     pub hard_edges: bool,
+    /// Draw only the clips of the sequence a model films (`filmed=true`), with its cameras and
+    /// lights and what its clips move with: a guide without what Kerf draws over the take.
+    /// Refused where the sequence has no such clip.
+    pub only_filmed: bool,
 }
 
 /// A stamp of the code that draws frames: what was drawn under one stamp is what would be drawn

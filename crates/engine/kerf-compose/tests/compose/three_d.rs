@@ -1195,3 +1195,140 @@ fn what_cuts_a_generator_in_depth_cuts_it_where_it_is_on_its_frame() {
         (160.0 - 80.0 * TWO_BACK, 160.0 + (270.0 - 80.0) * TWO_BACK),
     );
 }
+
+/// A scene a model films of, `s1`: a backdrop out of depth, a sign in depth, and a car before the
+/// sign's right half, as `car` says it. The model films the backdrop and the car. `s2` is the
+/// scene laid over a take, which is green all over.
+fn filmed_scene(car: &str) -> kerf_model::Project {
+    parse_document(
+        &format!(
+            concat!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n",
+                "  track V1 video\n    clip back gen=solid@1 at=0f dur=24f\n",
+                "      set color=#0000ff filmed=true\n",
+                "  track V2 video\n    clip sign gen=solid@1 at=0f dur=24f\n",
+                "      set color=#ffff00 three_d=true z=1 scale=0.5\n",
+                "  track V3 video\n    clip car {car}\n",
+                "sequence s2 rate=24 size=320x180 audio=48000\n",
+                "  track V1 video\n    clip take gen=solid@1 at=0f dur=24f\n      set color=#00ff00\n",
+                "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=24f\n",
+            ),
+            car = car
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project
+}
+
+/// The car as a flat clip in depth, drawn after the sign, and as a mesh, drawn with it pixel by
+/// pixel.
+const FILMED_CARS: [&str; 2] = [
+    "gen=solid@1 at=0f dur=24f\n      set color=#ff0000 filmed=true three_d=true x=0.12 scale=0.2",
+    "gen=mesh@1 at=0f dur=24f\n      set color=#ff0000 filmed=true x=0.12 kind=box width=0.2 height=0.2 length=0.1",
+];
+
+#[test]
+fn what_a_model_films_leaves_its_take_to_show_where_its_scene_is_laid_over_it() {
+    const BLUE: [u8; 3] = [0, 0, 255];
+    const YELLOW: [u8; 3] = [255, 255, 0];
+    const RED: [u8; 3] = [255, 0, 0];
+    const GREEN: [u8; 3] = [0, 255, 0];
+    // The backdrop alone, the sign alone, the car before the sign, and the car past the sign.
+    let (back, sign, before, past) = ((20, 20), (130, 90), (190, 90), (212, 90));
+    for car in FILMED_CARS {
+        let project = filmed_scene(car);
+        let drawn = |sequence: &str| {
+            Compositor::new(
+                &project,
+                Catalog::builtin(),
+                &ComposeOptions {
+                    sequence: Some(sequence.to_owned()),
+                    ..ComposeOptions::default()
+                },
+            )
+            .expect("composes")
+            .frame(Rate::FPS_24.time_of(3), 1.0)
+        };
+        let at = |frame: &Frame, (x, y): (u32, u32)| pixel(frame, x, y);
+        // The scene's own sequence shows every clip, filmed or not.
+        let scene = drawn("s1");
+        assert_eq!(at(&scene, back), BLUE, "{car}");
+        assert_eq!(at(&scene, sign), YELLOW, "{car}");
+        assert_eq!(at(&scene, before), RED, "{car}");
+        assert_eq!(at(&scene, past), RED, "{car}");
+        // Over its take, what a model films is the take's, and the sign is Kerf's own, cut
+        // where the car stands before it.
+        let over = drawn("s2");
+        assert_eq!(at(&over, back), GREEN, "{car}");
+        assert_eq!(at(&over, sign), YELLOW, "{car}");
+        assert_eq!(at(&over, before), GREEN, "{car}");
+        assert_eq!(at(&over, past), GREEN, "{car}");
+    }
+}
+
+#[test]
+fn a_transition_leaves_clear_the_side_of_it_a_model_films() {
+    const BLUE: [u8; 3] = [0, 0, 255];
+    const RED: [u8; 3] = [255, 0, 0];
+    const GREEN: [u8; 3] = [0, 255, 0];
+    // A red clip and then a blue one, with the transition `fx` across their cut from frame 18
+    // to 30, in a scene laid over a green take: the frame `at`.
+    let over = |fx: &str, at: i64, red: &str, blue: &str| {
+        let project = parse_document(
+            &format!(
+                concat!(
+                    "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n",
+                    "  track V1 video\n    clip a gen=solid@1 at=0f dur=24f\n",
+                    "      set color=#ff0000{red}\n",
+                    "    clip b gen=solid@1 at=24f dur=24f\n      set color=#0000ff{blue}\n",
+                    "    transition x1 from=a to=b fx={fx} dur=12f\n",
+                    "sequence s2 rate=24 size=320x180 audio=48000\n",
+                    "  track V1 video\n    clip take gen=solid@1 at=0f dur=48f\n      set color=#00ff00\n",
+                    "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=48f\n",
+                ),
+                red = red,
+                blue = blue,
+                fx = fx
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                sequence: Some("s2".to_owned()),
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+        .frame(Rate::FPS_24.time_of(at), 1.0)
+    };
+    let filmed = " filmed=true";
+    // A push, halfway: the blue has come in over the left half and the red is going out over
+    // the right. What a model films of the two is the take's, and the other is drawn.
+    let halves = |red: &str, blue: &str| {
+        let frame = over("push@2 motion_blur=0", 24, red, blue);
+        (pixel(&frame, 80, 90), pixel(&frame, 240, 90))
+    };
+    assert_eq!(halves("", ""), (BLUE, RED));
+    assert_eq!(halves(filmed, ""), (BLUE, GREEN));
+    assert_eq!(halves("", filmed), (GREEN, RED));
+    assert_eq!(halves(filmed, filmed), (GREEN, GREEN));
+    // A split opens the red over the blue, so that early on the red is still at the corners:
+    // whichever lies over the other, each is whose it is.
+    let corner = |red: &str, blue: &str| pixel(&over("split@2", 19, red, blue), 5, 5);
+    assert_eq!(corner("", ""), RED);
+    assert_eq!(corner(filmed, ""), GREEN);
+    assert_eq!(corner("", filmed), RED);
+    // A dissolve through a blur, halfway from the red Kerf draws to what a model films: half
+    // the red and half the take, as the same dissolve of the red and a green clip is.
+    let middle = |fx: &str, blue: &str| pixel(&over(fx, 24, "", blue), 160, 90);
+    let half = middle("blur-dissolve@1", filmed);
+    assert!(
+        half[0].abs_diff(188) <= 3 && half[1].abs_diff(188) <= 3 && half[2] <= 3,
+        "{half:?}"
+    );
+}

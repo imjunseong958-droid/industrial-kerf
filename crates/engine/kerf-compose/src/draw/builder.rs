@@ -356,6 +356,7 @@ impl<'a> Builder<'a> {
             plain: false,
             animated,
             three_d,
+            filmed: clip.filmed(),
             shown: 1.0,
             blend,
             effects,
