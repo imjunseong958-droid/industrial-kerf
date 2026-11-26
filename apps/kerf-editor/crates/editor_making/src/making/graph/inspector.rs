@@ -18,12 +18,13 @@ use kerf_bridge::event::graph::{Gives, Kind, What};
 use kerf_bridge::{RecipeEdit, ShotOf};
 
 /// What a guide draws, and its name.
-const PASSES: [(&str, &str); 5] = [
+const PASSES: [(&str, &str); 6] = [
     ("picture", "Picture"),
     ("depth", "Depth"),
     ("relative", "Relative depth"),
     ("ids", "Ids"),
     ("normals", "Normals"),
+    ("motion", "Motion"),
 ];
 
 impl ShotGraph {
