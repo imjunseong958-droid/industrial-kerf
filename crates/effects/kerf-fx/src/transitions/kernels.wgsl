@@ -790,7 +790,6 @@ fn blurs(@builtin(global_invocation_id) id: vec3<u32>) {
 // What moves the frames by arithmetic of its own, at each moment of `temporal`.
 
 const V_FILM_ROLL: u32 = 0u;
-const V_STRETCH: u32 = 1u;
 const V_FRAME: u32 = 3u;
 const V_STRETCH_WIPE: u32 = 9u;
 const V_EARTHQUAKE: u32 = 10u;
@@ -826,30 +825,6 @@ fn film_roll(x: f32, y: f32, q: f32) -> vec4<f32> {
         return vec4(0.5, 0.5, 0.5, 1.0);
     }
     return n4(0);
-}
-
-fn stretch(x: f32, y: f32) -> vec4<f32> {
-    let len = n(0);
-    let split = n(1);
-    let axis_x = on(2);
-    let s = select(y, x, axis_x);
-    let before = s / max(split, 1e-3) * len;
-    let beyond = (s - split) / max(len - split, 1e-3) * len;
-    var in_b: bool;
-    var local: f32;
-    if on(3) {
-        in_b = s < split;
-        local = select(beyond, before, in_b);
-    } else {
-        in_b = s >= split;
-        local = select(before, beyond, in_b);
-    }
-    let sx = select(x, local, axis_x);
-    let sy = select(local, y, axis_x);
-    if in_b {
-        return sbc(sx, sy);
-    }
-    return sac(sx, sy);
 }
 
 fn frame_side(out: vec4<f32>, x: f32, y: f32, is_b: bool, off: f32) -> vec4<f32> {
@@ -924,9 +899,6 @@ fn moved_at(x: f32, y: f32, q: f32) -> vec4<f32> {
     switch u.kind {
         case V_FILM_ROLL: {
             return film_roll(x, y, q);
-        }
-        case V_STRETCH: {
-            return stretch(x, y);
         }
         case V_FRAME: {
             let out = frame_side(vec4(0.0), x, y, false, n(8));

@@ -1,0 +1,11 @@
+kerf-look 1
+look look.pop-motion version=1 name="Pop Motion" category="Transitions" on=transition
+  doc "Pops the incoming shot in with a springy overshoot; fun, punchy reveals."
+  param overshoot number default=0.2 range=0..1 doc="How far past full size it springs."
+  param motion_blur number default=0.5 range=0..1 doc="How much the move smears."
+  a set scale={0%:1:0.3333,0,0.6667,0 60%:0.7}
+  a set opacity={35%:1:ease 80%:0}
+  b set scale={15%:0 23.5%:0.271+0.324*$overshoot 32%:0.488+0.512*$overshoot 40.5%:0.657+0.588*$overshoot 49%:0.784+0.576*$overshoot 57.5%:0.875+0.5*$overshoot 66%:0.936+0.384*$overshoot 74.5%:0.973+0.252*$overshoot 83%:0.992+0.128*$overshoot 91.5%:0.999+0.036*$overshoot 100%:1}
+  b set opacity={10%:0:ease 30%:1}
+  a set shutter={0%:0 5%:216*$motion_blur 95%:216*$motion_blur 100%:0}
+  b set shutter={0%:0 5%:216*$motion_blur 95%:216*$motion_blur 100%:0}

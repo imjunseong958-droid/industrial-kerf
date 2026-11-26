@@ -1,24 +1,6 @@
 # Transitions Kerf draws with its own renderer, carried from FilmCraft's
 # (crates/render/src/transitions), which kerf-fx runs. The same layout as
 # raster_effects.tsv; this table is written by hand.
-transition	pop-motion	Animation	Pop Motion	Pops the incoming shot in with a springy overshoot; fun, punchy reveals.	2	1
-	number	overshoot	20	0..100	%	Overshoot
-	number	motion_blur	50	0..100	%	Motion Blur
-transition	pull-motion	Animation	Pull Motion	Pulls the outgoing shot away toward an edge; quick scene changes.	2	1
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	motion_blur	50	0..100	%	Motion Blur
-transition	spin-motion	Animation	Spin Motion	Spins the shot out and the next in; high-energy, playful moments.	2	1
-	number	rotation	360	0..1440	degrees	Rotation
-	enum	spin	clockwise	clockwise|counter-clockwise		Spin Direction
-	number	motion_blur	50	0..100	%	Motion Blur
-transition	spring-motion	Animation	Spring Motion	Bounces the incoming shot in from a side; light, comic entrances.	2	1
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	bounce	40	0..100	%	Bounce
-	number	motion_blur	50	0..100	%	Motion Blur
-transition	travel-motion	Animation	Travel Motion	Zooms out, travels across, and lands on the next shot; journeys and montages.	2	1
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	zoom	40	0..90	%	Zoom Out
-	number	motion_blur	50	0..100	%	Motion Blur
 transition	additive-dissolve	Dissolve	Additive Dissolve	A dissolve that adds the two shots' light, so it blooms brighter midway; dreamy, glowing changes.
 transition	blur-dissolve	Dissolve	Blur Dissolve	Dissolves through a blur; soft time passing, memories, gentle changes.
 	number	blur	40	0..400	px	Blur
@@ -142,8 +124,6 @@ transition	slide	Slide	Slide	The incoming shot slides in over the outgoing one; 
 transition	split	Slide	Split	The outgoing shot splits apart down the middle to reveal the next; reveals and openings.	2	1
 	enum	orientation	horizontal	horizontal|vertical		Orientation
 	number	motion_blur	50	0..100	%	Motion Blur
-transition	stretch	Slide	Stretch	Stretches the outgoing shot away and the next in; playful, elastic changes.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 transition	whip	Slide	Whip	A fast whip pan blur from one shot into the next; energetic, kinetic cuts and travel edits.
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	blur	80	0..100	%	Blur

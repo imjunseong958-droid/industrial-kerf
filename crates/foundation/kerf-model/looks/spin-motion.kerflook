@@ -1,0 +1,12 @@
+kerf-look 1
+look look.spin-motion version=1 name="Spin Motion" category="Transitions" on=transition
+  doc "Spins the shot out and the next in; high-energy, playful moments."
+  param rotation angle default=360 range=0..1440 doc="How far the two spin between them."
+  param spin choice options=clockwise|counter-clockwise default=clockwise doc="Which way they spin."
+  param motion_blur number default=0.5 range=0..1 doc="How much the move smears."
+  a set rotation={0%:0:0.3333,0,0.6667,0 50%:0.5*$rotation*$spin[1,-1]}
+  a set scale={0%:1:0.3333,0,0.6667,0 50%:0}
+  b set rotation={50%:-0.5*$rotation*$spin[1,-1]:0.3333,1,0.6667,1 100%:0}
+  b set scale={50%:0:0.3333,1,0.6667,1 100%:1}
+  a set shutter={0%:0 5%:259.2*$motion_blur 95%:259.2*$motion_blur 100%:0}
+  b set shutter={0%:0 5%:259.2*$motion_blur 95%:259.2*$motion_blur 100%:0}

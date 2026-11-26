@@ -273,3 +273,10 @@ perspective.dropshadow	the clip in depth, lit by a `gen=light@1` that casts shad
 flip-motion	look.flip-motion@1
 spin-3d	look.spin-3d@1
 spinback-3d	look.spinback-3d@1
+# And transitions that moved the whole frame, which looks of the two clips do.
+pop-motion	look.pop-motion@1
+pull-motion	look.pull-motion@1
+spin-motion	look.spin-motion@1
+spring-motion	look.spring-motion@1
+travel-motion	look.travel-motion@1
+stretch	look.stretch@1
