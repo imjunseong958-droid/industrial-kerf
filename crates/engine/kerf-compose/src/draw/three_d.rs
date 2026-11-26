@@ -724,6 +724,19 @@ impl Scene {
     /// toward whoever sees it, in the camera's space, to the right, up, and toward the
     /// camera as red, green, and blue. The color is a display's, as a model reads a file,
     /// and the picture is light.
+    /// Where a point of the world is seen on the output picture, in its pixels: nowhere for one
+    /// at the eye or behind it.
+    pub(super) fn on_screen(&self, at: Vector) -> Option<(f64, f64)> {
+        let from = minus(at, self.eye);
+        let ahead = dot(from, self.forward);
+        (ahead > 1e-9).then(|| {
+            (
+                self.center.0 + self.focal * dot(from, self.right) / ahead,
+                self.center.1 + self.focal * dot(from, self.down) / ahead,
+            )
+        })
+    }
+
     pub(super) fn facing(&self, at: Vector, normal: Vector) -> [f32; 3] {
         let seen = if dot(minus(self.eye, at), normal) < 0.0 {
             times(normal, -1.0)
@@ -875,6 +888,96 @@ pub(super) fn shade_by_depth(
                 // The grey is a display's, as a model reads a file, and the picture is light.
                 let grey = kerf_draw::color::to_linear(scene.nearness(ahead)) * pixel[3];
                 pixel[..3].fill(grey);
+            }
+        });
+}
+
+/// The most a motion pass says of how far a thing goes in a frame, either way across or down, in
+/// frame heights: one that goes further is said to go this far.
+pub(super) const MOST_MOTION: f64 = 0.125;
+
+/// How far something goes in a frame, across and down in output pixels of a frame `height` tall, as
+/// a motion pass has it: red by how far right and green by how far down, mid grey for not at all
+/// and full for [`MOST_MOTION`] of the frame's height, and blue full, which says something is
+/// there. The color is a display's, as a model reads a file, and the picture is light.
+pub(super) fn motion_color((across, down): (f64, f64), height: f64) -> [f32; 3] {
+    let most = MOST_MOTION * height.max(1.0);
+    let side =
+        |by: f64| kerf_draw::color::to_linear((0.5 + 0.5 * (by / most).clamp(-1.0, 1.0)) as f32);
+    [side(across), side(down), 1.0]
+}
+
+/// `picture`, a clip's own, as a motion pass has what holds still.
+pub(super) fn shade_still(picture: &mut Image) {
+    let color = motion_color((0.0, 0.0), 1.0);
+    picture.px.par_chunks_mut(4).for_each(|pixel| {
+        let alpha = pixel[3];
+        for (channel, color) in pixel[..3].iter_mut().zip(color) {
+            *channel = color * alpha;
+        }
+    });
+}
+
+/// `picture`, a clip out of depth's own, as a motion pass has it: each of its pixels by how far
+/// what it shows goes in a frame, `moved` being where an output pixel's clip is a frame on.
+pub(super) fn shade_by_motion_flat(
+    picture: &mut Image,
+    to_output: &Affine,
+    moved: &Affine,
+    height: f64,
+) {
+    let w = picture.w;
+    picture
+        .px
+        .par_chunks_mut(4 * w.max(1))
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (x, pixel) in row.chunks_mut(4).enumerate() {
+                let from = to_output.apply(Vec2::new(x as f64 + 0.5, y as f64 + 0.5));
+                let to = moved.apply(from);
+                let color = motion_color((to.x - from.x, to.y - from.y), height);
+                let alpha = pixel[3];
+                for (channel, color) in pixel[..3].iter_mut().zip(color) {
+                    *channel = color * alpha;
+                }
+            }
+        });
+}
+
+/// `picture`, a clip in depth's own, as a motion pass has it: each of its pixels by how far the
+/// place of the clip it shows goes on the screen in a frame, from where the scene `now` sees it,
+/// the clip placed as `to_output.0` has it, to where the scene a frame on sees it, placed as
+/// `to_output.1` has it. A place behind either camera is said to hold still.
+pub(super) fn shade_by_motion(
+    (now, next): (&Scene, &Scene),
+    plan: &ClipPlan,
+    picture: &mut Image,
+    to_output: (&Affine, &Affine),
+    (time, step): (Time, Time),
+) {
+    let (w, h) = (picture.w, picture.h);
+    let size = (w as f64, h as f64);
+    let here = Plane::of(now, plan, size, to_output.0, time);
+    let there = Plane::of(next, plan, size, to_output.1, time + step);
+    picture
+        .px
+        .par_chunks_mut(4 * w.max(1))
+        .enumerate()
+        .for_each(|(y, row)| {
+            for (x, pixel) in row.chunks_mut(4).enumerate() {
+                let (u, v) = (x as f64 + 0.5, y as f64 + 0.5);
+                let moved = match (
+                    now.on_screen(here.point(u, v)),
+                    next.on_screen(there.point(u, v)),
+                ) {
+                    (Some(from), Some(to)) => (to.0 - from.0, to.1 - from.1),
+                    _ => (0.0, 0.0),
+                };
+                let color = motion_color(moved, now.height);
+                let alpha = pixel[3];
+                for (channel, color) in pixel[..3].iter_mut().zip(color) {
+                    *channel = color * alpha;
+                }
             }
         });
 }

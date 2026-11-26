@@ -578,3 +578,48 @@ fn where_a_clip_goes_is_read_as_a_guide_of_only_what_a_model_films_shows_it() {
     assert_eq!(middle(false), None);
     assert!(middle(true).is_some());
 }
+
+#[test]
+fn a_motion_guide_says_how_far_things_go_in_a_frame_of_its_file() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let directory = folder.path();
+    // A square that slides 2 pixels a frame of its sequence, drawn at half the sequence's
+    // rate: 4 pixels a frame of the file.
+    let project = parse_document(
+        "kerf 1\nproject name=\"shots\"\n\
+         media m1 path=\"shots/moves.mp4\" rate=12 dur=1s video=160x90\n\
+         \x20 render s2 {out} pass=motion rate=12\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         sequence s2 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip slides gen=solid@1 at=0f dur=24f\n\
+         \x20     set scale=0.4 x={0f:-0.15 24f:0.15}\n",
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let models = Models::default();
+    let planned = plan(&project, directory, "m1", &models).expect("a plan");
+    assert!(
+        planned.steps[0].contains("the motion of sequence s2"),
+        "{:?}",
+        planned.steps
+    );
+    let made = make(
+        &project,
+        directory,
+        &planned,
+        &models,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("a take");
+    let file = directory.join(&made.stored);
+    // Red is how far right, of an eighth of the frame's height: 4 of 11.25 pixels past mid
+    // grey. Green is how far down, none, and blue says the square is there; beside it, nothing.
+    let [red, green, blue] = pixel(&file, 56, 45);
+    assert!(red.abs_diff(173) <= 2, "{red}");
+    assert!(green.abs_diff(128) <= 1 && blue == 255, "{green} {blue}");
+    assert_eq!(pixel(&file, 150, 80), [0, 0, 0]);
+}

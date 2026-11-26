@@ -65,6 +65,12 @@ pub enum Pass {
     /// clip in depth is flat, so it is one color; a mesh has the way each place of it
     /// faces. What is not in depth is black.
     Normals,
+    /// How far what is at each pixel goes by the next frame, as a color: red by how far
+    /// right and green by how far down, mid grey for not at all and black or full for an
+    /// eighth of the frame's height or more either way, and blue full, which says something
+    /// is there. Where nothing is, it is black. A clip goes as its frame does, in depth or
+    /// out of it: what moves within its own picture, footage or particles, is not told.
+    Motion,
 }
 
 impl Pass {
@@ -76,6 +82,7 @@ impl Pass {
             "depth" => Some(Self::Depth),
             "relative" => Some(Self::Relative),
             "normals" => Some(Self::Normals),
+            "motion" => Some(Self::Motion),
             _ => None,
         }
     }
@@ -88,6 +95,7 @@ impl Pass {
             Self::Depth => "depth",
             Self::Relative => "relative",
             Self::Normals => "normals",
+            Self::Motion => "motion",
         }
     }
 }
@@ -500,7 +508,7 @@ pub enum Named {
 pub const VERBS: [&str; 3] = ["render", "generate", "join"];
 
 /// How each kind of step is written, for an error that says so.
-pub const SHAPES: &str = "`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>] [only=filmed] [from=<seconds>] [seconds=<seconds>]`, `generate model=<name> prompt=\"…\" …`, or `join {part} {part} … {name} [lap=<frames>]`";
+pub const SHAPES: &str = "`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals|motion] [matte=<clip>] [only=filmed] [from=<seconds>] [seconds=<seconds>]`, `generate model=<name> prompt=\"…\" …`, or `join {part} {part} … {name} [lap=<frames>]`";
 
 impl Step {
     /// Read a step from its words, the first of which says what it is: `render`,
@@ -832,7 +840,7 @@ fn drawn_at(words: &[String]) -> Result<Drawn, String> {
             Some(("pass", value)) => {
                 pass = Pass::parse(value).ok_or_else(|| {
                     format!(
-                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`, the same stretched to each frame's own nearest and farthest, or `normals`, which way it faces"
+                        "`pass={value}` is not a pass Kerf draws: `ids`, which clip each pixel is of, `depth`, how near it is, `relative`, the same stretched to each frame's own nearest and farthest, `normals`, which way it faces, or `motion`, how far it goes by the next frame"
                     )
                 })?;
             }
@@ -847,7 +855,7 @@ fn drawn_at(words: &[String]) -> Result<Drawn, String> {
             Some(("seconds", value)) => seconds = Some(seconds_of("seconds", value, f64::MIN_POSITIVE)?),
             _ => {
                 return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, `matte=<clip>`, `only=filmed`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals|motion`, `matte=<clip>`, `only=filmed`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"
                 ))
             }
         }
@@ -1014,6 +1022,12 @@ mod tests {
             })
             .collect();
         assert_eq!(only, [true, false]);
+        // Every pass is read by its name and written by it.
+        for pass in ["ids", "depth", "relative", "normals", "motion"] {
+            let named = format!("pass={pass}");
+            let line = ["render", "s2", "{pass.mp4}", named.as_str()];
+            assert_eq!(read(&[&line]).unwrap()[0].words(), words(&line));
+        }
         let refused = read(&[&["render", "s2", "{guide.mp4}", "only=sign"]]).unwrap_err();
         assert!(refused.contains("`only=filmed`"), "{refused}");
     }

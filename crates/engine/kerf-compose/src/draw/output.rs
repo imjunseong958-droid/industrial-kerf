@@ -171,6 +171,10 @@ impl Drawing {
         if self.pass != Pass::Picture {
             self.pass.hash(&mut hash);
         }
+        // A motion pass is of how far things go in a frame, however long that is.
+        if self.pass == Pass::Motion {
+            self.step.flicks().hash(&mut hash);
+        }
         self.matte.hash(&mut hash);
         // Only where it is, so that a pass drawn soft has the number it had.
         if self.hard {

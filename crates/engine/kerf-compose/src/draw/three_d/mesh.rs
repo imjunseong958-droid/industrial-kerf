@@ -83,6 +83,10 @@ pub(in crate::draw) enum Shade<'a> {
     Near,
     /// Colored by the way each place faces, as a normals pass has it.
     Facing,
+    /// Colored by how far each place goes on the screen in a frame, as a motion pass has it:
+    /// to where the scene `0` sees it a frame on, the clip placed as `1` has it then, a frame
+    /// being `2` long.
+    Moving(&'a Scene, &'a Affine, Time),
 }
 
 impl Mesh {
@@ -1348,9 +1352,43 @@ pub(in crate::draw) fn draw(
         }
     }
 
+    // Where each point of the mesh is a frame on, for a motion pass. A file's animation that
+    // gives it other points then tells nothing of where each went, and it is said to hold still.
+    let then: Option<(&Scene, Vec<Vector>)> = match &shade {
+        Shade::Moving(next, to_output, step) => {
+            let later = Mesh::of(&plan.clip, plan.clip.start + time + *step);
+            let plane = Plane::of(next, plan, size, to_output, time + *step);
+            let (later, _) = in_world(&later, &plane, size);
+            (later.len() == points.len()).then_some((*next, later))
+        }
+        _ => None,
+    };
+    // A place of a triangle among `all`, the points of the mesh, by its shares of two corners.
+    let place = |triangle: u32, of: [f32; 2], all: &[Vector]| -> Vector {
+        let corners = mesh.triangles[triangle as usize];
+        let shares = [
+            f64::from(of[0]),
+            f64::from(of[1]),
+            f64::from(1.0 - of[0] - of[1]),
+        ];
+        let mut sum = [0.0; 3];
+        for (corner, share) in corners.iter().zip(shares) {
+            sum = add(sum, times(all[*corner as usize], share));
+        }
+        sum
+    };
+
     let colored = |triangle: u32, of: [f32; 2], ahead: f32| -> [f32; 3] {
         match &shade {
             Shade::Flat(color) => *color,
+            Shade::Moving(..) => {
+                let moved = then.as_ref().and_then(|(next, later)| {
+                    let from = scene.on_screen(place(triangle, of, &points))?;
+                    let to = next.on_screen(place(triangle, of, later))?;
+                    Some((to.0 - from.0, to.1 - from.1))
+                });
+                motion_color(moved.unwrap_or((0.0, 0.0)), scene.height)
+            }
             Shade::Near => [kerf_draw::color::to_linear(scene.nearness(f64::from(ahead))); 3],
             Shade::Facing => {
                 let corners = mesh.triangles[triangle as usize];
@@ -1425,7 +1463,7 @@ pub(in crate::draw) fn draw(
                     depth[x] = depth[x].min(ahead);
                     // Its own colors change within a pixel, and are read at each place.
                     let once = match shade {
-                        Shade::Near | Shade::Facing => false,
+                        Shade::Near | Shade::Facing | Shade::Moving(..) => false,
                         Shade::Flat(_) => true,
                         Shade::Lit(_) => !mesh.part_of(triangle as usize).is_some_and(|p| p.own),
                     };
