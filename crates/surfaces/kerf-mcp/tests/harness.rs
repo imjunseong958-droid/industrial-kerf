@@ -706,12 +706,8 @@ fn render_hands_the_sequence_to_another_editor_and_says_what_is_left_out() {
     let output = Path::new(handed["output"].as_str().unwrap());
     // In the project's deliveries, and an unnamed sequence's file takes its id.
     assert_eq!(
-        output.canonicalize().unwrap(),
-        directory
-            .path()
-            .join("deliveries/s1.fcpxml")
-            .canonicalize()
-            .unwrap()
+        kerf_paths::canonicalize(output).unwrap(),
+        kerf_paths::canonicalize(directory.path().join("deliveries/s1.fcpxml")).unwrap()
     );
     let text = std::fs::read_to_string(output).unwrap();
     assert!(text.contains("<fcpxml version=\"1.9\">"), "{text}");

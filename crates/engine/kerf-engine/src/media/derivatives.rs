@@ -33,7 +33,7 @@ pub struct SourceIdentity {
 impl SourceIdentity {
     /// Read a stable path/stat identity for a local source.
     pub fn from_path(path: &Path) -> Result<Self> {
-        let canonical = path.canonicalize()?;
+        let canonical = kerf_paths::canonicalize(path)?;
         let metadata = fs::metadata(&canonical)?;
         let modified_ns = metadata
             .modified()
@@ -266,7 +266,7 @@ impl DerivativeCache {
     /// Remove the entries made from a file of an entry that is gone, as a
     /// transcript of a rendered program's sound.
     fn remove_orphans(&self) {
-        let Ok(root) = self.root.canonicalize() else {
+        let Ok(root) = kerf_paths::canonicalize(&self.root) else {
             return;
         };
         let Ok(directories) = fs::read_dir(&root) else {

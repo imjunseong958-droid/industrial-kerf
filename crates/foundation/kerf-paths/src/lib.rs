@@ -7,6 +7,10 @@
 //! is found by its system's own rule, which names `HOME` only off Windows. (So is a log
 //! folder, which is not found here.)
 
+mod canonical;
+
+pub use canonical::canonicalize;
+
 use std::ffi::OsString;
 use std::path::PathBuf;
 
