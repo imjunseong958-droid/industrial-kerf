@@ -171,23 +171,8 @@ fn card_numbers(t: &Tx, focal: f32, moments: &[Vec<Layer>]) -> Option<(Vec<f32>,
     let eye = super::cards::eye(t.wf, t.hf, focal);
     let mut numbers = vec![eye[0], eye[1], eye[2], 0.0];
     for layer in moments.iter().flatten() {
-        let is_b = |image: &Image| std::ptr::eq(image, t.b);
-        let mut flags = 0u32;
-        if is_b(layer.front) {
-            flags |= 1;
-        }
-        if let Some(back) = layer.back {
-            flags |= 2;
-            if is_b(back) {
-                flags |= 4;
-            }
-        }
-        if layer.mirror_y {
-            flags |= 8;
-        }
-        if layer.shade {
-            flags |= 16;
-        }
+        // Which clip it shows: `CARD_FRONT_B` in `kernels.wgsl`.
+        let flags = u32::from(std::ptr::eq(layer.front, t.b));
         let card = &layer.card;
         numbers.extend_from_slice(&card.origin);
         numbers.push(layer.opacity);

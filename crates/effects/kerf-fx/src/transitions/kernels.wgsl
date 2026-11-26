@@ -344,10 +344,6 @@ fn wipes(@builtin(global_invocation_id) id: vec3<u32>) {
 // for each of `count` moments, in four rows: origin and opacity, ex and flags, ey, what shows of it.
 
 const CARD_FRONT_B: u32 = 1u;
-const CARD_BACK: u32 = 2u;
-const CARD_BACK_B: u32 = 4u;
-const CARD_MIRROR_Y: u32 = 8u;
-const CARD_SHADE: u32 = 16u;
 
 fn cross3(a: vec3<f32>, b: vec3<f32>) -> vec3<f32> {
     return vec3(a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x);
@@ -397,25 +393,11 @@ fn cards_at(first: u32, x: f32, y: f32) -> vec4<f32> {
         if cov <= 0.0 {
             continue;
         }
-        var c: vec4<f32>;
-        if front {
-            c = card_read((flags & CARD_FRONT_B) != 0u, lx, ly);
-        } else if (flags & CARD_BACK) != 0u {
-            let is_b = (flags & CARD_BACK_B) != 0u;
-            if (flags & CARD_MIRROR_Y) != 0u {
-                c = card_read(is_b, lx, u.size.y - ly);
-            } else {
-                c = card_read(is_b, u.size.x - lx, ly);
-            }
-        } else {
+        // A card is one-sided: turned away, it is not seen.
+        if !front {
             continue;
         }
-        if (flags & CARD_SHADE) != 0u {
-            let len = max(sqrt(dot3(normal, normal)), 1e-9);
-            let facing = abs(normal.z / len);
-            let light = 0.45 + 0.55 * facing;
-            c = vec4(c.xyz * light, c.w);
-        }
+        let c = card_read((flags & CARD_FRONT_B) != 0u, lx, ly);
         let k = clamp(cov * origin.w, 0.0, 1.0);
         // Furthest first, those at one depth as they came, as a stable sort leaves them.
         var at = hits;

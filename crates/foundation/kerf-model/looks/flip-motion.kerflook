@@ -1,0 +1,25 @@
+kerf-look 1
+look look.flip-motion version=1 name="Flip Motion" category="Transitions" on=transition
+  doc "Flips the outgoing shot over like a card to show the next; reveals and before/after."
+  param direction choice options=from-north|from-east|from-south|from-west default=from-west doc="Which side the turn comes from."
+  param motion_blur number default=0.5 range=0..1 doc="How much the turn smears."
+  # The card turns before an eye as far off as a 16:9 frame's width three and a half times: each key is the turn and
+  # the narrowing that the default camera sees the same as, and the light the turn leaves on it.
+  a set three_d=true
+  a set rotate_y={0%:0 10%:$direction[0,0.159,0,-0.159] 20%:$direction[0,1.276,0,-1.276] 26%:$direction[0,2.838,0,-2.838] 32%:$direction[0,5.508,0,-5.508] 36%:$direction[0,8.343,0,-8.343] 40%:$direction[0,12.913,0,-12.913] 43%:$direction[0,18.941,0,-18.941] 46%:$direction[0,31.354,0,-31.354] 48%:$direction[0,50.336,0,-50.336] 50%:$direction[0,90,0,-90]}
+  a set rotate_x={0%:0 10%:$direction[-0.159,0,0.159,0] 20%:$direction[-1.276,0,1.276,0] 26%:$direction[-2.838,0,2.838,0] 32%:$direction[-5.508,0,5.508,0] 36%:$direction[-8.343,0,8.343,0] 40%:$direction[-12.913,0,12.913,0] 43%:$direction[-18.941,0,18.941,0] 46%:$direction[-31.354,0,31.354,0] 48%:$direction[-50.336,0,50.336,0] 50%:$direction[-90,0,90,0]}
+  a set scale_x={0%:1 10%:1 20%:$direction[1,0.995,1,0.995] 26%:$direction[1,0.977,1,0.977] 32%:$direction[1,0.921,1,0.921] 36%:$direction[1,0.842,1,0.842] 40%:$direction[1,0.712,1,0.712] 43%:$direction[1,0.572,1,0.572] 46%:$direction[1,0.399,1,0.399] 48%:$direction[1,0.282,1,0.282] 50%:$direction[1,0.221,1,0.221]}
+  a set scale_y={0%:1 10%:1 20%:$direction[0.995,1,0.995,1] 26%:$direction[0.977,1,0.977,1] 32%:$direction[0.921,1,0.921,1] 36%:$direction[0.842,1,0.842,1] 40%:$direction[0.712,1,0.712,1] 43%:$direction[0.572,1,0.572,1] 46%:$direction[0.399,1,0.399,1] 48%:$direction[0.282,1,0.282,1] 50%:$direction[0.221,1,0.221,1]}
+  a set z={0%:0 10%:0.029 20%:0.069 26%:0.085 32%:0.094 36%:0.096 40%:0.098 43%:0.098 46%:0.098 48%:0.098 50%:0.098}
+  a fx color.levels@2 out_white={0%:255 10%:254.995 20%:254.678 26%:253.446 32%:249.603 36%:244.073 40%:234.486 43%:223.414 46%:207.792 48%:194.168 50%:177.382}
+  a fx blur.directional@2 direction=$direction[0,90,0,90] length={0%:0 30%:0 45%:120*$motion_blur 50%:0}
+  a set opacity={0%:1:hold 50%:0}
+  b set three_d=true
+  b set rotate_y={50%:$direction[0,-90,0,90] 52%:$direction[0,-40.784,0,40.784] 54%:$direction[0,-23.22,0,23.22] 57%:$direction[0,-12.905,0,12.905] 60%:$direction[0,-7.932,0,7.932] 64%:$direction[0,-4.083,0,4.083] 68%:$direction[0,-1.703,0,1.703] 74%:$direction[0,0.301,0,-0.301] 80%:$direction[0,1.019,0,-1.019] 90%:$direction[0,0.604,0,-0.604] 100%:0}
+  b set rotate_x={50%:$direction[90,0,-90,0] 52%:$direction[40.784,0,-40.784,0] 54%:$direction[23.22,0,-23.22,0] 57%:$direction[12.905,0,-12.905,0] 60%:$direction[7.932,0,-7.932,0] 64%:$direction[4.083,0,-4.083,0] 68%:$direction[1.703,0,-1.703,0] 74%:$direction[-0.301,0,0.301,0] 80%:$direction[-1.019,0,1.019,0] 90%:$direction[-0.604,0,0.604,0] 100%:0}
+  b set scale_x={50%:$direction[1,0.221,1,0.221] 52%:$direction[1,0.327,1,0.327] 54%:$direction[1,0.498,1,0.498] 57%:$direction[1,0.712,1,0.712] 60%:$direction[1,0.854,1,0.854] 64%:$direction[1,0.954,1,0.954] 68%:$direction[1,0.991,1,0.991] 74%:1 80%:$direction[1,0.997,1,0.997] 90%:$direction[1,0.999,1,0.999] 100%:1}
+  b set scale_y={50%:$direction[0.221,1,0.221,1] 52%:$direction[0.327,1,0.327,1] 54%:$direction[0.498,1,0.498,1] 57%:$direction[0.712,1,0.712,1] 60%:$direction[0.854,1,0.854,1] 64%:$direction[0.954,1,0.954,1] 68%:$direction[0.991,1,0.991,1] 74%:1 80%:$direction[0.997,1,0.997,1] 90%:$direction[0.999,1,0.999,1] 100%:1}
+  b set z={50%:0.098 52%:0.098 54%:0.098 57%:0.098 60%:0.098 64%:0.096 68%:0.094 74%:0.085 80%:0.069 90%:0.029 100%:0}
+  b fx color.levels@2 out_white={50%:177.382 52%:200.06 54%:217.07 57%:234.501 60%:244.923 64%:251.886 68%:254.429 74%:254.982 80%:254.794 90%:254.927 100%:255}
+  b fx blur.directional@2 direction=$direction[0,90,0,90] length={50%:0 55%:120*$motion_blur 70%:0}
+  b set opacity={0%:0:hold 50%:1}

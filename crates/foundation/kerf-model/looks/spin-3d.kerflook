@@ -1,0 +1,22 @@
+kerf-look 1
+look look.spin-3d version=1 name="3D Spin" category="Transitions" on=transition
+  doc "Spins the frame around in 3D to the next shot; showy, playful reveals."
+  param direction choice options=from-north|from-east|from-south|from-west default=from-west doc="Which side the turn comes from."
+  # The card turns before an eye as far off as a 16:9 frame's width three and a half times: each key is the turn and
+  # the narrowing that the default camera sees the same as, and the light the turn leaves on it.
+  a set three_d=true
+  a set rotate_y={0%:0 10%:$direction[0,0.159,0,-0.159] 20%:$direction[0,1.276,0,-1.276] 26%:$direction[0,2.838,0,-2.838] 32%:$direction[0,5.508,0,-5.508] 36%:$direction[0,8.343,0,-8.343] 40%:$direction[0,12.913,0,-12.913] 43%:$direction[0,18.941,0,-18.941] 46%:$direction[0,31.354,0,-31.354] 48%:$direction[0,50.336,0,-50.336] 50%:$direction[0,90,0,-90]}
+  a set rotate_x={0%:0 10%:$direction[-0.159,0,0.159,0] 20%:$direction[-1.276,0,1.276,0] 26%:$direction[-2.838,0,2.838,0] 32%:$direction[-5.508,0,5.508,0] 36%:$direction[-8.343,0,8.343,0] 40%:$direction[-12.913,0,12.913,0] 43%:$direction[-18.941,0,18.941,0] 46%:$direction[-31.354,0,31.354,0] 48%:$direction[-50.336,0,50.336,0] 50%:$direction[-90,0,90,0]}
+  a set scale_x={0%:1 10%:1 20%:$direction[1,0.995,1,0.995] 26%:$direction[1,0.977,1,0.977] 32%:$direction[1,0.921,1,0.921] 36%:$direction[1,0.842,1,0.842] 40%:$direction[1,0.712,1,0.712] 43%:$direction[1,0.572,1,0.572] 46%:$direction[1,0.399,1,0.399] 48%:$direction[1,0.282,1,0.282] 50%:$direction[1,0.221,1,0.221]}
+  a set scale_y={0%:1 10%:1 20%:$direction[0.995,1,0.995,1] 26%:$direction[0.977,1,0.977,1] 32%:$direction[0.921,1,0.921,1] 36%:$direction[0.842,1,0.842,1] 40%:$direction[0.712,1,0.712,1] 43%:$direction[0.572,1,0.572,1] 46%:$direction[0.399,1,0.399,1] 48%:$direction[0.282,1,0.282,1] 50%:$direction[0.221,1,0.221,1]}
+  a set z={0%:0 10%:0.093 20%:0.221 26%:0.272 32%:0.3 36%:0.309 40%:0.313 43%:0.314 46%:0.314 48%:0.314 50%:0.314}
+  a fx color.levels@2 out_white={0%:255 10%:254.995 20%:254.678 26%:253.446 32%:249.603 36%:244.073 40%:234.486 43%:223.414 46%:207.792 48%:194.168 50%:177.382}
+  a set opacity={0%:1:hold 50%:0}
+  b set three_d=true
+  b set rotate_y={50%:$direction[0,-90,0,90] 52%:$direction[0,-50.336,0,50.336] 54%:$direction[0,-31.354,0,31.354] 57%:$direction[0,-18.941,0,18.941] 60%:$direction[0,-12.913,0,12.913] 64%:$direction[0,-8.343,0,8.343] 68%:$direction[0,-5.508,0,5.508] 74%:$direction[0,-2.838,0,2.838] 80%:$direction[0,-1.276,0,1.276] 90%:$direction[0,-0.159,0,0.159] 100%:0}
+  b set rotate_x={50%:$direction[90,0,-90,0] 52%:$direction[50.336,0,-50.336,0] 54%:$direction[31.354,0,-31.354,0] 57%:$direction[18.941,0,-18.941,0] 60%:$direction[12.913,0,-12.913,0] 64%:$direction[8.343,0,-8.343,0] 68%:$direction[5.508,0,-5.508,0] 74%:$direction[2.838,0,-2.838,0] 80%:$direction[1.276,0,-1.276,0] 90%:$direction[0.159,0,-0.159,0] 100%:0}
+  b set scale_x={50%:$direction[1,0.221,1,0.221] 52%:$direction[1,0.282,1,0.282] 54%:$direction[1,0.399,1,0.399] 57%:$direction[1,0.572,1,0.572] 60%:$direction[1,0.712,1,0.712] 64%:$direction[1,0.842,1,0.842] 68%:$direction[1,0.921,1,0.921] 74%:$direction[1,0.977,1,0.977] 80%:$direction[1,0.995,1,0.995] 90%:1 100%:1}
+  b set scale_y={50%:$direction[0.221,1,0.221,1] 52%:$direction[0.282,1,0.282,1] 54%:$direction[0.399,1,0.399,1] 57%:$direction[0.572,1,0.572,1] 60%:$direction[0.712,1,0.712,1] 64%:$direction[0.842,1,0.842,1] 68%:$direction[0.921,1,0.921,1] 74%:$direction[0.977,1,0.977,1] 80%:$direction[0.995,1,0.995,1] 90%:1 100%:1}
+  b set z={50%:0.314 52%:0.314 54%:0.314 57%:0.314 60%:0.313 64%:0.309 68%:0.3 74%:0.272 80%:0.221 90%:0.093 100%:0}
+  b fx color.levels@2 out_white={50%:177.382 52%:194.168 54%:207.792 57%:223.414 60%:234.486 64%:244.073 68%:249.603 74%:253.446 80%:254.678 90%:254.995 100%:255}
+  b set opacity={0%:0:hold 50%:1}

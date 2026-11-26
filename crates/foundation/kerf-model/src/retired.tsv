@@ -236,7 +236,7 @@ look.sparkle	the prompt and references of the shot's recipe
 transform.hflip	`scale_x=-1` on the clip
 transform.vflip	`scale_y=-1` on the clip
 block-motion	panel-wipe@1
-fold-motion	flip-motion@2
+fold-motion	look.flip-motion@1
 roll-3d	roll@2
 louver	panel-wipe@1
 mirror	
@@ -268,3 +268,8 @@ generate.audiowaveform	a `gen=sound@1` clip with `kind=waveform`
 distort.cornerpin	the clip in depth on the surface, as `look` with `track` and `corners` puts it
 # And a shadow, which a light casts in depth.
 perspective.dropshadow	the clip in depth, lit by a `gen=light@1` that casts shadows (`shadow=`) on the clips in depth behind it
+# And transitions that turned the whole frame in depth, which looks of the two
+# clips in depth do.
+flip-motion	look.flip-motion@1
+spin-3d	look.spin-3d@1
+spinback-3d	look.spinback-3d@1

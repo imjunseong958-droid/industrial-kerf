@@ -6,9 +6,11 @@
 //! as an effect or a transition of its own ([`Catalog::define_look`]), and
 //! expanded into built-ins before anything draws ([`expand`]), so documents
 //! keep the one line that names it. Expressions are `$param`, numbers,
-//! times (`12f`, `0.5s`), percentages of a transition (`30%`), `+ - * /`,
+//! times (`12f`, `0.5s`), percentages of a transition (`30%`), the number a
+//! choice picks (`$direction[1,-1,0,0]`, one for each option), `+ - * /`,
 //! and parentheses, so a look always expands the same way and is safe to
-//! open from anyone.
+//! open from anyone. Keys land on frames, each holding what the look's curve
+//! is at its frame.
 
 use crate::catalog::{Catalog, Domain, Engine, FxDef, FxKind, ParamDef, ParamType};
 use crate::model::{Clip, Content, Effect, Marker, Mask, MaskMode, MaskShape, Params, Project};
@@ -23,16 +25,29 @@ pub const MAX_EFFECTS: usize = 16;
 /// Most keyframes an animated property expands to.
 pub const MAX_KEYS: usize = 256;
 
-/// The properties a look sets, and whether it adds to the clip's own value
-/// (`false`) or multiplies it.
-const PROPS: &[(&str, bool)] = &[
-    ("x", false),
-    ("y", false),
-    ("rotation", false),
-    ("scale", true),
-    ("scale_x", true),
-    ("scale_y", true),
-    ("opacity", true),
+/// How a look's value for a property goes with the clip's own.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mix {
+    Add,
+    Multiply,
+    /// A switch, which the look's value stands for: a clip a turn puts in depth is in depth.
+    Replace,
+}
+
+/// The properties a look sets, and how it goes with the clip's own value.
+const PROPS: &[(&str, Mix)] = &[
+    ("x", Mix::Add),
+    ("y", Mix::Add),
+    ("rotation", Mix::Add),
+    ("scale", Mix::Multiply),
+    ("scale_x", Mix::Multiply),
+    ("scale_y", Mix::Multiply),
+    ("opacity", Mix::Multiply),
+    ("shutter", Mix::Add),
+    ("three_d", Mix::Replace),
+    ("z", Mix::Add),
+    ("rotate_x", Mix::Add),
+    ("rotate_y", Mix::Add),
 ];
 
 /// What a look applies to.
@@ -144,6 +159,9 @@ pub enum Expr {
     /// A share of a transition, from 0 to 1.
     Percent(f64),
     Param(String),
+    /// The number a choice parameter picks, one for each of its options in order:
+    /// `$direction[1,-1,0,0]`.
+    Pick(String, Vec<f64>),
     Neg(Box<Expr>),
     Op(char, Box<Expr>, Box<Expr>),
 }
@@ -391,6 +409,30 @@ pub fn read(text: &str, source: &str) -> Result<Look, LookError> {
                     ));
                 }
                 let value = val(arg).map_err(|message| fail(n, at(arg), message))?;
+                let switch = PROPS
+                    .iter()
+                    .any(|(p, how)| *p == prop && *how == Mix::Replace);
+                match &value {
+                    Val::Word(word)
+                        if switch
+                            && !word.starts_with('$')
+                            && word != "true"
+                            && word != "false" =>
+                    {
+                        return Err(fail(n, at(arg), format!("`{prop}` is true or false")));
+                    }
+                    Val::Word(word) if !switch && !word.starts_with('$') => {
+                        return Err(fail(
+                            n,
+                            at(arg),
+                            format!("`{prop}` is a number, not `{word}`"),
+                        ));
+                    }
+                    Val::Expr(_) | Val::Keys(_) if switch => {
+                        return Err(fail(n, at(arg), format!("`{prop}` is true or false")));
+                    }
+                    _ => {}
+                }
                 look.lines.push(Line::Set {
                     side,
                     prop,
@@ -896,9 +938,29 @@ pub fn expr(text: &str) -> Result<Expr, String> {
                     if start == self.i {
                         return Err(self.err("`$` names a parameter"));
                     }
-                    Ok(Expr::Param(
-                        String::from_utf8_lossy(&self.s[start..self.i]).into_owned(),
-                    ))
+                    let name = String::from_utf8_lossy(&self.s[start..self.i]).into_owned();
+                    if self.peek() != Some(b'[') {
+                        return Ok(Expr::Param(name));
+                    }
+                    self.i += 1;
+                    let end = self.s[self.i..]
+                        .iter()
+                        .position(|c| *c == b']')
+                        .ok_or_else(|| self.err("missing `]`"))?;
+                    let numbers = std::str::from_utf8(&self.s[self.i..self.i + end])
+                        .ok()
+                        .and_then(|list| {
+                            list.split(',')
+                                .map(|n| n.trim().parse().ok().filter(|n: &f64| n.is_finite()))
+                                .collect::<Option<Vec<f64>>>()
+                        })
+                        .ok_or_else(|| {
+                            self.err(
+                                "a choice picks from numbers, one for each option: `$name[1,-1]`",
+                            )
+                        })?;
+                    self.i += end + 1;
+                    Ok(Expr::Pick(name, numbers))
                 }
                 Some(c) if c.is_ascii_digit() || c == b'.' => {
                     let start = self.i;
@@ -948,6 +1010,7 @@ fn literal(expr: &Expr, kind: Kind, rate: Rate) -> Option<f64> {
         values: BTreeMap::new(),
         keys: BTreeMap::new(),
         times: BTreeSet::new(),
+        options: BTreeMap::new(),
         rate,
         span: None,
     };
@@ -980,18 +1043,28 @@ impl Look {
     /// Check that expressions use declared parameters and give the kind
     /// each place needs.
     fn check_expressions(&self) -> Result<(), LookError> {
-        let kinds: BTreeMap<&str, Option<Kind>> = self
-            .params
-            .iter()
-            .map(|p| {
-                let kind = match p.def.ty {
-                    ParamType::Number => Some(Kind::Number),
-                    ParamType::Time => Some(Kind::Time),
+        let kinds = Kinds {
+            of: self
+                .params
+                .iter()
+                .map(|p| {
+                    let kind = match p.def.ty {
+                        ParamType::Number => Some(Kind::Number),
+                        ParamType::Time => Some(Kind::Time),
+                        _ => None,
+                    };
+                    (p.def.name.as_str(), kind)
+                })
+                .collect(),
+            options: self
+                .params
+                .iter()
+                .filter_map(|p| match &p.def.ty {
+                    ParamType::Enum(options) => Some((p.def.name.as_str(), options.len())),
                     _ => None,
-                };
-                (p.def.name.as_str(), kind)
-            })
-            .collect();
+                })
+                .collect(),
+        };
         let key_kind = if self.on == On::Transition {
             Kind::Percent
         } else {
@@ -1011,7 +1084,7 @@ impl Look {
                     expect(&key.value, &kinds, want).map_err(|m| fail(line, m))
                 }),
                 Val::Word(word) => match word.strip_prefix('$') {
-                    Some(name) if !kinds.contains_key(name) => {
+                    Some(name) if !kinds.of.contains_key(name) => {
                         Err(fail(line, format!("unknown parameter `${name}`")))
                     }
                     _ => Ok(()),
@@ -1152,6 +1225,7 @@ impl Look {
             values: BTreeMap::new(),
             keys: BTreeMap::new(),
             times: BTreeSet::new(),
+            options: BTreeMap::new(),
             rate,
             span: None,
         };
@@ -1286,15 +1360,35 @@ fn degree(e: &Expr, name: &str) -> Option<u32> {
     }
 }
 
+/// A look's parameters, as its expressions read them: the kind of each number or time (`None`
+/// for another), and how many options each choice has.
+struct Kinds<'a> {
+    of: BTreeMap<&'a str, Option<Kind>>,
+    options: BTreeMap<&'a str, usize>,
+}
+
 /// The kind an expression gives, from its parameters' kinds.
-fn kind_of(e: &Expr, kinds: &BTreeMap<&str, Option<Kind>>) -> Result<Kind, String> {
+fn kind_of(e: &Expr, kinds: &Kinds) -> Result<Kind, String> {
     Ok(match e {
         Expr::Number(_) => Kind::Number,
         Expr::Frames(_) | Expr::Seconds(_) => Kind::Time,
         Expr::Percent(_) => Kind::Percent,
-        Expr::Param(name) => match kinds.get(name.as_str()) {
+        Expr::Param(name) => match kinds.of.get(name.as_str()) {
             Some(Some(kind)) => *kind,
             Some(None) => return Err(format!("`${name}` is not a number or a time")),
+            None => return Err(format!("unknown parameter `${name}`")),
+        },
+        Expr::Pick(name, numbers) => match kinds.options.get(name.as_str()) {
+            Some(count) if *count == numbers.len() => Kind::Number,
+            Some(count) => {
+                return Err(format!(
+                    "`${name}` has {count} options, and picks from as many numbers, not {}",
+                    numbers.len()
+                ))
+            }
+            None if kinds.of.contains_key(name.as_str()) => {
+                return Err(format!("`${name}` is not a choice"))
+            }
             None => return Err(format!("unknown parameter `${name}`")),
         },
         Expr::Neg(inner) => kind_of(inner, kinds)?,
@@ -1302,7 +1396,7 @@ fn kind_of(e: &Expr, kinds: &BTreeMap<&str, Option<Kind>>) -> Result<Kind, Strin
     })
 }
 
-fn expect(e: &Expr, kinds: &BTreeMap<&str, Option<Kind>>, want: Kind) -> Result<(), String> {
+fn expect(e: &Expr, kinds: &Kinds, want: Kind) -> Result<(), String> {
     let got = kind_of(e, kinds)?;
     if got == want {
         Ok(())
@@ -1345,7 +1439,11 @@ fn combine(op: char, a: Kind, b: Kind) -> Result<Kind, String> {
 /// `$hit*$length` has no one slope in either.
 fn slope(e: &Expr, name: &str) -> Option<f64> {
     Some(match e {
-        Expr::Number(_) | Expr::Frames(_) | Expr::Seconds(_) | Expr::Percent(_) => 0.0,
+        Expr::Number(_)
+        | Expr::Frames(_)
+        | Expr::Seconds(_)
+        | Expr::Percent(_)
+        | Expr::Pick(..) => 0.0,
         Expr::Param(param) => f64::from(u8::from(param == name)),
         Expr::Neg(inner) => -slope(inner, name)?,
         Expr::Op(op, a, b) => {
@@ -1380,7 +1478,7 @@ fn plain_number(e: &Expr) -> Option<f64> {
 /// Whether `e` reads parameter `name`.
 fn mentions(e: &Expr, name: &str) -> bool {
     match e {
-        Expr::Param(param) => param == name,
+        Expr::Param(param) | Expr::Pick(param, _) => param == name,
         Expr::Neg(inner) => mentions(inner, name),
         Expr::Op(_, a, b) => mentions(a, name) || mentions(b, name),
         _ => false,
@@ -1400,6 +1498,8 @@ struct Env {
     rate: Rate,
     /// A transition's span, which percentages are shares of.
     span: Option<(f64, f64)>,
+    /// The options of each choice parameter, which `$name[…]` picks among.
+    options: BTreeMap<String, Vec<String>>,
 }
 
 impl Env {
@@ -1415,6 +1515,20 @@ impl Env {
                 Some(_) => return Err(format!("`${name}` is not a number")),
                 None => return Err(format!("unknown parameter `${name}`")),
             },
+            Expr::Pick(name, numbers) => {
+                let Some(Value::Enum(choice)) = self.values.get(name) else {
+                    return Err(format!("`${name}` is not a choice"));
+                };
+                let index = self
+                    .options
+                    .get(name)
+                    .and_then(|options| options.iter().position(|o| o == choice))
+                    .ok_or_else(|| format!("`${name}` has no option `{choice}`"))?;
+                let n = numbers.get(index).ok_or_else(|| {
+                    format!("`${name}` picks from fewer numbers than it has options")
+                })?;
+                (*n, Kind::Number)
+            }
             Expr::Neg(inner) => {
                 let (v, k) = self.eval(inner)?;
                 (-v, k)
@@ -1445,8 +1559,9 @@ impl Env {
         })
     }
 
-    /// A keyframe's time, as clip time: a time, or a share of the span.
-    fn at(&self, e: &Expr, clip_start: f64) -> Result<Time, String> {
+    /// A keyframe's time, as clip time: a time, or a share of the span, on the frame nearest where
+    /// it falls; and the clip time it falls at.
+    fn at(&self, e: &Expr, clip_start: f64) -> Result<(Time, f64), String> {
         let (v, kind) = self.eval(e)?;
         let seconds = match (kind, self.span) {
             (Kind::Percent, Some((start, end))) => start + v * (end - start) - clip_start,
@@ -1455,6 +1570,7 @@ impl Env {
         };
         Time::from_seconds(seconds)
             .map(|t| self.rate.round(t))
+            .map(|at| (at, seconds))
             .ok_or_else(|| "a keyframe's time is out of range".into())
     }
 
@@ -1482,21 +1598,37 @@ impl Env {
                     .map(Param::Animated)
             }
             Val::Keys(keys) => {
+                // Where each key falls, to the instant, with its value and how it goes on.
+                let mut exact: Vec<(f64, f64, Interp)> = Vec::new();
                 let mut out: Vec<Keyframe> = Vec::new();
                 for key in keys {
-                    let keyframe = Keyframe {
-                        at: self.at(&key.at, clip_start)?,
-                        value: Value::Number(self.number(&key.value)?),
-                        interp: key.interp,
-                    };
-                    match out.last_mut() {
-                        // Two keys a look puts on one frame: the later wins.
-                        Some(last) if last.at == keyframe.at => *last = keyframe,
-                        Some(last) if last.at > keyframe.at => {
-                            return Err(format!("`{}` keyframes go back in time", def.name))
-                        }
-                        _ => out.push(keyframe),
+                    let (at, seconds) = self.at(&key.at, clip_start)?;
+                    let value = self.number(&key.value)?;
+                    if exact.last().is_some_and(|(last, ..)| *last > seconds) {
+                        return Err(format!("`{}` keyframes go back in time", def.name));
                     }
+                    exact.push((seconds, value, key.interp));
+                    match out.last_mut() {
+                        // Keys that fall on one frame are one key there, going on as the last does.
+                        Some(last) if last.at == at => last.interp = key.interp,
+                        _ => out.push(Keyframe {
+                            at,
+                            value: Value::Number(value),
+                            interp: key.interp,
+                        }),
+                    }
+                }
+                // Keys land on frames, which hold what the look's curve is there and not where the
+                // key fell between them: the frames drawn are the look's own. The first and the
+                // last hold their own values, which the frames before and after them keep.
+                let last = out.len() - 1;
+                for (index, key) in out.iter_mut().enumerate() {
+                    let value = match index {
+                        _ if index == last => exact[exact.len() - 1].1,
+                        0 => exact[0].1,
+                        _ => along(&exact, key.at.seconds()),
+                    };
+                    key.value = Value::Number(value);
                 }
                 if out.len() > MAX_KEYS {
                     return Err(format!(
@@ -1539,6 +1671,18 @@ impl Env {
     }
 }
 
+/// The value keys at clip times `exact` give at `t`: each going to the next as it says.
+fn along(exact: &[(f64, f64, Interp)], t: f64) -> f64 {
+    let after = exact.partition_point(|(at, ..)| *at <= t);
+    let Some(&(from, value, interp)) = after.checked_sub(1).and_then(|i| exact.get(i)) else {
+        return exact.first().map_or(0.0, |(_, value, _)| *value);
+    };
+    match exact.get(after) {
+        Some(&(to, next, _)) => value + (next - value) * interp.curve((t - from) / (to - from)),
+        None => value,
+    }
+}
+
 /// Where a clip look's times count from: the clip's start, in sequence
 /// seconds, and the sequence's markers, which a time may name.
 type Anchor<'a> = (f64, &'a [Marker]);
@@ -1560,6 +1704,7 @@ fn env(
         values: BTreeMap::new(),
         keys: BTreeMap::new(),
         times: BTreeSet::new(),
+        options: BTreeMap::new(),
         rate,
         span: None,
     };
@@ -1605,10 +1750,19 @@ fn env(
         .filter(|p| p.def.ty == ParamType::Time)
         .map(|p| p.def.name.clone())
         .collect();
+    let options = look
+        .params
+        .iter()
+        .filter_map(|p| match &p.def.ty {
+            ParamType::Enum(options) => Some((p.def.name.clone(), options.clone())),
+            _ => None,
+        })
+        .collect();
     Ok(Env {
         values,
         keys: animated,
         times,
+        options,
         rate,
         span,
     })
@@ -1738,7 +1892,15 @@ fn parts(
 /// masks after the clip's, and its effects at `at` in the stack.
 fn apply(clip: &mut Clip, parts: Parts, at: usize, catalog: &Catalog) -> Result<(), String> {
     for (prop, look) in parts.props {
-        let multiply = PROPS.iter().any(|(name, m)| *name == prop && *m);
+        let how = PROPS
+            .iter()
+            .find(|(name, _)| *name == prop)
+            .map_or(Mix::Add, |(_, how)| *how);
+        if how == Mix::Replace {
+            clip.props.insert(prop, look);
+            continue;
+        }
+        let multiply = how == Mix::Multiply;
         let own = clip.props.get(&prop).cloned().unwrap_or_else(|| {
             Param::Static(
                 catalog
@@ -2229,5 +2391,215 @@ mod tests {
         }
         let (least, after) = incoming(1, 1.0, crate::Align::Center, 10);
         assert_eq!((least, after), (0.7, 1.0));
+    }
+
+    /// The looks that turn the frame in depth put both clips in depth, turn them about the axis
+    /// their direction names, and hand over where the turn is edge on: on the cut's own frame,
+    /// however the turn's keys fall between frames, the outgoing clip is gone and the incoming one
+    /// edge on, so neither shows.
+    #[test]
+    fn a_turn_in_depth_hands_over_edge_on_at_the_cut() {
+        let rate = Rate::FPS_24;
+        let solid = |id: &str, at: i64| {
+            let solid = Content::Generator {
+                fx: Id::new("solid").unwrap(),
+                version: 1,
+                params: Params::new(),
+            };
+            Clip::new(
+                Id::new(id).unwrap(),
+                solid,
+                rate.time_of(at),
+                rate.time_of(48),
+            )
+        };
+        for look in ["look.flip-motion", "look.spin-3d", "look.spinback-3d"] {
+            for direction in ["from-north", "from-east", "from-south", "from-west"] {
+                for frames in [4, 10, 12, 30] {
+                    let mut track =
+                        crate::Track::new(Id::new("V1").unwrap(), crate::TrackKind::Video);
+                    track.clips = vec![solid("c1", 0), solid("c2", 48)];
+                    track.transitions.push(crate::Transition {
+                        id: Id::new("t1").unwrap(),
+                        from: Id::new("c1").unwrap(),
+                        to: Id::new("c2").unwrap(),
+                        fx: Id::new(look).unwrap(),
+                        version: 1,
+                        duration: rate.time_of(frames),
+                        align: crate::Align::Center,
+                        params: [(
+                            "direction".into(),
+                            Param::Static(Value::Enum(direction.into())),
+                        )]
+                        .into(),
+                    });
+                    let mut project = Project::new("p");
+                    project.sequences.push(crate::Sequence {
+                        buses: Vec::new(),
+                        id: Id::new("s1").unwrap(),
+                        name: "s1".into(),
+                        rate,
+                        drop_frame: false,
+                        width: 320,
+                        height: 180,
+                        sample_rate: 48_000,
+                        color: Default::default(),
+                        start: Time::ZERO,
+                        tracks: vec![track],
+                        markers: Vec::new(),
+                    });
+                    let expanded = expand(&project, Catalog::bundled()).unwrap();
+                    let clips = &expanded.sequences[0].tracks[0].clips;
+                    let cut = rate.time_of(48);
+                    let at = |clip: &Clip, prop: &str, time: Time| {
+                        clip.props
+                            .get(prop)
+                            .map_or(0.0, |p| p.value_at(time - clip.start).as_number().unwrap())
+                    };
+                    let case = format!("{look} {direction} {frames}f");
+                    for clip in clips {
+                        assert_eq!(
+                            clip.props.get("three_d"),
+                            Some(&Param::Static(Value::Bool(true))),
+                            "{case}"
+                        );
+                    }
+                    // Flip and spin turn about the axis across the way the next shot comes from;
+                    // spinback about the other.
+                    let across = matches!(direction, "from-east" | "from-west");
+                    let (turns, still) = if across == (look == "look.spinback-3d") {
+                        ("rotate_x", "rotate_y")
+                    } else {
+                        ("rotate_y", "rotate_x")
+                    };
+                    let (a, b) = (&clips[0], &clips[1]);
+                    let early = cut - rate.time_of(1);
+                    assert!(at(a, turns, early).abs() > 1.0, "{case}");
+                    assert_eq!(at(a, still, early), 0.0, "{case}");
+                    assert_eq!(at(a, "opacity", cut), 0.0, "{case}");
+                    assert_eq!(at(b, turns, cut).abs(), 90.0, "{case}");
+                    assert_eq!(at(b, still, cut), 0.0, "{case}");
+                }
+            }
+        }
+    }
+
+    /// A transition look changes the clips only across the transition: before it, the outgoing
+    /// clip has every number the look sets as the clip's own; after it, the incoming one does, for
+    /// every option of every choice.
+    #[test]
+    fn a_transition_look_leaves_the_clips_as_they_were_outside_it() {
+        let catalog = Catalog::bundled();
+        let rate = Rate::FPS_24;
+        let solid = |id: &str, at: i64| {
+            let solid = Content::Generator {
+                fx: Id::new("solid").unwrap(),
+                version: 1,
+                params: Params::new(),
+            };
+            Clip::new(
+                Id::new(id).unwrap(),
+                solid,
+                rate.time_of(at),
+                rate.time_of(48),
+            )
+        };
+        for look in catalog.looks().filter(|look| look.on == On::Transition) {
+            let mut choices = vec![Params::new()];
+            for param in &look.params {
+                if let ParamType::Enum(options) = &param.def.ty {
+                    choices = options
+                        .iter()
+                        .map(|option| {
+                            [(
+                                param.def.name.clone(),
+                                Param::Static(Value::Enum(option.clone())),
+                            )]
+                            .into()
+                        })
+                        .collect();
+                }
+            }
+            for params in choices {
+                let transition = crate::Transition {
+                    id: Id::new("t1").unwrap(),
+                    from: Id::new("c1").unwrap(),
+                    to: Id::new("c2").unwrap(),
+                    fx: look.id.clone(),
+                    version: look.version,
+                    duration: rate.time_of(12),
+                    align: crate::Align::Center,
+                    params: params.clone(),
+                };
+                let (before, after) = transition.split_at_cut(rate);
+                let mut track = crate::Track::new(Id::new("V1").unwrap(), crate::TrackKind::Video);
+                track.clips = vec![solid("c1", 0), solid("c2", 48)];
+                track.transitions.push(transition);
+                let mut project = Project::new("p");
+                project.sequences.push(crate::Sequence {
+                    buses: Vec::new(),
+                    id: Id::new("s1").unwrap(),
+                    name: "s1".into(),
+                    rate,
+                    drop_frame: false,
+                    width: 320,
+                    height: 180,
+                    sample_rate: 48_000,
+                    color: Default::default(),
+                    start: Time::ZERO,
+                    tracks: vec![track],
+                    markers: Vec::new(),
+                });
+                let expanded = expand(&project, catalog).unwrap();
+                let clips = &expanded.sequences[0].tracks[0].clips;
+                let cut = rate.time_of(48);
+                let one = rate.time_of(1);
+                for (clip, time) in [
+                    (&clips[0], cut - before - one),
+                    (&clips[1], cut + after + one),
+                ] {
+                    for (prop, param) in &clip.props {
+                        let own = catalog.prop(Domain::Video, prop).unwrap().default.clone();
+                        if let Value::Number(own) = own {
+                            let value = param.value_at(time - clip.start).as_number().unwrap();
+                            assert!(
+                                (value - own).abs() < 1e-9,
+                                "{} {params:?} `{}` {prop}: {value}",
+                                look.id,
+                                clip.id
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A look's switch stands for the clip's, its choice picks one number for each option, and
+    /// what cannot be either is refused where it is written.
+    #[test]
+    fn a_look_writes_a_switch_as_a_word_and_picks_a_number_for_each_option() {
+        let look = |lines: &str| {
+            read(
+                &format!(
+                    "kerf-look 1\nlook look.t version=1 on=transition\n  doc \"Turns.\"\n  param way choice options=left|right\n  param size number default=1\n{lines}\n"
+                ),
+                "t",
+            )
+        };
+        assert!(look("  a set three_d=true\n  a set rotate_y={0%:0 100%:$way[90,-90]}").is_ok());
+        for (line, error) in [
+            ("  a set three_d=1", "`three_d` is true or false"),
+            ("  a set x=true", "`x` is a number, not `true`"),
+            (
+                "  a set rotate_y=$way[90]",
+                "`$way` has 2 options, and picks from as many numbers, not 1",
+            ),
+            ("  a set rotate_y=$size[1,2]", "`$size` is not a choice"),
+            ("  a set rotate_y=$side[1,2]", "unknown parameter `$side`"),
+        ] {
+            let message = look(line).map(|_| ()).unwrap_err().message;
+            assert_eq!(message, error, "{line}");
+        }
     }
 }

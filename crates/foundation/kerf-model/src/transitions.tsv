@@ -1,10 +1,6 @@
 # Transitions Kerf draws with its own renderer, carried from FilmCraft's
 # (crates/render/src/transitions), which kerf-fx runs. The same layout as
 # raster_effects.tsv; this table is written by hand.
-transition	flip-motion	Animation	Flip Motion	Flips the outgoing shot over like a card to show the next; reveals and before/after.	2	1
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	perspective	50	0..100	%	Perspective
-	number	motion_blur	50	0..100	%	Motion Blur
 transition	pop-motion	Animation	Pop Motion	Pops the incoming shot in with a springy overshoot; fun, punchy reveals.	2	1
 	number	overshoot	20	0..100	%	Overshoot
 	number	motion_blur	50	0..100	%	Motion Blur
@@ -151,12 +147,6 @@ transition	stretch	Slide	Stretch	Stretches the outgoing shot away and the next i
 transition	whip	Slide	Whip	A fast whip pan blur from one shot into the next; energetic, kinetic cuts and travel edits.
 	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
 	number	blur	80	0..100	%	Blur
-transition	spin-3d	Transformers	3D Spin	Spins the frame around in 3D to the next shot; showy, playful reveals.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	perspective	50	0..100	%	Perspective
-transition	spinback-3d	Transformers	3D Spinback	Spins the frame back into depth and the next forward; dramatic, techy changes.
-	enum	direction	from-west	from-north|from-east|from-south|from-west		Direction
-	number	depth	60	0..100	%	Depth
 transition	frame	Transformers	Frame	Shrinks the shot into a framed card and grows the next; photo albums and recaps.
 	number	frame_width	24	0..200	px	Frame Width
 	color	frame_color	#ffffff			Frame Color

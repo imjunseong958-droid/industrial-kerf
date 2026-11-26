@@ -773,6 +773,18 @@ const BUNDLED_LOOKS: &[(&str, &str)] = &[
         "zoom-through@2.kerflook",
         include_str!("../looks/zoom-through@2.kerflook"),
     ),
+    (
+        "flip-motion.kerflook",
+        include_str!("../looks/flip-motion.kerflook"),
+    ),
+    (
+        "spin-3d.kerflook",
+        include_str!("../looks/spin-3d.kerflook"),
+    ),
+    (
+        "spinback-3d.kerflook",
+        include_str!("../looks/spinback-3d.kerflook"),
+    ),
 ];
 
 fn mask_props() -> Vec<ParamDef> {

@@ -1,0 +1,23 @@
+kerf-look 1
+look look.spinback-3d version=1 name="3D Spinback" category="Transitions" on=transition
+  doc "Spins the frame back into depth and the next forward; dramatic, techy changes."
+  param direction choice options=from-north|from-east|from-south|from-west default=from-west doc="Which side the turn comes from."
+  param depth number default=0.6 range=0..1 doc="How far back it goes."
+  # The card turns before an eye as far off as a 16:9 frame's width three times: each key is the turn and
+  # the narrowing that the default camera sees the same as, and the light the turn leaves on it.
+  a set three_d=true
+  a set rotate_y={0%:0 10%:$direction[0.185,0,-0.185,0] 20%:$direction[1.488,0,-1.488,0] 26%:$direction[3.31,0,-3.31,0] 32%:$direction[6.418,0,-6.418,0] 36%:$direction[9.708,0,-9.708,0] 40%:$direction[14.975,0,-14.975,0] 43%:$direction[21.82,0,-21.82,0] 46%:$direction[35.407,0,-35.407,0] 48%:$direction[54.598,0,-54.598,0] 50%:$direction[90,0,-90,0]}
+  a set rotate_x={0%:0 10%:$direction[0,-0.185,0,0.185] 20%:$direction[0,-1.488,0,1.488] 26%:$direction[0,-3.31,0,3.31] 32%:$direction[0,-6.418,0,6.418] 36%:$direction[0,-9.708,0,9.708] 40%:$direction[0,-14.975,0,14.975] 43%:$direction[0,-21.82,0,21.82] 46%:$direction[0,-35.407,0,35.407] 48%:$direction[0,-54.598,0,54.598] 50%:$direction[0,-90,0,90]}
+  a set scale_x={0%:1 10%:1 20%:$direction[0.995,1,0.995,1] 26%:$direction[0.977,1,0.977,1] 32%:$direction[0.922,1,0.922,1] 36%:$direction[0.845,1,0.845,1] 40%:$direction[0.718,1,0.718,1] 43%:$direction[0.583,1,0.583,1] 46%:$direction[0.418,1,0.418,1] 48%:$direction[0.311,1,0.311,1] 50%:$direction[0.258,1,0.258,1]}
+  a set scale_y={0%:1 10%:1 20%:$direction[1,0.995,1,0.995] 26%:$direction[1,0.977,1,0.977] 32%:$direction[1,0.922,1,0.922] 36%:$direction[1,0.845,1,0.845] 40%:$direction[1,0.718,1,0.718] 43%:$direction[1,0.583,1,0.583] 46%:$direction[1,0.418,1,0.418] 48%:$direction[1,0.311,1,0.311] 50%:$direction[1,0.258,1,0.258]}
+  a set z={0%:0 10%:0.203*$depth 20%:0.484*$depth 26%:0.594*$depth 32%:0.655*$depth 36%:0.675*$depth 40%:0.684*$depth 43%:0.686*$depth 46%:0.687*$depth 48%:0.687*$depth 50%:0.687*$depth}
+  a fx color.levels@2 out_white={0%:255 10%:254.995 20%:254.678 26%:253.446 32%:249.603 36%:244.073 40%:234.486 43%:223.414 46%:207.792 48%:194.168 50%:177.382}
+  a set opacity={0%:1:hold 50%:0}
+  b set three_d=true
+  b set rotate_y={50%:$direction[-90,0,90,0] 52%:$direction[-54.598,0,54.598,0] 54%:$direction[-35.407,0,35.407,0] 57%:$direction[-21.82,0,21.82,0] 60%:$direction[-14.975,0,14.975,0] 64%:$direction[-9.708,0,9.708,0] 68%:$direction[-6.418,0,6.418,0] 74%:$direction[-3.31,0,3.31,0] 80%:$direction[-1.488,0,1.488,0] 90%:$direction[-0.185,0,0.185,0] 100%:0}
+  b set rotate_x={50%:$direction[0,90,0,-90] 52%:$direction[0,54.598,0,-54.598] 54%:$direction[0,35.407,0,-35.407] 57%:$direction[0,21.82,0,-21.82] 60%:$direction[0,14.975,0,-14.975] 64%:$direction[0,9.708,0,-9.708] 68%:$direction[0,6.418,0,-6.418] 74%:$direction[0,3.31,0,-3.31] 80%:$direction[0,1.488,0,-1.488] 90%:$direction[0,0.185,0,-0.185] 100%:0}
+  b set scale_x={50%:$direction[0.258,1,0.258,1] 52%:$direction[0.311,1,0.311,1] 54%:$direction[0.418,1,0.418,1] 57%:$direction[0.583,1,0.583,1] 60%:$direction[0.718,1,0.718,1] 64%:$direction[0.845,1,0.845,1] 68%:$direction[0.922,1,0.922,1] 74%:$direction[0.977,1,0.977,1] 80%:$direction[0.995,1,0.995,1] 90%:1 100%:1}
+  b set scale_y={50%:$direction[1,0.258,1,0.258] 52%:$direction[1,0.311,1,0.311] 54%:$direction[1,0.418,1,0.418] 57%:$direction[1,0.583,1,0.583] 60%:$direction[1,0.718,1,0.718] 64%:$direction[1,0.845,1,0.845] 68%:$direction[1,0.922,1,0.922] 74%:$direction[1,0.977,1,0.977] 80%:$direction[1,0.995,1,0.995] 90%:1 100%:1}
+  b set z={50%:0.687*$depth 52%:0.687*$depth 54%:0.687*$depth 57%:0.686*$depth 60%:0.684*$depth 64%:0.675*$depth 68%:0.655*$depth 74%:0.594*$depth 80%:0.484*$depth 90%:0.203*$depth 100%:0}
+  b fx color.levels@2 out_white={50%:177.382 52%:194.168 54%:207.792 57%:223.414 60%:234.486 64%:244.073 68%:249.603 74%:253.446 80%:254.678 90%:254.995 100%:255}
+  b set opacity={0%:0:hold 50%:1}
