@@ -3,10 +3,7 @@
 //! OpenTimelineIO, the same files through the bridge.
 
 use kerf_interchange::otio::{self, Item, Timeline, WireKind};
-use kerf_interchange::{
-    export, import_otio, otio_json, render, Format, InterchangeConfig, OpenTimelineIoAdapter,
-    NATIVE_OTIO,
-};
+use kerf_interchange::{export, import_otio, otio_json, render, Format, NATIVE_OTIO};
 use kerf_lang::{parse_document, print_document, PrintOptions};
 use kerf_model::{Catalog, Project};
 use serde_json::Value;
@@ -116,41 +113,6 @@ fn a_project_written_and_read_back_is_the_same_project() {
         .map(|i| i.code.as_str())
         .collect();
     assert_eq!(warnings, ["media_assumed"]);
-}
-
-#[test]
-fn the_adapter_writes_and_reads_otio_files_without_python() {
-    // No such program: an `.otio` file never asks for it.
-    let adapter = OpenTimelineIoAdapter::new(InterchangeConfig {
-        python_executable: PathBuf::from("no-such-python-for-kerf"),
-        ..InterchangeConfig::default()
-    })
-    .unwrap();
-    let original = project(CARRIED);
-    let folder = tempfile::tempdir().unwrap();
-    for (name, format) in [
-        ("a.otio", None),
-        ("b.json", Some("otio")),
-        ("c", Some("json")),
-    ] {
-        let path = folder.path().join(name);
-        let written = adapter.export(&original, &path, format).unwrap();
-        assert_eq!(written.adapter, NATIVE_OTIO);
-        let read = adapter.import(&path, format.or(Some("otio_json"))).unwrap();
-        assert_eq!(read.project, original, "{name}");
-    }
-    // By its extension alone.
-    let read = adapter.import(&folder.path().join("a.otio"), None).unwrap();
-    assert_eq!(read.project, original);
-    // Any other adapter is the bridge's, which this Python cannot run.
-    let error = adapter
-        .export(&original, &folder.path().join("d.otioz"), None)
-        .unwrap_err();
-    assert_eq!(error.code.as_str(), "INTERCHANGE_PROCESS_FAILED");
-    let error = adapter
-        .import(&folder.path().join("a.otio"), Some("cmx_3600"))
-        .unwrap_err();
-    assert_eq!(error.code.as_str(), "INTERCHANGE_PROCESS_FAILED");
 }
 
 #[test]
@@ -519,7 +481,7 @@ fn bridge_python() -> Option<PathBuf> {
 }
 
 fn bridge(python: &Path, args: &[&str], stdin: Option<&str>) -> Value {
-    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("python/otio_bridge.py");
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/interchange/otio_bridge.py");
     let mut child = Command::new(python)
         .arg(script)
         .args(args)

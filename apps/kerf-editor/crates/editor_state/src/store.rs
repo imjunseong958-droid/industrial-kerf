@@ -10,6 +10,7 @@ use crate::model::{
 use kerf_bridge::event::{
     self, AgentUpdate, ConnectionStatus, Event, Export, ExportStatus, PresetInspection, ToolState,
 };
+use kerf_bridge::CommandName;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, Instant};
@@ -516,13 +517,26 @@ pub enum StatusLine {
 /// Commands whose refusals the view that sent them shows in place: a
 /// making's plan, a shot's graph, the Index page, the Cast dialog, a
 /// media's description.
-fn answered_in_place(command: &str) -> bool {
+fn answered_in_place(command: Option<&CommandName>) -> bool {
     matches!(
         command,
-        "media_make" | "media_carry" | "takes_read" | "media_index" | "media_info" | "cast"
-    ) || command.starts_with("recipe")
-        || command.starts_with("shot_")
-        || command.starts_with("workflow")
+        Some(
+            CommandName::MediaMake
+                | CommandName::MediaCarry
+                | CommandName::TakesRead
+                | CommandName::MediaIndex
+                | CommandName::MediaInfo
+                | CommandName::Cast
+                | CommandName::Recipe
+                | CommandName::RecipeGet
+                | CommandName::RecipeEdit
+                | CommandName::ShotPicture
+                | CommandName::ShotFollow
+                | CommandName::Workflow
+                | CommandName::WorkflowGet
+                | CommandName::WorkflowEdit
+        )
+    )
 }
 
 /// The first line of a request as a title says it: no list mark, no bold
@@ -633,15 +647,15 @@ impl EditorState {
                 Change::Connection
             }
             Event::Error(error) => {
-                let command = error.command.as_deref().unwrap_or_default();
+                let command = error.command.as_ref();
                 // A making that failed is over: its stripes and its Stop go.
-                if command == "media_make"
+                if command == Some(&CommandName::MediaMake)
                     && let Some(media) = &error.media
                 {
                     self.makings.remove(media);
                 }
                 // The Index page says why its media could not be indexed.
-                if command == "media_index" {
+                if command == Some(&CommandName::MediaIndex) {
                     let media = error.media.clone().unwrap_or_default();
                     self.index_asked.remove(&media);
                     self.media_index_errors.insert(media, error.message.clone());
@@ -1275,11 +1289,11 @@ impl EditorState {
     /// What Play / Pause sends now: `pause` whenever something plays (kerfd
     /// plays on through a render started meanwhile), else `play` while Play
     /// can run ([`EditorState::playable`]); None while it cannot.
-    pub fn playback_toggle(&self) -> Option<&'static str> {
+    pub fn playback_toggle(&self) -> Option<CommandName> {
         if self.playing {
-            Some("pause")
+            Some(CommandName::Pause)
         } else {
-            self.playable().then_some("play")
+            self.playable().then_some(CommandName::Play)
         }
     }
 

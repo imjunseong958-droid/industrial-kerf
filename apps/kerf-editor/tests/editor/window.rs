@@ -4,7 +4,7 @@ use crate::support::{bounds, rect, window};
 use gpui::{point, px, size, Action, Bounds, MenuItem, WindowBounds};
 use jiff::tz::TimeZone;
 use kerf_bridge::event::CollabStatus;
-use kerf_bridge::{CrashReport, CrashReports};
+use kerf_bridge::{CommandName, CrashReport, CrashReports};
 use kerf_editor::app::{
     crash_notice_text, parse_window_size, path_with_tool_folders, titlebar, window_buttons_at,
     window_place, x11_rgba, X11Pixels,
@@ -1855,16 +1855,22 @@ fn the_error_bar_reads_as_a_person_does() {
 #[test]
 fn what_a_view_answers_in_place_stays_out_of_the_error_bar() {
     for command in [
-        "media_make",
-        "takes_read",
-        "recipe_save",
-        "shot_read",
-        "workflow_run",
+        CommandName::MediaMake,
+        CommandName::TakesRead,
+        CommandName::RecipeEdit,
+        CommandName::ShotPicture,
+        CommandName::WorkflowGet,
     ] {
-        assert!(!kept_in_bar(command), "{command}");
+        assert!(!kept_in_bar(Some(&command)), "{command}");
     }
-    for command in ["", "agent", "edit", "forward", "conversation"] {
-        assert!(kept_in_bar(command), "{command}");
+    assert!(kept_in_bar(None));
+    for command in [
+        CommandName::Agent,
+        CommandName::Edit,
+        CommandName::Forward,
+        CommandName::Conversation,
+    ] {
+        assert!(kept_in_bar(Some(&command)), "{command}");
     }
 }
 

@@ -29,7 +29,7 @@ use gpui::{
     FocusHandle, Focusable, KeyBinding, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
     RenderImage, SharedString, Subscription, Task, Window,
 };
-use kerf_bridge::Event;
+use kerf_bridge::{CommandName, Event};
 use serde_json::{json, Value};
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
@@ -615,7 +615,7 @@ impl FocusRegion {
             |this, _, event: &BridgeEvent, window, cx| {
                 let indexed = match &*event.0 {
                     Event::MediaIndex(_) => true,
-                    Event::Error(error) => error.command.as_deref() == Some("media_index"),
+                    Event::Error(error) => error.command == Some(CommandName::MediaIndex),
                     _ => false,
                 };
                 if this.stage == Stage::Checking && indexed {

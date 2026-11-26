@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""OpenTimelineIO bridge for the native interchange adapter.
+"""OpenTimelineIO itself, for the interchange tests to check Kerf's ``.otio`` files against.
 
-This file intentionally has no installation or download behavior.  The
-selected Python executable must already have ``opentimelineio`` and any
-optional adapter plugin installed.  The Rust side speaks a small JSON protocol
-over stdin/stdout so its tests can replace the process entirely.
+Kerf never runs this: ``src/otio_json.rs`` writes and reads an ``.otio``
+file in Rust. The tests in ``otio.rs`` beside this file run it, with a Python
+that already has ``opentimelineio`` (``KERF_OTIO_PYTHON``, else ``python3``),
+to have OpenTimelineIO read a file written in Rust and write one Rust then
+reads, and hold both to the same timeline. It installs and downloads nothing.
+It speaks a small JSON protocol over stdin/stdout: ``import`` prints the
+timeline a file holds, ``export`` writes the timeline given on stdin as a file.
 
-Both directions exchange the timeline form defined in ``otio.rs``: one
+Both directions exchange the timeline form defined in ``src/otio.rs``: one
 sequence of a Kerf project with positions in frames of the timeline rate and
 media times in frames of the media rate, timecode included. Kerf ids travel in
 ``metadata["kerf"]["id"]`` so a round trip keeps them, and the sequence's own
 name and frame size in the timeline's ``metadata["kerf"]``.
 
-An ``.otio`` file does not come here: ``otio_json.rs`` writes and reads it in
-Rust. The two hold the same things, so a file means the same whichever wrote
-or read it; a change to one is a change to the other.
+``src/otio_json.rs`` and this file hold the same things, so a file means the
+same whichever wrote or read it; a change to one is a change to the other.
 """
 
 from __future__ import annotations

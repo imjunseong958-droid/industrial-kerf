@@ -14,7 +14,7 @@ use gpui::{
     MouseDownEvent, Pixels, Point, SharedString, Subscription, Window,
 };
 use kerf_bridge::event::{Recipe as RecipeEvent, TakeRead};
-use kerf_bridge::{Command, Event, RecipeEdit};
+use kerf_bridge::{Command, CommandName, Event, RecipeEdit};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -272,10 +272,9 @@ impl ShotGraph {
                 }
             }
             Event::Error(error) => {
-                let command = error.command.as_deref().unwrap_or_default();
                 let message = error.message.clone();
-                match command {
-                    "workflow" if ours => {
+                match &error.command {
+                    Some(CommandName::Workflow) if ours => {
                         self.said = Some(message);
                         // Asked for and refused: the shot's graph stays, and its
                         // model's Open workflow asks again.
@@ -283,7 +282,7 @@ impl ShotGraph {
                             self.workflow_line = 0;
                         }
                     }
-                    "recipe" if ours => {
+                    Some(CommandName::Recipe) if ours => {
                         if self.recipe.is_some() {
                             self.said = Some(message);
                         } else {
@@ -291,11 +290,11 @@ impl ShotGraph {
                             self.uncarried = super::plan::wants_carrying(error);
                         }
                     }
-                    "takes_read" if ours => self.reading = Holding::Failed(message),
-                    _ if command.starts_with("shot_") => {
+                    Some(CommandName::TakesRead) if ours => self.reading = Holding::Failed(message),
+                    Some(CommandName::ShotPicture | CommandName::ShotFollow) => {
                         self.followed(error.clip.as_deref(), error.of, message, true)
                     }
-                    "media_make" if ours => self.request(cx),
+                    Some(CommandName::MediaMake) if ours => self.request(cx),
                     _ => return,
                 }
             }

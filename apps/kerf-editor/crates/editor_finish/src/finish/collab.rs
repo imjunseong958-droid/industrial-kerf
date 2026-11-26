@@ -26,7 +26,7 @@ use gpui::{
     EventEmitter, FocusHandle, Subscription, Window,
 };
 use kerf_bridge::event::{CollabStatus, CollabSync};
-use kerf_bridge::{Command, Event};
+use kerf_bridge::{Command, CommandName, Event};
 use question::{Prompt, BODY_MOST};
 use said::summary;
 use std::time::Instant;
@@ -101,7 +101,7 @@ pub struct Collab {
     /// When the work under way began, for the spinner.
     busy_since: Instant,
     /// The command a person asked for (its bridge type), so its end is said.
-    asked: Option<String>,
+    asked: Option<CommandName>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -283,8 +283,8 @@ impl Collab {
                     }
                     // A sync is said by what it brought and sent; what else
                     // a person asked for (a commit, a branch) as it went.
-                    let said = match self.asked.take().as_deref() {
-                        Some("collab_sync") => sync_said(report, true),
+                    let said = match self.asked.take() {
+                        Some(CommandName::CollabSync) => sync_said(report, true),
                         Some(_) => Some(summary(report)),
                         None => sync_said(report, false),
                     };
@@ -389,7 +389,7 @@ impl Collab {
 
     /// Sends one collaboration command a person asked for.
     fn send(&mut self, command: Command, cx: &mut Context<Self>) {
-        let kind = command.kind().to_owned();
+        let kind = command.name().clone();
         if self.session.update(cx, |session, _| session.send(command)) {
             self.asked = Some(kind);
             self.busy_since = Instant::now();

@@ -2060,7 +2060,9 @@ mod tests {
 
     use std::fs;
 
+    #[cfg(unix)]
     use std::thread;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
 

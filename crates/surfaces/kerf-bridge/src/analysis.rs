@@ -26,6 +26,7 @@ use crate::event::{
     SignalStatus,
 };
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::{emit, Shared};
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{CancellationToken, EngineError, MediaIndex};
@@ -346,7 +347,7 @@ pub(crate) fn media_info(shared: Arc<Shared>, tx: Outbox, media: Option<String>)
                 &tx,
                 Event::Error(ErrorEvent {
                     message: message.to_owned(),
-                    command: Some("media_info".to_owned()),
+                    command: Some(CommandName::MediaInfo),
                     media: media.clone(),
                     ..ErrorEvent::default()
                 }),
@@ -489,7 +490,7 @@ pub(crate) fn media_index(shared: Arc<Shared>, tx: Outbox, media: String) {
         let event = index(&shared, &media).unwrap_or_else(|message| {
             Event::Error(ErrorEvent {
                 message,
-                command: Some("media_index".to_owned()),
+                command: Some(CommandName::MediaIndex),
                 media: Some(media.clone()),
                 ..ErrorEvent::default()
             })

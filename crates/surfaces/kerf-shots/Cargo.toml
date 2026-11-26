@@ -20,6 +20,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
+tempfile.workspace = true
 
 [lints]
 workspace = true

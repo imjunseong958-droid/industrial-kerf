@@ -187,7 +187,7 @@ impl Facts for CachedFacts {
 /// every proxy before it.
 pub(crate) fn prepare_media(path: String, directory: PathBuf) {
     let path = PathBuf::from(path);
-    let file = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+    let file = kerf_paths::canonicalize(&path).unwrap_or_else(|_| path.clone());
     let mut queue = media_queue();
     if !queue.pending.insert((directory.clone(), file.clone())) {
         return;

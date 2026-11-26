@@ -9,7 +9,7 @@ use super::qc::Report;
 use editor_session::session::{BridgeEvent, Session};
 use gpui::{prelude::*, App, Context, Entity, EntityId, Global, Subscription};
 use kerf_bridge::event::{Check, Export, ExportStatus, LoudnessEvent};
-use kerf_bridge::Event;
+use kerf_bridge::{CommandName, Event};
 use std::collections::HashMap;
 
 /// What Finish knows of a project: the check running or the last one's
@@ -147,7 +147,7 @@ impl Finishing {
                 }
                 _ => return false,
             },
-            Event::Error(error) if error.command.as_deref() == Some("export") => {
+            Event::Error(error) if error.command == Some(CommandName::Export) => {
                 self.export_failed = Some(error.message.clone());
             }
             _ => return false,

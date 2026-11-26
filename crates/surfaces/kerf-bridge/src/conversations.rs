@@ -13,6 +13,7 @@
 use crate::emit;
 use crate::event::{ConversationSummary, ErrorEvent, Event};
 use crate::wake::Outbox;
+use crate::CommandName;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -78,7 +79,9 @@ pub(crate) struct Item {
 
 /// A making an agent asked for and the person has to say yes to: the media,
 /// how many takes (one unless said), the first of them, and the plan as the
-/// person is asked about it.
+/// person is asked about it, in the words the agent was answered with and in
+/// the parts kerf-mcp wrote them from (`kerf_mcp::MakingAsk`), which are what a
+/// card shows. An ask kept before the parts were carried has only its words.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Ask {
@@ -88,6 +91,52 @@ pub(crate) struct Ask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub take: Option<u32>,
     pub text: String,
+    /// What the making is for, as the agent said it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// Each step as it would run, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
+    /// What its model has said it does not take.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
+}
+
+/// The most of an ask's parts kept, in bytes: as much as an agent's summary keeps of its
+/// words, so that an event and a conversation's file stay as small as they were.
+const MOST_ASK_BYTES: usize = 4 * 1024;
+
+impl Ask {
+    /// The ask with `parts`, as much of them as fits [`MOST_ASK_BYTES`] in the order its
+    /// words have them, why, steps and then notes: the one that does not fit is cut short
+    /// with `…`, and those after it are left out.
+    pub(crate) fn with_parts(self, parts: kerf_mcp::MakingAsk) -> Self {
+        let mut room = MOST_ASK_BYTES;
+        let mut keep = |part: String| {
+            if room == 0 {
+                return None;
+            }
+            if part.len() <= room {
+                room -= part.len();
+                return Some(part);
+            }
+            let mut end = room.saturating_sub('…'.len_utf8());
+            while !part.is_char_boundary(end) {
+                end -= 1;
+            }
+            room = 0;
+            Some(format!("{}…", &part[..end]))
+        };
+        let why = parts.why.and_then(&mut keep);
+        let steps = parts.steps.into_iter().map_while(&mut keep).collect();
+        let notes = parts.notes.into_iter().map_while(&mut keep).collect();
+        Self {
+            why,
+            steps,
+            notes,
+            ..self
+        }
+    }
 }
 
 /// A conversation as the editor gets it: its file without Claude Code's session.
@@ -129,6 +178,9 @@ impl From<&Ask> for crate::event::ConversationAsk {
             rolls: ask.rolls,
             take: ask.take,
             text: ask.text.clone(),
+            why: ask.why.clone(),
+            steps: ask.steps.clone(),
+            notes: ask.notes.clone(),
         }
     }
 }
@@ -372,7 +424,7 @@ pub(crate) fn command(store: &Store, request: Request, tx: &Outbox) {
             tx,
             Event::Error(ErrorEvent {
                 message,
-                command: Some("conversation".to_owned()),
+                command: Some(CommandName::Conversation),
                 ..ErrorEvent::default()
             }),
         ),

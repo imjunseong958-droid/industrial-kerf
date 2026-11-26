@@ -231,6 +231,8 @@ fn a_making_that_is_cancelled_asks_its_step_to_end_and_leaves_no_take() {
     editor.send(json!({"type": "media_make", "media": "m1", "confirmed": true}));
     let twice = editor.expect("an error", |event| event["type"] == "error");
     assert_eq!(twice["message"], "cannot make m1: it is being made already");
+    // Why, without the media its window names already, for the window to say as it is.
+    assert_eq!(twice["why"], "it is being made already");
     assert_eq!(
         (&twice["command"], &twice["media"]),
         (&json!("media_make"), &json!("m1"))
@@ -460,6 +462,14 @@ fn a_recipe_file_is_carried_into_the_document_once_a_person_says_yes() {
         again["message"]
             .as_str()
             .is_some_and(|message| message.contains("has its steps under its line")),
+        "{again}"
+    );
+    assert_eq!(
+        again["message"],
+        format!(
+            "cannot carry m1: {}",
+            again["why"].as_str().unwrap_or_default()
+        ),
         "{again}"
     );
 

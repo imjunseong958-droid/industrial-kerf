@@ -1,6 +1,7 @@
 //! The timeline an OTIO file holds: one sequence of a `kerf-model` project
 //! in OpenTimelineIO's terms. `otio_json` writes and reads it as an `.otio`
-//! file; the Python bridge exchanges the same form for every other adapter.
+//! file; the tests' Python bridge (`tests/interchange/otio_bridge.py`)
+//! exchanges the same form with OpenTimelineIO itself.
 //!
 //! Positions and durations count frames of the timeline `rate`. Media times
 //! count frames of the media `rate` and include its timecode `start`, as
@@ -436,8 +437,8 @@ pub(crate) fn sequence_losses(sequence: &Sequence, issues: &mut Vec<InterchangeI
 }
 
 /// The one forward speed a timeline file plays `clip` at, with what that
-/// leaves out: a ramp becomes its speed overall, as in an EDL, and reverse
-/// plays the same source forward.
+/// leaves out: a ramp becomes its speed overall, and reverse plays the same
+/// source forward.
 pub(crate) fn carried_speed(clip: &Clip, issues: &mut Vec<InterchangeIssue>) -> Ratio {
     let speed = clip.speed();
     let forward = match speed.constant() {

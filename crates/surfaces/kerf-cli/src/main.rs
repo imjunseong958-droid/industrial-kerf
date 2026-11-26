@@ -48,7 +48,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 struct Args {
     #[command(subcommand)]
     command: Option<Command>,
-    /// Local media path or a URL to import before opening the editor/session.
+    /// Local media file to import before opening the editor/session.
     media: Option<String>,
 
     /// LLM API key. Prefer the provider-specific environment variable.
@@ -85,10 +85,6 @@ struct Args {
     #[arg(long, global = true)]
     kerfd: Option<PathBuf>,
 
-    /// yt-dlp cookie file.
-    #[arg(long)]
-    cookies: Option<PathBuf>,
-
     /// Execute one instruction and exit.
     #[arg(short = 'p', long = "prompt")]
     prompt: Option<String>,
@@ -116,10 +112,6 @@ struct Args {
     /// Attach configured inbound MCP servers through mcp_search/mcp_call.
     #[arg(long = "mcp-tools")]
     mcp_tools: bool,
-
-    /// Keep the flag accepted for launcher-script compatibility.
-    #[arg(long)]
-    no_open: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -315,8 +307,7 @@ fn run() -> Result<()> {
         Some(Command::New(new)) => return run_new(new),
         Some(Command::Sync { message }) => {
             let directory = requested.unwrap_or_else(current);
-            let directory = directory
-                .canonicalize()
+            let directory = kerf_paths::canonicalize(&directory)
                 .with_context(|| format!("no project at {}", directory.display()))?;
             return run_sync(&directory, args.kerfd.as_deref(), message.as_deref());
         }
@@ -460,12 +451,7 @@ fn run() -> Result<()> {
     }
 
     if let Some(media) = args.media.as_deref() {
-        let path = import_media(
-            &directory,
-            args.kerfd.as_deref(),
-            media,
-            args.cookies.as_deref(),
-        )?;
+        let path = import_media(&directory, args.kerfd.as_deref(), media)?;
         println!("imported {}", path.display());
     }
 
@@ -523,11 +509,10 @@ fn requested_project(args: &Args, environment: Option<OsString>) -> Option<PathB
 
 /// `directory` as an absolute path, made first when it does not exist.
 fn resolve_directory(directory: &Path) -> Result<PathBuf> {
-    directory
-        .canonicalize()
+    kerf_paths::canonicalize(directory)
         .or_else(|_| {
             fs::create_dir_all(directory)?;
-            directory.canonicalize()
+            kerf_paths::canonicalize(directory)
         })
         .context("resolve project directory")
 }

@@ -4,6 +4,10 @@
 //! A kerfd and its clients may be of different builds, and what kerfd keeps on disk outlives
 //! the build that wrote it. So each such value is an enum of the names this build knows, and
 //! a name it does not know still reads: it is kept as it came, and written the same.
+//!
+//! A client's own names read the same way (the editor's bridge names its commands with
+//! [`named!`](crate::named!)), so the macro is exported. Such a client keeps the names it does
+//! not know in a type of its own, as this crate keeps its own in [`Unnamed`].
 
 /// A name this build has no value for. Only a value's `from_name` makes one, and nothing
 /// outside this crate can, so a name this build does know is always its own variant, and
@@ -24,8 +28,15 @@ impl Unnamed {
 
 /// An enum of named values: each written once with its name, so a value cannot be given one
 /// name going out and read by another coming in.
+///
+/// In another crate, it is given the type its enum keeps an unknown name in
+/// (`unnamed = Type;` first): one with a `new(&str)` only that enum's module can call, so
+/// that only `from_name` makes one, and an `as_str()` that gives the name back. This
+/// crate's [`Unnamed`] can be made in this crate alone.
+#[macro_export]
 macro_rules! named {
     (
+        unnamed = $Unnamed:ty;
         $(#[$about:meta])*
         $vis:vis enum $Value:ident {
             $($(#[$note:meta])* $value:ident = $name:literal,)+
@@ -35,10 +46,10 @@ macro_rules! named {
         #[derive(Debug, Clone, PartialEq, Eq)]
         $vis enum $Value {
             $($(#[$note])* $value,)+
-            /// A name this build has no value for, as it came: a kerfd of another build
-            /// wrote it, or kerfd passes it on as something else said it. Only
-            /// [`Self::from_name`] makes one.
-            Other($crate::named::Unnamed),
+            /// A name this build has no value for, as it came: another build wrote it, or
+            /// it is passed on as something else said it. Only [`Self::from_name`] makes
+            /// one.
+            Other($Unnamed),
         }
 
         impl $Value {
@@ -58,7 +69,7 @@ macro_rules! named {
             pub fn from_name(name: &str) -> Self {
                 match name {
                     $($name => Self::$value,)+
-                    _ => Self::Other($crate::named::Unnamed::new(name)),
+                    _ => Self::Other(<$Unnamed>::new(name)),
                 }
             }
         }
@@ -84,6 +95,20 @@ macro_rules! named {
             ) -> ::std::result::Result<Self, D::Error> {
                 <String as ::serde::Deserialize>::deserialize(deserializer)
                     .map(|name| Self::from_name(&name))
+            }
+        }
+    };
+    (
+        $(#[$about:meta])*
+        $vis:vis enum $Value:ident {
+            $($(#[$note:meta])* $value:ident = $name:literal,)+
+        }
+    ) => {
+        $crate::named! {
+            unnamed = $crate::named::Unnamed;
+            $(#[$about])*
+            $vis enum $Value {
+                $($(#[$note])* $value = $name,)+
             }
         }
     };

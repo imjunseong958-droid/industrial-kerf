@@ -18,6 +18,7 @@
 use crate::emit;
 use crate::event::{ErrorEvent, Event};
 use crate::wake::Outbox;
+use crate::CommandName;
 use kerf_model::look::{self, Look, On};
 use kerf_model::{Catalog, Clip, Domain, Engine, FxKind, Interp, Param, ParamType, Project, Value};
 use kerf_runtime::EditOp;
@@ -32,12 +33,12 @@ pub(crate) const LOOKS_DIR: &str = "presets/looks";
 const EXTENSION: &str = "kerflook";
 
 /// A refused look command: `error {command, message}`.
-pub(crate) fn refused(tx: &Outbox, command: &str, message: &str) {
+pub(crate) fn refused(tx: &Outbox, command: CommandName, message: &str) {
     emit(
         tx,
         Event::Error(ErrorEvent {
             message: message.to_owned(),
-            command: Some(command.to_owned()),
+            command: Some(command),
             ..ErrorEvent::default()
         }),
     );
@@ -291,7 +292,7 @@ pub(crate) fn save_from(
         .and_then(|project| save(directory, &project, clip, name, replace));
     match saved {
         Ok(event) => emit(tx, event),
-        Err(message) => refused(tx, "look_save", &message),
+        Err(message) => refused(tx, CommandName::LookSave, &message),
     }
     Ok(())
 }

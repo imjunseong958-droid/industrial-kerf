@@ -6,6 +6,7 @@
 use crate::error::BridgeError;
 use crate::event::{CastToMake, ErrorEvent, Event, MediaMakePlan};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::{emit, Command, Shared};
 use kerf_collab::git::is_lfs_pointer;
 use kerf_collab::media::{absolute, external, relative_to};
@@ -260,7 +261,7 @@ pub(crate) fn cast(
             Event::Error(ErrorEvent {
                 message,
                 code: why.code(),
-                command: Some("cast".to_owned()),
+                command: Some(CommandName::Cast),
                 ..ErrorEvent::default()
             }),
         );
@@ -390,8 +391,9 @@ fn make_failed(tx: &Outbox, id: &str, why: impl Into<BridgeError>) {
         tx,
         Event::Error(ErrorEvent {
             message: format!("cannot make {id}: {why}"),
+            why: Some(why.to_string()),
             code: why.code(),
-            command: Some("media_make".to_owned()),
+            command: Some(CommandName::MediaMake),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
         }),
