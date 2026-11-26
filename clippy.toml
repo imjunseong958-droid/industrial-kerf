@@ -17,6 +17,8 @@ disallowed-methods = [
     { path = "std::fs::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
     { path = "std::path::Path::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
     { path = "std::process::Command::spawn", reason = "a plain child outlives cancellation, and its own children outlive it; start it as a kerf_sidecar::Sidecar" },
+    { path = "std::process::Command::output", reason = "a plain child outlives cancellation, and its own children outlive it; run it as a sidecar" },
+    { path = "std::process::Command::status", reason = "a plain child outlives cancellation, and its own children outlive it; run it as a sidecar" },
 ]
 
 # The crates carried from EffectCraft and FilmCraft deny unwrap, expect and panics, and

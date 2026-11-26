@@ -81,6 +81,10 @@ fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
         .to_owned()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn footage(path: &Path, source: &str) {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let made = Command::new("ffmpeg")
@@ -154,6 +158,10 @@ fn router(dir: &Path) -> KerfMcpRouter {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied() {
     if Command::new("ffmpeg").arg("-version").output().is_err() {
         eprintln!("skipping: ffmpeg is not installed");

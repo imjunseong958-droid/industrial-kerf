@@ -252,6 +252,10 @@ fn media_project(label: &str) -> PathBuf {
 }
 
 /// `seconds` of 64x36 picture at 24 fps, with a tone when `sound`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn media_clip(path: &Path, seconds: u32, sound: bool) {
     let mut command =
         std::process::Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin());

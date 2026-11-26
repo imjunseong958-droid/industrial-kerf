@@ -18,6 +18,10 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 /// Seconds of CPU the process has used, and its resident memory in MB, as `ps` says.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a benchmark run by hand, which makes its media with FFmpeg and waits on it"
+)]
 fn usage() -> (f64, f64) {
     let pid = std::process::id().to_string();
     let output = Command::new("ps")

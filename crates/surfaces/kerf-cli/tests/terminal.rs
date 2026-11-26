@@ -31,6 +31,10 @@ fn kerfd() -> Option<PathBuf> {
 /// Run `kerf` on the project in `directory`, with no terminal to ask at: what it printed,
 /// what it said, and whether it ended well. The models it reads are the project folder's
 /// `models.json`, and none where there is none: never those of whoever runs the tests.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn kerf(directory: &Path, kerfd: &Path, words: &[&str]) -> (String, String, bool) {
     let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
         .env("KERF_MODELS", directory.join("models.json"))
@@ -342,6 +346,10 @@ fn a_media_whose_steps_are_in_a_recipe_file_is_made_once_they_are_carried() {
 /// Windows sets no `HOME`: a person's own skills (`~/.kerf/skills`) are found by their
 /// `USERPROFILE` there, as `kerf --skills` lists them.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_persons_skills_are_found_where_only_the_user_profile_is_set() {
     let home = tempfile::tempdir().unwrap();
     let skill = home.path().join(".kerf/skills/house-style");
@@ -372,6 +380,10 @@ fn a_persons_skills_are_found_where_only_the_user_profile_is_set() {
 /// `kerf <URL>` fetches nothing, and says so, where it once downloaded the URL: it is not
 /// taken for a file in the project that does not exist.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_url_to_import_is_refused_as_one() {
     let project = tempfile::tempdir().unwrap();
     std::fs::write(project.path().join("project.kerf"), DOCUMENT).unwrap();
@@ -401,6 +413,10 @@ fn a_url_to_import_is_refused_as_one() {
 /// started in a session of its own, out of reach of that, does not hold `kerf`'s stderr open.
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
     use std::io::Read;
     use std::os::unix::process::ExitStatusExt;
@@ -441,6 +457,10 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
         named: Vec<String>,
     }
     impl Drop for Leftovers {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+        )]
         fn drop(&mut self) {
             // Nothing is signalled once it has been waited for.
             let _ = self.kerf.kill();

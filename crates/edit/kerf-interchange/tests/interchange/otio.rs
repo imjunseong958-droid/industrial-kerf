@@ -463,6 +463,10 @@ fn a_file_from_another_editor_is_read_with_what_it_loses() {
 
 /// The Python that has OpenTimelineIO: `KERF_OTIO_PYTHON`, else `python3`.
 /// `None` where it has none, and the bridge checks are skipped.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn bridge_python() -> Option<PathBuf> {
     let python = std::env::var_os("KERF_OTIO_PYTHON")
         .map_or_else(|| PathBuf::from("python3"), PathBuf::from);
@@ -506,6 +510,10 @@ fn bridge(python: &Path, args: &[&str], stdin: Option<&str>) -> Value {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn the_bridge_reads_what_is_written_here_and_writes_what_is_read_here() {
     let Some(python) = bridge_python() else {
         return;

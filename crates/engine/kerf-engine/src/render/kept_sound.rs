@@ -807,6 +807,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn an_encoder_started_before_a_piece_joins_and_one_started_at_it_does_not() {
         if hidden_command(resolve_ffmpeg_bin())
             .arg("-version")

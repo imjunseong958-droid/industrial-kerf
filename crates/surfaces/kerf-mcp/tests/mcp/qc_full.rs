@@ -9,10 +9,18 @@ use std::path::Path;
 use std::process::Command;
 use tempfile::TempDir;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg_available() -> bool {
     Command::new("ffmpeg").arg("-version").output().is_ok()
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg(directory: &Path, args: &[&str]) {
     let status = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])

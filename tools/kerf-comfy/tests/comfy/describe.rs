@@ -6,6 +6,10 @@ use std::process::{Command, Stdio};
 /// `--describe` with no workflow named is a models file whole: an entry for each workflow
 /// that comes with the program, under the name `--list` gives it, and no server is asked.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn describe_alone_is_an_entry_for_every_workflow_that_comes_with_it() {
     let run = |arguments: &[&str]| {
         let folder = tempfile::tempdir().unwrap();

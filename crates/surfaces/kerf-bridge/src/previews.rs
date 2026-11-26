@@ -396,6 +396,10 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
         as u32)
         .max(2)
         & !1;
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "short-lived and waited on: FFmpeg decodes one frame"
+    )]
     let output = kerf_engine::process::ffmpeg::hidden_command(
         kerf_engine::process::ffmpeg::resolve_ffmpeg_bin(),
     )

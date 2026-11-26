@@ -37,6 +37,10 @@ fn fnv(hash: u64, bytes: &[u8]) -> u64 {
 const FNV_START: u64 = 0xCBF2_9CE4_8422_2325;
 
 /// The FFmpeg that measures, by what it says it is.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: ffmpeg -version"
+)]
 fn ffmpeg_version() -> &'static str {
     static VERSION: OnceLock<String> = OnceLock::new();
     VERSION.get_or_init(|| {

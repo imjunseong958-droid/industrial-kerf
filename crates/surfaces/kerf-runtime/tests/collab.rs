@@ -1,6 +1,5 @@
 //! Two people editing one shared project through real kerfd daemons, a
 //! bare repository standing in for GitHub, and the structural merge driver.
-
 #![cfg(unix)]
 
 use kerf_collab::git;
@@ -49,6 +48,10 @@ fn root(label: &str) -> PathBuf {
     root
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn sh(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .envs(hermetic_env().iter().cloned())
@@ -247,6 +250,10 @@ fn branches_hold_their_own_edits() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn kerfd_merges_project_documents_as_git_asks() {
     hermetic();
     let root = root("driver");

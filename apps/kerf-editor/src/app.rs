@@ -402,6 +402,10 @@ fn capture(target: CaptureTarget, file: &Path) -> Result<(), String> {
             .map_err(|error| error.to_string()),
         #[cfg(target_os = "macos")]
         CaptureTarget::Mac(number) => {
+            #[expect(
+                clippy::disallowed_methods,
+                reason = "short-lived and waited on: screencapture writes the window's picture"
+            )]
             let status = std::process::Command::new("screencapture")
                 .args(["-x", "-o", "-l", &number.to_string()])
                 .arg(file)

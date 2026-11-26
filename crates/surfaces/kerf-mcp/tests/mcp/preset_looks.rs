@@ -26,6 +26,10 @@ fn router_on(directory: &Path, kerfd: Option<&Path>) -> KerfMcpRouter {
     router
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn router() -> Option<(TempDir, KerfMcpRouter)> {
     if Command::new("ffmpeg").arg("-version").output().is_err() {
         eprintln!("skipping: ffmpeg is not installed");

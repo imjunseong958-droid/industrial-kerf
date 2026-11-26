@@ -649,7 +649,7 @@ fn locate_peak(
     limit: f64,
     cancel: &CancellationToken,
 ) -> Result<Option<PeakStretch>, EngineError> {
-    let heard = kerf_engine::render::ramps::with_sound(project);
+    let heard = kerf_engine::render::ramps::with_sound(project, cancel);
     let compiled = compile_program(
         &heard,
         Catalog::builtin(),

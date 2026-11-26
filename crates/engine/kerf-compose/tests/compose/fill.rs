@@ -6,6 +6,10 @@ use kerf_model::{Catalog, Rate};
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg(source: &str, out: &Path) {
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
     let output = Command::new(program)

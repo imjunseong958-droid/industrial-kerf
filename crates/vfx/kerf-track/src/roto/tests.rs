@@ -423,6 +423,10 @@ fn a_subject_under_an_open_shutter_is_kept_up_with() {
     clippy::type_complexity,
     reason = "carried from EffectCraft, whose tests spell out nested types"
 )]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn footage(
     names: impl Iterator<Item = String>,
     width: usize,

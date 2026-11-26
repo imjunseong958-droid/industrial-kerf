@@ -9,6 +9,10 @@ use std::process::Command;
 const SET_ASIDE_AT: usize = 1024 * 1024;
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn the_project_log_is_set_aside_as_it_grows() {
     // The logger reads RUST_LOG, so this runs again in a process of its own without one, at the
     // level kerfd logs at when nothing says otherwise.

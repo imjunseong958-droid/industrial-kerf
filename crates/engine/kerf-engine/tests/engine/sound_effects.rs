@@ -7,6 +7,10 @@ use kerf_model::Catalog;
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg(args: &[&str]) {
     let output = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])

@@ -846,6 +846,10 @@ fn project_config(directory: &Path, log: &mut impl FnMut(String)) -> Option<Path
 }
 
 /// Whether Git tracks `path`, relative to `directory`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: git ls-files"
+)]
 fn tracked(directory: &Path, path: &str) -> bool {
     Command::new("git")
         .arg("-C")
@@ -872,6 +876,10 @@ mod tests {
     use std::process::Command;
     use std::sync::Arc;
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn git(directory: &Path, args: &[&str]) {
         let status = Command::new("git")
             .arg("-C")
@@ -980,6 +988,10 @@ for line in sys.stdin:
 
     #[cfg(unix)]
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn stopping_a_launched_server_stops_what_its_launcher_started() {
         let root = tempfile::tempdir().unwrap();
         let pid_file = root.path().join("pid");

@@ -647,6 +647,10 @@ fn export_writes_the_file_and_reports_by_severity() {
 /// in this repository. With `KERF_FCPXML_DTD` naming a copy, every document
 /// the tests above write is held to it by `xmllint`.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn documents_are_valid_by_apples_dtd_where_one_is_at_hand() {
     let Some(dtd) = std::env::var_os("KERF_FCPXML_DTD") else {
         eprintln!("skipped: set KERF_FCPXML_DTD to FCPXMLv1_9.dtd to validate with xmllint");

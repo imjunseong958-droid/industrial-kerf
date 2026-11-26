@@ -3801,6 +3801,7 @@ dependencies = [
  "image",
  "jiff",
  "kerf-bridge",
+ "kerf-sidecar",
  "log",
  "proptest",
  "serde_json",

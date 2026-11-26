@@ -598,6 +598,10 @@ fn an_index_row_finds_where_the_program_shows_it() {
 
 // ---------------------------------------------------------------- artwork
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg() -> Option<String> {
     let binary = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".into());
     std::process::Command::new(&binary)
@@ -621,6 +625,10 @@ fn wait_for(artwork: &Artwork, ready: impl Fn(&Artwork) -> bool) -> bool {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn media_gets_a_poster_a_strip_and_peaks_off_the_window() {
     let Some(ffmpeg) = ffmpeg() else {
         eprintln!("no FFmpeg here: the artwork pipeline is not exercised");

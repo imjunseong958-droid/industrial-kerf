@@ -129,6 +129,10 @@ const SYSTEM_UI: &str = ".SystemUIFont";
 /// The computer's own interface face: GPUI's name for it on macOS and
 /// Windows; on Linux, what fontconfig gives for `sans-serif` (GPUI's own
 /// name for it there is IBM Plex). Looked up once.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: fc-match names the system's face"
+)]
 pub fn system_family() -> &'static str {
     static FAMILY: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
     FAMILY.get_or_init(|| {

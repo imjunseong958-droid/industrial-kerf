@@ -216,6 +216,10 @@ impl Editor {
 }
 
 /// Four seconds of `picture` at 320x180 and 24 fps over stereo `sound`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn media(path: &Path, picture: &str, sound: &str) -> bool {
     Command::new(ffmpeg())
         .args([

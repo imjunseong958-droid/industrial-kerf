@@ -13,6 +13,10 @@ fn ffmpeg_binary() -> String {
     })
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg_available(binary: &str) -> bool {
     Command::new(binary)
         .arg("-version")
@@ -37,6 +41,10 @@ fn project(source: &std::path::Path, name: &str, frames: u32) -> kerf_model::Pro
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn real_ffmpeg_surface_delivers_rgba_frames_off_the_calling_thread() {
     let binary = ffmpeg_binary();
     if !ffmpeg_available(&binary) {
@@ -97,6 +105,10 @@ fn real_ffmpeg_surface_delivers_rgba_frames_off_the_calling_thread() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn small_forward_seek_still_delivers_a_later_frame() {
     let binary = ffmpeg_binary();
     if !ffmpeg_available(&binary) {
@@ -171,6 +183,10 @@ fn small_forward_seek_still_delivers_a_later_frame() {
 /// Leaving a skim sends the playhead's seek, and the editor sends it again
 /// when the pointer settles: however they land, its frame must come back.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn seeking_back_after_a_skim_shows_the_playheads_frame() {
     let binary = ffmpeg_binary();
     if !ffmpeg_available(&binary) {
@@ -246,6 +262,10 @@ fn seeking_back_after_a_skim_shows_the_playheads_frame() {
 /// The end of a sequence has no frame of its own: the playhead stays there and
 /// the picture is the last frame, not whatever was showing before.
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn seeking_to_the_end_shows_the_last_frame() {
     let binary = ffmpeg_binary();
     if !ffmpeg_available(&binary) {
@@ -314,6 +334,10 @@ fn seeking_to_the_end_shows_the_last_frame() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn raster_effects_play_live_inside_the_letterbox() {
     let binary = ffmpeg_binary();
     if !ffmpeg_available(&binary) {
@@ -388,6 +412,10 @@ fn raster_effects_play_live_inside_the_letterbox() {
 
 /// A source whose frames grow brighter, 64x36 at 10 fps: frame `n` is
 /// gray `16 + 10n`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn counting_source(binary: &str, directory: &std::path::Path) -> std::path::PathBuf {
     let source = directory.join("counting.mp4");
     let status = Command::new(binary)
@@ -492,6 +520,10 @@ fn composited_programs_play_and_seek_frame_exactly() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn masked_clips_play_live_as_the_compositor_draws_them() {
     let binary = ffmpeg_binary();
     if !ffmpeg_available(&binary) {

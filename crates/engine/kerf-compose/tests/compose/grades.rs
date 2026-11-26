@@ -166,6 +166,10 @@ fn accels() -> &'static [Accel] {
 }
 
 impl Footage {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+    )]
     fn new() -> Self {
         let folder = tempfile::tempdir().expect("a folder");
         let path = folder.path().join("footage.mp4");

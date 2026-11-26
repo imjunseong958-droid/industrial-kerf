@@ -68,6 +68,10 @@ struct Crashed {
     folder: tempfile::TempDir,
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn crash(how: &str) -> Crashed {
     let folder = tempfile::tempdir().expect("a folder");
     let output = Command::new(std::env::current_exe().expect("this test binary"))

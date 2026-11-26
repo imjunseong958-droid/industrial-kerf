@@ -97,6 +97,10 @@ fn legacy_take(dir: &Path) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
     if Command::new("ffmpeg").arg("-version").output().is_err() {
         eprintln!("skipping: ffmpeg is not installed");

@@ -49,6 +49,10 @@ fn sdr_white_sits_at_reference_white_in_an_hdr_master() {
 }
 
 /// A flat 10-bit PQ signal, as a camera or a grade would leave it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn pq_footage(dir: &Path, gray: u8) -> String {
     let path = dir.join(format!("pq{gray}.mov"));
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
@@ -74,6 +78,10 @@ fn pq_footage(dir: &Path, gray: u8) -> String {
 }
 
 /// The first channel of the file's first pixel, as FFmpeg itself decodes it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn decoded_signal(path: &str) -> f64 {
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
     let output = Command::new(program)
@@ -252,6 +260,10 @@ fn lumetri_grades_highlights_in_an_hdr_sequence_alike_on_gpu_and_cpu() {
 }
 
 /// A flat 10-bit PQ picture in the color `rgb` of BT.2020, with what its signal is as code values.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn flat_footage(dir: &Path, name: &str, rgb: &str) -> String {
     let path = dir.join(format!("{name}.mov"));
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
@@ -419,6 +431,10 @@ fn an_sdr_picture_in_an_hdr_sequence_is_held_by_nothing() {
 }
 
 /// A flat HLG picture of those code values, in BT.2020.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn flat_hlg_footage(dir: &Path, name: &str, rgb: &str) -> String {
     let path = dir.join(format!("{name}.mov"));
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());
@@ -539,6 +555,10 @@ fn the_gpu_holds_an_hlg_picture_for_effects_as_the_cpu_does() {
 }
 
 /// A picture that moves, in SDR or as an HLG signal in BT.2020.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn moving_footage(dir: &Path, hlg: bool) -> String {
     let path = dir.join(if hlg { "moving-hlg.mov" } else { "moving.mov" });
     let program = std::env::var("KERF_FFMPEG").unwrap_or_else(|_| "ffmpeg".to_owned());

@@ -7,6 +7,10 @@ use kerf_model::{Catalog, Project, Rate};
 use std::path::Path;
 use std::process::Command;
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn run(command: &mut Command) -> Vec<u8> {
     let output = command.output().expect("runs");
     assert!(
@@ -262,6 +266,10 @@ fn the_sound_alone_is_what_a_draft_of_the_range_carries() {
 }
 
 /// Titles and captions need FFmpeg built with libfreetype.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn has_drawtext() -> bool {
     Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-filters"])

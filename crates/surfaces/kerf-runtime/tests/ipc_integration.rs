@@ -1,6 +1,5 @@
 //! Real-process proof for the project-scoped kerfd boundary: a Unix socket,
 //! or a named pipe on Windows.
-
 #![cfg(any(unix, windows))]
 
 use kerf_engine::process::sidecar::Sidecar;
@@ -606,6 +605,10 @@ sequence s1 name=\"Round Trip\" rate=24 size=1920x1080 audio=48000 start=00:00:0
 }
 
 /// `seconds` of 64x36 picture at 24 fps with a tone.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn media_file(path: &Path, seconds: u32) {
     let output = Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
@@ -688,6 +691,10 @@ fn media_is_replaced_through_the_client_relative_to_the_project() {
 
 /// What ffprobe finds in `path`: each stream's codec, profile, and sample
 /// format.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn streams(path: &Path) -> Vec<serde_json::Value> {
     let output = Command::new(kerf_engine::process::ffmpeg::resolve_ffprobe_bin())
         .args([
@@ -924,6 +931,10 @@ fn a_rust_log_kerfd_cannot_read_leaves_the_error_it_stops_with_readable() {
 
 #[cfg(unix)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
     let base = project_directory("endpoint");
     let long = base.join("a".repeat(120));
@@ -951,6 +962,10 @@ fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
 
 #[cfg(windows)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn endpoint_flag_prints_the_pipe_the_daemon_listens_on() {
     let base = project_directory("endpoint");
     let long = base.join("a".repeat(120));
@@ -981,6 +996,10 @@ fn endpoint_flag_prints_the_pipe_the_daemon_listens_on() {
 
 #[cfg(windows)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_second_daemon_for_a_project_refuses_to_start() {
     let directory = project_directory("second");
     fs::create_dir_all(&directory).unwrap();

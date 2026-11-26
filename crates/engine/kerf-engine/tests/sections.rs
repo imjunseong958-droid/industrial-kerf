@@ -33,6 +33,10 @@ fn render(project: &Project, out: &Path, sections: CacheFolder) {
     .expect("renders");
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ffmpeg(args: &[&str]) -> Vec<u8> {
     let output = Command::new(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error"])
@@ -63,6 +67,10 @@ fn sound(path: &Path) -> Vec<u8> {
 }
 
 /// When each frame of the file is shown, in seconds, in the order they are shown.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn times(path: &Path) -> Vec<f64> {
     let output = Command::new(resolve_ffprobe_bin())
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries"])
@@ -88,6 +96,10 @@ fn apart(a: &[u8], b: &[u8]) -> f64 {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_render_in_stretches_is_the_render_and_an_edit_encodes_only_what_it_touched() {
     let dir = tempfile::tempdir().expect("a folder");
     let source = dir.path().join("source.mp4");

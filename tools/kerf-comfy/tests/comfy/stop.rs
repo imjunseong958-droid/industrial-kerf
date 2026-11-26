@@ -91,6 +91,10 @@ fn comfy() -> (String, Requests) {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn the_program_takes_its_job_back_on_sigterm() {
     let folder = tempfile::tempdir().unwrap();
     let request = folder.path().join("request.json");

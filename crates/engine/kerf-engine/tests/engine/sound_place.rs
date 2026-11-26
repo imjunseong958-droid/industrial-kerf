@@ -67,6 +67,10 @@ fn sample_of(frame: i64) -> i64 {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn every_sample_of_a_mix_is_the_one_the_document_puts_there() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("told.wav");

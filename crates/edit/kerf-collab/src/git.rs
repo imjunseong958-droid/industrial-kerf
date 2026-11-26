@@ -423,6 +423,10 @@ fn non_interactive_env(
     vars
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waited on, and left in the terminal's process group: with KERF_GIT_INTERACTIVE git and ssh ask on the terminal, which a group of its own cannot, and git's credential cache is meant to outlive it"
+)]
 fn output(mut command: Command, what: &str) -> Result<Output> {
     command.output().map_err(|error| {
         CollabError::new(
@@ -505,6 +509,10 @@ pub fn local_tools() -> Tools {
 }
 
 /// Whether `gh` holds a token, without printing it or asking GitHub.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: gh says whether it holds a token"
+)]
 fn gh_signed_in() -> bool {
     let mut command = program("gh");
     command

@@ -97,6 +97,10 @@ fn only_the_serve_argument_has_the_editor_serve_its_tools() {
 }
 
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn the_editor_runs_the_ffmpeg_kerfd_runs() {
     let found = kerf_bridge::ffmpeg_bin();
     // The engine's own, found once: the very same text.
@@ -159,6 +163,10 @@ const ALONE: &str = "KERF_BRIDGE_API_ALONE";
 /// in a process of its own, this binary started for it alone, with a home of the tests' own
 /// and the keychain off. True in that process, where the test goes on; false in this one,
 /// once the test has passed there. `env` is set in that process too.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn alone(test: &str, env: &[(&str, &std::ffi::OsStr)]) -> bool {
     if std::env::var_os(ALONE).is_some() {
         return true;
@@ -249,6 +257,10 @@ wait
 /// Whether process `pid` ends within `limit`; a zombie awaiting its new parent counts as
 /// ended. `ps` that says nothing, not even why, has found no such process.
 #[cfg(unix)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn ends_within(pid: &str, limit: Duration) -> bool {
     let start = Instant::now();
     while start.elapsed() < limit {

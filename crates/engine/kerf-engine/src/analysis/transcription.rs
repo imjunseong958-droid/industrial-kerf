@@ -1403,6 +1403,10 @@ fn alignment_preset(model: &Path) -> Option<&'static str> {
 /// How the whisper at `binary` is asked for alignment by `preset`, going
 /// by the options its help lists; `None` for one that has no `-dtw`.
 fn alignment_of(binary: &Path, preset: &'static str) -> Option<Alignment> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "short-lived and waited on: whisper --help"
+    )]
     let help = Command::new(binary)
         .arg("--help")
         .stdin(Stdio::null())
@@ -1531,6 +1535,10 @@ fn resolve_path_command(binary: PathBuf) -> PathBuf {
         .unwrap_or(binary)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: whisper --help"
+)]
 fn sidecar_available(binary: &Path) -> bool {
     if binary.is_absolute() || binary.components().count() > 1 {
         return binary.is_file();

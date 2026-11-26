@@ -12,6 +12,10 @@ use std::path::Path;
 use std::process::Command;
 
 /// Whether `program -version` starts and ends well.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: -version, in kerf-comfy's process group (job), which ends with it"
+)]
 fn runs(program: &str) -> bool {
     Command::new(program)
         .arg("-version")
@@ -283,6 +287,10 @@ impl Tools {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waited on, and left in kerf-comfy's process group (job) so that it ends with kerf-comfy, which Kerf runs as a sidecar"
+)]
 fn run(command: &mut Command, program: &str) -> Result<String, String> {
     let output = command.output().map_err(|error| {
         format!("{program} could not start: {error}; KERF_FFMPEG names where FFmpeg is")
