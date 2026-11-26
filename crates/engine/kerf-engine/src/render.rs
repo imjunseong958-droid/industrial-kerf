@@ -1252,6 +1252,8 @@ where
             pass: opts.pass,
             matte: opts.matte.clone(),
             only_filmed: opts.only_filmed,
+            // A motion pass says how far things go from one frame of the file to the next.
+            rate: opts.rate,
             // A file of the pass is read a pixel at a time, each taken for one clip's.
             hard_edges: true,
             ..Default::default()

@@ -101,12 +101,12 @@ picture cut; a blade or roll where all it cuts are quiet.
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
 A media Kerf or a model makes has its steps under its line, written by `step` lines after `media add`: `render <sequence> {name}
-[size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>] [only=filmed]` (Kerf draws a sequence as a guide, without sound, at a model's
+[size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals|motion] [matte=<clip>] [only=filmed]` (Kerf draws a sequence as a guide, soundless, at a model's
 size and rate; `pass=depth` is how near each pixel is, `pass=ids` each clip in a flat color), `generate model=<name> prompt="…" [guide=|guide_<name>=|first=|last=|ref=<file>]
 [signal=<clip>] [moves=<clip>] [cast=<name>] [style=<name>] [seconds=<n>] [size=WxH] [seed=<n>] [out={name}]`, or `join {part} … {name}`. `cast=`/`style=` name
 one of `look`'s `cast`/`styles`. A guide says where, the prompt what, and a signal when: a `gen=signal@1` clip whose `value={0f:0 12f:1}`
 the model is handed frame by frame; `moves=` hands it a clip's box on each frame. `{out}` is the media's file, which the last step
-writes; another `{name}` one step makes and a later one reads. A file is named from the project's folder. No step names a program.
+writes; another `{name}` one step makes and a later reads. A file is named from the project's folder. No step names a program.
 
 ```
 step <media> add [<n>] <step>  ·  step <media> remove <n>

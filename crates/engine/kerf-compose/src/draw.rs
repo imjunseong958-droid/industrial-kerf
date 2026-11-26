@@ -100,6 +100,8 @@ pub(crate) struct Drawing {
     ids: Vec<(Id, Rgba)>,
     /// Only the clips a model films are drawn ([`ComposeOptions::only_filmed`]).
     only_filmed: bool,
+    /// How long a frame is, for a motion pass: the sequence's, or [`ComposeOptions::rate`]'s.
+    step: Time,
     /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
     /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
     clear: std::sync::Mutex<Vec<Image>>,
@@ -168,6 +170,7 @@ impl Drawing {
             hard: options.hard_edges && pass == Pass::Ids,
             ids,
             only_filmed: options.only_filmed,
+            step: options.rate.unwrap_or(top.rate).time_of(1),
             clear: std::sync::Mutex::default(),
         })
     }
@@ -215,11 +218,40 @@ impl Drawing {
         plan: &ClipPlan,
         picture: &mut Image,
         to_output: &Affine,
-        at: Time,
+        (at, scale): (Time, f64),
         size: (usize, usize),
     ) {
         match self.pass {
             Pass::Picture => {}
+            Pass::Motion => {
+                let time = at - plan.clip.start;
+                let placed = |time: Time| {
+                    Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time))
+                };
+                // Where what is at an output pixel now is a frame on, as the clip is placed
+                // then. One placed nowhere now, at no size, goes nowhere.
+                let Some(moved) = placed(time)
+                    .inverse()
+                    .map(|back| placed(time + self.step).then_apply(&back))
+                else {
+                    three_d::shade_still(picture);
+                    return;
+                };
+                if plan.three_d {
+                    let now = three_d::Scene::at(sequence, at, size);
+                    let next = three_d::Scene::at(sequence, at + self.step, size);
+                    let to_output_next = moved.then_apply(to_output);
+                    three_d::shade_by_motion(
+                        (&now, &next),
+                        plan,
+                        picture,
+                        (to_output, &to_output_next),
+                        (time, self.step),
+                    );
+                } else {
+                    three_d::shade_by_motion_flat(picture, to_output, &moved, size.1 as f64);
+                }
+            }
             Pass::Ids => {
                 let [r, g, b, _] = self.id_color(&plan.clip.id);
                 flat(picture, [r, g, b]);

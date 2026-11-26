@@ -463,6 +463,7 @@ fn render_title(pass: Pass, matte: Option<&str>) -> String {
         (Pass::Relative, None) => "Relative depth guide".to_owned(),
         (Pass::Ids, None) => "Ids guide".to_owned(),
         (Pass::Normals, None) => "Normals guide".to_owned(),
+        (Pass::Motion, None) => "Motion guide".to_owned(),
     }
 }
 

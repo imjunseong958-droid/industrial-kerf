@@ -618,9 +618,32 @@ impl Drawing {
         if opacity <= 0.0 {
             return None;
         }
-        let shade = self.mesh_shade(&clip.id);
         let to_output =
             Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        // What it is drawn as in the pass drawn: lit, in its color, by how near it is, by the
+        // way it faces, or by how far it goes in a frame, which is read from where the scene a
+        // frame on has it.
+        let next;
+        let shade = match self.pass {
+            Pass::Picture => three_d::mesh::Shade::Lit(&clip.id),
+            Pass::Ids => {
+                let [r, g, b, _] = self.id_color(&clip.id);
+                three_d::mesh::Shade::Flat([r, g, b])
+            }
+            Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
+            Pass::Normals => three_d::mesh::Shade::Facing,
+            Pass::Motion => {
+                next = (
+                    three_d::Scene::at(sequence, at + self.step, size),
+                    Affine::scale(scale, scale).then_apply(&self.geometry(
+                        sequence,
+                        plan,
+                        time + self.step,
+                    )),
+                );
+                three_d::mesh::Shade::Moving(&next.0, &next.1, self.step)
+            }
+        };
         let (mut picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
         if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
             let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
@@ -651,19 +674,5 @@ impl Drawing {
             blend: self.blend(plan.blend),
             clears: false,
         })
-    }
-
-    /// What the mesh clip `id` is drawn as in the pass drawn: lit, in its color, by how near it
-    /// is, or by the way it faces.
-    fn mesh_shade<'c>(&self, id: &'c Id) -> three_d::mesh::Shade<'c> {
-        match self.pass {
-            Pass::Picture => three_d::mesh::Shade::Lit(id),
-            Pass::Ids => {
-                let [r, g, b, _] = self.id_color(id);
-                three_d::mesh::Shade::Flat([r, g, b])
-            }
-            Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
-            Pass::Normals => three_d::mesh::Shade::Facing,
-        }
     }
 }
