@@ -29,30 +29,46 @@
 
 set -uo pipefail
 
-# Without jq the hook cannot read its input, so it stays out of the way.
-command -v jq >/dev/null 2>&1 || exit 0
-
 mode=${LIM_COMMIT_GATE:-enforce}
 [ "$mode" = off ] && exit 0
 
-input=$(cat)
-event=$(jq -r '.hook_event_name // "PreToolUse"' <<<"$input")
-session=$(jq -r '.session_id // "default"' <<<"$input")
+# The hook runs on every Bash call and every prompt, and most concern neither git nor the verify
+# skill, so it leaves before starting any other program. JSON does not escape letters, so these
+# words are in the input as written whenever they are in a field.
+IFS= read -r -d '' input || true
+case $input in *git*|*verify*|*code-review*) ;; *) exit 0 ;; esac
+
+# Without jq the hook cannot read its input, so it stays out of the way.
+command -v jq >/dev/null 2>&1 || exit 0
+
+# Every field in one jq run, each ended by a NUL (taken out of the fields themselves). If jq
+# cannot read the input, the fields stay empty and the hook allows the call, as before.
+event='' session='' text='' cwd=''
+{ IFS= read -r -d '' event; IFS= read -r -d '' session; IFS= read -r -d '' text; IFS= read -r -d '' cwd; } < <(
+  jq -j '[.hook_event_name // "PreToolUse", .session_id // "default",
+          (if .hook_event_name == "PostToolUse" then .tool_input.skill
+           elif .hook_event_name == "UserPromptSubmit" then .prompt else .tool_input.command end) // "",
+          .cwd // ""] | map(tostring | split("\u0000") | join("") + "\u0000") | add' <<<"$input")
+while [[ $text == *$'\n' ]]; do text=${text%$'\n'}; done
+while [[ $cwd == *$'\n' ]]; do cwd=${cwd%$'\n'}; done
 state="${TMPDIR:-/tmp}/claude-commit-gate-${session//[^A-Za-z0-9_-]/}"
 
+skill_re='(^|:)(verify|code-review)$'
+typed_re=$'(^|\n)[[:space:]]*/([^[:space:]]*:)?(verify|code-review)([[:space:]]|$)'
 case $event in
   PostToolUse)
-    jq -r '.tool_input.skill // ""' <<<"$input" | grep -Eq '(^|:)(verify|code-review)$' && touch "$state.verified"
+    [[ $text =~ $skill_re ]] && touch "$state.verified"
     exit 0 ;;
   UserPromptSubmit)   # print nothing: stdout here would be added to Claude's context
-    jq -r '.prompt // ""' <<<"$input" | grep -Eq '^[[:space:]]*/([^[:space:]]*:)?(verify|code-review)([[:space:]]|$)' && touch "$state.verified"
+    [[ $text =~ $typed_re ]] && touch "$state.verified"
     exit 0 ;;
   PreToolUse) ;;
   *) exit 0 ;;
 esac
 
-cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
-cwd=$(jq -r '.cwd // ""' <<<"$input")
+# A call is git followed by commit or push, so a command without both words has none.
+cmd=$text
+[[ $cmd == *git* && ( $cmd == *commit* || $cmd == *push* ) ]] || exit 0
 
 # The command as it is read for calls and moves: without the bodies of heredocs that are a commit
 # message (given to git commit -F -, or in $(cat <<...)) and the values of -m, so that the words
@@ -75,12 +91,42 @@ scan=$(awk '
 # A value starts on the line of its -m: the next line is the next command.
 opt="(^|[[:space:]])(-[[:alpha:]]*m|--message)([=[:blank:]]*)"
 msgval="(\"[^\"]*\"|'[^']*'|[^[:space:];&|()\"']+)"
+# Text up to a match is cut by its length: ${rest#*"$m"} takes time squared in the length of a
+# long command, such as one that writes a file with a heredoc.
 rest=$scan scan=""
 while [[ $rest =~ $opt$msgval ]]; do
-  scan+=${rest%%"${BASH_REMATCH[0]}"*}${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}x
-  rest=${rest#*"${BASH_REMATCH[0]}"}
+  pre=${rest%%"${BASH_REMATCH[0]}"*}
+  scan+=$pre${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}x
+  rest=${rest:${#pre}+${#BASH_REMATCH[0]}}
 done
 scan+=$rest
+# A quoted string that mentions git is text, as in grep "git commit" or echo '... git push',
+# unless something runs it: a shell's or su's -c before it in the same command (bash -c, sh -ec,
+# su - me -c), eval or exec, or a $( or backquote inside double quotes. Its text is left out, so
+# it is not taken for a call, nor does it use up the blocks after which a commit is let through.
+scan=$(awk '
+  { s = s (NR > 1 ? "\n" : "") $0 }
+  END {
+    out = ""; seg = ""; rest = s
+    while (match(rest, /\\.|["\047]/)) {
+      pre = substr(rest, 1, RSTART - 1); c = substr(rest, RSTART, RLENGTH); rest = substr(rest, RSTART + RLENGTH)
+      if (length(c) > 1) { out = out pre c; seg = seg pre c; continue }
+      out = out pre; seg = seg pre
+      if (match(seg, /.*[;&|(){}`\n]/)) seg = substr(seg, RLENGTH + 1)
+      body = ""; r = rest; closed = 0; end = (c == "\"") ? "\\\\.|\"" : "\047"
+      while (match(r, end)) {
+        if (RLENGTH > 1) { body = body substr(r, 1, RSTART + 1); r = substr(r, RSTART + 2); continue }
+        body = body substr(r, 1, RSTART - 1); r = substr(r, RSTART + 1); closed = 1; break
+      }
+      if (!closed) { out = out c rest; rest = ""; break }
+      rest = r
+      run = seg ~ /(^|[ \t\/])((ba|z|da|k|fi)?sh|su)([ \t]+[^ \t]+)*[ \t]+-[A-Za-z]*c[ \t]*$/ || seg ~ /(^|[ \t])(eval|exec)[ \t]*$/ ||
+            (c == "\"" && (index(body, "$(") || index(body, "`")))
+      piece = (run || body !~ /(^|[^A-Za-z0-9_-])git[ \t]/) ? c body c : c c
+      out = out piece; seg = seg piece
+    }
+    printf "%s", out rest
+  }' <<<"$scan")
 
 # A call of git $1: also `/usr/bin/git $1`, `git -C "/a b" -c k="v w" $1`, `... && git $1`,
 # `bash -c 'git $1'`, `(git $1)` and `git commit;git push`, but not `git commit-tree`. Group 2 is
@@ -180,14 +226,14 @@ fi
 calls=() kinds=() commit_args=""
 argpiece="(\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:];&|()<>])"
 collect() {  # $1: kind, $2: its pattern
-  local rest=$scan seen=$'\n' whole call
+  local rest=$scan seen=$'\n' whole call pre
   while [[ $rest =~ $2 ]]; do
     whole=${BASH_REMATCH[0]} call=${BASH_REMATCH[2]}
     if [[ $seen != *$'\n'"$call"$'\n'* ]]; then
       calls+=("$call") kinds+=("$1")
       seen+=$call$'\n'
     fi
-    rest=${rest#*"$whole"}
+    pre=${rest%%"$whole"*} rest=${rest:${#pre}+${#whole}}
     # What git commit is given, up to the end of its command or its line.
     if [ "$1" = commit ] && [[ ${whole: -1} == [[:blank:]] && $rest =~ ^($argpiece|[[:blank:]])* ]]; then
       commit_args+=" ${BASH_REMATCH[0]}"
@@ -340,7 +386,7 @@ if [ ${#commit_tops[@]} -gt 0 ]; then
       block verify.sh-changed "Commit blocked: .claude/verify.sh has uncommitted changes in $top. Do not change the checks that judge your change. Ask the user to review and commit verify.sh themselves."
     fi
   done
-  commit_allowed || block no-verify "Commit blocked: this session has not run the verify skill. Run it before the first commit (AGENTS.md Order of work 2). If this commit does not need verifying, end its message with \`Verified: none (<reason>)\`."
+  commit_allowed || block no-verify "Commit blocked: this session has not run the verify skill. Run it before the first commit (AGENTS.md Order of work 3). If this commit does not need verifying, end its message with \`Verified: none (<reason>)\`."
 fi
 
 # git push: with CI, CI checks the PR.

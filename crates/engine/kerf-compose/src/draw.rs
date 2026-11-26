@@ -31,7 +31,7 @@ use kerf_draw::effect::{EffectHost, EffectRun, Files};
 use kerf_draw::source::{premultiplied, PictureSource, SourceRun};
 use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{mask, wipe, Affine, Blend, Image, Rect, Vec2};
-use kerf_fx::transitions::{apply_scaled, Fx};
+use kerf_fx::transitions::{apply_filmed, apply_scaled, split_filmed, Fx, Side};
 use kerf_fx::video::{self, catalog::Headroom};
 use kerf_model::time::format_timecode;
 use kerf_model::{
@@ -98,6 +98,10 @@ pub(crate) struct Drawing {
     hard: bool,
     /// The color each clip that draws has in an ids pass, in the order they are told in.
     ids: Vec<(Id, Rgba)>,
+    /// Only the clips a model films are drawn ([`ComposeOptions::only_filmed`]).
+    only_filmed: bool,
+    /// How long a frame is, for a motion pass: the sequence's, or [`ComposeOptions::rate`]'s.
+    step: Time,
     /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
     /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
     clear: std::sync::Mutex<Vec<Image>>,
@@ -133,15 +137,19 @@ impl Drawing {
         let plan = builder.sequence(top)?;
         builder.sequences[0] = Some(plan);
         let files = files_named(&builder.effects)?;
-        let sequences: Vec<SequencePlan> = builder
+        let mut sequences: Vec<SequencePlan> = builder
             .sequences
             .into_iter()
             .map(|plan| {
                 plan.expect("a sequence that could not be planned fails the build, hidden or not")
             })
             .collect();
+        // Each clip keeps the color it has with all of them drawn, whichever are left out.
         let ids = told_ids(&sequences);
         let matte = matte_color(options.matte.as_deref(), &ids)?;
+        if options.only_filmed {
+            only_filmed(&mut sequences[0], &top.id)?;
+        }
         Ok(Self {
             hdr: HdrOutput::new(top.color),
             sequences,
@@ -161,6 +169,8 @@ impl Drawing {
             matte,
             hard: options.hard_edges && pass == Pass::Ids,
             ids,
+            only_filmed: options.only_filmed,
+            step: options.rate.unwrap_or(top.rate).time_of(1),
             clear: std::sync::Mutex::default(),
         })
     }
@@ -208,11 +218,40 @@ impl Drawing {
         plan: &ClipPlan,
         picture: &mut Image,
         to_output: &Affine,
-        at: Time,
+        (at, scale): (Time, f64),
         size: (usize, usize),
     ) {
         match self.pass {
             Pass::Picture => {}
+            Pass::Motion => {
+                let time = at - plan.clip.start;
+                let placed = |time: Time| {
+                    Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time))
+                };
+                // Where what is at an output pixel now is a frame on, as the clip is placed
+                // then. One placed nowhere now, at no size, goes nowhere.
+                let Some(moved) = placed(time)
+                    .inverse()
+                    .map(|back| placed(time + self.step).then_apply(&back))
+                else {
+                    three_d::shade_still(picture);
+                    return;
+                };
+                if plan.three_d {
+                    let now = three_d::Scene::at(sequence, at, size);
+                    let next = three_d::Scene::at(sequence, at + self.step, size);
+                    let to_output_next = moved.then_apply(to_output);
+                    three_d::shade_by_motion(
+                        (&now, &next),
+                        plan,
+                        picture,
+                        (to_output, &to_output_next),
+                        (time, self.step),
+                    );
+                } else {
+                    three_d::shade_by_motion_flat(picture, to_output, &moved, size.1 as f64);
+                }
+            }
             Pass::Ids => {
                 let [r, g, b, _] = self.id_color(&plan.clip.id);
                 flat(picture, [r, g, b]);

@@ -348,10 +348,12 @@ impl EffectHost for ClipEnv<'_> {
             self.drawing
                 .scene(placed.sequence, &[track], at, scale, (w, h))
         });
+        // A track an effect reads is read as its own picture.
         let moment = Moment {
             at,
             scale,
             scene: scene.as_ref(),
+            clears: false,
         };
         self.drawing
             .track(&mut canvas, placed.sequence, track, &moment);

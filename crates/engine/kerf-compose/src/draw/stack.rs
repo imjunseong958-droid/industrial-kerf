@@ -11,6 +11,9 @@ pub(super) struct Moment<'a> {
     pub(super) at: Time,
     pub(super) scale: f64,
     pub(super) scene: Option<&'a three_d::Scene>,
+    /// Whether a clip a model films (`filmed=true`) leaves its place clear: the sequence is
+    /// drawn as a clip of another, where the take laid under that clip is to show.
+    pub(super) clears: bool,
 }
 
 impl Drawing {
@@ -37,6 +40,8 @@ impl Drawing {
             at,
             scale,
             scene: scene.as_ref(),
+            // The program's sequence is the first, and every other is a clip of another.
+            clears: index != 0,
         };
         let mut next = 0;
         while next < tracks.len() {
@@ -233,7 +238,9 @@ impl Drawing {
         tracks: &[&'p TrackPlan],
         moment: &Moment,
     ) -> Vec<&'p Shown> {
-        let Moment { at, scale, scene } = *moment;
+        let Moment {
+            at, scale, scene, ..
+        } = *moment;
         let Some(scene) = scene else {
             return Vec::new();
         };
@@ -324,6 +331,7 @@ impl Drawing {
                     );
                     layer.opacity = 1.0;
                 }
+                layer.clears = moment.clears && shown.plan.filmed;
                 Some(layer)
             })
             .collect();
@@ -338,7 +346,9 @@ impl Drawing {
         moment: &Moment,
         size: (usize, usize),
     ) -> Option<three_d::Layer> {
-        let Moment { at, scale, scene } = *moment;
+        let Moment {
+            at, scale, scene, ..
+        } = *moment;
         let scene = scene?;
         if matches!(shown.plan.source, Source::Mesh) {
             return self.mesh(sequence, shown, moment, size);
@@ -357,6 +367,7 @@ impl Drawing {
             depth,
             opacity: ready.opacity,
             blend: self.blend(shown.plan.blend),
+            clears: false,
         })
     }
 
@@ -413,10 +424,16 @@ impl Drawing {
         let Moment { at, scale, .. } = *moment;
         let (w, h) = (canvas.w, canvas.h);
         let (from, to) = (&track.shown[pair.from], &track.shown[pair.to]);
+        // Each side is its clip's own picture, which is what a transition mixes: what the two
+        // leave clear is said of the mix.
+        let own = Moment {
+            clears: false,
+            ..*moment
+        };
         let side = |shown: &Shown| {
             let mut picture = Image::new(w, h);
             if shown.shows(at) {
-                self.layer(&mut picture, sequence, shown, moment, Blend::Normal);
+                self.layer(&mut picture, sequence, shown, &own, Blend::Normal);
             }
             picture
         };
@@ -430,26 +447,64 @@ impl Drawing {
             return;
         };
         let p = progress(at, pair.start, pair.end) as f32;
-        let mut mixed = apply_scaled(&fx, &a, &b, p, scale as f32);
-        if self.hard {
-            // Each pixel is the one of the two clips it is the more of.
-            let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
-            lay_hard(canvas, &mut mixed, &colors);
-            return;
-        }
-        // A fade from or to nothing keeps the one clip's blend mode;
-        // between two they mix normally.
-        let blend = match (from.shows(at), to.shows(at)) {
-            (true, false) => from.plan.blend,
-            (false, true) => to.plan.blend,
-            _ if pair.from == pair.to => from.plan.blend,
-            _ => Blend::Normal,
+        let mix = |a: &Image, b: &Image| apply_scaled(&fx, a, b, p, scale as f32);
+        let lay = |canvas: &mut Image, mut mixed: Image| {
+            if self.hard {
+                // Each pixel is the one of the two clips it is the more of.
+                let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
+                lay_hard(canvas, &mut mixed, &colors);
+                return;
+            }
+            // A fade from or to nothing keeps the one clip's blend mode;
+            // between two they mix normally.
+            let blend = match (from.shows(at), to.shows(at)) {
+                (true, false) => from.plan.blend,
+                (false, true) => to.plan.blend,
+                _ if pair.from == pair.to => from.plan.blend,
+                _ => Blend::Normal,
+            };
+            composite(canvas, &mixed, 1.0, self.blend(blend));
         };
-        composite(canvas, &mixed, 1.0, self.blend(blend));
+        // Which side is a clip a model films, where such clips leave their place clear. One
+        // clip that enters from nothing or leaves into it is all there is of its pair.
+        let clears = |shown: &Shown| moment.clears && shown.shows(at) && shown.plan.filmed;
+        let (a_clears, b_clears) = match pair.from == pair.to {
+            true => (clears(from), clears(from)),
+            false => (clears(from), clears(to)),
+        };
+        match (a_clears, b_clears) {
+            (false, false) => lay(canvas, mix(&a, &b)),
+            (true, true) => clear_under(canvas, &mut mix(&a, &b), self.hard),
+            // One side is a model's and the other Kerf's. The mix is one that takes the model's
+            // picture as a share of it, as the take shows in its place, and so a plain
+            // dissolve where the transition goes by what that picture shows.
+            (a_filmed, _) => {
+                let filmed = match a_filmed {
+                    true => Side::Outgoing,
+                    false => Side::Incoming,
+                };
+                let scale = scale as f32;
+                if self.hard {
+                    // Each pixel of the mix is the one of the two it is the more of: left
+                    // clear, or laid down.
+                    let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
+                    let models = usize::from(!a_filmed);
+                    let mut mixed = apply_filmed(&fx, &a, &b, p, scale, filmed);
+                    lay_hard_or_clear(canvas, &mut mixed, &colors, models);
+                } else {
+                    // What the mix covers is left clear, and Kerf's part of it laid there,
+                    // whichever of the two lies over the other in it and however it blends
+                    // them.
+                    split_filmed(&fx, &a, &b, p, scale, filmed).lay(canvas);
+                }
+            }
+        }
     }
 
     /// Draw a shown clip over `canvas` at `moment` with `blend`. Drawn hard, it is drawn by itself
-    /// and laid down whole where it covers half a pixel or more.
+    /// and laid down whole where it covers half a pixel or more. One a model films, where
+    /// `moment` has such clips leave their place clear, is drawn by itself too, and what it
+    /// covers of `canvas` is made clear by as much.
     pub(super) fn layer(
         &self,
         canvas: &mut Image,
@@ -458,13 +513,20 @@ impl Drawing {
         moment: &Moment,
         blend: Blend,
     ) {
-        if !self.hard {
+        // An adjustment has no picture to leave clear, whatever it says.
+        let clears =
+            moment.clears && shown.plan.filmed && !matches!(shown.plan.source, Source::Adjustment);
+        if !self.hard && !clears {
             self.lay(canvas, sequence, shown, moment, blend);
             return;
         }
         let mut alone = self.clear_picture(canvas.w, canvas.h);
         self.lay(&mut alone, sequence, shown, moment, Blend::Normal);
-        lay_hard(canvas, &mut alone, &[self.id_color(&shown.plan.clip.id)]);
+        if clears {
+            clear_under(canvas, &mut alone, self.hard);
+        } else {
+            lay_hard(canvas, &mut alone, &[self.id_color(&shown.plan.clip.id)]);
+        }
         self.keep_clear(alone);
     }
 
@@ -477,7 +539,9 @@ impl Drawing {
         moment: &Moment,
         blend: Blend,
     ) {
-        let Moment { at, scale, scene } = *moment;
+        let Moment {
+            at, scale, scene, ..
+        } = *moment;
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
@@ -534,7 +598,9 @@ impl Drawing {
         moment: &Moment,
         size: (usize, usize),
     ) -> Option<three_d::Layer> {
-        let Moment { at, scale, scene } = *moment;
+        let Moment {
+            at, scale, scene, ..
+        } = *moment;
         let scene = scene?;
         let plan = &shown.plan;
         let clip = &plan.clip;
@@ -552,9 +618,32 @@ impl Drawing {
         if opacity <= 0.0 {
             return None;
         }
-        let shade = self.mesh_shade(&clip.id);
         let to_output =
             Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        // What it is drawn as in the pass drawn: lit, in its color, by how near it is, by the
+        // way it faces, or by how far it goes in a frame, which is read from where the scene a
+        // frame on has it.
+        let next;
+        let shade = match self.pass {
+            Pass::Picture => three_d::mesh::Shade::Lit(&clip.id),
+            Pass::Ids => {
+                let [r, g, b, _] = self.id_color(&clip.id);
+                three_d::mesh::Shade::Flat([r, g, b])
+            }
+            Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
+            Pass::Normals => three_d::mesh::Shade::Facing,
+            Pass::Motion => {
+                next = (
+                    three_d::Scene::at(sequence, at + self.step, size),
+                    Affine::scale(scale, scale).then_apply(&self.geometry(
+                        sequence,
+                        plan,
+                        time + self.step,
+                    )),
+                );
+                three_d::mesh::Shade::Moving(&next.0, &next.1, self.step)
+            }
+        };
         let (mut picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
         if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
             let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
@@ -583,20 +672,7 @@ impl Drawing {
             depth,
             opacity,
             blend: self.blend(plan.blend),
+            clears: false,
         })
-    }
-
-    /// What the mesh clip `id` is drawn as in the pass drawn: lit, in its color, by how near it
-    /// is, or by the way it faces.
-    fn mesh_shade<'c>(&self, id: &'c Id) -> three_d::mesh::Shade<'c> {
-        match self.pass {
-            Pass::Picture => three_d::mesh::Shade::Lit(id),
-            Pass::Ids => {
-                let [r, g, b, _] = self.id_color(id);
-                three_d::mesh::Shade::Flat([r, g, b])
-            }
-            Pass::Depth | Pass::Relative => three_d::mesh::Shade::Near,
-            Pass::Normals => three_d::mesh::Shade::Facing,
-        }
     }
 }

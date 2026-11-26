@@ -191,7 +191,7 @@ impl Drawing {
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         if self.pass != Pass::Picture {
             let picture = Arc::make_mut(&mut picture);
-            self.as_pass(sequence, plan, picture, &to_output, at, (w, h));
+            self.as_pass(sequence, plan, picture, &to_output, (at, scale), (w, h));
         }
         Some(Ready {
             picture,

@@ -309,6 +309,12 @@ impl Drawing {
                 named = true;
             }
         }
+        if self.nests_filmed(plan, time) {
+            why.push(format!(
+                "clip `{clip}`: a model films a clip of its sequence, whose place the CPU leaves clear"
+            ));
+            named = true;
+        }
         if !named && matches!(plan.source, Source::Nested { .. }) {
             why.push(format!(
                 "clip `{clip}`: something in its sequence has no kernel"
@@ -407,6 +413,34 @@ impl Drawing {
         })
     }
 
+    /// Whether the sequence clip `plan` holds shows, at the clip's time `time`, a clip a model
+    /// films, or a clip of a sequence that does: it leaves its place clear in a sequence drawn
+    /// as a clip of another, which the CPU does.
+    fn nests_filmed(&self, plan: &ClipPlan, time: Time) -> bool {
+        let Source::Nested {
+            sequence,
+            source_in,
+            speed,
+            duration,
+            angle,
+        } = &plan.source
+        else {
+            return false;
+        };
+        let inner = &self.sequences[*sequence];
+        let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+        inner
+            .tracks
+            .iter()
+            .filter(|track| track.drawn(angle.as_ref()))
+            .flat_map(|track| &track.shown)
+            .any(|clip| {
+                clip.shows(shown)
+                    && (clip.plan.filmed
+                        || self.nests_filmed(&clip.plan, shown - clip.plan.clip.start))
+            })
+    }
+
     fn gpu_can_draw_clip(
         &self,
         gpu: &Gpu,
@@ -439,7 +473,9 @@ impl Drawing {
         {
             let inner = &self.sequences[*nested];
             let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-            if !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref()) {
+            if self.nests_filmed(plan, time)
+                || !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref())
+            {
                 return false;
             }
         }
@@ -657,6 +693,7 @@ impl Drawing {
                         at,
                         scale,
                         scene: Some(&depth.scene),
+                        clears: false,
                     };
                     self.crossing_run(plan, &tracks[next..], &moment)
                 }
@@ -809,6 +846,7 @@ impl Drawing {
                 at,
                 scale,
                 scene: depth.as_deref().map(|depth| &depth.scene),
+                clears: false,
             };
             let Some(mesh) =
                 self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
@@ -1114,6 +1152,7 @@ impl Drawing {
                     at,
                     scale,
                     scene: Some(&depth.scene),
+                    clears: false,
                 };
                 let Some(mesh) =
                     self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))

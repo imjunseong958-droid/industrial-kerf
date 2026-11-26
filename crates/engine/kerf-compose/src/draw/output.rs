@@ -171,10 +171,20 @@ impl Drawing {
         if self.pass != Pass::Picture {
             self.pass.hash(&mut hash);
         }
+        // A motion pass is of how far things go in a frame, however long that is.
+        if self.pass == Pass::Motion {
+            self.step.flicks().hash(&mut hash);
+        }
         self.matte.hash(&mut hash);
         // Only where it is, so that a pass drawn soft has the number it had.
         if self.hard {
             self.hard.hash(&mut hash);
+        }
+        // And so with this. Each clip left out keeps its place among the colors of an ids
+        // pass, which the clips drawn do not say: a frame of the same clips with no other
+        // in the sequence has other colors.
+        if self.only_filmed {
+            self.only_filmed.hash(&mut hash);
         }
         self.hash_sequence(&mut hash, 0, at)?;
         Some(hash.finish())

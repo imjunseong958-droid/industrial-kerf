@@ -38,7 +38,7 @@ line, applied in order and atomically.
 - `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
   track, the highest over the rest: each part of a multicam wants its own.
 - `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge at `x`, as a title; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `weight=900` picks its face, and `reveal={0f:0 24f:1} reveal_by=word` brings it in piece by piece.
-- `three_d=true z=0.5 rotate_y=30` places a clip in depth; `gen=camera@1` and `gen=light@1` clips see and light it. Adjacent 3D tracks draw far to near, cut where they cross. `depth=0.1 bevel=0.02`: a solid, its edges cut.
+- `three_d=true z=0.5 rotate_y=30` places a clip in depth, under `gen=camera@1` and `gen=light@1`. Adjacent 3D tracks draw far to near, cut where they cross.
 
 ## Versions
 Effects, transitions, and generators have versions, listed below as
@@ -100,13 +100,13 @@ picture cut; a blade or roll where all it cuts are quiet.
 `shape.outline@1` adds an outline to a `gen=shape` clip, in order, by `mode` (add, subtract,
 intersect, difference), with the shape's own numbers and `x`, `y`, `rotation`.
 
-A media Kerf or a model makes has the steps that make it under its line, written by `step` lines after its `media add`: `render <sequence> {name}
-[size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>]` (Kerf draws a sequence as a guide, without sound, at a model's
+A media Kerf or a model makes has its steps under its line, written by `step` lines after `media add`: `render <sequence> {name}
+[size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals|motion] [matte=<clip>] [only=filmed]` (Kerf draws a sequence as a guide, soundless, at a model's
 size and rate; `pass=depth` is how near each pixel is, `pass=ids` each clip in a flat color), `generate model=<name> prompt="…" [guide=|guide_<name>=|first=|last=|ref=<file>]
 [signal=<clip>] [moves=<clip>] [cast=<name>] [style=<name>] [seconds=<n>] [size=WxH] [seed=<n>] [out={name}]`, or `join {part} … {name}`. `cast=`/`style=` name
 one of `look`'s `cast`/`styles`. A guide says where, the prompt what, and a signal when: a `gen=signal@1` clip whose `value={0f:0 12f:1}`
 the model is handed frame by frame; `moves=` hands it a clip's box on each frame. `{out}` is the media's file, which the last step
-writes; another `{name}` one step makes and a later one reads. A file is named from the project's folder. No step names a program.
+writes; another `{name}` one step makes and a later reads. A file is named from the project's folder. No step names a program.
 
 ```
 step <media> add [<n>] <step>  ·  step <media> remove <n>

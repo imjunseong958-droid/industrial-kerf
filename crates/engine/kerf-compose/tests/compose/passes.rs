@@ -456,3 +456,371 @@ fn an_ids_pass_drawn_hard_gives_every_pixel_to_one_clip() {
     };
     assert_eq!(picture(false), picture(true));
 }
+
+/// [`SCENE`] with a model filming all of it but the box, and `s2`, the scene laid over a take.
+fn filmed_scene() -> kerf_model::Project {
+    let scene = SCENE
+        .replace("set color=#88aaff", "set color=#88aaff filmed=true")
+        .replace("set color=#404040", "set color=#404040 filmed=true")
+        .replace("set color=#c0c0c0", "set color=#c0c0c0 filmed=true");
+    assert_eq!(scene.matches("filmed=true").count(), 3);
+    parse_document(
+        &format!(
+            concat!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{}",
+                "sequence s2 rate=24 size=320x180 audio=48000\n",
+                "  track V1 video\n    clip take gen=solid@1 at=0f dur=24f\n      set color=#00ff00\n",
+                "  track V2 video\n    clip world seq=s1 src=0f at=0f dur=24f\n",
+            ),
+            scene
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project
+}
+
+#[test]
+fn a_guide_of_only_what_a_model_films_leaves_the_rest_out() {
+    let project = filmed_scene();
+    let drawn = |pass: Pass, only_filmed: bool| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass,
+                only_filmed,
+                hard_edges: true,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+    };
+    let at = Rate::FPS_24.time_of(3);
+    let (all, only) = (drawn(Pass::Ids, false), drawn(Pass::Ids, true));
+    // Each clip has the color it has with all of them drawn, the one left out too.
+    assert_eq!(all.ids(), only.ids());
+    let color = |id: &str| all.ids().iter().find(|(told, _)| told == id).unwrap().1;
+    let (all_frame, only_frame) = (all.frame(at, 1.0), only.frame(at, 1.0));
+    // The box no model films is before the wall, and with it left out the wall is there.
+    assert_eq!(pixel(&all_frame, 160, 90), color("box"));
+    assert_eq!(pixel(&only_frame, 160, 90), color("wall"));
+    // What a model films is where it was.
+    assert_eq!(pixel(&all_frame, 20, 10), color("sky"));
+    assert_eq!(pixel(&only_frame, 20, 10), color("sky"));
+    assert_eq!(pixel(&only_frame, 160, 170), pixel(&all_frame, 160, 170));
+    // And so in the pass a model follows: the box is nearer than the wall behind it.
+    let near =
+        |only_filmed: bool| pixel(&drawn(Pass::Depth, only_filmed).frame(at, 1.0), 160, 90)[0];
+    assert!(
+        near(true) < near(false),
+        "{} and {}",
+        near(true),
+        near(false)
+    );
+    // A frame of it is its own, kept apart from one of the same clips with no other in the
+    // sequence, where each has another color.
+    let ids_of = |body: &str, only_filmed: bool| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        let drawn = Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass: Pass::Ids,
+                only_filmed,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes");
+        (drawn.frame(at, 1.0), drawn.frame_key(at, 1.0))
+    };
+    let sky = "  track V2 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set filmed=true\n";
+    let sign = "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n      set scale=0.5\n";
+    let (with_a_sign, alone) = (ids_of(&format!("{sign}{sky}"), true), ids_of(sky, false));
+    assert_ne!(with_a_sign.0, alone.0);
+    assert_ne!(with_a_sign.1, alone.1);
+    // A sequence no clip of which a model films has nothing to draw so.
+    let none = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{SCENE}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let refused = Compositor::new(
+        &none,
+        Catalog::builtin(),
+        &ComposeOptions {
+            only_filmed: true,
+            ..ComposeOptions::default()
+        },
+    )
+    .err()
+    .expect("refused")
+    .to_string();
+    assert!(refused.contains("`filmed=true`"), "{refused}");
+}
+
+#[test]
+fn what_a_model_films_is_the_takes_in_a_pass_of_the_scene_laid_over_it() {
+    let project = filmed_scene();
+    let drawn = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            sequence: Some("s2".to_owned()),
+            pass: Pass::Ids,
+            hard_edges: true,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes");
+    let ids = drawn.ids();
+    let color = |id: &str| ids.iter().find(|(told, _)| told == id).unwrap().1;
+    let frame = drawn.frame(Rate::FPS_24.time_of(3), 1.0);
+    // The scene's clip is where the box Kerf draws is, and the take everywhere else, the sky
+    // out of depth and the wall behind the box among it.
+    assert_eq!(pixel(&frame, 160, 90), color("world"));
+    assert_eq!(pixel(&frame, 20, 10), color("take"));
+    assert_eq!(pixel(&frame, 100, 90), color("take"));
+    assert_eq!(pixel(&frame, 160, 170), color("take"));
+}
+
+#[test]
+fn a_guide_of_only_what_a_model_films_keeps_what_a_hidden_track_is_read_for() {
+    let drawn = |body: &str| {
+        let project = parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                only_filmed: true,
+                ..ComposeOptions::default()
+            },
+        )
+    };
+    // A matte on a hidden track cuts a clip a model films, and no model films the matte:
+    // it draws nothing itself, and is still read.
+    let matted = concat!(
+        "  track V1 video\n    clip g1 gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ff0000 filmed=true\n",
+        "      fx key.trackmatte@1 matte=V2 composite=matte-luma\n",
+        "  track V2 video enabled=false\n    clip m1 gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ffffff scale=0.5\n",
+    );
+    let frame = drawn(matted)
+        .expect("composes")
+        .frame(Rate::FPS_24.time_of(3), 1.0);
+    assert_eq!(pixel(&frame, 160, 90), [255, 0, 0]);
+    assert_eq!(pixel(&frame, 10, 10), [0, 0, 0]);
+    // A camera draws nothing, whatever it says: with no clip that draws a model's, such a
+    // guide is of nothing.
+    let camera = concat!(
+        "  track V1 video\n    clip sign gen=solid@1 at=0f dur=24f\n",
+        "  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set filmed=true\n",
+    );
+    assert!(drawn(camera).is_err());
+}
+
+/// How far a motion pass says the thing at a pixel goes in a frame, across and down in pixels
+/// of a frame `height` tall: none where it says nothing is there.
+fn motion_at(frame: &Frame, x: u32, y: u32) -> Option<(f64, f64)> {
+    let [red, green, blue] = pixel(frame, x, y);
+    let most = 0.125 * f64::from(frame.height);
+    let side = |byte: u8| (f64::from(byte) / 255.0 - 0.5) * 2.0 * most;
+    (blue > 127).then(|| (side(red), side(green)))
+}
+
+#[test]
+fn a_motion_pass_says_how_far_each_clip_goes_in_a_frame() {
+    // A square that slides right by 0.3 of the frame's width in 24 frames, 4 pixels a frame,
+    // beside one that holds still, on nothing.
+    let body = concat!(
+        "  track V1 video\n    clip slides gen=solid@1 at=0f dur=24f\n",
+        "      set scale=0.2 x={0f:-0.3 24f:0} y=-0.25\n",
+        "  track V2 video\n    clip holds gen=solid@1 at=0f dur=24f\n",
+        "      set scale=0.2 y=0.25\n",
+    );
+    let drawn = frame(body, Pass::Motion);
+    // At frame 3 the sliding square's middle is 84 pixels left of the frame's.
+    let (across, down) = motion_at(&drawn, 160 - 84, 45).expect("the sliding square");
+    assert!(
+        (across - 4.0).abs() < 0.2 && down.abs() < 0.2,
+        "{across} {down}"
+    );
+    // What holds still is mid grey, as near as a byte comes to it, and blue says it is there.
+    let (across, down) = motion_at(&drawn, 160, 135).expect("the still square");
+    assert!(across.abs() < 0.1 && down.abs() < 0.1, "{across} {down}");
+    assert_eq!(pixel(&drawn, 10, 90), [0, 0, 0]);
+    // A frame is as long as the rate asked for has it: at half the rate it goes twice as far.
+    let project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let slower = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass: Pass::Motion,
+            rate: Some(Rate::parse("12").expect("a rate")),
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes");
+    let at = Rate::FPS_24.time_of(3);
+    let (across, _) = motion_at(&slower.frame(at, 1.0), 160 - 84, 45).expect("the square");
+    assert!((across - 8.0).abs() < 0.2, "{across}");
+    assert_ne!(
+        slower.frame_key(at, 1.0),
+        compositor(body, Pass::Motion).frame_key(at, 1.0)
+    );
+}
+
+#[test]
+fn what_a_motion_pass_says_of_a_pixel_is_where_its_clip_is_a_frame_on() {
+    // A floor and a wall, a square and a plate that cross before them, and a camera that
+    // goes in and turns: flat clips in depth, a mesh, and everything moving on the screen.
+    // The mesh is a thin plate, all of it as far off as its middle, so that its middle goes
+    // as far as its pixels do: the near side of a ball goes further than its outline.
+    let body = concat!(
+        "  track V1 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set color=#88aaff\n",
+        "  track V2 video\n    clip floor gen=solid@1 at=0f dur=24f\n",
+        "      set color=#404040 three_d=true rotate_x=-80 y=0.4 z=1 scale=3\n",
+        "  track V3 video\n    clip wall gen=solid@1 at=0f dur=24f\n",
+        "      set color=#c0c0c0 three_d=true z=2 scale=0.8\n",
+        "  track V4 video\n    clip square gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ff0000 three_d=true scale=0.2 x={0f:-0.25 24f:0.15} y=-0.1\n",
+        "  track V5 video\n    clip plate gen=mesh@1 at=0f dur=24f\n",
+        "      set kind=box width=0.25 height=0.25 length=0.002 x={0f:0.3 24f:-0.1} y=0.2 z=0.5\n",
+        "  track V6 video\n    clip cam gen=camera@1 at=0f dur=24f\n",
+        "      set z={0f:-0.4 24f:0.2} pan={0f:-4 24f:4}\n",
+    );
+    let project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let drawn = |pass: Pass| {
+        Compositor::new(
+            &project,
+            Catalog::builtin(),
+            &ComposeOptions {
+                pass,
+                hard_edges: true,
+                ..ComposeOptions::default()
+            },
+        )
+        .expect("composes")
+    };
+    let (ids, motion) = (drawn(Pass::Ids), drawn(Pass::Motion));
+    let color = |id: &str| ids.ids().iter().find(|(told, _)| told == id).unwrap().1;
+    // A pixel well inside one clip: every pixel about it is that clip's too.
+    let inside = |frame: &Frame, x: i64, y: i64| -> Option<[u8; 3]> {
+        let (w, h) = (i64::from(frame.width), i64::from(frame.height));
+        if x < 2 || y < 2 || x >= w - 2 || y >= h - 2 {
+            return None;
+        }
+        let here = pixel(frame, x as u32, y as u32);
+        (-2..=2)
+            .flat_map(|dy| (-2..=2).map(move |dx| (dx, dy)))
+            .all(|(dx, dy)| pixel(frame, (x + dx) as u32, (y + dy) as u32) == here)
+            .then_some(here)
+    };
+    for frame in [2, 11, 20] {
+        let (now, next) = (Rate::FPS_24.time_of(frame), Rate::FPS_24.time_of(frame + 1));
+        let (ids_now, ids_next) = (ids.frame(now, 1.0), ids.frame(next, 1.0));
+        let moves = motion.frame(now, 1.0);
+        let (mut held, mut lost) = (std::collections::BTreeMap::new(), 0);
+        for y in (2..178).step_by(3) {
+            for x in (2..318).step_by(3) {
+                let Some(clip) = inside(&ids_now, x, y) else {
+                    continue;
+                };
+                // The sky is out of depth and holds still; all else is in depth.
+                let (across, down) = motion_at(&moves, x as u32, y as u32).expect("a clip");
+                let to = (
+                    (x as f64 + across).round() as i64,
+                    (y as f64 + down).round() as i64,
+                );
+                // Where it goes it is seen whole, or something has come before it there.
+                match inside(&ids_next, to.0, to.1) {
+                    Some(there) if there == clip => *held.entry(clip).or_insert(0) += 1,
+                    Some(_) => lost += 1,
+                    None => {}
+                }
+            }
+        }
+        // Each clip is found where its pixels were said to go, the mesh among them, and next
+        // to none is found to be another's: only what one of them has moved in front of.
+        for id in ["floor", "wall", "square", "plate"] {
+            let found = held.get(&color(id)).copied().unwrap_or(0);
+            assert!(found >= 15, "frame {frame}: {id} held at {found} pixels");
+        }
+        let all: i32 = held.values().sum();
+        assert!(
+            lost * 50 < all,
+            "frame {frame}: {lost} of {all} went astray"
+        );
+    }
+    // And as far. The square and the plate, which nothing comes before, are eight frames on
+    // where the pass has said frame by frame: the middle of each has gone as far as its pixels
+    // were said to go, to within what a whole pixel at each of its edges moves a middle by.
+    let middle = |frame: &Frame, id: &str| {
+        let (mut x, mut y, mut count) = (0.0, 0.0, 0.0);
+        for at_y in 0..frame.height {
+            for at_x in 0..frame.width {
+                if pixel(frame, at_x, at_y) == color(id) {
+                    (x, y, count) = (x + f64::from(at_x), y + f64::from(at_y), count + 1.0);
+                }
+            }
+        }
+        (x / count, y / count)
+    };
+    for id in ["square", "plate"] {
+        let (mut across, mut down) = (0.0, 0.0);
+        for frame in 4..12 {
+            let at = Rate::FPS_24.time_of(frame);
+            let (ids_now, moves) = (ids.frame(at, 1.0), motion.frame(at, 1.0));
+            let (mut sum, mut count) = ((0.0, 0.0), 0.0);
+            for y in 2..178 {
+                for x in 2..318 {
+                    if inside(&ids_now, x, y) == Some(color(id)) {
+                        let said = motion_at(&moves, x as u32, y as u32).expect("a clip");
+                        (sum, count) = ((sum.0 + said.0, sum.1 + said.1), count + 1.0);
+                    }
+                }
+            }
+            (across, down) = (across + sum.0 / count, down + sum.1 / count);
+        }
+        let at = |frame: i64| ids.frame(Rate::FPS_24.time_of(frame), 1.0);
+        let (from, to) = (middle(&at(4), id), middle(&at(12), id));
+        let went = (to.0 - from.0, to.1 - from.1);
+        assert!(went.0.abs() > 8.0, "{id} went {went:?}");
+        assert!(
+            (went.0 - across).abs() < 0.8 && (went.1 - down).abs() < 0.8,
+            "{id} went {went:?} and is said to go {across} {down}"
+        );
+    }
+}

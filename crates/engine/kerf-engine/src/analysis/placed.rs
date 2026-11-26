@@ -160,6 +160,7 @@ impl Placing {
                 &ComposeOptions {
                     sequence: Some(target.id.to_string()),
                     pass,
+                    only_filmed: crate::recipe::guide_only_filmed(project, target.id.as_str()),
                     ..ComposeOptions::default()
                 },
             )
