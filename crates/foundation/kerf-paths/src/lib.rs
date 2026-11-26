@@ -26,7 +26,8 @@ pub fn user_dir() -> Option<PathBuf> {
 
 /// Kerf's folder in the system's cache folder, for what can be made again: `%LOCALAPPDATA%\Kerf`
 /// on Windows, `$HOME/Library/Caches/Kerf` on macOS, and `$XDG_CACHE_HOME/kerf`, else
-/// `$HOME/.cache/kerf`, elsewhere. `None` when the variable the system's rule needs is not set.
+/// `$HOME/.cache/kerf`, elsewhere. `None` when the variable the system's rule needs is not set;
+/// one set to nothing counts as not set.
 ///
 /// Each system's own rule, so the name is `Kerf` on Windows and macOS and `kerf` elsewhere. A
 /// cache keeps its own folder in it, and its own variable to move or turn it off.
@@ -74,14 +75,11 @@ impl System {
 
 /// [`cache_dir`] on `system`, with `var` the environment.
 fn cache_dir_on(system: System, var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    // Unlike the crash folder's rule, this takes a variable set to nothing as a folder, as the
-    // caches always have.
     kerf_dir_on(system, Kind::Cache, var)
 }
 
 /// [`crash_dir`] on `system`, with `var` the environment.
 fn crash_dir_on(system: System, var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    let var = |name: &str| var(name).filter(|value| !value.is_empty());
     let folder = kerf_dir_on(system, Kind::Logs, var)?;
     Some(match system {
         System::MacOs => folder,
@@ -101,13 +99,17 @@ enum Kind {
 /// Kerf's folder in the system's folder of `kind`, with `var` the environment:
 /// `%LOCALAPPDATA%\Kerf` on Windows, which has one folder for every kind;
 /// `$HOME/Library/<Caches or Logs>/Kerf` on macOS; and `$XDG_<CACHE or STATE>_HOME/kerf`, else
-/// `$HOME/<.cache or .local/state>/kerf`, elsewhere.
+/// `$HOME/<.cache or .local/state>/kerf`, elsewhere. A variable set to nothing counts as not set.
 fn kerf_dir_on(
     system: System,
     kind: Kind,
     var: impl Fn(&str) -> Option<OsString>,
 ) -> Option<PathBuf> {
-    let var = |name: &str| var(name).map(PathBuf::from);
+    let var = |name: &str| {
+        var(name)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
+    };
     match system {
         System::Windows => var("LOCALAPPDATA").map(|folder| folder.join("Kerf")),
         System::MacOs => {
@@ -154,5 +156,30 @@ mod tests {
         );
         assert_eq!(home_from(Some(OsString::new()), None), None);
         assert_eq!(home_from(None, None), None);
+    }
+
+    // kerf-engine's `frame_cache` test renders with every cache variable set to nothing, on the
+    // systems CI runs it on; this checks the fallback to HOME, and Windows, which it does not run on.
+    #[test]
+    fn a_cache_variable_set_to_nothing_counts_as_not_set() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(value))
+            }
+        };
+        assert_eq!(
+            cache_dir_on(
+                System::Other,
+                env(&[("XDG_CACHE_HOME", ""), ("HOME", "/home/lim")])
+            ),
+            Some(PathBuf::from("/home/lim/.cache/kerf"))
+        );
+        assert_eq!(
+            cache_dir_on(System::Windows, env(&[("LOCALAPPDATA", "")])),
+            None
+        );
     }
 }
