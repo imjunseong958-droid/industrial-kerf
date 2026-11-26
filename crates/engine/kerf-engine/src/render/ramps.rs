@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 /// `project` with what ramps on its sound tracks made into sound of its own. Nested sequences are
 /// mixed by FFmpeg first; one inside another that ramps is heard at its speed overall. Once
-/// `cancellation` is asked for, a mix under way is stopped and the rest are not made: what reads
-/// the sound stops on it too.
+/// `cancellation` is asked for, a nested mix under way is stopped and no other is made, so their
+/// sound is left out: what reads the sound must stop on the token too.
 pub fn with_sound<'a>(project: &'a Project, cancellation: &CancellationToken) -> Cow<'a, Project> {
     kerf_compose::ramps::with_sound(project, |sequence, from, to| {
         mixed(project, sequence, from, to, cancellation)

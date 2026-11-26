@@ -962,6 +962,10 @@ fn endpoint_flag_prints_the_socket_even_when_a_long_path_moves_it() {
 
 #[cfg(windows)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn endpoint_flag_prints_the_pipe_the_daemon_listens_on() {
     let base = project_directory("endpoint");
     let long = base.join("a".repeat(120));
@@ -992,6 +996,10 @@ fn endpoint_flag_prints_the_pipe_the_daemon_listens_on() {
 
 #[cfg(windows)]
 #[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 fn a_second_daemon_for_a_project_refuses_to_start() {
     let directory = project_directory("second");
     fs::create_dir_all(&directory).unwrap();

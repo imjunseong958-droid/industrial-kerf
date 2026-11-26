@@ -157,6 +157,10 @@ pub fn measure_program_with_progress(
         return Err(EngineError::Cancelled);
     }
     let heard = crate::render::ramps::with_sound(project, cancellation);
+    // A cancel during a nested mix leaves that sound out: what is kept for that is not the answer.
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
     let compiled = compile_program(
         &heard,
         kerf_model::Catalog::builtin(),
