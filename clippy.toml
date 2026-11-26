@@ -4,8 +4,8 @@
 
 # On Windows, std's canonicalize returns a verbatim path, `\\?\C:\project`, which takes
 # `/` literally, so a project-relative `media/a.mov` joined to it names nothing; nor is
-# it equal to the same folder written plainly. kerf_paths::canonicalize returns the plain
-# path wherever it names the same file.
+# it equal to the same folder written plainly. kerf_paths::canonicalize returns a drive's
+# path plainly.
 disallowed-methods = [
     { path = "std::fs::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
     { path = "std::path::Path::canonicalize", reason = 'Windows makes it a verbatim path (\\?\C:\...); use kerf_paths::canonicalize' },
