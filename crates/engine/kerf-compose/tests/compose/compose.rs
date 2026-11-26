@@ -485,3 +485,55 @@ fn a_keyframe_curve_moves_the_picture_along_it() {
     );
     assert!(script.contains("0f:0:0.1,0.9,0.2,1 "), "{script}");
 }
+
+#[test]
+fn a_clip_is_slanted_by_its_skew_along_its_axis() {
+    // A white solid at half size, from 80 to 240 across and 45 to 135 down.
+    let lit = |set: &str, x: u32, y: u32| {
+        let body = format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ffffff scale=0.5 {set}\n"
+        );
+        pixel(&frame(&body, 3, false), x, y)[0] > 128
+    };
+    // Slanted 45 degrees, its top goes 45 pixels left and its bottom 45 right.
+    assert!(lit("skew=45", 40, 47) && lit("skew=45", 280, 133));
+    assert!(!lit("skew=45", 230, 47) && !lit("skew=45", 90, 133));
+    assert!(!lit("", 40, 47) && lit("", 230, 47));
+    // Along an axis turned a quarter, its left side goes down and its right side up.
+    assert!(lit("skew=45 skew_axis=90", 81, 140) && !lit("skew=45 skew_axis=90", 81, 50));
+    assert!(lit("skew=45 skew_axis=90", 238, 40) && !lit("skew=45 skew_axis=90", 238, 130));
+}
+
+#[test]
+fn a_clip_is_smeared_where_it_moves_while_its_shutter_is_open() {
+    // A white solid a quarter the size of the frame, crossing it 11 pixels a frame.
+    let drawn = |set: &str| {
+        let body = format!(
+            "{SEQUENCE}\
+             \x20 track V1 video\n\
+             \x20   clip g1 gen=solid@1 at=0f dur=24f\n\
+             \x20     set color=#ffffff scale=0.25 {set}\n"
+        );
+        frame(&body, 12, false)
+    };
+    // How many pixels of the row through its middle are partly white.
+    let soft = |frame: &Frame| {
+        (0..320)
+            .filter(|x| (20..235).contains(&pixel(frame, *x, 90)[0]))
+            .count()
+    };
+    let moving = "x={0f:-0.4 23f:0.4}";
+    assert!(soft(&drawn(moving)) <= 2);
+    let smeared = drawn(&format!("{moving} shutter=360"));
+    assert!(soft(&smeared) >= 16, "{}", soft(&smeared));
+    // Half as long open, half as long a smear.
+    let half = soft(&drawn(&format!("{moving} shutter=180")));
+    assert!((6..=14).contains(&half), "{half}");
+    // About where it is at the frame: its middle is as white as ever.
+    assert_eq!(pixel(&smeared, 160, 90), pixel(&drawn(moving), 160, 90));
+    // What holds still is drawn as it was, to the byte.
+    assert_eq!(drawn("x=0.1 shutter=180"), drawn("x=0.1"));
+}

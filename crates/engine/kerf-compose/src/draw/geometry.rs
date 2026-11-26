@@ -6,9 +6,21 @@
 use super::*;
 
 /// The clip properties that place a picture.
-pub(super) const GEOMETRY: [&str; 12] = [
-    "crop_l", "crop_r", "crop_t", "crop_b", "scale", "scale_x", "scale_y", "rotation", "anchor_x",
-    "anchor_y", "x", "y",
+pub(super) const GEOMETRY: [&str; 14] = [
+    "crop_l",
+    "crop_r",
+    "crop_t",
+    "crop_b",
+    "scale",
+    "scale_x",
+    "scale_y",
+    "rotation",
+    "anchor_x",
+    "anchor_y",
+    "x",
+    "y",
+    "skew",
+    "skew_axis",
 ];
 
 impl Drawing {
@@ -25,6 +37,75 @@ impl Drawing {
     }
 }
 
+/// How far apart on the canvas, in its pixels, the copies of a smeared picture may be drawn at most:
+/// no further, and they read as one smear.
+const SMEAR_STEP: f64 = 1.0;
+
+/// The most copies a smeared picture is drawn as.
+const MOST_SMEARS: usize = 64;
+
+impl Drawing {
+    /// Where a picture that `to_output` puts on the canvas at clip time `time`, `rect` of it showing,
+    /// is at each moment the clip's shutter is open about that time: as many as keep the copies
+    /// [`SMEAR_STEP`] apart where it moves fastest. None when its `shutter` is shut, when it is in
+    /// depth, where a camera puts it, or when it moves less than half a pixel while it is open.
+    pub(super) fn smeared(
+        &self,
+        sequence: &SequencePlan,
+        plan: &ClipPlan,
+        time: Time,
+        scale: f64,
+        to_output: &Affine,
+        rect: Rect,
+    ) -> Option<Vec<Affine>> {
+        if plan.three_d {
+            return None;
+        }
+        let shutter = number(&param(&plan.clip, "shutter").value_at(time));
+        if !(shutter > 0.0) {
+            return None;
+        }
+        let open = sequence.rate.frame_duration().seconds() * shutter / 360.0;
+        let placed = |time: Time| {
+            Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time))
+        };
+        let back = placed(time).inverse()?;
+        // Where it is `share` of the way through the shutter, which opens half before `time`.
+        let moved = |share: f64| {
+            let at = time + Time::from_seconds(open * (share - 0.5)).unwrap_or(Time::ZERO);
+            placed(at).then_apply(&back).then_apply(to_output)
+        };
+        let corners = [
+            Vec2::new(rect.x, rect.y),
+            Vec2::new(rect.right(), rect.y),
+            Vec2::new(rect.x, rect.bottom()),
+            Vec2::new(rect.right(), rect.bottom()),
+        ];
+        // How far its corners go over the shutter, at the speed of its fastest stretch.
+        const STRETCHES: usize = 8;
+        let mut fastest = 0.0f64;
+        let mut before = moved(0.0);
+        for stretch in 1..=STRETCHES {
+            let after = moved(stretch as f64 / STRETCHES as f64);
+            for corner in corners {
+                let (from, to) = (before.apply(corner), after.apply(corner));
+                fastest = fastest.max((to.x - from.x).hypot(to.y - from.y));
+            }
+            before = after;
+        }
+        let across = fastest * STRETCHES as f64;
+        if !(across >= 0.5) {
+            return None;
+        }
+        let count = ((across / SMEAR_STEP).ceil() as usize + 1).clamp(2, MOST_SMEARS);
+        Some(
+            (0..count)
+                .map(|at| moved(at as f64 / (count - 1) as f64))
+                .collect(),
+        )
+    }
+}
+
 /// Where a clip's source pixels land on a `canvas` at clip time `time`,
 /// and how many canvas pixels a source pixel is across and down.
 pub(super) fn place(plan: &ClipPlan, canvas: (f64, f64), time: Time) -> (Affine, Vec2) {
@@ -33,7 +114,7 @@ pub(super) fn place(plan: &ClipPlan, canvas: (f64, f64), time: Time) -> (Affine,
 }
 
 /// The values of a clip's [`GEOMETRY`] at clip time `time`, with its motion path added in.
-pub(super) fn geometry_numbers(clip: &Clip, path: Option<&MotionPath>, time: Time) -> [f64; 12] {
+pub(super) fn geometry_numbers(clip: &Clip, path: Option<&MotionPath>, time: Time) -> [f64; 14] {
     let mut numbers = GEOMETRY.map(|name| number(&param(clip, name).value_at(time)));
     if let Some(path) = path {
         let on = path.at(number(&param(clip, "along").value_at(time)));
@@ -63,7 +144,7 @@ pub(super) fn placed(
     fit: bool,
     snap: bool,
     (cw, ch): (f64, f64),
-    [l, r, t, b, s, sx, sy, rotation, ax, ay, x, y]: [f64; 12],
+    [l, r, t, b, s, sx, sy, rotation, ax, ay, x, y, skew, skew_axis]: [f64; 14],
 ) -> (Affine, Vec2) {
     let (sw, sh) = (f64::from(size.0), f64::from(size.1));
     let (width, height) = (sw * (1.0 - l - r), sh * (1.0 - t - b));
@@ -75,7 +156,7 @@ pub(super) fn placed(
     let (kx, ky) = (s * sx, s * sy);
     let mut position = Vec2::new(cw / 2.0 + x * cw + ax * fw, ch / 2.0 + y * ch + ay * fh);
     let mut scale = Vec2::new(fw / width * kx, fh / height * ky);
-    if snap && rotation == 0.0 && ax == 0.0 && ay == 0.0 {
+    if snap && rotation == 0.0 && skew == 0.0 && ax == 0.0 && ay == 0.0 {
         // A still picture lands on whole pixels.
         let (ow, oh) = ((fw * kx.abs()).round(), (fh * ky.abs()).round());
         position = Vec2::new(
@@ -85,7 +166,28 @@ pub(super) fn placed(
         scale = Vec2::new(ow / width * kx.signum(), oh / height * ky.signum());
     }
     let anchor = Vec2::new(sw * l + width * (0.5 + ax), sh * t + height * (0.5 + ay));
-    (Affine::motion(position, scale, rotation, anchor), scale)
+    let moved = Affine::motion(position, scale, rotation, anchor);
+    if skew == 0.0 {
+        return (moved, scale);
+    }
+    // Slanted between being scaled and being turned, as an After Effects layer is: along its own
+    // axes, turned by `skew_axis`.
+    let slant = Affine::rotate_deg(skew_axis)
+        .then_apply(&Affine {
+            a: 1.0,
+            b: 0.0,
+            c: skew.to_radians().tan(),
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
+        })
+        .then_apply(&Affine::rotate_deg(-skew_axis));
+    let slanted = Affine::translate(position.x, position.y)
+        .then_apply(&Affine::rotate_deg(rotation))
+        .then_apply(&slant)
+        .then_apply(&Affine::scale(scale.x, scale.y))
+        .then_apply(&Affine::translate(-anchor.x, -anchor.y));
+    (slanted, scale)
 }
 
 /// How a parent has moved its children at its clip time `time`: from where it would sit with no
@@ -94,8 +196,8 @@ pub(super) fn placed(
 /// ([`three_d::Scene::at`]).
 pub(super) fn parent_motion(rig: &Rig, canvas: (f64, f64), time: Time) -> Affine {
     let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), time);
-    let [l, r, t, b, _, _, _, _, ax, ay, _, _] = numbers;
-    let rest = [l, r, t, b, 1.0, 1.0, 1.0, 0.0, ax, ay, 0.0, 0.0];
+    let [l, r, t, b, _, _, _, _, ax, ay, _, _, _, _] = numbers;
+    let rest = [l, r, t, b, 1.0, 1.0, 1.0, 0.0, ax, ay, 0.0, 0.0, 0.0, 0.0];
     let (now, _) = placed(rig.size, rig.fit, false, canvas, numbers);
     let (before, _) = placed(rig.size, rig.fit, false, canvas, rest);
     before

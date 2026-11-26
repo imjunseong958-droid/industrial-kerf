@@ -577,12 +577,21 @@ impl Drawing {
             composite(canvas, &projected, opacity, blend);
             return;
         }
+        let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
+        // A picture that moves while its shutter is open is smeared over where it goes; a pass,
+        // which says one thing of each pixel, is not.
+        if self.pass == Pass::Picture {
+            let kept = crop.unwrap_or(whole);
+            if let Some(places) = self.smeared(sequence, plan, time, scale, &to_output, kept) {
+                composite_smeared(canvas, &picture, &places, kept, opacity, blend);
+                return;
+            }
+        }
         match crop {
             None if (picture.w, picture.h) == (w, h) && identity(&to_output) => {
                 composite(canvas, &picture, opacity, blend);
             }
             crop => {
-                let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
                 let crop = crop.unwrap_or(whole);
                 composite_placed(canvas, &picture, &to_output, crop, opacity, blend);
             }

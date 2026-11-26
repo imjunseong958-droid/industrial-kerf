@@ -28,7 +28,17 @@ const VIDEO_GROUPS: &[Group] = &[
     (
         "Transform",
         &[
-            "x", "y", "scale", "scale_x", "scale_y", "rotation", "anchor_x", "anchor_y",
+            "x",
+            "y",
+            "scale",
+            "scale_x",
+            "scale_y",
+            "rotation",
+            "skew",
+            "skew_axis",
+            "anchor_x",
+            "anchor_y",
+            "shutter",
         ],
         true,
     ),

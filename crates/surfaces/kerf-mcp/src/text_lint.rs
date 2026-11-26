@@ -57,9 +57,21 @@ const GENERIC: &[(&str, &str)] = &[
     ("monospace", "JetBrains Mono"),
 ];
 /// The placement properties of a picture, as the compositor reads them.
-const GEOMETRY: [&str; 12] = [
-    "crop_l", "crop_r", "crop_t", "crop_b", "scale", "scale_x", "scale_y", "rotation", "anchor_x",
-    "anchor_y", "x", "y",
+const GEOMETRY: [&str; 14] = [
+    "crop_l",
+    "crop_r",
+    "crop_t",
+    "crop_b",
+    "scale",
+    "scale_x",
+    "scale_y",
+    "rotation",
+    "anchor_x",
+    "anchor_y",
+    "x",
+    "y",
+    "skew",
+    "skew_axis",
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -318,7 +330,7 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
         [cw / 2.0, ch / 2.0],
         0.5,
     )?;
-    let [l, r, t, b, s, sx, sy, rotation, ax, ay, x, y] =
+    let [l, r, t, b, s, sx, sy, rotation, ax, ay, x, y, skew, skew_axis] =
         GEOMETRY.map(|name| number(clip, name, at));
     // What the crop leaves of the title's picture.
     let (width, height) = (cw * (1.0 - l - r), ch * (1.0 - t - b));
@@ -334,7 +346,7 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
     if kept[2] <= kept[0] || kept[3] <= kept[1] {
         return None;
     }
-    // position + R(rotation) · scale · (p − anchor), as `place` in the
+    // position + R(rotation) · slant · scale · (p − anchor), as `place` in the
     // compositor; the title's picture is not fitted, so it keeps its size.
     let position = (
         cw / 2.0 + x * cw + ax * width,
@@ -342,6 +354,17 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
     );
     let anchor = (cw * l + width * (0.5 + ax), ch * t + height * (0.5 + ay));
     let (sin, cos) = rotation.to_radians().sin_cos();
+    let (axis_sin, axis_cos) = skew_axis.to_radians().sin_cos();
+    let lean = skew.to_radians().tan();
+    // Slanted along its own axes turned by `skew_axis`.
+    let slant = |dx: f64, dy: f64| {
+        let (u, v) = (
+            axis_cos * dx + axis_sin * dy,
+            -axis_sin * dx + axis_cos * dy,
+        );
+        let u = u + lean * v;
+        (axis_cos * u - axis_sin * v, axis_sin * u + axis_cos * v)
+    };
     let (kx, ky) = (s * sx, s * sy);
     let mut placed = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
     for (px, py) in [
@@ -350,7 +373,7 @@ fn title_box(sequence: &Sequence, clip: &Clip, at: Time) -> Option<[f64; 4]> {
         (kept[0], kept[3]),
         (kept[2], kept[3]),
     ] {
-        let (dx, dy) = ((px - anchor.0) * kx, (py - anchor.1) * ky);
+        let (dx, dy) = slant((px - anchor.0) * kx, (py - anchor.1) * ky);
         let (qx, qy) = (
             position.0 + cos * dx - sin * dy,
             position.1 + sin * dx + cos * dy,

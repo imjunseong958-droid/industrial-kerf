@@ -108,6 +108,7 @@ fn a_clip_lands_where_its_frame_is_drawn() {
         ("\n      set rotation=90", 3),
         ("\n      set rotation=30 x=-0.1", 3),
         ("\n      set scale_x=-1", 3),
+        ("\n      set skew=25 skew_axis=30 scale=0.8", 3),
         // A crop is fitted again, and moves what it leaves.
         ("\n      set crop_l=0.2", 3),
         ("\n      set crop_t=0.1 crop_b=0.3 scale=0.7", 3),

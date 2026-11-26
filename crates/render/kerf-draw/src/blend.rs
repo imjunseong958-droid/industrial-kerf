@@ -353,6 +353,43 @@ pub fn composite_placed(
         });
 }
 
+/// `src` placed through each of `places`, cropped to `rect` of it, and the pictures that makes
+/// averaged, as a picture moving while a shutter is open is seen, composited over `dst` with
+/// `opacity` and `mode`.
+pub fn composite_smeared(
+    dst: &mut Image,
+    src: &Image,
+    places: &[Affine],
+    rect: Rect,
+    opacity: f32,
+    mode: Blend,
+) {
+    let (w, h) = (dst.w, dst.h);
+    let mut smeared = Image::new(w, h);
+    let share = 1.0 / places.len().max(1) as f32;
+    for m in places {
+        let Some(placement) = src.placement(w, h, m, rect) else {
+            continue;
+        };
+        smeared
+            .px
+            .par_chunks_mut(w * 4)
+            .enumerate()
+            .skip(placement.at.rows.start)
+            .take(placement.at.rows.len())
+            .for_each(|(y, row)| {
+                for x in placement.at.columns.clone() {
+                    if let Some(sample) = placement.sample(x, y) {
+                        for (value, sample) in row[x * 4..x * 4 + 4].iter_mut().zip(sample) {
+                            *value += sample * share;
+                        }
+                    }
+                }
+            });
+    }
+    composite(dst, &smeared, opacity, mode);
+}
+
 /// Mix the premultiplied color `sp` (its opacity applied) into pixel `d` at (`x`, `y`).
 #[inline]
 pub fn mix(d: &mut [f32], mut sp: [f32; 4], x: usize, y: usize, mode: Blend) {
