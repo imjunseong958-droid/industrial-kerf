@@ -27,7 +27,6 @@ mod tests;
 use crate::video::project::{EffectInstance, ParamValue};
 use crate::video::tick::Tick;
 use kerf_geom::{Affine, Vec2};
-use rayon::prelude::*;
 
 use crate::video::effects::FxCtx;
 use kerf_draw::Image;
@@ -171,30 +170,6 @@ pub(crate) fn lin(c: [f32; 4]) -> [f32; 3] {
     dec([c[0], c[1], c[2]])
 }
 
-/// Blend `src` (straight linear RGB) onto `base` (straight linear RGB) with one of
-/// [`crate::video::project::effect::SIMPLE_BLEND`] (Normal, Add, Screen, Multiply, Overlay).
-#[inline]
-pub(crate) fn blend_simple(mode: u32, base: [f32; 3], src: [f32; 3]) -> [f32; 3] {
-    let mut o = [0.0; 3];
-    for k in 0..3 {
-        let (b, s) = (base[k], src[k]);
-        o[k] = match mode {
-            1 => b + s,
-            2 => 1.0 - (1.0 - b.min(1.0)) * (1.0 - s.min(1.0)),
-            3 => b * s,
-            4 => {
-                if b < 0.5 {
-                    2.0 * b * s
-                } else {
-                    1.0 - 2.0 * (1.0 - b.min(1.0)) * (1.0 - s.min(1.0))
-                }
-            }
-            _ => s,
-        };
-    }
-    o
-}
-
 /// Premultiplied `src` over premultiplied `dst`.
 #[inline]
 pub(crate) fn over(dst: &mut [f32], src: [f32; 4]) {
@@ -202,26 +177,6 @@ pub(crate) fn over(dst: &mut [f32], src: [f32; 4]) {
     for c in 0..4 {
         dst[c] = src[c] + dst[c] * k;
     }
-}
-
-// ------------------------------------------------------------------ noise
-
-#[inline]
-pub(crate) fn hash_u(x: i64, y: i64, z: i64, seed: u64) -> u64 {
-    let mut h = (x as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15)
-        ^ (y as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
-        ^ (z as u64).wrapping_mul(0x1656_67B1_9E37_79F9)
-        ^ seed.wrapping_mul(0x27D4_EB2F_1656_67C5);
-    h ^= h >> 31;
-    h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    h ^= h >> 29;
-    h = h.wrapping_mul(0x94D0_49BB_1331_11EB);
-    h ^ (h >> 32)
-}
-/// Uniform 0..1 from integer coordinates.
-#[inline]
-pub(crate) fn hash01(x: i64, y: i64, z: i64, seed: u64) -> f32 {
-    (hash_u(x, y, z, seed) >> 40) as f32 / (1u64 << 24) as f32
 }
 
 // ------------------------------------------------------------------ image helpers
@@ -238,21 +193,6 @@ pub(crate) fn blur_plane(plane: &[f32], w: usize, h: usize, sigma: f32) -> Vec<f
     };
     crate::video::effects::gaussian(&mut im, sigma, sigma, false);
     im.px.as_chunks::<4>().0.iter().map(|p| p[0]).collect()
-}
-
-/// Fill an image from a per-pixel premultiplied colour function (x, y at pixel centres).
-pub(crate) fn generate(img: &mut Image, f: impl Fn(f32, f32, [f32; 4]) -> [f32; 4] + Sync) {
-    let w = img.w;
-    img.px
-        .par_chunks_mut(w * 4)
-        .enumerate()
-        .for_each(|(y, row)| {
-            for x in 0..w {
-                let p = &mut row[x * 4..x * 4 + 4];
-                let o = f(x as f32 + 0.5, y as f32 + 0.5, [p[0], p[1], p[2], p[3]]);
-                p.copy_from_slice(&o);
-            }
-        });
 }
 
 /// Inverse-map warp with an affine (destination → source sampling).
@@ -284,8 +224,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         "mosaic" => distort::mosaic(img, e, cx),
         // Stylize / Perspective / Generate / Legacy & obsolete generators
         "stroke" => stylize::stroke(img, e, cx),
-        "gradient" => stylize::gradient(img, e, cx),
-        "checkerboard" => stylize::checkerboard(img, e, cx),
         // Time / analysis
         "posterize_time" => temporal::posterize_time(img, e, cx),
         "warp_stabilizer" => temporal::warp_stabilizer(img, e, cx),

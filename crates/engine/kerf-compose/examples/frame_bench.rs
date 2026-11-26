@@ -125,21 +125,6 @@ const SCENES: &[(&str, &str)] = &[
     ("optics", "      fx distort.opticscompensation fieldOfView=80\n"),
     ("sphere", "      fx vr.rotatesphere tilt=20 pan=-70 roll=10\n"),
     ("plane to sphere", "      fx vr.planetosphere scale=90 pan=30 feather=20\n"),
-    // What generates a picture over the clip's.
-    ("four colors", "      fx generate.fourcolor@2 opacity=60\n"),
-    ("grid", "      fx generate.grid@2 size=120 border=4\n"),
-    (
-        "ramp",
-        "      fx generate.gradientramp@2 start_x=0.2 end_x=0.8 blend=50\n",
-    ),
-    (
-        "gradient",
-        "      fx generate.gradient@1 shape=radial scatter=50 blend=50\n",
-    ),
-    (
-        "checkerboard",
-        "      fx generate.checkerboard@2 width=120 mode=normal opacity=50\n",
-    ),
     // The color effects kept from EffectCraft, and the Cineon Converter.
     (
         "curves",

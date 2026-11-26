@@ -335,7 +335,6 @@ const ADJUST: &[&str] = &["Video Effects", "Adjust"];
 const BLUR: &[&str] = &["Video Effects", "Blur & Sharpen"];
 const COLOR_CORR: &[&str] = &["Video Effects", "Color Correction"];
 const DISTORT: &[&str] = &["Video Effects", "Distort"];
-const GENERATE: &[&str] = &["Video Effects", "Generate"];
 const IMAGE_CONTROL: &[&str] = &["Video Effects", "Image Control"];
 const KEYING: &[&str] = &["Video Effects", "Keying"];
 const NOISE: &[&str] = &["Video Effects", "Noise & Grain"];
@@ -1337,43 +1336,6 @@ fn build_effects() -> Vec<EffectDef> {
             vec![
                 f("threshold", "Threshold", 0.0, 0.0, 100.0, "%"),
                 f("cutoff", "Cutoff", 0.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
-            "four_color_gradient",
-            "4-Color Gradient",
-            GENERATE,
-            vec![
-                col("c1", "Color 1", [1.0, 1.0, 0.0, 1.0]),
-                col("c2", "Color 2", [0.0, 1.0, 0.0, 1.0]),
-                col("c3", "Color 3", [1.0, 0.0, 1.0, 1.0]),
-                col("c4", "Color 4", [0.0, 0.0, 1.0, 1.0]),
-                f("blend", "Blend", 100.0, 1.0, 1000.0, ""),
-                f("opacity", "Opacity", 100.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
-            "ramp",
-            "Ramp",
-            vfx::LEGACY,
-            vec![
-                pt("start", "Start of Ramp", f64::NAN, 0.0),
-                col("start_color", "Start Color", [0.0, 0.0, 0.0, 1.0]),
-                pt("end", "End of Ramp", f64::NAN, f64::NAN),
-                col("end_color", "End Color", [1.0, 1.0, 1.0, 1.0]),
-                ch("shape", "Ramp Shape", &["Linear Ramp", "Radial Ramp"], 0),
-                f("blend", "Blend With Original", 0.0, 0.0, 100.0, "%"),
-            ],
-        ),
-        video(
-            "grid",
-            "Grid",
-            vfx::OBSOLETE,
-            vec![
-                fs("size", "Width", 60.0, (1.0, 4000.0), (1.0, 400.0), "", 0),
-                fs("border", "Border", 2.0, (0.0, 100.0), (0.0, 20.0), "", 1),
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                f("opacity", "Opacity", 100.0, 0.0, 100.0, "%"),
             ],
         ),
         video(

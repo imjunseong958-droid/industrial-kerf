@@ -45,11 +45,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     ("transform", "distort.transform", 2, "Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture."),
     ("warp_stabilizer", "distort.warpstabilizer", 2, "Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage."),
     // Generate
-    ("checkerboard", "generate.checkerboard", 2, "A checkerboard; backgrounds and patterns."),
-    ("four_color_gradient", "generate.fourcolor", 2, "A gradient from four colored points; backgrounds and color washes."),
-    ("gradient", "generate.gradient", 1, "A smooth linear or radial gradient between two colors, dithered against banding; skies, backgrounds, shading."),
-    ("ramp", "generate.gradientramp", 2, "A linear or radial ramp between two colors; skies, backgrounds, shading."),
-    ("grid", "generate.grid", 2, "Draws a grid of lines; layouts, tech overlays, and backgrounds."),
     // Immersive Video
     ("vr_blur", "vr.blur", 2, "Blurs a 360° frame evenly on the sphere, seams and poles included; soft 360 backgrounds."),
     ("vr_denoise", "vr.denoise", 2, "Reduces noise on a 360° frame without seams; cleaning VR footage."),

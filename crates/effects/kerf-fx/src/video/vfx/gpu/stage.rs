@@ -40,11 +40,10 @@ impl U {
 /// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
 fn source() -> String {
     format!(
-        "{}{}{}{}",
+        "{}{}{}",
         include_str!("../kernels.wgsl"),
         kerf_kernel::shadow_wgsl(),
-        kerf_kernel::color_wgsl(),
-        kerf_kernel::generated_wgsl()
+        kerf_kernel::color_wgsl()
     )
 }
 
@@ -91,11 +90,6 @@ pub(super) struct Stage {
     pub(super) choke_columns: wgpu::ComputePipeline,
     pub(super) choke_put: wgpu::ComputePipeline,
     pub(super) plane_to_sphere: wgpu::ComputePipeline,
-    pub(super) four_colors: wgpu::ComputePipeline,
-    pub(super) grid: wgpu::ComputePipeline,
-    pub(super) ramp: wgpu::ComputePipeline,
-    pub(super) gradient: wgpu::ComputePipeline,
-    pub(super) checkerboard: wgpu::ComputePipeline,
 }
 
 impl Stage {
@@ -162,11 +156,6 @@ impl Stage {
                 choke_columns: kernel("choke_columns"),
                 choke_put: kernel("choke_put"),
                 plane_to_sphere: kernel("plane_to_sphere"),
-                four_colors: kernel("four_colors"),
-                grid: kernel("grid"),
-                ramp: kernel("ramp"),
-                gradient: kernel("gradient"),
-                checkerboard: kernel("checkerboard"),
                 layout,
             }
         });

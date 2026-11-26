@@ -104,21 +104,15 @@ fn px(id: &'static str, label: &'static str, def: f64, max: f64, soft: f64) -> P
 fn layout() -> ParamDef {
     ch("frame_layout", "Frame Layout", FRAME_LAYOUTS, 0)
 }
-fn blend_orig() -> ParamDef {
-    pct("blend", "Blend With Original", 0.0)
-}
 
 /// Default position of auto (NaN) point parameters, as fractions of the frame, where the frame
-/// centre is not right (Corner Pin corners, gradient ends, Lightning endpoints…).
+/// centre is not right (Corner Pin corners, Lightning endpoints…).
 pub fn auto_point(effect: &str, param: &str) -> Option<(f64, f64)> {
     Some(match (effect, param) {
         ("corner_pin", "upper_left") => (0.0, 0.0),
         ("corner_pin", "upper_right") => (1.0, 0.0),
         ("corner_pin", "lower_left") => (0.0, 1.0),
         ("corner_pin", "lower_right") => (1.0, 1.0),
-        ("gradient", "start") => (0.5, 0.0),
-        ("gradient", "end") => (0.5, 1.0),
-        ("checkerboard", "anchor") => (0.0, 0.0),
         _ => return None,
     })
 }
@@ -454,26 +448,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         // ---- Generate ----
-        video(
-            "gradient",
-            "Gradient",
-            GENERATE,
-            vec![
-                pt("start", "Gradient Start", f64::NAN, f64::NAN),
-                col("start_color", "Start Color", [0.0, 0.0, 0.0, 1.0]),
-                pt("end", "Gradient End", f64::NAN, f64::NAN),
-                col("end_color", "End Color", [1.0, 1.0, 1.0, 1.0]),
-                ch(
-                    "shape",
-                    "Gradient Shape",
-                    &["Linear", "Radial", "Reflected", "Diamond"],
-                    0,
-                ),
-                pct("scatter", "Gradient Scatter", 0.0),
-                pct("midpoint", "Midpoint", 50.0),
-                blend_orig(),
-            ],
-        ),
         // ---- Image Control ----
         video(
             "channel_mix",
@@ -703,26 +677,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
             ],
         ),
         // ---- Obsolete (still render in old projects) ----
-        video(
-            "checkerboard",
-            "Checkerboard",
-            OBSOLETE,
-            vec![
-                pt("anchor", "Anchor", f64::NAN, f64::NAN),
-                px("width", "Width", 64.0, 4000.0, 400.0),
-                px("height", "Height", 64.0, 4000.0, 400.0),
-                b("square", "Square (Width Only)", true),
-                px("feather", "Feather", 0.0, 100.0, 20.0),
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                pct("opacity", "Opacity", 100.0),
-                ch(
-                    "mode",
-                    "Blending Mode",
-                    &["None", "Normal", "Add", "Multiply", "Screen", "Overlay"],
-                    0,
-                ),
-            ],
-        ),
         // ---- Legacy bin ----
     ];
     v.extend(immersive());
@@ -871,7 +825,6 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
                 | "lumetri"
                 | "video_limiter"
                 | "vignette"
-                | "gradient"
                 | "channel_mix"
                 | "logo_cutout"
                 | "luma_key"

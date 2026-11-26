@@ -70,7 +70,7 @@ generate.gluegun	utility.stroke@1
 generate.lightburst	
 generate.lightrays	
 generate.lightsweep	the prompt and references of the shot's recipe
-generate.threads	generate.grid@2
+generate.threads	a `gen=shape@1` clip with `fill_kind=grid`
 generate.eyedropperfill	a `gen=solid@1` clip over it
 generate.fill	a solid (gen=solid@1)
 generate.fractal	
@@ -251,3 +251,9 @@ text.simple	a `gen=title@1` clip, with a `gen=shape@1` rect behind it for a box
 utility.autoalign	the clip's `x` and `y`
 distort.magnify	a copy of the clip above it, scaled with `scale` about the spot its `anchor_x` and `anchor_y` name, under an ellipse or rect mask
 generate.paintbucket	a `gen=shape@1` clip over the region
+# And what generates a picture that a shape's fill draws in the guide.
+generate.checkerboard	a `gen=shape@1` clip with `fill_kind=checker`
+generate.fourcolor	a `gen=shape@1` clip with `fill_kind=corners`
+generate.gradient	a `gen=shape@1` clip with `fill_kind=linear` or `fill_kind=radial`
+generate.gradientramp	a `gen=shape@1` clip with `fill_kind=linear` or `fill_kind=radial`
+generate.grid	a `gen=shape@1` clip with `fill_kind=grid`

@@ -2,7 +2,7 @@
 //! them.
 
 use super::*;
-use crate::video::effects::{choice, f, gaussian_boxes};
+use crate::video::effects::{f, gaussian_boxes};
 use kerf_color::{rgb_to_ycbcr, Matrix};
 
 /// `hash3`'s constant on its third coordinate.
@@ -186,94 +186,6 @@ impl Kernel {
                     ],
                     reach: (w / 2.0).hypot(h / 2.0) as f32,
                     curvature: (f64::from(f(e, "curvature", cx)) / 100.0) as f32,
-                }
-            }
-            "four_color_gradient" => {
-                let color = |id: &str| {
-                    let c = crate::video::effects::color(e, id, cx);
-                    [c[0], c[1], c[2]]
-                };
-                Kernel::FourColors(kerf_kernel::FourColors {
-                    colors: [color("c1"), color("c2"), color("c3"), color("c4")],
-                    power: 1.0 + f(e, "blend", cx) / 100.0,
-                    opacity: f(e, "opacity", cx) / 100.0,
-                    size: [size.0 as f32, size.1 as f32],
-                })
-            }
-            "grid" => {
-                let c = crate::video::effects::color(e, "color", cx);
-                Kernel::Grid(kerf_kernel::Grid {
-                    middle: [size.0 as f32 / 2.0, size.1 as f32 / 2.0],
-                    size: (f(e, "size", cx) * cx.px_scale).max(1.0),
-                    border: f(e, "border", cx) * cx.px_scale,
-                    color: dec([c[0], c[1], c[2]]),
-                    opacity: f(e, "opacity", cx) / 100.0,
-                })
-            }
-            "ramp" => {
-                let sized = Image {
-                    w: size.0,
-                    h: size.1,
-                    px: Vec::new(),
-                };
-                let start = crate::video::effects::point(e, "start", cx, &sized);
-                let end = crate::video::effects::point(e, "end", cx, &sized);
-                let (vx, vy) = (end.x - start.x, end.y - start.y);
-                let color = |id: &str| {
-                    let c = crate::video::effects::color(e, id, cx);
-                    [c[0], c[1], c[2]]
-                };
-                Kernel::Ramp {
-                    start: [start.x as f32, start.y as f32],
-                    along: [vx as f32, vy as f32],
-                    length2: (vx * vx + vy * vy).max(1e-9) as f32,
-                    colors: [color("start_color"), color("end_color")],
-                    radial: choice(e, "shape") == 1,
-                    opacity: 1.0 - f(e, "blend", cx) / 100.0,
-                }
-            }
-            "gradient" => {
-                let sized = Image {
-                    w: size.0,
-                    h: size.1,
-                    px: Vec::new(),
-                };
-                let (start, end) = (pv(e, "start", cx, &sized), pv(e, "end", cx, &sized));
-                let (vx, vy) = ((end.x - start.x) as f32, (end.y - start.y) as f32);
-                let length2 = (vx * vx + vy * vy).max(1e-6);
-                let mid = (fv(e, "midpoint", cx) / 100.0).clamp(0.01, 0.99);
-                Kernel::Gradient(Box::new(Gradient {
-                    start: [start.x as f32, start.y as f32],
-                    along: [vx, vy],
-                    length2,
-                    length: length2.sqrt(),
-                    colors: [cv(e, "start_color", cx), cv(e, "end_color", cx)],
-                    shape: chv(e, "shape"),
-                    scatter: fv(e, "scatter", cx) / 100.0,
-                    gamma: (0.5f32).ln() / mid.ln(),
-                    blend: fv(e, "blend", cx) / 100.0,
-                }))
-            }
-            "checkerboard" => {
-                let sized = Image {
-                    w: size.0,
-                    h: size.1,
-                    px: Vec::new(),
-                };
-                let anchor = pv(e, "anchor", cx, &sized);
-                let width = (fv(e, "width", cx) * cx.px_scale).max(1.0);
-                let height = if bv(e, "square") {
-                    width
-                } else {
-                    (fv(e, "height", cx) * cx.px_scale).max(1.0)
-                };
-                Kernel::Checkerboard {
-                    anchor: [anchor.x as f32, anchor.y as f32],
-                    cell: [width, height],
-                    feather: fv(e, "feather", cx) * cx.px_scale,
-                    color: lin(cv(e, "color", cx)),
-                    opacity: fv(e, "opacity", cx) / 100.0,
-                    mode: chv(e, "mode"),
                 }
             }
             "cineon_converter" => {
