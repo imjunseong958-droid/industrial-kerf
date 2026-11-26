@@ -66,10 +66,10 @@ pub struct ComposeOptions {
     pub frame_folder: Option<std::path::PathBuf>,
     /// What is drawn: the picture, unless it says otherwise.
     pub pass: Pass,
-    /// A clip of the sequence to draw alone as a matte, in place of any pass: white where a
-    /// pixel is that clip's, as [`Pass::Ids`] has it, and black everywhere else, so what
-    /// stands before the clip is cut out of it.
-    pub matte: Option<String>,
+    /// The clips of the sequence to draw alone as one matte, in place of any pass: white where
+    /// a pixel is one of those clips', as [`Pass::Ids`] has it, and black everywhere else, so
+    /// what stands before them is cut out of it. None draws no matte.
+    pub matte: Vec<String>,
     /// In [`Pass::Ids`] and a matte, each clip is laid down whole where it covers half a pixel
     /// or more and not at all where it covers less, so that every pixel is one clip's color or
     /// black, with none between two: as a file of the pass is written, for what reads it to take

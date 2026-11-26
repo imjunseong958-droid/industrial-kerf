@@ -517,6 +517,17 @@ impl Clip {
         )
     }
 
+    /// What a model is told it is, over the part of a guide it shows in (`prompt="…"`):
+    /// its own words, which a step's prompt says of the whole shot. None where it says none.
+    pub fn prompt(&self) -> Option<&str> {
+        match self.props.get("prompt") {
+            Some(Param::Static(Value::Text(words))) if !words.trim().is_empty() => {
+                Some(words.trim())
+            }
+            _ => None,
+        }
+    }
+
     /// Whether it draws a picture: not a null, a camera, a light, or a signal, which draw
     /// nothing, nor a caption, which its sequence burns in.
     pub fn draws(&self) -> bool {

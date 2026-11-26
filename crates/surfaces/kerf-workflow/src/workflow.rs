@@ -54,6 +54,19 @@
 //! guide's own rate, `{frames}` each frame it has up to `frames.most`, and
 //! `{width}` and `{height}` its own size, down to `size` by area.
 //!
+//! A workflow whose model is told what clips of its guide say they are (`prompt=` on a
+//! clip) says where their words join the line's, and how many frames it makes for each frame
+//! of a mask it reads:
+//!
+//! ```json
+//! "regions": { "joins": "4", "every": 4 }
+//! ```
+//!
+//! Each region's words are encoded with the text encoder node 4 reads, held to the region's
+//! mask, and joined to node 4's words, and what read node 4 reads them all
+//! ([`Workflow::with_regions`]). Its mask is a grey video of one frame for every `every` the
+//! model makes, from the first: the frames a video model reads its words over.
+//!
 //! A workflow that reads a file that is not a picture, a scene as splats,
 //! and makes another file of it says `"of": "ref"`: the file is the line's
 //! `ref=`, sent as it is, and the workflow has no rate, size, or frames to
@@ -62,6 +75,7 @@
 
 use crate::names::{
     guide_named, names_a_file, names_a_signal, names_what_is_handed, MOVES, MOVES_BOX, MOVES_VIDEO,
+    REGIONS,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -143,9 +157,34 @@ pub struct Workflow {
     /// The nodes that go when an input of theirs does, by their id.
     #[serde(default)]
     without: BTreeMap<String, Without>,
+    /// Where what clips of a guide say they are joins the line's words: none for a workflow
+    /// whose model is told none of it.
+    #[serde(default)]
+    pub regions: Option<Regions>,
     #[serde(rename = "workflow")]
     graph: Map<String, Value>,
 }
+
+/// Where the words of a region of a guide join a workflow's own, and the masks it reads.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Regions {
+    /// The node that encodes the line's words: each region's join them, read with its text
+    /// encoder.
+    pub joins: String,
+    /// The frames the model makes for each frame of a mask it reads, from the first.
+    pub every: u32,
+}
+
+/// The kinds of node a region is read with, as [`Workflow::with_regions`] adds them.
+const REGION_NODES: [&str; 6] = [
+    "LoadVideo",
+    "GetVideoComponents",
+    "ImageToMask",
+    "CLIPTextEncode",
+    "ConditioningSetMask",
+    "ConditioningCombine",
+];
 
 /// What a node is left out for, and what stands in for it then.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -257,7 +296,128 @@ impl Workflow {
                     ));
             }
         }
+        if let Some(regions) = &workflow.regions {
+            let encodes = workflow
+                .graph
+                .get(&regions.joins)
+                .is_some_and(|node| link(&node["inputs"]["clip"]).is_some());
+            if !encodes {
+                return Err(format!(
+                    "`regions` joins node {}, which is not a node of `workflow` that reads a text encoder as its `clip`",
+                    regions.joins
+                ));
+            }
+            if regions.every == 0 {
+                return Err(
+                    "`regions` reads a mask frame for `every` frames, at least 1".to_owned(),
+                );
+            }
+        }
         Ok(workflow)
+    }
+
+    /// `graph`, a graph [`Self::graph`] filled, with what each of `regions` says, its words
+    /// and the name the server has its mask by, read over its mask beside the line's words.
+    /// Each region's words are encoded with the text encoder the node [`Regions::joins`]
+    /// names reads, held to its mask, and joined to that node's words in turn, and whatever
+    /// read that node reads them all.
+    pub fn with_regions(
+        &self,
+        graph: Value,
+        regions: &[(String, String)],
+    ) -> Result<Value, String> {
+        let Value::Object(mut graph) = graph else {
+            return Err("the graph is not an object of nodes".to_owned());
+        };
+        if regions.is_empty() {
+            return Ok(Value::Object(graph));
+        }
+        let Some(spec) = &self.regions else {
+            return Err("this workflow reads no region".to_owned());
+        };
+        let joins = spec.joins.as_str();
+        let Some(clip) = graph
+            .get(joins)
+            .map(|node| node["inputs"]["clip"].clone())
+            .filter(|clip| link(clip).is_some())
+        else {
+            return Err(format!(
+                "node {joins}, which regions join, is not in the graph left to send"
+            ));
+        };
+        // New nodes are numbered past every node the graph has.
+        let mut next = graph
+            .keys()
+            .filter_map(|id| id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let mut id = || {
+            next += 1;
+            (next - 1).to_string()
+        };
+        let mut added = BTreeSet::new();
+        let mut words = serde_json::json!([joins, 0]);
+        for (prompt, mask) in regions {
+            let [load, frames, matte, encoded, held, joined] = [(); 6].map(|()| id());
+            let nodes = [
+                (&load, "LoadVideo", serde_json::json!({ "file": mask })),
+                (
+                    &frames,
+                    "GetVideoComponents",
+                    serde_json::json!({ "video": [load, 0] }),
+                ),
+                (
+                    &matte,
+                    "ImageToMask",
+                    serde_json::json!({ "image": [frames, 0], "channel": "red" }),
+                ),
+                (
+                    &encoded,
+                    "CLIPTextEncode",
+                    serde_json::json!({ "clip": clip, "text": prompt }),
+                ),
+                (
+                    &held,
+                    "ConditioningSetMask",
+                    serde_json::json!({
+                        "conditioning": [encoded, 0],
+                        "mask": [matte, 0],
+                        "strength": 1.0,
+                        "set_cond_area": "default",
+                    }),
+                ),
+                (
+                    &joined,
+                    "ConditioningCombine",
+                    serde_json::json!({ "conditioning_1": words, "conditioning_2": [held, 0] }),
+                ),
+            ];
+            for (id, class, inputs) in nodes {
+                graph.insert(
+                    id.clone(),
+                    serde_json::json!({ "class_type": class, "inputs": inputs }),
+                );
+                added.insert(id.clone());
+            }
+            words = serde_json::json!([joined, 0]);
+        }
+        // What read the line's words reads them with every region's.
+        for (id, node) in &mut graph {
+            if added.contains(id) {
+                continue;
+            }
+            for input in node["inputs"]
+                .as_object_mut()
+                .into_iter()
+                .flat_map(|inputs| inputs.values_mut())
+            {
+                if link(input) == Some(joins) && input[1] == 0 {
+                    *input = words.clone();
+                }
+            }
+        }
+        Ok(Value::Object(graph))
     }
 
     /// The node that stands in for `id` among those not in `gone`, if one does.
@@ -395,6 +555,9 @@ impl Workflow {
         if blanks.contains(MOVES) || blanks.contains(MOVES_VIDEO) || blanks.contains(MOVES_BOX) {
             reads.push(MOVES);
         }
+        if self.regions.is_some() {
+            reads.push(REGIONS);
+        }
         let more: Map<String, Value> = self
             .set
             .iter()
@@ -501,11 +664,18 @@ impl Workflow {
             .collect()
     }
 
-    /// The kinds of node its graph has, each once.
+    /// The kinds of node its graph has, each once, with those a region is read with where it
+    /// reads one.
     pub fn classes(&self) -> BTreeSet<String> {
+        let regions = self
+            .regions
+            .iter()
+            .flat_map(|_| REGION_NODES)
+            .map(str::to_owned);
         self.graph
             .values()
             .filter_map(|node| node["class_type"].as_str().map(str::to_owned))
+            .chain(regions)
             .collect()
     }
 
@@ -788,7 +958,7 @@ mod tests {
         let directed = Workflow::named("shot-directed").unwrap();
         assert_eq!(
             directed.takes()["reads"],
-            json!(["guide", "first", "ref", "signal", "moves"])
+            json!(["guide", "first", "ref", "signal", "moves", "regions"])
         );
         assert_eq!(directed.takes()["more"]["moves_strength"], json!(1.0));
         let mut needs = |class: &str| -> Result<BTreeSet<String>, String> {

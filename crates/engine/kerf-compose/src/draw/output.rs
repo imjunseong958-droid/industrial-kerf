@@ -116,13 +116,16 @@ impl Drawing {
         if self.pass == Pass::Relative {
             stretch_to_its_own16(&mut rgba);
         }
-        if let Some(color) = self.matte {
+        if !self.matte.is_empty() {
             rgba.par_chunks_mut(8).for_each(|pixel| {
                 let byte = |at: usize| {
                     let code = u16::from_le_bytes([pixel[at * 2], pixel[at * 2 + 1]]);
                     ((u32::from(code) * 255 + 32_767) / 65_535) as u8
                 };
-                let its = (0..3).all(|at| color[at].abs_diff(byte(at)) <= NEAR);
+                let its = self
+                    .matte
+                    .iter()
+                    .any(|color| (0..3).all(|at| color[at].abs_diff(byte(at)) <= NEAR));
                 pixel[..6].fill(if its { u8::MAX } else { 0 });
             });
         }
@@ -169,12 +172,14 @@ impl Drawing {
         if self.pass == Pass::Relative {
             stretch_to_its_own(&mut rgba);
         }
-        if let Some(color) = self.matte {
+        if !self.matte.is_empty() {
             rgba.par_chunks_mut(4).for_each(|pixel| {
-                let its = color
-                    .iter()
-                    .zip(pixel.iter())
-                    .all(|(a, b)| a.abs_diff(*b) <= NEAR);
+                let its = self.matte.iter().any(|color| {
+                    color
+                        .iter()
+                        .zip(pixel.iter())
+                        .all(|(a, b)| a.abs_diff(*b) <= NEAR)
+                });
                 pixel[..3].fill(if its { u8::MAX } else { 0 });
             });
         }

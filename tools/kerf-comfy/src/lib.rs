@@ -423,6 +423,37 @@ pub fn make(
             unread.push(format!("`{}`", request::MOVES));
         }
     }
+    // What clips of the guide say they are, each over where the guide shows them, in the
+    // frames the model reads its words over.
+    let mut regions = Vec::new();
+    match (&workflow.regions, request.regions.is_empty()) {
+        (_, true) => {}
+        (None, false) => unread.push("`regions`".to_owned()),
+        (Some(read), false) => {
+            let shape = Shape {
+                size: (width, height),
+                fps,
+                frames,
+                hold,
+            };
+            for (index, region) in request.regions.iter().enumerate() {
+                let file = work.join(format!("region{}.comfy.mp4", index + 1));
+                tools.mask(&region.mask, &file, &shape, read.every)?;
+                let bytes = std::fs::read(&file)
+                    .map_err(|error| format!("cannot read {}: {error}", file.display()))?;
+                let sent = server.upload(&file, &format!("kerf-{}.mp4", hash(&bytes)))?;
+                regions.push((region.prompt.clone(), sent));
+            }
+            say(&format!(
+                "handed what clips of the guide say they are, each over where it is: {}",
+                regions
+                    .iter()
+                    .map(|(prompt, _)| format!("\"{prompt}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
     if !unread.is_empty() {
         say(&format!(
             "this workflow reads no {}: left out",
@@ -431,6 +462,7 @@ pub fn make(
     }
 
     let graph = workflow.graph(&values, &mut |class| server.required(class))?;
+    let graph = workflow.with_regions(graph, &regions)?;
     // With what the line does not give left out, and all that cannot do without it, a
     // workflow can have nothing left that saves a file: said here, with what it wants,
     // where the server would say only that the graph has no end.

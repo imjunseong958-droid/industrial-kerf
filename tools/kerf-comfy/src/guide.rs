@@ -186,11 +186,7 @@ impl Shape {
     /// model's rate, the picture filling the model's size with what is over
     /// cut off evenly, and no sound.
     fn arguments(&self) -> Vec<String> {
-        let (width, height) = self.size;
-        let filter = format!(
-            "fps={},scale={width}:{height}:force_original_aspect_ratio=increase:flags=bicubic,crop={width}:{height},setsar=1,tpad=stop_mode=clone:stop={}",
-            self.fps, self.hold
-        );
+        let filter = self.fit();
         ["-an", "-vf", &filter, "-frames:v", &self.frames.to_string()]
             .into_iter()
             .chain([
@@ -199,11 +195,45 @@ impl Shape {
             .map(str::to_owned)
             .collect()
     }
+
+    /// FFmpeg's filter that fits a picture in motion to it: the model's rate, the picture
+    /// filling the model's size with what is over cut off evenly, the last frame held.
+    fn fit(&self) -> String {
+        let (width, height) = self.size;
+        format!(
+            "fps={},scale={width}:{height}:force_original_aspect_ratio=increase:flags=bicubic,crop={width}:{height},setsar=1,tpad=stop_mode=clone:stop={}",
+            self.fps, self.hold
+        )
+    }
 }
 
 /// Run `command` to its end and give what it wrote; one that does not end
 /// well is an error with what it said.
 impl Tools {
+    /// The mask of a region of a guide at `to`: `mask` fitted to `shape` as its guide is,
+    /// then one frame of it for every `every`, from the first, which is what a model reads a
+    /// region's words over.
+    pub fn mask(&self, mask: &Path, to: &Path, shape: &Shape, every: u32) -> Result<(), String> {
+        let every = every.max(1);
+        let frames = shape.frames.saturating_sub(1) / every + 1;
+        let filter = format!(
+            "{},select=not(mod(n\\,{every})),setpts=N/({}*TB)",
+            shape.fit(),
+            shape.fps
+        );
+        run(
+            Command::new(&self.ffmpeg)
+                .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+                .arg(mask)
+                .args(["-an", "-vf", &filter, "-frames:v", &frames.to_string()])
+                .args(["-c:v", "libx264", "-preset", "veryfast", "-crf", "10"])
+                .args(["-pix_fmt", "yuv420p"])
+                .arg(to),
+            &self.ffmpeg,
+        )
+        .map(drop)
+    }
+
     /// A grey video at `to` of `size`, `fps` frames a second: each frame as light all over
     /// as its number in `levels` says, 0 black and 1 white. It is how a number a frame
     /// reaches a node that reads a mask a frame.

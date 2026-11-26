@@ -255,8 +255,9 @@ pub struct RenderOptions {
     pub sound: bool,
     /// What of the sequence is drawn: its picture, or a pass of it for a model that reads one.
     pub pass: kerf_compose::Pass,
-    /// A clip of the sequence to draw alone, white on black, in place of the picture.
-    pub matte: Option<String>,
+    /// The clips of the sequence to draw alone, white on black, in place of the picture: none
+    /// for the picture.
+    pub matte: Vec<String>,
     /// Draw only the clips of the sequence a model films ([`ComposeOptions::only_filmed`]).
     pub only_filmed: bool,
     /// Where the frames drawn are kept, and read back from when they are drawn again.
@@ -406,7 +407,7 @@ impl Default for RenderOptions {
             rate: None,
             sound: true,
             pass: kerf_compose::Pass::Picture,
-            matte: None,
+            matte: Vec::new(),
             only_filmed: false,
             frame_cache: CacheFolder::Default,
             section_cache: CacheFolder::Default,
@@ -543,7 +544,7 @@ fn pass_encoding(opts: &RenderOptions) -> Result<Encoding> {
             }
         )));
     }
-    let greys = pass_of_greys(opts.pass, opts.matte.is_some());
+    let greys = pass_of_greys(opts.pass, !opts.matte.is_empty());
     let codec = pass_codec(Path::new(&opts.output), greys)?;
     let frames = match codec.pix_fmt {
         "gray16le" => FramesIn::Grey16,
@@ -561,7 +562,7 @@ fn pass_encoding(opts: &RenderOptions) -> Result<Encoding> {
 }
 
 fn encoding(opts: &RenderOptions, color: ColorSpace) -> Result<Encoding> {
-    if opts.pass != kerf_compose::Pass::Picture || opts.matte.is_some() {
+    if opts.pass != kerf_compose::Pass::Picture || !opts.matte.is_empty() {
         return pass_encoding(opts);
     }
     let plain = |video| Encoding {

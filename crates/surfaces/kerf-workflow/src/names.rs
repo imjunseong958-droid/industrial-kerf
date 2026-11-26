@@ -4,6 +4,9 @@
 /// The name a workflow reads where clips go under.
 pub const MOVES: &str = "moves";
 
+/// The name a workflow is told what clips of a guide say they are under (`prompt=` on a clip).
+pub const REGIONS: &str = "regions";
+
 /// The blank that takes where clips go as a picture in motion, in place of points: a video
 /// of the frames asked for, white, with each clip's box drawn on it in black where it is on
 /// that frame, as a layout a model follows.

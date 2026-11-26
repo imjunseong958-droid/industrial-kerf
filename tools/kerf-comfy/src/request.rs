@@ -52,6 +52,10 @@ pub struct Request {
     /// Where clips of the guide go, frame by frame.
     #[serde(default)]
     pub moves: Vec<Moves>,
+    /// What clips of the guide say they are (`prompt=` on a clip), each with where the
+    /// guide shows them.
+    #[serde(default)]
+    pub regions: Vec<Region>,
     /// A workflow of the project to run in place of the one this program was
     /// started with: the step's `workflow=`, a file a person keeps beside
     /// the shot's takes.
@@ -62,6 +66,14 @@ pub struct Request {
     pub more: BTreeMap<String, String>,
     /// The file to write.
     pub out: PathBuf,
+}
+
+/// Words clips of a guide say they are, and a grey video of where the guide shows those
+/// clips: white where they are, at the guide's size and rate.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Region {
+    pub prompt: String,
+    pub mask: PathBuf,
 }
 
 /// Where a clip goes, as a request holds it: for each frame of its sequence the middle of

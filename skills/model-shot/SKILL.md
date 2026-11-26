@@ -14,15 +14,17 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   (`pass=depth` on the `render` step), for one that follows depth. With a
   depth pass the guide's colors say nothing, so the prompt gives every
   color, and a backdrop out of depth is black.
-- A guide is read for layout, motion, and camera, not for finish. Flat colors
-  and plain solids that differ clearly from each other guide better than
-  detail. A model keeps where things are and how they move, and takes their
-  color from the prompt alone: a white box is a dark boat until the prompt
-  says a white hull. What kind of thing it is comes from the prompt and its
-  outline: one box was a van, and a low body with a cabin on it a car.
+- A guide is read for layout, motion, and camera, not for finish: plain
+  solids that differ clearly guide better than detail. A model keeps where
+  things are and how they move, and takes what each is and its color from
+  the words: a white box is a dark boat until they say a white hull. One
+  prompt does not say which solid is which: two boxes and "a red car and a
+  white van" came out both red and white. Say it on each solid,
+  `prompt="a red car"`, and a model whose `reads` has `regions` hears it over
+  where the guide shows that clip; the step's prompt says the rest.
 - Stack the scene with `overwrite`, a clip a track, each at `at=0f` for the
-  shot's length. `insert` opens time, and puts each clip after the last.
-  The camera and the lights go on the top tracks.
+  shot's length (`insert` puts each after the last), the camera and lights
+  on top.
 - A thing seen from more than one side is a `gen=mesh@1`:
   `kind=box|ball|cylinder`, `width`, `height`, and `length` in frame
   heights, and a `color`. It is in depth, its middle at `x`, `y`, `z`, and
@@ -31,8 +33,8 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   it is one flat color. With `file="car.glb"` it is a glTF model, `height`
   tall, a color a part; replacing the file asks for the shot again. A part
   the file gives a picture or corner colors is drawn in them, unlit.
-  `animation="Walk"` plays one of the file's animations, by name or number,
-  looping from the clip's start; `seconds={0f:0 48f:1}` retimes it.
+  `animation="Walk"` plays one of its animations, by name or number,
+  looping; `seconds={0f:0 48f:1}` retimes it.
 - A set rebuilt from a shot is seen through the shot's camera: `look`
   with `mesh: {"clip": "set", "camera": "shot"}` returns the lines that
   add a camera of the file, or with `from` one a model wrote. What is
@@ -64,9 +66,8 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   frame: `look` with `shows`, `stands`, and `at`. `shows` says where each
   clip is (`box`), what hides it (`hidden`, `by`), and the `edges` it
   reaches; `stands`, what `floats`, is `sunk`, or goes `through` another.
-  Mend those, and a subject with a floor in its `by`, no `box`, or an edge
-  it should not be at. Then look at the frames themselves: nothing crossing
-  by accident, the move plain.
+  Mend those, and a subject with a floor in its `by`, no `box`, or a wrong
+  edge. Then see the frames: nothing crossing by accident, the move plain.
 - The shot is a media with two steps under it: `step <id> add render
   <sequence> {guide.mp4} …`, then `step <id> add generate model=…
   prompt="…" guide={guide.mp4}` with `seconds` and a `seed`. The media's
@@ -81,15 +82,15 @@ description: Block a shot in Kerf and have a video model film it, from a guide s
   jumps, roll again.
 - `look` lists the project's `cast` and `styles`: name them,
   `cast=Ada style=film`, and have the prompt say what they do, not how
-  they look. One it lacks is added with `edit`'s `cast`.
+  they look; `edit`'s `cast` adds one.
 - Mend what `toMake`'s `cannot` and `notes` say, then make it once with `make`,
   with `why`, after the edit is accepted. Let through, it runs as a job you
   `wait` for; asked, the person makes it. A making costs minutes and money:
   never make one to see the guide, which `look` shows.
 - After a making, look at the take (`media` with `sheet`), not at the guide,
   and say what the model kept and what it lost. Change one thing for the
-  next take: the guide for layout and motion, the prompt for the look, the
-  seed for another roll of the same (`step <id> set 2 seed=8`). Any change
+  next take: the guide for layout and motion, the words for the look, the
+  seed for a roll (`step <id> set 2 seed=8`). Any change
   to the guide, one too small to see among them, brings other scenery with
   it: judge a take against the one before for place, path, and size, and
   keep a take that is wanted by leaving its guide as it is. A take that was

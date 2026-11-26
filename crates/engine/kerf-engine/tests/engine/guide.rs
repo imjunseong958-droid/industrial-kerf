@@ -639,3 +639,142 @@ fn a_motion_guide_says_how_far_things_go_in_a_frame_of_its_file() {
     let [red, _, blue] = pixel(&directory.join(&made.stored), 112, 45);
     assert!(red.abs_diff(218) <= 2 && blue == 255, "{red} {blue}");
 }
+
+/// The first frame of `file`, a grey byte a pixel, row by row.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
+fn first_greys(file: &Path) -> Vec<u8> {
+    let output = Command::new(resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(file)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+        .output()
+        .expect("ffmpeg runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+#[test]
+fn what_clips_of_a_guide_say_they_are_goes_to_a_model_with_where_each_is() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    // Two like boxes a model films, a car in two parts on the left and a van on the right,
+    // each saying what it is, before a backdrop that says nothing; and a sign Kerf draws,
+    // over the middle, which says words of its own.
+    let project = parse_document(
+        "kerf 1\nproject name=\"words\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=12f video=160x90\n\
+         \x20 render s2 {guide.mp4} only=filmed\n\
+         \x20 generate model=shot prompt=\"a car and a van\" guide={guide.mp4}\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         sequence s2 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip back gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#202020 filmed=true\n\
+         \x20 track V2 video\n\
+         \x20   clip body gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#ff0000 filmed=true scale=0.3 x=-0.25 y=0.1 prompt=\"a red sports car\"\n\
+         \x20 track V3 video\n\
+         \x20   clip cabin gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#ff0000 filmed=true scale=0.15 x=-0.25 y=-0.2 prompt=\"a red sports car\"\n\
+         \x20 track V4 video\n\
+         \x20   clip van gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#ffffff filmed=true scale=0.3 x=0.25 prompt=\"a white delivery van\"\n\
+         \x20 track V5 video\n\
+         \x20   clip sign gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#0000ff scale=0.1 prompt=\"a neon sign\"\n",
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    // A model that copies its guide to its file, and says what of a line it reads.
+    let models = |reads: &str| {
+        let file = directory.join("models.json");
+        std::fs::write(
+            &file,
+            format!(
+                r#"{{"shot": {{"run": ["cp", "{{guide}}", "{{out}}"], "takes": {{"reads": {reads}}}}}}}"#
+            ),
+        )
+        .expect("a models file");
+        Models::read(&file).expect("models")
+    };
+    let hears = models(r#"["guide", "regions"]"#);
+    let planned = plan(&project, directory, "m1", &hears).expect("a plan");
+    assert!(planned.notes.is_empty(), "{:?}", planned.notes);
+    make(
+        &project,
+        directory,
+        &planned,
+        &hears,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("a take");
+    let work = directory.join("shots/open.takes/001.work");
+    let request: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(work.join("request.json")).unwrap()).unwrap();
+    // Each thing said once, with the clips that say it; the sign is no part of a guide of what
+    // a model films, and what it says goes to no model.
+    let regions = request["regions"].as_array().expect("regions");
+    let said: Vec<&str> = regions
+        .iter()
+        .map(|region| region["prompt"].as_str().unwrap())
+        .collect();
+    assert_eq!(said, ["a red sports car", "a white delivery van"]);
+    // Each mask is white where the guide shows what says it, and black elsewhere: the car's
+    // over both its parts, the van's over the van, neither over the backdrop or the sign.
+    let white = |region: usize, x: usize, y: usize| {
+        let mask = Path::new(regions[region]["mask"].as_str().unwrap());
+        assert!(mask.starts_with(&work), "{mask:?}");
+        first_greys(mask)[y * 160 + x] > 200
+    };
+    let (body, cabin, van, middle, corner) = ((40, 54), (40, 27), (120, 45), (80, 45), (4, 4));
+    for (at, car, is_van) in [
+        (body, true, false),
+        (cabin, true, false),
+        (van, false, true),
+        (middle, false, false),
+        (corner, false, false),
+    ] {
+        assert_eq!(
+            (white(0, at.0, at.1), white(1, at.0, at.1)),
+            (car, is_van),
+            "{at:?}"
+        );
+    }
+
+    // A model that reads no such thing is handed none, and the plan says it is not told.
+    let deaf = models(r#"["guide"]"#);
+    let planned = plan(&project, directory, "m1", &deaf).expect("a plan");
+    assert!(
+        planned
+            .notes
+            .iter()
+            .any(|note| note.contains("`body`, `cabin`, `van`") && !note.contains("`sign`")),
+        "{:?}",
+        planned.notes
+    );
+    make(
+        &project,
+        directory,
+        &planned,
+        &deaf,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("a take");
+    let request: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(directory.join("shots/open.takes/002.work/request.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(request.get("regions").is_none(), "{request}");
+}

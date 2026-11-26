@@ -174,6 +174,10 @@ pub const SIGNAL: &str = "signal";
 /// The name a `generate` step hands a model a clip's way across the frame by.
 pub const MOVES: &str = "moves";
 
+/// The name a model is handed what the clips of its guide say they are by (`prompt=` on a
+/// clip), each with where the guide shows it.
+pub const REGIONS: &str = "regions";
+
 /// The name a `generate` step hands a model a graph of its own to run by.
 pub const WORKFLOW: &str = "workflow";
 

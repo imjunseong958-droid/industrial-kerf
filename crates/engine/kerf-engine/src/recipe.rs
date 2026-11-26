@@ -56,6 +56,7 @@ pub mod cast;
 pub mod graph;
 pub mod model;
 pub mod moves;
+pub mod regions;
 pub mod shots;
 pub mod signal;
 pub mod takes;
@@ -1020,6 +1021,32 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 plain(most)
             ));
         }
+        // Clips of the guide that say what they are, to a model that hears none of it.
+        let unheard = takes
+            .reads
+            .as_ref()
+            .filter(|reads| !reads.iter().any(|read| read == model::REGIONS));
+        if let (
+            Some(_),
+            Some(Step::Render {
+                sequence,
+                only_filmed,
+                ..
+            }),
+        ) = (unheard, regions::guide_drawn(&recipe.steps, ask))
+        {
+            let clips: Vec<String> = regions::said(project, sequence, *only_filmed)
+                .into_iter()
+                .flat_map(|region| region.clips)
+                .map(|clip| format!("`{clip}`"))
+                .collect();
+            if !clips.is_empty() {
+                notes.push(format!(
+                    "model `{model}` is not told what a clip says it is (`prompt=` on {}): say it in the step's prompt",
+                    clips.join(", ")
+                ));
+            }
+        }
         if let Some(reads) = &takes.reads {
             let named: Vec<String> = ask
                 .guides
@@ -1210,6 +1237,75 @@ impl Making<'_> {
         self.place.file_for(self.take, name)
     }
 
+    /// What the clips of the guide `ask` hands its model say they are ([`regions`]), each with
+    /// a mask of where the guide shows them, drawn beside the step's `request` as the guide is
+    /// drawn. None where the model has not said it reads them, or no step of `recipe` draws
+    /// its guide.
+    fn regions(
+        &self,
+        recipe: &Recipe,
+        ask: &model::Ask,
+        request: &Path,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<Vec<model::Region>> {
+        let reads = self
+            .models
+            .takes(&ask.model)
+            .and_then(|takes| takes.reads.as_ref());
+        if !reads.is_some_and(|reads| reads.iter().any(|read| read == model::REGIONS)) {
+            return Ok(Vec::new());
+        }
+        let Some(Step::Render {
+            sequence,
+            size,
+            rate,
+            only_filmed,
+            from,
+            seconds,
+            ..
+        }) = regions::guide_drawn(&recipe.steps, ask)
+        else {
+            return Ok(Vec::new());
+        };
+        let said = regions::said(self.project, sequence, *only_filmed);
+        if said.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut resolved = self.project.clone();
+        resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
+        let range = part_of(&resolved, sequence, *from, *seconds)?;
+        let folder = request.parent().unwrap_or(self.directory);
+        let mut regions = Vec::new();
+        for (index, region) in said.into_iter().enumerate() {
+            let mask = folder.join(format!("region{}.mp4", index + 1));
+            let clips = region.clips.join("`, `");
+            render_program_with_cancellation(
+                &resolved,
+                Some(sequence),
+                range,
+                &RenderOptions {
+                    output: mask.to_string_lossy().into_owned(),
+                    project_dir: Some(self.directory.to_path_buf()),
+                    size: *size,
+                    rate: *rate,
+                    matte: region.clips,
+                    only_filmed: *only_filmed,
+                    sound: false,
+                    ..RenderOptions::default()
+                },
+                self.cancellation,
+                Some(|done: f64| {
+                    on_line(&format!("drawing where `{clips}` is: {:.0}%", done * 100.0));
+                }),
+            )?;
+            regions.push(model::Region {
+                prompt: region.prompt,
+                mask: mask.to_string_lossy().into_owned(),
+            });
+        }
+        Ok(regions)
+    }
+
     /// Run each step of `recipe`, in order, stopping at the first that fails.
     fn run(&self, recipe: &Recipe, on_line: &mut dyn FnMut(&str)) -> Result<()> {
         for (index, step) in recipe.steps.iter().enumerate() {
@@ -1250,7 +1346,7 @@ impl Making<'_> {
                             size: *size,
                             rate: *rate,
                             pass: *pass,
-                            matte: matte.clone(),
+                            matte: matte.iter().cloned().collect(),
                             only_filmed: *only_filmed,
                             // What a step makes is for a model to follow, or a shot of its
                             // own: a picture, with no sound.
@@ -1294,6 +1390,7 @@ impl Making<'_> {
                             .collect::<std::result::Result<Vec<_>, _>>()
                             .map_err(EngineError::msg)?
                     };
+                    let regions = self.regions(recipe, ask, &request, on_line)?;
                     let mut asked = model::request(
                         ask,
                         &|file| {
@@ -1303,6 +1400,7 @@ impl Making<'_> {
                         &|name| self.file_for(name),
                         &signals,
                         &moves,
+                        &regions,
                     )?;
                     // A picture in motion given as the first frame is where it ended, and as
                     // the last, where it began: a shot that goes on from another, or into one.
