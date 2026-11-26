@@ -1,23 +1,31 @@
 ---
 name: verify
-description: Check that a code change actually works by running it, not just by reading it or seeing unit tests pass. Use before committing, before opening or updating a PR, and whenever you are about to say a change is done.
+description: Check that a code change actually works by running it, not just by reading it. Run once per task, before the first commit. Not for review fixes, merges, rebases, conflict resolution, updates to an open PR, or doc-only changes.
 ---
 
 # Verify
 
-Goal: evidence that the change does what the task asked, gathered by running it.
+Goal: evidence that the change does what the task asked, gathered by running it. This is step 2 of the Order of work in AGENTS.md: once per task, before the first commit. The commit gate blocks commits in a session that has not run this skill.
 
-## 1. Run the project's checks
+## When not to run it
 
-1. If `.claude/verify.sh` exists, run it. It is the project's own list of checks.
-2. Otherwise run the build, linter, and tests the project already uses. Find them in the README, CI config, Makefile, or package manifest.
-3. Run the narrowest relevant tests first. Run wider ones if the change touches shared code.
+1. It already ran in this task. For review fixes, use by hand only the behavior a fix changed (AGENTS.md Order of work 5).
+2. Merging, rebasing, cherry-picking, or resolving conflicts between branches or PRs. AGENTS.md Merging says how the merged result is checked.
+3. Updating an open PR (feedback, a fix after checks failed). Run the tests for the fix. CI or the push gate covers the rest.
+4. The change touches only docs, comments, or the PR description. Commit it with `Verified: none (docs only)`.
+
+## 1. Checks
+
+1. Run the tests related to the change.
+2. Do not run `.claude/verify.sh` or the full suite here. They run once on the final code, before the PR is opened (AGENTS.md Order of work 6).
 
 ## 2. Use the change the way a user would
 
-Find the entry point the change affects and use it with realistic input:
+Do this only when the change alters behavior a user or caller can see. For refactors and internal changes, the tests are enough.
 
-1. CLI or binary: run it with real arguments and input, including one bad input.
+Run the affected entry point once with realistic input. Add one bad input only when the change is about handling input.
+
+1. CLI or binary: run it with real arguments and input.
 2. Library: call the public API from a small scratch program, or from a test only if it is worth keeping under the Tests rules in AGENTS.md.
 3. HTTP service: start it locally and call the changed endpoints.
 4. Web UI: open it in a browser, go through the changed flow, and take a screenshot.
@@ -29,7 +37,7 @@ Compare the result with what the task asked for, not with what the code appears 
 ## 3. Rules
 
 1. Do not change tests, snapshots or golden files, lint settings, CI config, or `.claude/verify.sh` to get a pass.
-2. If a failure is flaky, do not rerun until green, add sleeps, or skip the test. Find the cause or report it.
+2. If a failure is flaky, do not rerun until green, add sleeps, or skip the test. Find the cause. If you can't, delete the test and write down why (AGENTS.md Verification 5).
 3. After 3 failed fix attempts on the same check, stop and report.
 4. Delete scratch files, including tests you wrote only to check this change once, and stop any servers you started.
 
@@ -41,4 +49,4 @@ Write down what you ran and what you saw:
 2. What you tried by hand and what happened (screenshots for UI)
 3. What you did not verify, and why
 
-Put this report in the PR description or your reply, not in a file in the repo.
+Put this report in the PR description or your reply, not in a file in the repo, and sum it up in the commit's `Verified:` trailer (AGENTS.md Git and PRs 5).

@@ -1,202 +1,137 @@
 #!/usr/bin/env bash
-# Claude Code PreToolUse hook (matcher: Bash).
-# Runs the project's checks before any `git commit` and blocks the commit if they fail.
-# Exit 0 allows the command. Exit 2 blocks it, and stderr is shown to Claude.
+# Claude Code hook, registered for three events:
+#   PostToolUse (matcher Skill) and UserPromptSubmit: note that this session ran the verify
+#     or code-review skill (Claude called it, or the user typed /verify).
+#   PreToolUse (matcher Bash): gate `git commit` and `git push`.
+# Exit 0 allows. Exit 2 blocks, and stderr is shown to Claude.
 #
-# Which checks run, in the checkout the commit is made in:
-#   1. .claude/verify.sh in the repo, if it exists and is executable
-#   2. otherwise a guess from the project files (Cargo, Go, npm, pytest)
-#   3. otherwise nothing, and the commit is allowed
+# git commit is allowed when any of these hold:
+#   - this session ran the verify or code-review skill
+#   - the commit message says why it was not verified: `Verified: none (<reason>)`
+#   - a merge, cherry-pick, revert, or rebase is in progress
+#   - commits were already blocked twice in this session, so Claude does not get stuck
+# It is always blocked while .claude/verify.sh has uncommitted changes.
+#
+# git push runs the repo's checks first, only in a repo without CI config (with CI, CI checks
+# the PR). The checks are .claude/verify.sh, or a guess from the project files. A failing check
+# blocks the push every time. A tree that already passed in this session is not checked again.
+#
+# LIM_COMMIT_GATE=off|observe|enforce (default enforce). observe writes what would have been
+# blocked to .git/lim-commit-gate.log and allows it.
 
 set -uo pipefail
 
 # Without jq the hook cannot read its input, so it stays out of the way.
 command -v jq >/dev/null 2>&1 || exit 0
 
+mode=${LIM_COMMIT_GATE:-enforce}
+[ "$mode" = off ] && exit 0
+
 input=$(cat)
-cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
+event=$(jq -r '.hook_event_name // "PreToolUse"' <<<"$input")
 session=$(jq -r '.session_id // "default"' <<<"$input")
-cwd=$(jq -r '.cwd // ""' <<<"$input")
-
-# Only gate git commit: also `/usr/bin/git commit`, `git -C "/a b" -c k="v w" commit`,
-# `... && git commit`, `bash -c 'git commit'` and `(git commit)`, but not `git commit-tree`.
-# Group 2 is the call itself, from git to commit. A word may hold quoted spaces, and a quote
-# with no partner, as in O\'Brien, is an ordinary character.
-piece="(\"[^\"]*\"|'[^']*'|\\\\.|[^[:space:]])"
-value="(\"[^\"]*\"|'[^']*'|\\\\.|[^-[:space:]])$piece*"
-gitcall="([^[:space:];&|()\"'\`]*/)?git[[:space:]]+([\"']?-${piece}+[[:space:]]+(${value}[[:space:]]+)?)*commit"
-commit="(^|[;&|(\"'\`\\[:space:]])($gitcall)([;&|)<>\"'\`[:space:]]|\$)"
-grep -Eq "$commit" <<<"$cmd" || exit 0
-
-# Find the checkouts the command commits in. CLAUDE_PROJECT_DIR does not say: in a session of
-# a git worktree it is the main checkout. The folder the command starts in says, with the moves
-# before the commit and git's own -C. Where those leave more than one folder possible, each is
-# checked. Where one is known only once the command runs, the commit is blocked.
-
-unknown() {
-  echo "Commit blocked: cannot tell which checkout \`$1\` leads to, so cannot run its checks. Name an existing folder in full: git -C /path/to/checkout commit. If this is only text in the command, such as a commit message, pass it in a file." >&2
-  exit 2
-}
-
-# The folder that word $3 of the command names, seen from folder $2. Option $1 is -L to resolve
-# .. as the shell's cd does, or -P as git's -C does.
-folder() {
-  local to=$3
-  case $to in
-    \"*\") to=${to#\"} to=${to%\"} ;;
-    \'*\') to=${to#\'} to=${to%\'} ;;
-    \~/*) to=$HOME/${to#\~/} ;;
-  esac
-  case $to in '' | -* | *[\"\'\\\`\$\*\?\[\{\~\<\>]*) return 1 ;; esac
-  (unset CDPATH && cd "$1" "$2" && cd "$1" -- "$to" && pwd) 2>/dev/null
-}
-
-start=$cwd
-[ -d "$start" ] || start=${CLAUDE_PROJECT_DIR:-}
-[ -d "$start" ] || exit 0
-
-# A cd that opens the command moves all that follows, unless a lone & sends it to the background.
-word="(\"[^\"]*\"|'[^']*'|[^[:space:];&|()\"'])+"
-opening="^[[:space:]]*cd[[:space:]]+($word)[[:space:]]*(&&|;|"$'\n'")"
-before=${cmd%git*commit*}
-amp=${before//&&/} amp=${amp//>&/} amp=${amp//&>/}
-while [[ $amp != *'&'* && $before =~ $opening ]]; do
-  start=$(folder -L "$start" "${BASH_REMATCH[1]}") || unknown "cd ${BASH_REMATCH[1]}"
-  before=${before#"${BASH_REMATCH[0]}"}
-done
-
-# A later one may be in a subshell or never run, so the folder before it stays possible. That
-# covers popd, which only goes back to one of them.
-here=("$start")
-while IFS= read -r move; do
-  [[ $move =~ (cd|pushd|chdir)[[:space:]]*(.*)$ ]]
-  move=${BASH_REMATCH[0]}
-  found=
-  for from in "${here[@]}"; do
-    to=$(folder -L "$from" "${BASH_REMATCH[2]}") || continue
-    found=1
-    for known in "${here[@]}"; do
-      [ "$known" = "$to" ] && continue 2
-    done
-    here+=("$to")
-  done
-  [ -n "$found" ] || unknown "$move"
-done < <(grep -Eo "(^|[^[:alnum:]_./-])(cd|pushd|chdir)([[:space:]]+$word|[[:space:]]+[\"'(]|[[:space:]]*(\$|[;&|)<>]))" <<<"$before")
-
-setting='(^|[^[:alnum:]_])GIT_(DIR|WORK_TREE|COMMON_DIR)='
-setting+='|(^|[^[:alnum:]_.-])env([[:space:]]+(-u[[:space:]]+[^[:space:]]+|-[^[:space:]]+|[[:alnum:]_]+=[^[:space:]]*))*[[:space:]]+(-[[:alnum:]]*C|--chdir)'
-if set_by=$(grep -Eo "$setting" <<<"$before"); then
-  unknown "$(head -n 1 <<<"$set_by")"
-fi
-
-# Each commit in the command. A match ends on the character after `commit`, and that character
-# can also open the next one, as in `git commit;git -C dir commit`, so it is put back.
-# A call met before is not checked again.
-calls=()
-seen=$'\n'
-rest=$cmd
-while [[ $rest =~ $commit ]]; do
-  if [[ $seen != *$'\n'"${BASH_REMATCH[2]}"$'\n'* ]]; then
-    calls+=("${BASH_REMATCH[2]}")
-    seen+=${BASH_REMATCH[2]}$'\n'
-  fi
-  rest=${rest#*"${BASH_REMATCH[0]}"}
-  rest=${BASH_REMATCH[0]: -1}$rest
-done
-# grep saw a commit, so not finding it here must not let it through.
-[ ${#calls[@]} -gt 0 ] || unknown "$cmd"
-
-tops=()
-for call in ${calls[@]+"${calls[@]}"}; do
-  dirs=("${here[@]}")
-  # Split the call into words, keeping quoted spaces in their word.
-  words=()
-  while [[ $call =~ ^[[:space:]]*($piece+) ]]; do
-    words+=("${BASH_REMATCH[1]}")
-    call=${call#"${BASH_REMATCH[0]}"}
-  done
-  for ((i = 1; i < ${#words[@]}; i++)); do
-    # Quotes do not change what git reads, and its config keys ignore case.
-    bare=${words[i]//[\"\']/}
-    case $(tr '[:upper:]' '[:lower:]' <<<"$bare") in
-      --git-dir* | --work-tree* | *core.worktree=*) unknown "git ${words[i]}" ;;
-    esac
-    case $bare in
-      -C)
-        i=$((i + 1))
-        next=()
-        for dir in "${dirs[@]}"; do
-          to=$(folder -P "$dir" "${words[i]}") && next+=("$to")
-        done
-        [ ${#next[@]} -gt 0 ] || unknown "git -C ${words[i]}"
-        dirs=("${next[@]}")
-        ;;
-    esac
-  done
-  for dir in "${dirs[@]}"; do
-    top=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null) || continue
-    for known in ${tops[@]+"${tops[@]}"}; do
-      [ "$known" = "$top" ] && continue 2
-    done
-    tops+=("$top")
-  done
-done
-
-# Outside any checkout, the project's own is checked: leaving it must not skip the checks.
-if [ ${#tops[@]} -eq 0 ]; then
-  top=$(git -C "${CLAUDE_PROJECT_DIR:-$start}" rev-parse --show-toplevel 2>/dev/null) || exit 0
-  tops=("$top")
-fi
-
-# A change must not edit the check that judges it.
-for top in "${tops[@]}"; do
-  if [ -n "$(git -C "$top" status --porcelain -- .claude/verify.sh)" ]; then
-    echo "Commit blocked: .claude/verify.sh has uncommitted changes. Do not change the checks that judge your change. Ask the user to review and commit verify.sh themselves." >&2
-    exit 2
-  fi
-done
-
 state="${TMPDIR:-/tmp}/claude-commit-gate-${session//[^A-Za-z0-9_-]/}"
-checked=
 
-for top in "${tops[@]}"; do
-  cd "$top" || continue
+case $event in
+  PostToolUse)
+    jq -r '.tool_input.skill // ""' <<<"$input" | grep -Eq '(^|:)(verify|code-review)$' && touch "$state.verified"
+    exit 0 ;;
+  UserPromptSubmit)   # print nothing: stdout here would be added to Claude's context
+    jq -r '.prompt // ""' <<<"$input" | grep -Eq '^[[:space:]]*/([^[:space:]]*:)?(verify|code-review)([[:space:]]|$)' && touch "$state.verified"
+    exit 0 ;;
+  PreToolUse) ;;
+  *) exit 0 ;;
+esac
 
-  if [ -x .claude/verify.sh ]; then
-    check='./.claude/verify.sh'
-  elif [ -f Cargo.toml ]; then
-    check='cargo check -q && cargo test -q'
-  elif [ -f go.mod ]; then
-    check='go vet ./... && go test ./...'
-  elif [ -f package.json ] && jq -e '(.scripts.test // "") as $t | $t != "" and ($t | test("no test specified") | not)' package.json >/dev/null 2>&1; then
-    check='npm test --silent'
-  elif [ -f pytest.ini ] || grep -q '^\[tool\.pytest' pyproject.toml 2>/dev/null; then
-    check='python3 -m pytest -q'
-  else
-    continue
+cmd=$(jq -r '.tool_input.command // ""' <<<"$input")
+cwd=$(jq -r '.cwd // ""' <<<"$input")
+git_does() {  # git $1 (also `git -C dir $1` and `... && git $1`)
+  grep -Eq "(^|[;&|(]|[[:space:]])git[[:space:]]+(-[^[:space:]]+[[:space:]]+([^-[:space:]][^[:space:]]*[[:space:]]+)?)*$1([[:space:]]|\$)" <<<"$cmd"
+}
+git_does commit || git_does push || exit 0
+
+cd "${CLAUDE_PROJECT_DIR:-$cwd}" 2>/dev/null || exit 0
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$top" || exit 0
+
+block() {  # $1: reason for the log, $2: message for Claude. In observe mode, log and carry on.
+  if [ "$mode" = observe ]; then
+    printf '%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$session" "$1" "$(head -c 200 <<<"$cmd" | tr '\t\n' '  ')" \
+      >>"$(git rev-parse --git-path lim-commit-gate.log)"
+    return 0
   fi
-  checked=1
-
-  out=$(bash -c "$check" 2>&1) && continue
-
-  n=$(( $(cat "$state" 2>/dev/null || echo 0) + 1 ))
-  echo "$n" >"$state"
-
-  {
-    echo "Commit blocked: \`$check\` failed (attempt $n)."
-    echo "Ran in $top."
-    echo "--- last 60 lines ---"
-    tail -n 60 <<<"$out"
-    echo "---"
-    if [ "$n" -ge 3 ]; then
-      echo "This check has failed $n times in a row. Stop. Do not commit. Report to the user what fails, what you tried, and your best guess at the cause."
-    else
-      echo "Fix the code, not the tests or checks. If the failure is flaky or was already failing before your change, stop and tell the user instead of working around it."
-    fi
-  } >&2
+  echo "$2" >&2
   exit 2
+}
+
+commit_allowed() {
+  for p in MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD rebase-merge rebase-apply; do
+    [ -e "$(git rev-parse --git-path "$p")" ] && return 0
+  done
+  grep -Eq 'Verified:[[:space:]]*none[[:space:]]*\([^)]*[^)[:space:]][^)]*\)' <<<"$cmd" && return 0
+  [ -e "$state.verified" ] && return 0
+  [ "$mode" = observe ] && return 1
+  local n
+  n=$(cat "$state.blocks" 2>/dev/null || echo 0)
+  if [ "$n" -ge 2 ]; then rm -f "$state.blocks"; return 0; fi
+  echo $((n + 1)) >"$state.blocks"
+  return 1
+}
+
+if git_does commit; then
+  # A change must not edit the check that judges it.
+  if [ -e .claude/verify.sh ] && [ -n "$(git status --porcelain -- .claude/verify.sh)" ]; then
+    block verify.sh-changed "Commit blocked: .claude/verify.sh has uncommitted changes. Do not change the checks that judge your change. Ask the user to review and commit verify.sh themselves."
+  fi
+  commit_allowed || block no-verify "Commit blocked: this session has not run the verify skill. Run it before the first commit (AGENTS.md Order of work 2). If this commit does not need verifying, end its message with \`Verified: none (<reason>)\`."
+fi
+git_does push || exit 0
+
+# git push: with CI, CI checks the PR.
+set -- .github/workflows/*.yml .github/workflows/*.yaml
+for f in "$@" .gitlab-ci.yml .circleci/config.yml azure-pipelines.yml bitbucket-pipelines.yml .travis.yml Jenkinsfile .buildkite; do
+  [ -e "$f" ] && exit 0
 done
 
-# Every check passed, so the failures are no longer in a row.
-[ -z "$checked" ] || rm -f "$state"
-exit 0
+if [ -x .claude/verify.sh ]; then
+  check='./.claude/verify.sh'
+elif [ -f Cargo.toml ]; then
+  check='cargo check -q && cargo test -q'
+elif [ -f go.mod ]; then
+  check='go vet ./... && go test ./...'
+elif [ -f package.json ] && jq -e '(.scripts.test // "") as $t | $t != "" and ($t | test("no test specified") | not)' package.json >/dev/null 2>&1; then
+  check='npm test --silent'
+elif [ -f pytest.ini ] || grep -q '^\[tool\.pytest' pyproject.toml 2>/dev/null; then
+  check='python3 -m pytest -q'
+else
+  exit 0
+fi
+
+# The files as they are now (ignored files left out), as a git tree id, built in a scratch index.
+tree=""
+if idx=$(mktemp "${TMPDIR:-/tmp}/claude-commit-gate-index.XXXXXX"); then
+  trap 'rm -f "$idx"' EXIT
+  cp "$(git rev-parse --git-path index)" "$idx" 2>/dev/null || rm -f "$idx"   # a copy lets git skip unchanged files
+  tree=$(GIT_INDEX_FILE="$idx" git add -A 2>/dev/null && GIT_INDEX_FILE="$idx" git write-tree 2>/dev/null) || tree=""
+fi
+[ -n "$tree" ] && [ "$(cat "$state.pass" 2>/dev/null)" = "$tree" ] && exit 0
+
+if out=$(bash -c "$check" 2>&1); then
+  rm -f "$state.fails"
+  [ -n "$tree" ] && echo "$tree" >"$state.pass"
+  exit 0
+fi
+
+if [ "$mode" = observe ]; then block check-failed ""; exit 0; fi
+n=$(( $(cat "$state.fails" 2>/dev/null || echo 0) + 1 ))
+echo "$n" >"$state.fails"
+if [ "$n" -ge 3 ]; then
+  next="This check has failed $n times in a row. Stop. Do not push. Report to the user what fails, what you tried, and your best guess at the cause."
+else
+  next="Fix the code, not the tests or checks. If the failure is flaky or was already failing before your change, follow AGENTS.md Verification 5."
+fi
+block check-failed "Push blocked: \`$check\` failed (attempt $n).
+--- last 60 lines ---
+$(tail -n 60 <<<"$out")
+---
+$next"

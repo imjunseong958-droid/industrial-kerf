@@ -1,13 +1,27 @@
 <!-- BEGIN Lim_claude: managed by lim.sh and replaced on update. Put repo-specific rules below the END line. -->
+## Order of work
+
+Do the steps in this order. Each later round builds on the one before it and looks only at what changed since then. Never start a check over from scratch.
+
+1. Implement. While working, run only the tests related to the change. Commit in step 3, not before.
+2. Verify: follow `.claude/skills/verify/SKILL.md` once. In Claude Code this is the `verify` skill.
+3. Commit. The commit gate blocks the commit if this session has not run the verify skill.
+4. Review round 1: spawn one reviewer subagent on the committed change (Subagents 2). Do not change the code while it reviews. A review of an out-of-date commit is worthless.
+5. Fix the findings you can confirm and commit the fixes. Then run another round on the fix commits only (Subagents 3). Use by hand again only the behavior a fix changed, not the whole change. Stop when a round finds nothing you need to fix, or after 3 rounds, and list what is left in the PR.
+6. Run this repo's checks once on the final code (Verification 2). In a repo without CI config, skip this step: the push gate runs them in step 7.
+7. Push and open the PR (Git and PRs 3 and 4).
+8. Merge it without asking (Merging).
+
+Updates after the PR is open (feedback, merging the default branch in, conflict resolution): make the change, run the related tests, and commit. Do not review or run the verify skill again unless the user asks.
+
 ## Verification
 
 1. Done means you ran the change and saw it work. Passing checks or unit tests alone is not done.
-2. Before committing, follow `.claude/skills/verify/SKILL.md`. In Claude Code this is the `verify` skill. If `.claude/verify.sh` exists, it holds this repo's checks.
+2. This repo's checks are `.claude/verify.sh` if it exists, otherwise the build, linter, and tests the project uses (see the README, CI config, Makefile, or package manifest). Run them once before opening the PR, not before each commit. In a repo without CI config, the push gate runs them on every `git push` and blocks the push if they fail, so do not run them yourself first. While working, run only the tests related to the change. Do not run the same check twice on the same code.
 3. Do not change tests, snapshots or golden files, lint settings, CI config, or `.claude/verify.sh` to make your change pass. Change a test only when the task changes the behavior it checks, and say so in the PR.
 4. Fix warnings your change introduces instead of silencing them.
-5. Flaky tests: do not rerun until green, add sleeps, raise timeouts, or skip them. Find the cause. If you can't, stop and tell the user.
+5. Flaky tests: do not rerun until green, add sleeps, raise timeouts, or skip them. Find the cause. If you can't, delete the test and say in the PR which test you deleted and why. Do not merge that PR yourself (Merging 6).
 6. If a check still fails after 3 fix attempts, stop and report what fails, what you tried, and your best guess at the cause.
-7. Do not rerun a passing check without relevant changes.
 
 ## Tests
 
@@ -31,19 +45,31 @@
 
 1. For new work, use a short-lived branch from the latest default branch. Reuse the existing branch when continuing a task or PR. Never push directly to the default branch.
 2. Never discard uncommitted work. Commit only the changes made for the task.
-3. Once verification passes, commit, push, and open or update a PR without asking. Ask before force-pushing or merging.
-4. Keep PR descriptions concise: what changed, and how you verified it (commands run, what you saw). If something was not verified, say so and why. Call out any test or config you changed.
+3. Once verification passes, commit, push, and open or update a PR without asking. Ask before force-pushing.
+4. Keep PR descriptions concise: what changed, and how you verified it (commands run, what you saw). If something was not verified, say so and why. Call out any test or config you changed, and list the review findings you did not fix.
+5. End every commit message you write with a `Verified:` trailer that says in one line how that commit was checked: the checks you ran and their result, and what you tried by hand. For a review fix, say how you checked the fix. If you did not check it, write `Verified: none (<reason>)`, for example `Verified: none (docs only)`. The commit gate lets such a commit through even if the session has not run the verify skill. Put it in the last paragraph of the message, directly above any other trailers such as `Co-Authored-By`, with no blank line between them. Git reads only the last paragraph as trailers. Merge commits do not need one.
+
+## Merging
+
+1. Merge the PRs you opened for a task, and the PRs the user asks you to merge, without asking. Do not merge other PRs on your own.
+2. Merge one PR at a time. Before each, merge the latest default branch into the PR branch, resolve any conflicts, and push. Do not rebase it, since that needs a force-push.
+3. Resolve a conflict by keeping what both sides meant to do. Do not drop either side's change to make the conflict go away. If both sides changed the same behavior in different ways and you cannot tell which is right, stop and ask the user.
+4. Check the result once. If the repo runs CI on PRs, wait for it to pass and do not also run the checks locally. Without CI, the push gate checks the merged code when you push it in step 2.
+5. If the checks fail, fix the code on the PR branch, commit, and check again. Verification 6 applies.
+6. Do not merge, and tell the user instead, if a person requested changes or left unresolved comments, if you left a review finding unfixed that may be a real bug, if the PR deletes a flaky test, or if branch protection blocks the merge. Never bypass branch protection or required checks.
+7. Use the merge method the repo already uses (squash, merge commit, or rebase).
 
 ## Subagents
 
 1. Do not spawn subagents unless the user asks.
-2. Exception: after the final commit and before opening or updating a PR, spawn one reviewer subagent. Give it the task and the diff against the default branch, not your reasoning or conclusions. Ask it to look for bugs and for tests or checks that were weakened. If the repo has a REVIEW.md, have it read the version on the default branch. Fix the findings you can confirm and list the rest in the PR. Use one reviewer, not several.
+2. Exception: one reviewer per task, for the review rounds in Order of work. In round 1, give it the task and the diff of your commits against the default branch, not your reasoning or conclusions. Ask it to look for bugs and for tests or checks that were weakened. If the repo has a REVIEW.md, have it read the version on the default branch.
+3. Send later rounds to the same reviewer so it keeps its context (in Claude Code, continue it with SendMessage). Give it only the diff since the commit it last reviewed, and ask whether its findings are fixed and whether the fixes broke anything. If you cannot continue it, start one new reviewer with the earlier findings and that diff. Do not add reviewers for a second opinion, and do not review again after the PR is open unless the user asks.
 
 ## Rust
 
 1. Run `cargo check -q` after meaningful batches of changes and fix errors before continuing.
-2. Run relevant tests with `cargo test -q`. Run the full suite when shared behavior or a broad area is affected.
-3. Before committing, run `cargo fmt` and `cargo clippy --all-targets -q`. Fix warnings your change introduced instead of silencing them with `#[allow]`.
+2. While working, run only the relevant tests (`cargo test -q <filter>`). Run the full suite once before opening the PR.
+3. Before committing, run `cargo fmt`. Run `cargo clippy --all-targets -q` with the full suite before opening the PR, unless `.claude/verify.sh` already runs it. Fix warnings your change introduced instead of silencing them with `#[allow]`.
 4. Put behavior tests in `tests/` against the public API or the built binary. Use `proptest` for property tests.
 5. Do not add `#[ignore]` to get past a failing test.
 <!-- END Lim_claude -->
