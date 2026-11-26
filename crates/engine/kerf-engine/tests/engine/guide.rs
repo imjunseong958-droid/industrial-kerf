@@ -496,6 +496,19 @@ fn a_guide_of_only_what_a_model_films_is_held_to_those_clips_alone() {
     assert_eq!(wants("#ff0000", "#0000ff"), None);
     assert_eq!(wants("#ff0000", "#00ffff"), None);
     assert!(wants("#00ff00", "#0000ff").is_some());
+    // The guide is as long as its sequence, so a clip Kerf draws that makes the sequence
+    // longer wants one too.
+    let mut longer = scene_with_a_sign("#ff0000", "#0000ff", only, &made.stored);
+    for clip in longer.sequences[1]
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| clip.id.as_str() == "sign")
+    {
+        clip.duration = clip.duration + clip.duration;
+    }
+    let media = longer.media("m1").expect("the media").clone();
+    assert!(kerf_engine::recipe::unmade(&longer, directory, &media).is_some());
     // And a guide of all of it is held to all of it.
     let whole = scene_with_a_sign("#ff0000", "#0000ff", "", "shots/whole.mp4");
     let planned = plan(&whole, directory, "m1", &models).expect("a plan");
@@ -527,6 +540,17 @@ fn a_guide_of_only_what_a_model_films_is_held_to_those_clips_alone() {
         .expect_err("refused")
         .to_string();
     assert!(refused.contains("`filmed=true`"), "{refused}");
+    // Nor has one whose only such clip is off, which draws nothing.
+    let mut off = scene_with_a_sign("#ff0000", "#0000ff", only, "shots/off.mp4");
+    for clip in off.sequences[1]
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.clips)
+        .filter(|clip| clip.id.as_str() == "back")
+    {
+        clip.enabled = false;
+    }
+    assert!(plan(&off, directory, "m1", &models).is_err());
 }
 
 #[test]
