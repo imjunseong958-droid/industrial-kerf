@@ -1598,6 +1598,42 @@ impl<'a> Frame<'a> {
         out
     }
 
+    /// `source` placed through each of `places`, cropped to `rect` of it, and the pictures that
+    /// makes averaged, as a picture moving while a shutter is open is seen, over `canvas` with
+    /// `opacity` and `mode`, as `kerf_draw::blend::composite_smeared` does.
+    pub fn smeared(
+        &mut self,
+        canvas: Picture,
+        source: &Picture,
+        places: &[Affine],
+        rect: Rect,
+        opacity: f32,
+        mode: Blend,
+    ) -> Picture {
+        let gpu = self.gpu;
+        let size = (canvas.w, canvas.h);
+        let share = 1.0 / places.len().max(1) as f32;
+        let mut smeared = self.clear(size.0, size.1);
+        for m in places {
+            let empty = self.clear(size.0, size.1);
+            let copy = self.composite(empty, source, m, rect, share, Blend::Normal);
+            let sum = self.kernel(
+                &gpu.plus,
+                &Uniforms::default(),
+                &smeared.view,
+                Some(&copy.view),
+                size,
+            );
+            self.release(smeared);
+            self.release(copy);
+            smeared = sum;
+        }
+        let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
+        let out = self.composite(canvas, &smeared, &Affine::IDENTITY, whole, opacity, mode);
+        self.release(smeared);
+        out
+    }
+
     /// Submit the frame and read `picture` back as sRGB-encoded RGBA bytes over black. `None` when
     /// the device failed, and the CPU should draw the frame.
     pub fn finish(mut self, picture: &Picture) -> Option<Vec<u8>> {
