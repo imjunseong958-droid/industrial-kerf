@@ -1,5 +1,7 @@
 //! A `render` step draws a guide at a model's size and rate: the
-//! file made is inspected.
+//! file made is inspected. The model is `cp`, so these run on Unix only.
+
+#![cfg(unix)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::recipe::model::Models;
@@ -48,7 +50,6 @@ fn pixel(file: &Path, x: u32, y: u32) -> [u8; 3] {
 
 /// The models file of a project in `directory` that names one program: `copy`, which
 /// copies the guide it is handed to where its file goes.
-#[cfg(unix)]
 fn copy(directory: &Path) -> Models {
     let file = directory.join("models.json");
     std::fs::write(&file, r#"{"copy": {"run": ["cp", "{guide}", "{out}"]}}"#)
@@ -56,7 +57,6 @@ fn copy(directory: &Path) -> Models {
     Models::read(&file).expect("models")
 }
 
-#[cfg(unix)]
 #[test]
 fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
     let folder = tempfile::tempdir().expect("a folder");
@@ -126,7 +126,6 @@ fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
     assert!(red > 190 && green < 60, "the side is {red}, {green}");
 }
 
-#[cfg(unix)]
 #[test]
 fn a_pass_of_a_guide_is_a_file_of_its_own() {
     use kerf_compose::{ComposeOptions, Compositor, Pass};
@@ -261,7 +260,6 @@ sequence s2 rate=24 size=640x360 audio=48000
       set kind=directional x=0.3 y=0.6 z=1 shadow=0.8
 ";
 
-#[cfg(unix)]
 #[test]
 fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
     use kerf_compose::{ComposeOptions, Compositor, Pass};
