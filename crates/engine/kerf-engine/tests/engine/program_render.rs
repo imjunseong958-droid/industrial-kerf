@@ -1,4 +1,8 @@
 //! Renders `kerf-model` projects through FFmpeg and inspects the output.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, RenderOptions};

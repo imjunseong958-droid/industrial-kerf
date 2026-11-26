@@ -1,4 +1,8 @@
 //! Where the eye is either side of a cut, read from the guides of the two shots.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use std::collections::BTreeMap;
 

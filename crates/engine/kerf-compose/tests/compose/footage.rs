@@ -1,5 +1,9 @@
 //! Media the compositor reads: a frame drawn again, at another size or by
 //! another layer, is the same picture.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_compose::{ComposeOptions, Compositor, Frame};
 use kerf_lang::parse_document;

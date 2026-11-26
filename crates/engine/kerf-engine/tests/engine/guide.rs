@@ -1,6 +1,9 @@
 //! A `render` step draws a guide at a model's size and rate: the
 //! file made is inspected. The model is `cp`, so these run on Unix only.
-
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 #![cfg(unix)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;

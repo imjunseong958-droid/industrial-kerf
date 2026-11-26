@@ -1,6 +1,10 @@
 //! The program itself, asked to end as Kerf asks a making that is cancelled:
 //! it takes its job back from the server before it goes.
 #![cfg(unix)]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use serde_json::{json, Value};
 use std::io::{Read, Write};

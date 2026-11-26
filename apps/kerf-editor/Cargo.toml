@@ -124,6 +124,7 @@ editor_state.workspace = true
 editor_timeline.workspace = true
 editor_ui.workspace = true
 kerf-bridge.workspace = true
+kerf-sidecar.workspace = true
 gpui.workspace = true
 image = { workspace = true, features = ["png"] }
 serde_json.workspace = true

@@ -423,6 +423,10 @@ fn non_interactive_env(
     vars
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "waited on, and bounded by git's own network timeouts; as a sidecar it would end the helpers git leaves running for its next commands (a credential cache, a shared ssh connection)"
+)]
 fn output(mut command: Command, what: &str) -> Result<Output> {
     command.output().map_err(|error| {
         CollabError::new(
@@ -505,6 +509,10 @@ pub fn local_tools() -> Tools {
 }
 
 /// Whether `gh` holds a token, without printing it or asking GitHub.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: gh says whether it holds a token"
+)]
 fn gh_signed_in() -> bool {
     let mut command = program("gh");
     command

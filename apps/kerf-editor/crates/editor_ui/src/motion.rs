@@ -177,6 +177,10 @@ fn ask_system() {
 /// switch, or GNOME's animations where `gsettings` has them. A thread
 /// reads it at once, then waits until a motion starts ([`ask_system`]).
 /// Where neither can be read, nothing is followed.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: defaults or gsettings reads one setting"
+)]
 fn follow_system() {
     let read: fn() -> Option<bool> = if cfg!(target_os = "macos") {
         || {

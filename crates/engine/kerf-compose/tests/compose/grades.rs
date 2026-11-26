@@ -1,4 +1,8 @@
 //! The grades: what each does to a picture, that an amount of 0 leaves it alone, and how they stack.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_compose::{Accel, ComposeOptions, Compositor, Frame};
 use kerf_fx::video::instance::leaves_alone;

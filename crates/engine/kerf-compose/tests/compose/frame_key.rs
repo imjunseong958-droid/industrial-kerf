@@ -1,5 +1,9 @@
 //! What a kept frame depends on: the same picture under the same number, whichever document or
 //! compositor asks, and another number whenever the picture could differ.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_lang::parse_document;

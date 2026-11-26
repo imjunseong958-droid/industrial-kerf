@@ -206,14 +206,16 @@ impl Match {
 }
 
 fn read_mono(path: &Path) -> Result<Vec<f32>> {
-    let output = hidden_command(resolve_ffmpeg_bin())
-        .args(["-hide_banner", "-loglevel", "error", "-i"])
-        .arg(path)
-        .args(["-vn", "-ac", "1", "-ar"])
-        .arg(READ_RATE.to_string())
-        .args(["-f", "f32le", "-"])
-        .output()
-        .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
+    // A sidecar: it reads the whole of the file's sound.
+    let output = crate::process::sidecar::output(
+        hidden_command(resolve_ffmpeg_bin())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(path)
+            .args(["-vn", "-ac", "1", "-ar"])
+            .arg(READ_RATE.to_string())
+            .args(["-f", "f32le", "-"]),
+    )
+    .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
     if !output.status.success() {
         return Err(EngineError::msg(format!(
             "{} has no sound to read: {}",

@@ -1,5 +1,9 @@
 //! `look`, `edit`, `render`, and `note` against a real kerfd and real
 //! footage.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_mcp::{KerfMcpRouter, McpCode, McpServer, PresetInspection, ToolError};
 use serde_json::{json, Value};

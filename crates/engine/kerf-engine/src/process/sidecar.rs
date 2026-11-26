@@ -17,7 +17,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub use kerf_sidecar::{
-    forward_termination_signals, stop_on_termination, CancellationToken, Sidecar,
+    forward_termination_signals, output, stop_on_termination, CancellationToken, Sidecar,
     StopOnTermination, Stopper, GRACE,
 };
 
@@ -189,6 +189,10 @@ pub(crate) fn append_bounded(tail: &mut String, line: &str) {
 }
 
 #[cfg(all(test, unix))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 mod tests {
     use super::*;
     use std::time::Instant;

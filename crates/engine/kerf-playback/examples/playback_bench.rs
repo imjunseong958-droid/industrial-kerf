@@ -9,6 +9,10 @@
 //! the size they came at, the share of a core it used (400% is four cores), and the process's memory.
 //! The machine warms over a long run, so a number from the start and one from the end are not the
 //! same run's. `KERF_FRAME_CACHE=off` leaves the disk out of it.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a benchmark run by hand, which makes its media with FFmpeg and waits on it"
+)]
 
 use kerf_lang::parse_document;
 use kerf_model::Catalog;

@@ -835,6 +835,10 @@ pub fn opaque_fill(mut img: Image, hole: &[bool]) -> Image {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 mod tests {
     use super::*;
     use kerf_raster::hash_noise;

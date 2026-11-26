@@ -25,8 +25,10 @@
 //! unless the binary holds [`stop_on_termination`]: then the first one cancels that work, and
 //! so stops its sidecar as above.
 
-use std::io;
-use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
+use std::io::{self, Read};
+use std::process::{
+    Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Output, Stdio,
+};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -70,14 +72,18 @@ impl CancellationToken {
 struct Listed {
     id: u32,
     serial: u64,
+    /// No cancellation reaches it, so the first termination signal is passed on to it even
+    /// while [`stop_on_termination`] holds.
+    uncancellable: bool,
 }
 
 impl Listed {
-    fn of(child: &Child) -> Self {
+    fn of(child: &Child, uncancellable: bool) -> Self {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         Self {
             id: child.id(),
             serial: SERIAL.fetch_add(1, Ordering::Relaxed),
+            uncancellable,
         }
     }
 }
@@ -112,21 +118,21 @@ fn jobs() -> std::sync::MutexGuard<'static, Vec<(Listed, job::Hold)>> {
     clippy::disallowed_methods,
     reason = "this is the supervised spawn the lint points everyone else to"
 )]
-fn start(command: &mut Command) -> io::Result<(Child, Listed)> {
+fn start(command: &mut Command, uncancellable: bool) -> io::Result<(Child, Listed)> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         // Listed under the lock, so a forwarded signal cannot miss it.
         let mut running = running();
         let child = command.process_group(0).spawn()?;
-        let listed = Listed::of(&child);
+        let listed = Listed::of(&child, uncancellable);
         running.push(listed);
         Ok((child, listed))
     }
     #[cfg(windows)]
     {
         let child = command.spawn()?;
-        let listed = Listed::of(&child);
+        let listed = Listed::of(&child, uncancellable);
         // A sidecar that cannot have a job still runs; stopping it then
         // ends only the sidecar itself.
         if let Ok(hold) = job::Hold::of(&child) {
@@ -137,7 +143,7 @@ fn start(command: &mut Command) -> io::Result<(Child, Listed)> {
     #[cfg(not(any(unix, windows)))]
     {
         let child = command.spawn()?;
-        let listed = Listed::of(&child);
+        let listed = Listed::of(&child, uncancellable);
         Ok((child, listed))
     }
 }
@@ -168,7 +174,19 @@ impl Sidecar {
     /// its own, a program that reads or sets up the terminal it inherited (FFmpeg does) is
     /// stopped there, and is never waited out.
     pub fn start(command: &mut Command) -> io::Result<Self> {
-        let (mut child, listed) = start(command)?;
+        Self::started(command, false)
+    }
+
+    /// Start `command` as a sidecar that no cancellation reaches: nothing it is run for can
+    /// stop it. While [`stop_on_termination`] holds, the first termination signal cancels that
+    /// work in place of ending this process, and is passed on to this sidecar all the same, as a
+    /// terminal's Ctrl-C reaches a plain child in the terminal's own process group.
+    pub fn start_uncancellable(command: &mut Command) -> io::Result<Self> {
+        Self::started(command, true)
+    }
+
+    fn started(command: &mut Command, uncancellable: bool) -> io::Result<Self> {
+        let (mut child, listed) = start(command, uncancellable)?;
         Ok(Self {
             stdin: child.stdin.take(),
             stdout: child.stdout.take(),
@@ -263,6 +281,40 @@ impl Drop for Sidecar {
     fn drop(&mut self) {
         self.kill();
     }
+}
+
+/// Run `command` to its end as a sidecar that no cancellation reaches
+/// ([`Sidecar::start_uncancellable`]), as [`Command::output`] runs a plain child: its stdin is
+/// null, and what it writes to stdout and stderr is returned with how it exited. What it left
+/// running is ended once it exits, so its pipes close then.
+pub fn output(command: &mut Command) -> io::Result<Output> {
+    let mut sidecar = Sidecar::start_uncancellable(
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )?;
+    // Both read at once, so that neither fills while the other is waited on.
+    let stdout = read_to_end(sidecar.stdout.take());
+    let stderr = read_to_end(sidecar.stderr.take());
+    let status = sidecar.wait()?;
+    Ok(Output {
+        status,
+        stdout: stdout.join().unwrap_or_default(),
+        stderr: stderr.join().unwrap_or_default(),
+    })
+}
+
+/// Read `pipe` to its end on a thread of its own.
+fn read_to_end<R: Read + Send + 'static>(pipe: Option<R>) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            // What was read before an error is what there is.
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        bytes
+    })
 }
 
 /// What stops a running [`Sidecar`] from a thread other than the one that
@@ -426,11 +478,8 @@ pub fn forward_termination_signals() {
                     .name("kerf-sidecar-signals".into())
                     .spawn(move || {
                         for signal in signals.forever() {
-                            if stopped_instead(signal) {
+                            if !pass_on(signal) {
                                 continue;
-                            }
-                            for listed in running().iter() {
-                                signal_group(listed.id, signal);
                             }
                             if let Err(error) =
                                 signal_hook::low_level::emulate_default_handler(signal)
@@ -458,6 +507,20 @@ fn stoppable() -> std::sync::MutexGuard<'static, Option<CancellationToken>> {
     STOPPABLE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Pass `signal` on to the running sidecars, and say whether it should now end this process as
+/// it would have. While [`stop_on_termination`] holds, the first one cancels that work instead,
+/// and reaches only the sidecars no cancellation reaches.
+#[cfg(unix)]
+fn pass_on(signal: libc::c_int) -> bool {
+    let stopped = stopped_instead(signal);
+    for listed in running().iter() {
+        if !stopped || listed.uncancellable {
+            signal_group(listed.id, signal);
+        }
+    }
+    !stopped
 }
 
 /// Whether `signal` cancelled the work [`stop_on_termination`] named, which
@@ -506,6 +569,10 @@ impl Drop for StopOnTermination {
 }
 
 #[cfg(all(test, unix))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 mod tests {
     use super::*;
     use std::io::{BufRead, BufReader};
@@ -605,8 +672,72 @@ mod tests {
         assert!(!running().iter().any(|listed| listed.id == shell));
     }
 
+    /// Held by the tests that pass signals on or hold `stop_on_termination`, which are the
+    /// process's own and would reach each other's sidecars.
+    static SIGNALS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn signals() -> std::sync::MutexGuard<'static, ()> {
+        SIGNALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    #[test]
+    fn output_ends_with_its_child_and_ends_what_it_left_running() {
+        let _signals = signals();
+        let started = Instant::now();
+        let ran = output(Command::new("sh").args([
+            "-c",
+            "echo said; echo warned >&2; sleep 30 & echo $! >&2; exit 3",
+        ]))
+        .expect("sh runs");
+        // A plain child's output would wait the half minute the sleeper holds its pipes.
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(ran.status.code(), Some(3));
+        assert_eq!(String::from_utf8_lossy(&ran.stdout), "said\n");
+        let said = String::from_utf8_lossy(&ran.stderr);
+        let mut lines = said.lines();
+        assert_eq!(lines.next(), Some("warned"));
+        let sleeper = lines.next().expect("the shell reports the sleeper's id");
+        assert!(ends_within(sleeper, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn the_first_signal_held_reaches_only_the_sidecars_no_cancellation_reaches() {
+        let _signals = signals();
+        let sleeper = || {
+            let mut command = Command::new("sleep");
+            command.arg("30").stdin(Stdio::null()).stdout(Stdio::null());
+            command
+        };
+        let mut plain = Sidecar::start(&mut sleeper()).expect("sleep starts");
+        let mut bare = Sidecar::start_uncancellable(&mut sleeper()).expect("sleep starts");
+        let token = CancellationToken::new();
+        let held = stop_on_termination(&token);
+        assert!(
+            !pass_on(libc::SIGTERM),
+            "the first signal ended the process"
+        );
+        assert!(token.is_cancelled());
+        let ended = bare
+            .wait()
+            .expect("the uncancellable sleeper is waited for");
+        assert!(!ended.success());
+        assert!(
+            plain.try_wait().expect("looked at").is_none(),
+            "the sleeper the work stops was signalled"
+        );
+        drop(held);
+        plain.kill();
+    }
+
     #[test]
     fn the_first_signal_stops_the_work_held_and_a_second_ends_the_process() {
+        let _signals = signals();
         let token = CancellationToken::new();
         {
             let _held = stop_on_termination(&token);

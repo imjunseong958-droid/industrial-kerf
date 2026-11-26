@@ -31,6 +31,10 @@ pub(crate) fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
         .clone()
         .or_else(discover_kerfd)
         .unwrap_or_else(|| PathBuf::from(binary_name("kerfd")));
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the editor is the program the person asked to run: it stays in the terminal's group, ends with its Ctrl-C, and runs its own sidecars"
+    )]
     let status = editor_command(&editor, directory, &kerfd)
         .envs(agent)
         .status()

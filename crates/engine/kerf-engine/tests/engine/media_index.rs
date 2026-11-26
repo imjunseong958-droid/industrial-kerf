@@ -1,4 +1,8 @@
 //! The media index and proxies against real footage.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_engine::media::derivatives::DerivativeCache;
 use kerf_engine::{

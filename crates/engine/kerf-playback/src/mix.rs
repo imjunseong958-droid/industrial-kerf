@@ -619,6 +619,10 @@ fn audio_error(error: PlaybackError) -> PlaybackError {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 mod tests {
     use super::{Mixer, CHANNELS};
     use crate::timeline::PlaybackTimeline;

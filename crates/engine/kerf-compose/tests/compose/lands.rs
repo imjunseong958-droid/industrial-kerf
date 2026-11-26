@@ -1,5 +1,9 @@
 //! Where a clip of footage has its picture on the frame, said from its numbers: it is where
 //! the frame is drawn.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_compose::{ComposeOptions, Compositor};
 use kerf_lang::parse_document;

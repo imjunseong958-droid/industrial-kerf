@@ -1,6 +1,10 @@
 //! A project worked on from a terminal, with no editor: `kerf load` takes a
 //! `project.kerf` changed by hand, and `kerf proposals`, `kerf accept` and
 //! `kerf reject` answer what was proposed. Run against a real kerfd.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_runtime::{ProposalFreshness, RuntimeClient};
 use std::path::{Path, PathBuf};

@@ -5,6 +5,10 @@
 //! The media is a sound whose every sample says which it is, so a sample
 //! lost, doubled, or a sample late shows. The sequence runs at 29.97 frames
 //! a second, where a frame is not a whole number of samples.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::render_sound;

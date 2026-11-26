@@ -1,6 +1,10 @@
 //! The native `.otio` writer and reader: a project written and read back, a
 //! golden file, a file as another editor writes one, and, where Python has
 //! OpenTimelineIO, the same files through the bridge.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_interchange::otio::{self, Item, Timeline, WireKind};
 use kerf_interchange::{export, import_otio, otio_json, render, Format, NATIVE_OTIO};

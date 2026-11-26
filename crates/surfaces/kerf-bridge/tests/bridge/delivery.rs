@@ -5,6 +5,10 @@
 //!
 //! Needs kerfd built beside this test (`cargo build -p kerf-runtime --bin
 //! kerfd`) and FFmpeg; without FFmpeg it says so and passes.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_bridge::Bridge;
 use serde_json::{json, Value};

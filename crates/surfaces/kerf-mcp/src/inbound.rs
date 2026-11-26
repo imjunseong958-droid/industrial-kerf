@@ -846,6 +846,10 @@ fn project_config(directory: &Path, log: &mut impl FnMut(String)) -> Option<Path
 }
 
 /// Whether Git tracks `path`, relative to `directory`.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: git ls-files"
+)]
 fn tracked(directory: &Path, path: &str) -> bool {
     Command::new("git")
         .arg("-C")
@@ -860,6 +864,10 @@ fn tracked(directory: &Path, path: &str) -> bool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 mod tests {
     use super::{
         project_config, ConnectedServer, InboundMcpRegistry, McpServerConfig,

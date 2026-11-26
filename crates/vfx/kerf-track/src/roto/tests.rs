@@ -1,4 +1,8 @@
 //! Following an object on synthetic sequences: a textured disk over a textured background.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use super::*;
 

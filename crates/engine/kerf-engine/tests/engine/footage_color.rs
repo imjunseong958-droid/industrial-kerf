@@ -1,4 +1,8 @@
 //! What importing finds out about real files: depth and color, from what FFmpeg wrote in them.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_model::ColorSpace;
 use std::path::Path;

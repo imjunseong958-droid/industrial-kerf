@@ -1,3 +1,7 @@
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackSession};
 use std::process::Command;
 use std::time::{Duration, Instant};

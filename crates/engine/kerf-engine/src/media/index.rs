@@ -254,6 +254,10 @@ pub fn small_color_frames(
 pub fn small_color_frame(src: &Path, seconds: f64, (width, height): (u32, u32)) -> Result<Vec<u8>> {
     let seconds = seconds.max(0.0);
     let lead = seconds.min(0.5);
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "short-lived and waited on: FFmpeg decodes one frame, from just before it"
+    )]
     let read = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args(video_decode_prefix())
         .args(["-hide_banner", "-loglevel", "error", "-ss"])

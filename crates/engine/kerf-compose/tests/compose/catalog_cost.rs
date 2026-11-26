@@ -5,6 +5,10 @@
 //!
 //! `KERF_GPU=software cargo test -p kerf-compose --test compose -- catalog_cost:: --nocapture` prints the list
 //! with no GPU but Mesa's llvmpipe, as CI runs it; with no GPU at all it says so and passes.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_compose::{Accel, ComposeOptions, Compositor};
 use kerf_lang::parse_document;

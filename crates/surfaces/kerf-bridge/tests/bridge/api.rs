@@ -3,6 +3,10 @@
 //! leaves none of running, and the editor's `--serve-mcp` argument.
 //!
 //! Needs kerfd built beside this test: `cargo build -p kerf-runtime --bin kerfd`.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use crate::{poll, send};
 use kerf_bridge::{serve_mcp, Bridge, SERVE_MCP};

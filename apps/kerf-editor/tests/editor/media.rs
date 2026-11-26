@@ -1,4 +1,8 @@
 //! Media: the media bin, waveforms and pictures of media, importing, the inspector, and Finish's checks and deliveries.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use crate::support::{command, snapshot_timeline};
 use gpui::{

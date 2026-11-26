@@ -1111,6 +1111,10 @@ fn expression(param: &Param, tau: &str) -> String {
 mod tests;
 
 #[cfg(test)]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 mod sound_effect_tests {
     use super::*;
     use kerf_lang::parse_document;

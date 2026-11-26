@@ -8,6 +8,10 @@
 //! In a file of its own: it reads a models file of its own for the whole
 //! process ([`Models::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_engine::recipe::model::Models;
 use kerf_mcp::permissions::{Mode, Permissions};

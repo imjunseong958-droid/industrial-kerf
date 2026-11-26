@@ -32,6 +32,10 @@ const TICK: Duration = Duration::from_millis(250);
 
 /// A read-only `git` in `dir` that takes no locks: its trimmed output, or
 /// `None` when it fails or prints nothing.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: a read-only git that takes no locks"
+)]
 pub(crate) fn git_text(dir: &Path, args: &[&str]) -> Option<String> {
     let output = Process::new("git")
         .arg("-C")

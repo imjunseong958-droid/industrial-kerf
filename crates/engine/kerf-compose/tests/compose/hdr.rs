@@ -1,4 +1,8 @@
 //! A sequence finished in HDR: what its frames hold for a master, and what a monitor gets.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_compose::{Accel, ComposeOptions, Compositor, Frame};
 use kerf_lang::parse_document;

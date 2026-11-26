@@ -1,6 +1,10 @@
 //! A preset that carries a project's look, applied to a project without it
 //! on music whose beats its marker moves to, against a real kerfd. A file of
 //! its own: the process's catalog has one project's looks at a time.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_mcp::KerfMcpRouter;
 use kerf_model::Catalog;

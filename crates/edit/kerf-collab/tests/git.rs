@@ -1,5 +1,9 @@
 //! Collaboration through real repositories: two clones of one bare remote
 //! standing in for GitHub.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_collab::git;
 use kerf_collab::scaffold::{self, NewProject, Template};

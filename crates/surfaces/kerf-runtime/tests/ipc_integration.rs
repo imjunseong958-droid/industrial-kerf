@@ -1,6 +1,9 @@
 //! Real-process proof for the project-scoped kerfd boundary: a Unix socket,
 //! or a named pipe on Windows.
-
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 #![cfg(any(unix, windows))]
 
 use kerf_engine::process::sidecar::Sidecar;

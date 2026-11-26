@@ -3,7 +3,10 @@
 //! and live, and a project started from a preset by the launcher.
 //!
 //! These need Unix sockets (kerfd), git, and ffmpeg for the media parts.
-
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 #![cfg(unix)]
 
 use kerf_bridge::{preset_inspect, project_inspect, Bridge, Task, TaskDone, TaskStatus};

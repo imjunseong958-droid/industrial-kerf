@@ -2,6 +2,10 @@
 //! FFmpeg's, leaves a report as a panic does, which `crash::reports` lists for the editor's
 //! next start to tell of. Each test crashes a child process on purpose: this test binary, run
 //! again for `crash_on_purpose` alone.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_runtime::crash;
 use std::process::{Command, ExitStatus, Stdio};

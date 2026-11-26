@@ -1,5 +1,9 @@
 //! The reducer's tests: edits and their receipts, proposals, renders, and
 //! what survives a restart from the journal and checkpoints.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use super::*;
 use crate::ipc::expect_state;

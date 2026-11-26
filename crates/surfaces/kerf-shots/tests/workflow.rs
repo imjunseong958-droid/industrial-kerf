@@ -1,7 +1,10 @@
 //! What a workflow's model program says its inputs take ([`kerf_shots::workflow::taken`]),
 //! asked of a stand-in for `kerf-comfy`: a shell script of that name. One leaves a process
 //! outside its group with Perl, which macOS has where it has no `setsid`.
-
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 #![cfg(unix)]
 
 use kerf_engine::recipe::model::Models;

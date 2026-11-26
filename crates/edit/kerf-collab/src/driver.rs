@@ -89,6 +89,10 @@ fn install_looks(path: &str) -> Result<(), String> {
 fn incoming_looks(folder: &Path) -> Vec<Look> {
     let folder = folder.to_string_lossy();
     let folder = folder.trim_start_matches("./");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "short-lived and waited on: git reads the looks on the branch being merged"
+    )]
     let git = |args: &[&str]| {
         crate::git::program("git")
             .args(args)

@@ -32,11 +32,13 @@ fn mixed(project: &Project, sequence: &Id, from: Time, to: Time) -> Option<Read>
         },
     )
     .ok()?;
-    let output = hidden_command(resolve_ffmpeg_bin())
-        .args(compiled.argv.iter().skip(1))
-        .args(["-f", "f32le", "-c:a", "pcm_f32le", "-"])
-        .output()
-        .ok()?;
+    // A sidecar: it mixes as much of the sequence's sound as the range holds.
+    let output = crate::process::sidecar::output(
+        hidden_command(resolve_ffmpeg_bin())
+            .args(compiled.argv.iter().skip(1))
+            .args(["-f", "f32le", "-c:a", "pcm_f32le", "-"]),
+    )
+    .ok()?;
     if !output.status.success() {
         return None;
     }

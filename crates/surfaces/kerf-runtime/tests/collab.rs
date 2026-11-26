@@ -1,6 +1,9 @@
 //! Two people editing one shared project through real kerfd daemons, a
 //! bare repository standing in for GitHub, and the structural merge driver.
-
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 #![cfg(unix)]
 
 use kerf_collab::git;

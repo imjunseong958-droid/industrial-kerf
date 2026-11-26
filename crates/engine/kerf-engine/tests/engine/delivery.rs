@@ -1,5 +1,9 @@
 //! Delivery measurements on generated media: programme R128 loudness, the
 //! picture QC pass, and the ProRes 422 HQ master probed back.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_engine::analysis::loudness::measure_program;
 use kerf_engine::analysis::qc::picture_qc;

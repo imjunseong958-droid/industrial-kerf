@@ -433,7 +433,8 @@ fn run_ffmpeg(args: &[String]) -> Option<Vec<u8>> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     no_window(&mut command);
-    let output = command.output().ok()?;
+    // A sidecar: a followed subject is read over the whole of its range.
+    let output = kerf_sidecar::output(&mut command).ok()?;
     output.status.success().then_some(output.stdout)
 }
 

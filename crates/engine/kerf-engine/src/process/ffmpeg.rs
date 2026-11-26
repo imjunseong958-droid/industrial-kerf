@@ -35,6 +35,10 @@ pub fn hidden_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     Command::new(program)
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: -version"
+)]
 fn bin_exists(candidate: &str) -> bool {
     hidden_command(candidate)
         .arg("-version")
@@ -227,6 +231,10 @@ fn hw_device_opens(kind: &str) -> bool {
 /// decoder of its own to gain from: it decodes in software. Its encoders
 /// are VideoToolbox's too, and wait the same way, with the render that
 /// feeds them: it encodes in software as well.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "short-lived and waited on: sysctl reads one value"
+)]
 pub(crate) fn runs_in_a_guest() -> bool {
     static GUEST: OnceLock<bool> = OnceLock::new();
     *GUEST.get_or_init(|| {
@@ -261,19 +269,14 @@ pub fn run_in(bin: &str, args: &[String], dir: Option<&Path>) -> Result<CommandO
     if let Some(dir) = dir {
         command.current_dir(dir);
     }
-    let output = command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .map_err(|error| {
-            if error.kind() == io::ErrorKind::NotFound {
-                EngineError::msg(format!("{bin} not found on PATH"))
-            } else {
-                EngineError::from(error)
-            }
-        })?;
+    // A sidecar: what it is asked for can take as long as the media it reads.
+    let output = crate::process::sidecar::output(command.args(args)).map_err(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            EngineError::msg(format!("{bin} not found on PATH"))
+        } else {
+            EngineError::from(error)
+        }
+    })?;
     let code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -296,12 +299,7 @@ pub fn run_in(bin: &str, args: &[String], dir: Option<&Path>) -> Result<CommandO
 }
 
 pub fn run_allow_failure(bin: &str, args: &[String]) -> Result<CommandOutput> {
-    let output = hidden_command(bin)
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
+    let output = crate::process::sidecar::output(hidden_command(bin).args(args))?;
     Ok(CommandOutput {
         code: output.status.code().unwrap_or(-1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

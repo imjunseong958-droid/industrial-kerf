@@ -11,6 +11,10 @@
 //!
 //! The only test of this file, since renders are counted for the whole process
 //! (`section_stats`).
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_engine::process::ffmpeg::{resolve_ffmpeg_bin, resolve_ffprobe_bin};
 use kerf_engine::render::sections::{section_stats, SectionStats};

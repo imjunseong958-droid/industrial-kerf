@@ -2,6 +2,10 @@
 //! holds a file to. No editor has opened these files: the checks here are
 //! the format's own rules, and Apple's DTD where one is at hand
 //! (`KERF_FCPXML_DTD`).
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_interchange::fcpxml::{to_fcpxml, VERSION};
 use kerf_interchange::{export, Format, InterchangeIssue, IssueSeverity};

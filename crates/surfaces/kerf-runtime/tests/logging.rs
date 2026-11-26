@@ -1,5 +1,9 @@
 //! kerfd's log in its project folder grows only so far. Its own test binary, since the logger is
 //! the process's.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use std::fs;
 use std::path::Path;

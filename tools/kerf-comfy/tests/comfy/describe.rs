@@ -1,5 +1,9 @@
 //! `kerf-comfy --describe`, which reads the workflows that come with the program and asks
 //! no server.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use std::process::{Command, Stdio};
 

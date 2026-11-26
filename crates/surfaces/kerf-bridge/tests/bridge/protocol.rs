@@ -8,6 +8,10 @@
 //! Needs kerfd built beside this test (`cargo build -p kerf-runtime --bin
 //! kerfd`) and FFmpeg; the tests that need media say so and pass without
 //! FFmpeg.
+#![expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
 
 use kerf_bridge::Bridge;
 use kerf_runtime::{Author, AuthorKind, RuntimeClient};
