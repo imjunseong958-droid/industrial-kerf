@@ -5,7 +5,6 @@ use super::*;
 use crate::video::effects::apply;
 use crate::video::project::find_effect;
 use crate::video::tick::Tick;
-use kerf_draw::blend::Blend;
 
 /// A picture with bright spots, every kind of alpha, and hues.
 fn picture(w: usize, h: usize) -> Image {
@@ -188,30 +187,10 @@ fn kernels_match_the_effects() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Drop Shadow, Mosaic, Lens Distortion, and the Cineon Converter, each way they can be set.
+/// Mosaic, Lens Distortion, and the Cineon Converter, each way they can be set.
 fn shaped_cases() -> Vec<(&'static str, Vec<(&'static str, ParamValue)>)> {
     let fl = ParamValue::Float;
-    let on = ParamValue::Bool(true);
-    let color = |r: f32, g: f32, b: f32| ParamValue::Color([r, g, b, 1.0]);
     vec![
-        ("drop_shadow", vec![]),
-        (
-            "drop_shadow",
-            vec![
-                ("distance", fl(12.0)),
-                ("softness", fl(8.0)),
-                ("opacity", fl(80.0)),
-            ],
-        ),
-        (
-            "drop_shadow",
-            vec![
-                ("distance", fl(7.5)),
-                ("direction", fl(250.0)),
-                ("color", color(0.9, 0.2, 0.1)),
-                ("only", on.clone()),
-            ],
-        ),
         ("mosaic", vec![]),
         (
             "mosaic",
@@ -322,25 +301,7 @@ fn from_one_source(kernel: &Kernel, image: &Image) -> Option<Image> {
         }
         out
     };
-    let (w, h) = (image.w, image.h);
     Some(match kernel {
-        Kernel::DropShadow {
-            offset,
-            color,
-            opacity,
-            blur,
-            only,
-        } => {
-            let moved = image.transformed(w, h, &Affine::translate(offset[0], offset[1]));
-            let mut cast = each(&moved, &|p, _, _| kerf_kernel::shadow(p, *color, *opacity));
-            if let Some(blur) = blur {
-                blur.apply(&mut cast);
-            }
-            if !only {
-                kerf_draw::blend::composite(&mut cast, image, 1.0, Blend::Normal);
-            }
-            cast
-        }
         Kernel::Cineon { way, told } => {
             each(image, &|p, _, _| kerf_kernel::cineon_px(p, *way, told))
         }
@@ -376,7 +337,7 @@ fn kernels_from_one_source_are_the_effects_to_the_bit() {
         assert_ne!(cpu.px, image.px, "{id} {params:?} changes nothing");
         held += 1;
     }
-    assert_eq!(held, 3 + 4);
+    assert_eq!(held, 4);
 }
 
 /// A Lumetri's curves, LUTs, HSL Secondary, and sharpening, each and together, and with what comes

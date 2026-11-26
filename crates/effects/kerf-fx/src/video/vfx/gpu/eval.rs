@@ -2,7 +2,7 @@
 //! them.
 
 use super::*;
-use crate::video::effects::{f, gaussian_boxes};
+use crate::video::effects::f;
 use kerf_color::{rgb_to_ycbcr, Matrix};
 
 /// `hash3`'s constant on its third coordinate.
@@ -101,26 +101,6 @@ impl Kernel {
                 }))
             }
             "lumetri" => Kernel::Lumetri(Box::new(Lumetri::eval(e, cx, size)?)),
-            "drop_shadow" => {
-                let c = crate::video::effects::color(e, "color", cx);
-                let direction = f64::from(f(e, "direction", cx)).to_radians();
-                let distance = f64::from(f(e, "distance", cx)) * f64::from(cx.px_scale);
-                let soft = f(e, "softness", cx) * cx.px_scale * 0.5;
-                Kernel::DropShadow {
-                    offset: [direction.sin() * distance, -direction.cos() * distance],
-                    color: dec([c[0], c[1], c[2]]),
-                    opacity: f(e, "opacity", cx) / 100.0,
-                    blur: (soft > 0.3).then(|| {
-                        let (rx, ry) = gaussian_boxes(size.0, size.1, soft, soft);
-                        FxOp::Gaussian {
-                            rx,
-                            ry,
-                            repeat: false,
-                        }
-                    }),
-                    only: crate::video::effects::b(e, "only"),
-                }
-            }
             "vr_projection" | "vr_rotate_sphere" => match immersive::turn_of(e, cx) {
                 Some((turn, share)) => Kernel::Sphere {
                     turn,

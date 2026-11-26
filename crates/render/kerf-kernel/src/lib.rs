@@ -343,7 +343,7 @@ pub fn iris_round<N: Num>(x: N, y: N, cx: N, cy: N) -> N {
 
 // ------------------------------------------------------------------------------------- More grades
 //
-// As the shadow below, these run on the GPU only, and the CPU's code stays the reference:
+// These run on the GPU only, and the CPU's code stays the reference:
 // `kept::tests` and `vfx::gpu::tests` in `kerf-fx` hold each, as `f32`, to that code's very values.
 
 /// What a photo filter is told.
@@ -519,19 +519,6 @@ pub fn cineon_px<N: Num>(p: [N; 4], way: u32, told: &Cineon<N>) -> [N; 4] {
             [through(0), through(1), through(2), a]
         },
     )
-}
-
-// ----------------------------------------------------------------------------------------- A shadow
-//
-// This runs on the GPU only: the CPU's code in `kerf-fx` stays where it is, as the reference, and
-// `kernels_from_one_source_are_the_effects_to_the_bit` there holds it, as `f32`, to its very values.
-
-/// A pixel of the shadow a premultiplied pixel casts: `color` by how much of the pixel is there and by
-/// how dark the shadow is.
-#[inline(always)]
-pub fn shadow<N: Num>(p: [N; 4], color: [N; 3], opacity: N) -> [N; 4] {
-    let a = p[3] * opacity;
-    [color[0] * a, color[1] * a, color[2] * a, a]
 }
 
 // ------------------------------------------------------------------------------------------- A blur
@@ -856,19 +843,6 @@ pub fn wipe_wgsl() -> String {
     )
 }
 
-/// A function of WGSL that takes a pixel `q` and where its middle is, `x` and `y`, and returns what
-/// `body` makes of them.
-fn at_a_pixel(name: &str, body: impl FnOnce([Traced; 4], Traced, Traced) -> [Traced; 4]) -> String {
-    let mut result = None;
-    let lines = written(|| {
-        result = Some(body(parts("q"), Traced::named("x"), Traced::named("y")));
-    });
-    format!(
-        "fn {name}(q: vec4<f32>, x: f32, y: f32) -> vec4<f32> {{\n{lines}{}}}\n",
-        returned(result.expect("`written` runs its body once, and the body sets it"))
-    )
-}
-
 /// A function of WGSL that takes a pixel `q` and returns what `body` makes of it.
 fn of_a_pixel(name: &str, body: impl FnOnce([Traced; 4]) -> [Traced; 4]) -> String {
     let mut result = None;
@@ -925,15 +899,6 @@ pub fn color_wgsl() -> String {
         })
         .collect();
     format!("{filter}{unmultiplied}{converted}")
-}
-
-/// `shadow` as `fn shadow_px`, for the effects' `vfx/kernels.wgsl`: it takes a premultiplied pixel and
-/// where its middle is, and the shadow's color in `u.p0` with how dark it is.
-pub fn shadow_wgsl() -> String {
-    let v = Traced::named;
-    at_a_pixel("shadow_px", |q, _, _| {
-        shadow(q, [v("u.p0.x"), v("u.p0.y"), v("u.p0.z")], v("u.p0.w"))
-    })
 }
 
 #[cfg(test)]
@@ -1158,7 +1123,6 @@ mod tests {
             color_balance_wgsl(),
             box_line_wgsl(),
             wipe_wgsl(),
-            shadow_wgsl(),
             color_wgsl(),
         ];
         for written in all {

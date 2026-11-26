@@ -59,15 +59,6 @@ pub enum Kernel {
     Lumetri(Box<Lumetri>),
     /// Add Grain, whose picture is encoded and decoded as a kept effect's is.
     Grain(Box<Grain>),
-    DropShadow {
-        /// How far the shadow lies from what casts it, in pixels.
-        offset: [f64; 2],
-        color: [f32; 3],
-        opacity: f32,
-        /// What softens it, when anything does.
-        blur: Option<FxOp>,
-        only: bool,
-    },
     Mosaic {
         /// A block's width and height, in pixels.
         block: [f32; 2],

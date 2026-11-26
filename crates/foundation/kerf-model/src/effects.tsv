@@ -263,13 +263,6 @@ effect	noise.noise	Noise & Grain	Noise	Adds random noise, in color or not; film 
 	bool	color	true			Use Color Noise
 	bool	clip	true			Clipping
 	number	grain_size	1	1..10		Grain Size
-effect	perspective.dropshadow	Perspective	Drop Shadow	A drop shadow; separates text and cutouts from the background.	2
-	color	color	#000000			Shadow Color
-	number	opacity	50	0..100	%	Opacity
-	number	direction	135		degrees	Direction
-	number	distance	5	0..4000		Distance
-	number	softness	0	0..1000		Softness
-	bool	only	false			Shadow Only
 effect	stylize.mosaic	Stylize	Mosaic	Pixelates into blocks; censoring and retro 8-bit.	2
 	number	horizontal	10	1..4000		Horizontal Blocks
 	number	vertical	10	1..4000		Vertical Blocks

@@ -105,7 +105,7 @@ perspective.cylinder	distort.lens@2
 perspective.environment	
 perspective.sphere	distort.lens@2
 perspective.spotlight	a light on clips in depth, `gen=light@1`
-perspective.radialshadow	perspective.dropshadow@2
+perspective.radialshadow	the clip in depth, lit by a `gen=light@1` that casts shadows (`shadow=`) on the clips in depth behind it
 sim.ballaction	
 sim.bubbles	
 sim.drizzle	
@@ -190,7 +190,7 @@ distort.bulge	distort.lens@2
 distort.spherize	distort.lens@2
 distort.twirl	
 distort.turbulentdisplace	the prompt and references of the shot's recipe
-perspective.longshadow	perspective.dropshadow@2
+perspective.longshadow	the clip in depth, lit by a `gen=light@1` that casts shadows (`shadow=`) on the clips in depth behind it
 vr.chromaticaberrations	the prompt and references of the shot's recipe
 vr.colorgradients	
 vr.digitalglitch	the prompt and references of the shot's recipe
@@ -266,3 +266,5 @@ generate.audiospectrum	a `gen=sound@1` clip with `kind=spectrum`
 generate.audiowaveform	a `gen=sound@1` clip with `kind=waveform`
 # And what pinned a picture's corners, which a clip in depth on the surface does.
 distort.cornerpin	the clip in depth on the surface, as `look` with `track` and `corners` puts it
+# And a shadow, which a light casts in depth.
+perspective.dropshadow	the clip in depth, lit by a `gen=light@1` that casts shadows (`shadow=`) on the clips in depth behind it

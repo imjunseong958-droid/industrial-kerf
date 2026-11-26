@@ -6,8 +6,6 @@ use super::stage::{stage, Stage, U};
 use super::*;
 use crate::video::effects::gaussian_boxes;
 use crate::video::gpu::run as run_ops;
-use kerf_draw::blend::Blend;
-use kerf_geom::Rect;
 use kerf_gpu::{wgpu, Frame, Picture};
 
 impl Kernel {
@@ -108,16 +106,6 @@ impl Kernel {
             Kernel::Grain(grain) => {
                 let numbers = U::grain(grain);
                 encoded_pass(stage, frame, picture, &stage.add_grain, &numbers)
-            }
-            Kernel::DropShadow {
-                offset,
-                color,
-                opacity,
-                blur,
-                only,
-            } => {
-                let shadow = [color[0], color[1], color[2], *opacity];
-                drop_shadow(stage, frame, picture, *offset, shadow, blur.as_ref(), *only)?
             }
             Kernel::Mosaic {
                 block,
@@ -254,35 +242,6 @@ fn ultra_key(
     };
     frame.release(picture);
     Some(out)
-}
-
-/// Drop Shadow: the picture moved by `offset` and made a shadow of `shadow`'s color and opacity,
-/// softened by `blur` when it is, with the picture over it unless `only` the shadow is drawn.
-fn drop_shadow(
-    stage: &Stage,
-    frame: &mut Frame<'static>,
-    picture: Picture,
-    offset: [f64; 2],
-    shadow: [f32; 4],
-    blur: Option<&FxOp>,
-    only: bool,
-) -> Option<Picture> {
-    let (w, h) = (picture.w, picture.h);
-    let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
-    let by = Affine::translate(offset[0], offset[1]);
-    let empty = frame.clear(w, h);
-    let moved = frame.composite(empty, &picture, &by, whole, 1.0, Blend::Normal);
-    let mut cast = stage.pass(frame, &stage.shadow, &moved, None, &U::floats(shadow));
-    frame.release(moved);
-    if let Some(blur) = blur {
-        cast = run_ops(frame, cast, std::slice::from_ref(blur))?;
-    }
-    if !only {
-        let over = &Affine::IDENTITY;
-        cast = frame.composite(cast, &picture, over, whole, 1.0, Blend::Normal);
-    }
-    frame.release(picture);
-    Some(cast)
 }
 
 /// Mosaic, of `blocks` blocks each `block` in size.

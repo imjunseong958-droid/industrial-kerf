@@ -8,7 +8,7 @@
 use crate::video::project::{EffectInstance, ParamValue};
 use crate::video::tick::Tick;
 use kerf_color::{hsl_to_rgb, linear_to_srgb, luma709, rgb_to_hsl, srgb_to_linear, GradeSpace};
-use kerf_geom::{Affine, Vec2};
+use kerf_geom::Vec2;
 use rayon::prelude::*;
 
 use kerf_draw::Image;
@@ -217,31 +217,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) {
                 let s = 1.0 - k * r2;
                 (cxp + dx * s * norm, cyp + dy * s * norm)
             });
-        }
-        "drop_shadow" => {
-            let c = color(e, "color", cx);
-            let op = f(e, "opacity", cx) / 100.0;
-            let dir = (f(e, "direction", cx) as f64).to_radians();
-            let dist = f(e, "distance", cx) as f64 * cx.px_scale as f64;
-            let soft = f(e, "softness", cx) * cx.px_scale * 0.5;
-            let only = b(e, "only");
-            let (dx, dy) = (dir.sin() * dist, -dir.cos() * dist);
-            let lc = dec([c[0], c[1], c[2]]);
-            let mut sh = img.transformed(img.w, img.h, &Affine::translate(dx, dy));
-            sh.px.par_chunks_mut(4).for_each(|p| {
-                let a = p[3] * op;
-                p[0] = lc[0] * a;
-                p[1] = lc[1] * a;
-                p[2] = lc[2] * a;
-                p[3] = a;
-            });
-            if soft > 0.3 {
-                gaussian(&mut sh, soft, soft, false);
-            }
-            if !only {
-                kerf_draw::blend::composite(&mut sh, img, 1.0, kerf_draw::blend::Blend::Normal);
-            }
-            *img = sh;
         }
         "ultra_key" | "color_key" => key(img, e, cx),
         "luma_key" => {
