@@ -27,11 +27,8 @@ use kerf_engine::program::{compile_program, ProgramOptions};
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_lang::Clock;
 use kerf_model::{Catalog, Project, Sequence, Time};
-use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::Duration;
+use std::process::Command;
 
 /// What the measured checks allow. The default is EBU R128: −23 LUFS
 /// ±1 LU integrated, true peak at most −1 dBTP, loudness range at most
@@ -748,8 +745,8 @@ fn stretch_over(blocks: &[(f64, f64)], limit: f64) -> Option<PeakStretch> {
         })
 }
 
-/// Run FFmpeg with `args` in `dir`, killing it when `cancel` is asked
-/// for, and read what it wrote to stderr with `parse`.
+/// Run FFmpeg with `args` in `dir` as a sidecar, stopping it when `cancel`
+/// is asked for, and read what it wrote to stderr with `parse`.
 fn run_ffmpeg_lines<T>(
     args: &[String],
     dir: &Path,
@@ -760,40 +757,12 @@ fn run_ffmpeg_lines<T>(
     if dir.is_dir() {
         command.current_dir(dir);
     }
-    let mut child = command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| EngineError::msg(format!("ffmpeg could not start: {error}")))?;
-    let stderr = child
-        .stderr
-        .take()
-        .expect("the command was spawned with stderr piped, and nothing took it since");
-    let reader = thread::spawn(move || {
-        BufReader::new(stderr)
-            .lines()
-            .map_while(std::io::Result::ok)
-            .collect::<Vec<_>>()
-    });
-    let status = loop {
-        if cancel.is_cancelled() {
-            // Cancelled: FFmpeg may have ended by itself already, and what it wrote is not
-            // wanted, so none of these can fail in a way that matters.
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = reader.join();
-            return Err(EngineError::Cancelled);
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(error) => return Err(EngineError::msg(format!("ffmpeg: {error}"))),
-        }
-    };
-    let lines = reader.join().unwrap_or_default();
-    if !status.success() {
+    command.args(args);
+    let mut lines = Vec::new();
+    let finished = kerf_engine::process::sidecar::run(command, cancel, |line| {
+        lines.push(line.to_owned());
+    })?;
+    if !finished.status.success() {
         let tail: Vec<&str> = lines.iter().rev().take(8).map(String::as_str).collect();
         return Err(EngineError::msg(format!(
             "the peak pass failed: {}",

@@ -108,6 +108,10 @@ fn jobs() -> std::sync::MutexGuard<'static, Vec<(Listed, job::Hold)>> {
 
 /// Start `command` as a sidecar: on Unix, leading a process group of its
 /// own and listed as running; on Windows, in a job of its own.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "this is the supervised spawn the lint points everyone else to"
+)]
 fn start(command: &mut Command) -> io::Result<(Child, Listed)> {
     #[cfg(unix)]
     {
@@ -160,7 +164,9 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
-    /// Start `command` as a sidecar.
+    /// Start `command` as a sidecar. Give it a stdin of its own, null or a pipe: in a group of
+    /// its own, a program that reads or sets up the terminal it inherited (FFmpeg does) is
+    /// stopped there, and is never waited out.
     pub fn start(command: &mut Command) -> io::Result<Self> {
         let (mut child, listed) = start(command)?;
         Ok(Self {
@@ -690,6 +696,10 @@ mod windows_tests {
     #[test]
     fn a_sidecar_ends_when_its_job_closes() {
         // What closing kerfd's handles does to the sidecars it ran.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a plain child put in a job by hand: the job is what is tested"
+        )]
         let mut child = Command::new("ping")
             .args(["-n", "30", "127.0.0.1"])
             .stdout(Stdio::null())

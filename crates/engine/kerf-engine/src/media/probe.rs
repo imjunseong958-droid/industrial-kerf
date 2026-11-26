@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Child, ChildStderr, Stdio};
+use std::process::{ChildStderr, Stdio};
 use std::sync::{LazyLock, Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -17,6 +17,7 @@ use crate::process::ffmpeg::{
     resolve_ffmpeg_bin, resolve_ffprobe_bin, run, run_allow_failure, run_in, video_decode_prefix,
 };
 use crate::process::resources::extract_job_count;
+use crate::process::sidecar::Sidecar;
 use crate::said;
 
 static SILENCE_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -1201,34 +1202,37 @@ fn decode_waveform_buckets(
     let sample_rate = WAVEFORM_SAMPLE_RATE.to_string();
     let start = start.to_string();
     let duration = duration.to_string();
-    let mut child = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-ss",
-            start.as_str(),
-            "-t",
-            duration.as_str(),
-            "-i",
-            src,
-            "-vn",
-            "-ac",
-            "1",
-            "-ar",
-            sample_rate.as_str(),
-            "-f",
-            "f32le",
-            "pipe:1",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    // It reads the whole of a stretch that may be hours long: a sidecar, ended with the work
+    // whichever way that ends.
+    let mut child = Sidecar::start(
+        crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                start.as_str(),
+                "-t",
+                duration.as_str(),
+                "-i",
+                src,
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                sample_rate.as_str(),
+                "-f",
+                "f32le",
+                "pipe:1",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )?;
     let mut stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
-            reap_waveform_child(&mut child);
+            child.kill();
             return Err(EngineError::msg(
                 "ffmpeg waveform decoder did not expose stdout",
             ));
@@ -1237,7 +1241,7 @@ fn decode_waveform_buckets(
     let stderr = match child.stderr.take() {
         Some(stderr) => stderr,
         None => {
-            reap_waveform_child(&mut child);
+            child.kill();
             return Err(EngineError::msg(
                 "ffmpeg waveform decoder did not expose stderr",
             ));
@@ -1334,18 +1338,12 @@ fn drain_waveform_stderr_tail(mut stderr: impl Read) -> std::io::Result<Vec<u8>>
     }
 }
 
-/// End a decoder given up on. Best effort, on a way out with an error of its own: the
-/// decoder may have ended already.
-fn reap_waveform_child(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
+/// End a decoder given up on, which may have ended already, and what it said.
 fn reap_waveform_child_with_stderr(
-    child: &mut Child,
+    child: &mut Sidecar,
     stderr_reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
 ) {
-    reap_waveform_child(child);
+    child.kill();
     // Its stderr is not told: the error being returned is what went wrong.
     let _ = stderr_reader.join();
 }
@@ -1583,6 +1581,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn waveform_stderr_is_drained_while_stdout_is_read() {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "a shell standing in for FFmpeg's pipes, read and waited on by the test"
+        )]
         let mut child = std::process::Command::new("sh")
             .args([
                 "-c",

@@ -11,6 +11,10 @@ use std::process::Stdio;
 
 /// Write `frame` to `path` as a PNG.
 pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "short-lived and waited on: FFmpeg writes one frame it is given as a PNG"
+    )]
     let mut child = crate::process::ffmpeg::hidden_command(resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-s"])
@@ -22,7 +26,7 @@ pub fn write_png(frame: &Frame, path: &Path) -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()?;
     // Read as it writes, so a full stderr cannot stop it taking the frame.
-    let errors = crate::process::sidecar::drain_stderr(&mut child);
+    let errors = crate::process::sidecar::drain_stderr(child.stderr.take());
     child
         .stdin
         .take()

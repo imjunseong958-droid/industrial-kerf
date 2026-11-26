@@ -2940,6 +2940,10 @@ fn filmed(
         return None;
     }
     let directory = TempDir::new().unwrap();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "FFmpeg encoding a test's footage, waited on"
+    )]
     let mut encoder = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-y"])
         .args(["-f", "rawvideo", "-pix_fmt", "rgba", "-r", "30"])

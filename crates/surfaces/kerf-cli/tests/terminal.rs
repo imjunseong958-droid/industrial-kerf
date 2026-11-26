@@ -450,6 +450,10 @@ fn a_terminated_kerf_ends_the_mcp_servers_it_runs() {
             }
         }
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "kerf under test: the test signals it by its process id and waits on it"
+    )]
     let kerf = Command::new(env!("CARGO_BIN_EXE_kerf"))
         // No one's own servers, and no timeout while the server is waited on.
         .env("HOME", home.path())

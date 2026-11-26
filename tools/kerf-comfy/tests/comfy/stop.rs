@@ -109,6 +109,10 @@ fn the_program_takes_its_job_back_on_sigterm() {
     )
     .unwrap();
     let (url, kept) = comfy();
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "kerf-comfy under test: the test signals it by its process id and waits on it"
+    )]
     let program = Command::new(env!("CARGO_BIN_EXE_kerf-comfy"))
         .args(["--workflow", "shot"])
         .arg(&request)

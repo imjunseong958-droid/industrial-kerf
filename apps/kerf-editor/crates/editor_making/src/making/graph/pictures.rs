@@ -107,7 +107,7 @@ pub fn output_within(
 ) -> Option<Vec<u8>> {
     use std::io::Read;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{mpsc, Mutex, PoisonError};
+    use std::sync::mpsc;
     command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -118,23 +118,23 @@ pub fn output_within(
         // No console window flashing up for each picture.
         command.creation_flags(0x0800_0000);
     }
-    let mut child = command.spawn().ok()?;
+    // A sidecar, so that stopping it stops what it started too.
+    let mut child = kerf_sidecar::Sidecar::start(&mut command).ok()?;
     let Some(mut out) = child.stdout.take() else {
         // Stopped and reaped, if it has not ended already: it is not read.
-        let _ = child.kill();
-        let _ = child.wait();
+        child.kill();
         return None;
     };
-    let child = Arc::new(Mutex::new(child));
+    let stopper = child.stopper();
     let stopped = Arc::new(AtomicBool::new(false));
     let (done, finished) = mpsc::channel::<()>();
     let watchdog = {
-        let (child, stopped) = (child.clone(), stopped.clone());
+        let stopped = stopped.clone();
         std::thread::spawn(move || {
             if finished.recv_timeout(limit) == Err(mpsc::RecvTimeoutError::Timeout) {
                 stopped.store(true, Ordering::Relaxed);
-                // One that has just ended needs no stopping.
-                let _ = child.lock().unwrap_or_else(PoisonError::into_inner).kill();
+                // At once: it has run too long. One that has just ended needs no stopping.
+                stopper.kill();
             }
         })
     };
@@ -145,7 +145,7 @@ pub fn output_within(
     // the answer, however it ended.
     let _ = done.send(());
     let _ = watchdog.join();
-    let _ = child.lock().unwrap_or_else(PoisonError::into_inner).wait();
+    let _ = child.wait();
     (read.is_ok() && !stopped.load(Ordering::Relaxed)).then_some(written)
 }
 

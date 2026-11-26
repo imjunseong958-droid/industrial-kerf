@@ -80,6 +80,10 @@ fn ignored(directory: &Path, paths: &[&str]) -> BTreeSet<String> {
     if paths.is_empty() || !directory.join(".git").exists() {
         return BTreeSet::new();
     }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "short-lived and waited on: git check-ignore answers the paths it is given and ends"
+    )]
     let child = crate::git::program("git")
         .arg("-C")
         .arg(directory)

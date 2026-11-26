@@ -33,6 +33,10 @@ impl Project {
         if let Some(document) = document {
             fs::write(directory.join("project.kerf"), document).unwrap();
         }
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "kerfd under test, killed and waited on when the test ends"
+        )]
         let daemon = Command::new(env!("CARGO_BIN_EXE_kerfd"))
             .arg("--dir")
             .arg(&directory)

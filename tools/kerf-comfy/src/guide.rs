@@ -228,6 +228,12 @@ impl Tools {
         to: &Path,
     ) -> Result<(), String> {
         use std::io::Write;
+        // A sidecar of its own would leave kerf-comfy's process group, which is how Kerf, which
+        // runs kerf-comfy as a sidecar, stops this FFmpeg with it.
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "short-lived and waited on, and left in kerf-comfy's process group (job) so that it ends with kerf-comfy"
+        )]
         let mut child = Command::new(&self.ffmpeg)
             .args(["-hide_banner", "-loglevel", "error", "-y"])
             .args(["-f", "rawvideo", "-pix_fmt", "gray", "-color_range", "pc"])

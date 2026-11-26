@@ -51,12 +51,20 @@ impl Drop for Project {
     }
 }
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "kerfd under test, which each test stops itself"
+)]
 fn start_daemon(directory: &Path) -> Child {
     daemon_command(directory).spawn().expect("spawn kerfd")
 }
 
 /// A daemon that gives up `seconds` after its last request when nothing
 /// holds it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "kerfd under test, which each test stops itself"
+)]
 fn start_daemon_idle_for(directory: &Path, seconds: u64) -> Child {
     daemon_command(directory)
         .env("KERFD_IDLE_TIMEOUT", seconds.to_string())
@@ -857,6 +865,10 @@ fn what_kerfd_warns_of_is_kept_in_the_projects_log() {
     let directory = _project.0.clone();
     let log = directory.join(".kerf-runtime.log");
     let stderr = directory.join("kerfd.stderr");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "kerfd under test, which the test stops itself"
+    )]
     let start = || {
         let mut command = daemon_command(&directory);
         command
@@ -1141,6 +1153,10 @@ fn a_killed_client_releases_its_lease() {
     // No idle timeout, so only a released lease can end it.
     let mut daemon = start_daemon_idle_for(&directory, 0);
     wait_until_ready(&RuntimeClient::new(&directory).unwrap());
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a process holding a lease, which the test kills to see the lease let go"
+    )]
     let mut holder = Command::new(std::env::current_exe().unwrap())
         .args(["lease_holder_process", "--exact", "--nocapture"])
         .env("KERFD_TEST_LEASE_HOLDER", &directory)
@@ -1214,6 +1230,10 @@ fn a_client_outwaits_a_daemon_still_letting_go_of_the_project() {
     let directory = _project.0.clone();
     // A kerfd in stdio mode holds the project, as one on its way out does,
     // for longer than a new kerfd waits for it.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "kerfd under test, talked to over its pipes and waited on"
+    )]
     let mut holder = Command::new(env!("CARGO_BIN_EXE_kerfd"))
         .arg("--dir")
         .arg(&directory)

@@ -11,7 +11,7 @@
 //! any other.
 
 use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{ChildStderr, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,7 +30,7 @@ const STDERR_QUEUE_CAPACITY: usize = 128;
 const MAX_STDERR_TAIL_BYTES: usize = 16 * 1024;
 
 /// How a sidecar exited, with the end of what it wrote to stderr.
-pub(crate) struct Finished {
+pub struct Finished {
     pub status: ExitStatus,
     pub stderr: String,
 }
@@ -40,7 +40,7 @@ pub(crate) struct Finished {
 /// requested the child is asked to end, killed if it has not within
 /// [`GRACE`], and `EngineError::Cancelled` returned; what it says while it
 /// ends still goes to `on_line`.
-pub(crate) fn run(
+pub fn run(
     command: Command,
     cancellation: &CancellationToken,
     on_line: impl FnMut(&str),
@@ -149,10 +149,9 @@ fn run_within(
     })
 }
 
-/// Read `child`'s stderr to its end on a thread of its own, keeping the
-/// last of it to report.
-pub(crate) fn drain_stderr(child: &mut Child) -> thread::JoinHandle<String> {
-    let pipe = child.stderr.take();
+/// Read a child's stderr, `pipe`, to its end on a thread of its own, keeping
+/// the last of it to report.
+pub(crate) fn drain_stderr(pipe: Option<ChildStderr>) -> thread::JoinHandle<String> {
     thread::spawn(move || {
         let mut tail = String::new();
         let Some(pipe) = pipe else {

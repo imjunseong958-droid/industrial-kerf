@@ -288,20 +288,25 @@ fn frames_with(
     (format, bytes): (&str, usize),
     mut each: impl FnMut(f64, &[u8]),
 ) -> Result<()> {
-    let mut child = crate::process::ffmpeg::hidden_command(ffmpeg)
-        .args(video_decode_prefix())
-        .args(["-hide_banner", "-loglevel", "error", "-i"])
-        .arg(src)
-        .args(["-map", "0:v:0", "-vf"])
-        .arg(format!("fps={rate},scale={width}:{height},format={format}"))
-        .args(["-f", "rawvideo", "-"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
+    // It decodes the whole of the file: a sidecar, ended with the work whichever way that ends.
+    let mut child = sidecar::Sidecar::start(
+        crate::process::ffmpeg::hidden_command(ffmpeg)
+            .args(video_decode_prefix())
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(src)
+            .args(["-map", "0:v:0", "-vf"])
+            .arg(format!("fps={rate},scale={width}:{height},format={format}"))
+            .args(["-f", "rawvideo", "-"])
+            // Not this process's own: in a process group of its own, FFmpeg reading a terminal
+            // there would be stopped.
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )?;
     // Read as it writes: an FFmpeg that says more than a pipe holds (a decoder failing on every
     // frame, as VideoToolbox does on 4:4:4) would otherwise wait on its stderr while this waits on
     // its stdout, and neither would end.
-    let errors = crate::process::sidecar::drain_stderr(&mut child);
+    let errors = sidecar::drain_stderr(child.stderr.take());
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut grey = vec![0u8; (width * height) as usize * bytes];
     let mut frame = 0u64;
