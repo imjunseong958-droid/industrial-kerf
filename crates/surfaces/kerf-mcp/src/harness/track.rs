@@ -207,20 +207,6 @@ impl KerfMcpRouter {
             let kept =
                 kerf_track::simplified_quads(&followed.quads, TRACK_TOLERANCE_PIXELS / drawn_width);
             let rounded = |value: f64| (value * 100_000.0).round() / 100_000.0;
-            // One number of one corner over the kept frames, as keyframes.
-            let channel = |corner: usize, axis: usize| {
-                let words: Vec<String> = kept
-                    .iter()
-                    .map(|index| {
-                        format!(
-                            "{}f:{}",
-                            first + *index as i64 - origin,
-                            rounded(followed.quads[*index][corner][axis])
-                        )
-                    })
-                    .collect();
-                format!("{{{}}}", words.join(" "))
-            };
             let words: Vec<String> = kept
                 .iter()
                 .map(|index| {
@@ -244,28 +230,37 @@ impl KerfMcpRouter {
                 "outline": format!("{{{}}}", words.join(" ")),
             });
             if let Some(clip) = target {
-                // Corner order, as the corner pin names them.
-                let names = [
-                    ("upper_left", 0),
-                    ("upper_right", 1),
-                    ("lower_right", 2),
-                    ("lower_left", 3),
-                ];
-                let params: Vec<String> = names
+                // The clip put in depth where the surface goes, before the camera a sequence
+                // has without one of its own: one it has, or a parent that moves the clip, puts
+                // it elsewhere.
+                let camera = sequence
+                    .tracks
                     .iter()
-                    .map(|(name, corner)| {
-                        format!(
-                            "{name}_x={} {name}_y={}",
-                            channel(*corner, 0),
-                            channel(*corner, 1)
+                    .flat_map(|track| &track.clips)
+                    .any(|clip| matches!(&clip.content, kerf_model::Content::Generator { fx, .. } if fx.as_str() == "camera"));
+                let frame = (f64::from(sequence.width), f64::from(sequence.height));
+                let script = (!camera && clip.parent.is_none())
+                    .then(|| {
+                        kerf_shots::tracks::depth_script(
+                            clip.id.as_str(),
+                            &followed.quads,
+                            &kept,
+                            first - origin,
+                            fitted_picture(project, sequence, clip),
+                            frame,
                         )
                     })
-                    .collect();
-                result["script"] = json!(format!(
-                    "fx {} add distort.cornerpin@2 {}",
-                    clip.id,
-                    params.join(" ")
-                ));
+                    .flatten();
+                match script {
+                    Some(script) => result["script"] = json!(script),
+                    None => {
+                        result["unplaced"] = json!(if camera || clip.parent.is_some() {
+                            "the sequence's camera, or the clip's parent, moves what is in depth: the surface's corners are in `quads` and `outline`"
+                        } else {
+                            "no plane seen by the camera has these corners: they are in `quads` and `outline`"
+                        });
+                    }
+                }
             }
             return Ok(result);
         }
@@ -405,6 +400,32 @@ fn solved_camera(
 }
 
 /// How many pixels wide the picture of `clip` is, if it has one of its own.
+/// How large a clip's picture is on the frame of `sequence` before it is scaled, in its pixels:
+/// fitted inside it, as the compositor fits media and a sequence, and the frame for a generator.
+fn fitted_picture(project: &Project, sequence: &Sequence, clip: &Clip) -> (f64, f64) {
+    let frame = (f64::from(sequence.width), f64::from(sequence.height));
+    let picture = match &clip.content {
+        kerf_model::Content::Media { media, .. } => project
+            .media
+            .iter()
+            .find(|found| found.id == *media)
+            .and_then(|media| media.video.as_ref())
+            .map(|video| (f64::from(video.width), f64::from(video.height))),
+        kerf_model::Content::Sequence { sequence, .. } => project
+            .sequence(sequence.as_str())
+            .map(|nested| (f64::from(nested.width), f64::from(nested.height))),
+        _ => None,
+    };
+    let Some((width, height)) = picture.filter(|(width, height)| *width > 0.0 && *height > 0.0)
+    else {
+        return frame;
+    };
+    (
+        (frame.1 * width / height).round().min(frame.0).max(1.0),
+        (frame.0 * height / width).round().min(frame.1).max(1.0),
+    )
+}
+
 fn picture_width(project: &kerf_model::Project, clip: Option<&kerf_model::Clip>) -> Option<f64> {
     let kerf_model::Content::Media { media, .. } = &clip?.content else {
         return None;
