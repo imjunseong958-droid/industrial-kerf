@@ -1,7 +1,5 @@
 //! Moving-frame transitions: Animation, Slide, Transformers and the camera-style Smart Tools.
 
-use std::f32::consts::PI;
-
 use super::cards::{eye, focal_for, Card, V3};
 use super::{
     bell, ease_in, ease_in_out, ease_out, exposure, following, line_blur, mid_mix, mix, over,
@@ -122,26 +120,6 @@ fn scene(t: &Tx, found: &CardScene) -> Image {
     })
 }
 
-fn center3(t: &Tx) -> V3 {
-    [t.wf / 2.0, t.hf / 2.0, 0.0]
-}
-
-/// "Back-out" easing with overshoot `s` (0 = plain ease-out).
-fn back_out(x: f32, s: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0) - 1.0;
-    1.0 + (s + 1.0) * x * x * x + s * x * x
-}
-
-/// Damped spring from 0 to exactly 1.
-fn spring(x: f32, bounce: f32) -> f32 {
-    let w = (2.0 + 4.0 * bounce) * PI;
-    let k = 4.0 + 6.0 * (1.0 - bounce);
-    let f = |u: f32| 1.0 - (-k * u).exp() * (w * u).cos();
-    // a slower start (u = x^1.6) so the move reads before the bounce
-    let x = x.clamp(0.0, 1.0).powf(1.6);
-    f(x) + x * (1.0 - f(1.0))
-}
-
 /// What a scene of cards takes: how far off the eye is, how long the shutter is open (in progress
 /// units, 0 for no motion blur), and the cards at each moment.
 pub(crate) struct CardScene<'a, 'b> {
@@ -192,7 +170,6 @@ fn boxed<'a, 'b>(
 
 /// The cards of a transition that is a scene of them, which the CPU paints and the GPU's kernel reads.
 pub(crate) fn card_scene<'a, 'b>(id: &str, t: &'b Tx<'a>) -> Option<CardScene<'a, 'b>> {
-    let c = center3(t);
     let (w, h) = (t.wf, t.hf);
     let (dx, dy) = t.dir();
     let horiz = dx != 0.0;
@@ -258,111 +235,6 @@ pub(crate) fn card_scene<'a, 'b>(id: &str, t: &'b Tx<'a>) -> Option<CardScene<'a
                 vec![
                     Layer::new(Card::flat().rot_z(hub, a), t.a),
                     Layer::new(Card::flat().rot_z(hub, a - gap * sign), t.b),
-                ]
-            })
-        }
-        "pop_motion" => {
-            let s = t.frac("overshoot") * 4.0;
-            boxed(far, exposure(t, 0.05), move |q| {
-                let sa = 1.0 - 0.3 * ease_in((q / 0.6).min(1.0));
-                let qb = ((q - 0.15) / 0.85).clamp(0.0, 1.0);
-                let sb = back_out(qb, s).max(0.0);
-                let mut la = Layer::new(Card::flat().scale_about(c, sa), t.a);
-                la.opacity = 1.0 - smoothstep(0.35, 0.8, q);
-                let mut lb = Layer::new(
-                    Card::flat()
-                        .scale_about(c, sb.max(1e-3))
-                        .translate([0.0, 0.0, -0.01]),
-                    t.b,
-                );
-                lb.opacity = smoothstep(0.1, 0.3, q);
-                vec![la, lb]
-            })
-        }
-        "pull_motion" => boxed(far, exposure(t, 0.1), move |q| {
-            let e = ease_in_out(q);
-            let s = 1.0 - 0.25 * bell(q);
-            vec![
-                Layer::new(
-                    Card::flat().scale_about(c, s).translate([
-                        dx * travel * e,
-                        dy * travel * e,
-                        0.0,
-                    ]),
-                    t.a,
-                ),
-                Layer::new(
-                    Card::flat().scale_about(c, s).translate([
-                        dx * travel * (e - 1.0),
-                        dy * travel * (e - 1.0),
-                        0.0,
-                    ]),
-                    t.b,
-                ),
-            ]
-        }),
-        "spin_motion" => {
-            let turn =
-                t.num("rotation").to_radians() * if t.choice("spin") == 1 { -1.0 } else { 1.0 };
-            boxed(far, exposure(t, 0.06), move |q| {
-                if q < 0.5 {
-                    let k = ease_in(q * 2.0);
-                    vec![Layer::new(
-                        Card::flat()
-                            .rot_z(c, turn * 0.5 * k)
-                            .scale_about(c, (1.0 - k).max(1e-3)),
-                        t.a,
-                    )]
-                } else {
-                    let k = ease_out((q - 0.5) * 2.0);
-                    vec![Layer::new(
-                        Card::flat()
-                            .rot_z(c, -turn * 0.5 * (1.0 - k))
-                            .scale_about(c, k.max(1e-3)),
-                        t.b,
-                    )]
-                }
-            })
-        }
-        "spring_motion" => {
-            let bounce = t.frac("bounce");
-            boxed(far, exposure(t, 0.08), move |q| {
-                let e = spring(q, bounce);
-                vec![
-                    Layer::new(
-                        Card::flat().translate([dx * travel * e, dy * travel * e, 0.0]),
-                        t.a,
-                    ),
-                    Layer::new(
-                        Card::flat().translate([
-                            dx * travel * (e - 1.0),
-                            dy * travel * (e - 1.0),
-                            0.0,
-                        ]),
-                        t.b,
-                    ),
-                ]
-            })
-        }
-        "travel_motion" => {
-            let zoom = t.frac("zoom");
-            let step = travel * 1.08;
-            boxed(far, exposure(t, 0.08), move |q| {
-                let s = 1.0 - zoom * bell(q);
-                let pan = step * ease_in_out(q);
-                vec![
-                    Layer::new(
-                        Card::flat()
-                            .translate([dx * pan, dy * pan, 0.0])
-                            .scale_about(c, s),
-                        t.a,
-                    ),
-                    Layer::new(
-                        Card::flat()
-                            .translate([dx * (pan - step), dy * (pan - step), 0.0])
-                            .scale_about(c, s),
-                        t.b,
-                    ),
                 ]
             })
         }
@@ -448,33 +320,6 @@ pub(super) fn apply(id: &str, t: &Tx) -> Option<Image> {
                         gcol
                     }
                 })
-            })
-        }
-        "stretch" => {
-            let e = ease_in_out(t.p);
-            // B grows from the entry side while A squeezes towards the exit side
-            let (len, axis_x) = if horiz { (w, true) } else { (h, false) };
-            let fwd = if horiz { dx > 0.0 } else { dy > 0.0 };
-            let split = if fwd { len * e } else { len * (1.0 - e) };
-            paint(t.w, t.h, |x, y| {
-                let s = if axis_x { x } else { y };
-                let (in_b, local) = if fwd {
-                    if s < split {
-                        (true, s / split.max(1e-3) * len)
-                    } else {
-                        (false, (s - split) / (len - split).max(1e-3) * len)
-                    }
-                } else if s >= split {
-                    (true, (s - split) / (len - split).max(1e-3) * len)
-                } else {
-                    (false, s / split.max(1e-3) * len)
-                };
-                let (sx, sy) = if axis_x { (local, y) } else { (x, local) };
-                if in_b {
-                    t.sbc(sx, sy)
-                } else {
-                    t.sac(sx, sy)
-                }
             })
         }
         // ---------------- Transformers ----------------

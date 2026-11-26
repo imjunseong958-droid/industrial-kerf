@@ -97,6 +97,10 @@ fn scenes() -> Vec<(&'static str, String)> {
         ),
         ("moved", clip("      set x=0.1 y=-0.05 scale=0.7\n")),
         ("turned", clip("      set rotation=17 scale=0.8\n")),
+        (
+            "smeared as it moves",
+            over("      set x={0f:-0.3 23f:0.3} rotation={0f:0 23f:40} scale=0.7 shutter=180\n"),
+        ),
         ("flipped", clip("      set scale_x=-1 scale=0.9\n")),
         ("cropped", clip("      set crop_l=0.1 crop_t=0.05 crop_r=0.2 scale=0.9\n")),
         ("faint", clip("      set opacity=0.6 scale=0.9\n")),
@@ -498,8 +502,6 @@ fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     let time = Rate::FPS_24.time_of(6);
     let refused = [
         format!("{CLIP}      fx noise.median\n"),
-        // A picture smeared as it moves.
-        format!("{CLIP}      set x={{0f:-0.3 23f:0.3}} shutter=180\n"),
         "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=morph-cut@1 dur=12f\n".to_owned(),
     ];
     for body in refused {

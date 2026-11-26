@@ -454,18 +454,6 @@ impl Drawing {
         if plan.clip.retime != kerf_model::Retime::Frames {
             return false;
         }
-        // So is a picture smeared as it moves.
-        if self.pass == Pass::Picture {
-            let time = at - plan.clip.start;
-            let place = self.geometry(sequence, plan, time);
-            let whole = Rect::new(0.0, 0.0, f64::from(plan.size.0), f64::from(plan.size.1));
-            if self
-                .smeared(sequence, plan, time, 1.0, &place, whole)
-                .is_some()
-            {
-                return false;
-            }
-        }
         // A mesh is drawn on the CPU and handed over as a picture and how far off it is,
         // which does where its light is the scene's lights alone: a shadow is cast through
         // the GPU's own planes and a light from a picture is the GPU's to read.
@@ -915,14 +903,25 @@ impl Drawing {
             f64::from(ready.picture.w),
             f64::from(ready.picture.h),
         );
-        let canvas = frame.composite(
-            canvas,
-            &ready.picture,
-            &ready.to_output,
-            ready.crop.unwrap_or(whole),
-            ready.opacity,
-            blend,
-        );
+        let kept = ready.crop.unwrap_or(whole);
+        // A picture that moves while its shutter is open is smeared over where it goes; a pass,
+        // which says one thing of each pixel, is not.
+        let smeared = (self.pass == Pass::Picture)
+            .then(|| self.smeared(sequence, plan, time, scale, &ready.to_output, kept))
+            .flatten();
+        let canvas = match smeared {
+            Some(places) => {
+                frame.smeared(canvas, &ready.picture, &places, kept, ready.opacity, blend)
+            }
+            None => frame.composite(
+                canvas,
+                &ready.picture,
+                &ready.to_output,
+                kept,
+                ready.opacity,
+                blend,
+            ),
+        };
         frame.release(ready.picture);
         Some(canvas)
     }

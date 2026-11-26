@@ -132,7 +132,7 @@ fn each_kernel_draws_what_the_cpu_draws() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert!(ran > 1000, "only {ran} ran");
+    assert!(ran > 900, "only {ran} ran");
     // `read_floats` gives nothing back from a device that failed, which would stop the test above; and
     // one that fails at the very end should not pass.
     assert!(kerf_gpu::shared().is_some(), "the device failed");
@@ -180,8 +180,6 @@ fn which_transitions_have_kernels() {
         "panel-wipe",
         "phosphor",
         "plateau-wipe",
-        "pop-motion",
-        "pull-motion",
         "push",
         "radial-blur",
         "radial-wipe",
@@ -190,14 +188,10 @@ fn which_transitions_have_kernels() {
         "slide",
         "soft-wipe",
         "solarize",
-        "spin-motion",
         "split",
-        "spring-motion",
         "star-wipe",
-        "stretch",
         "stretch-wipe",
         "stripe",
-        "travel-motion",
         "tv-power",
         "vhs-damage",
         "whip",
@@ -218,5 +212,5 @@ fn which_transitions_have_kernels() {
     without.sort_unstable();
     assert_eq!(with, KERNELS);
     assert_eq!(without, ON_THE_CPU);
-    assert_eq!(with.len() + without.len(), 61);
+    assert_eq!(with.len() + without.len(), 55);
 }

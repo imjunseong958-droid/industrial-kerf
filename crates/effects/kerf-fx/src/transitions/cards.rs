@@ -51,19 +51,6 @@ impl Card {
     pub fn translate(self, d: V3) -> Self {
         self.map(|p| [p[0] + d[0], p[1] + d[1], p[2] + d[2]], |v| v)
     }
-    /// Uniform scale about `c`.
-    pub fn scale_about(self, c: V3, s: f32) -> Self {
-        self.map(
-            |p| {
-                [
-                    c[0] + (p[0] - c[0]) * s,
-                    c[1] + (p[1] - c[1]) * s,
-                    c[2] + (p[2] - c[2]) * s,
-                ]
-            },
-            |v| [v[0] * s, v[1] * s, v[2] * s],
-        )
-    }
     /// Rotate in the screen plane about `c` (positive = clockwise on screen).
     pub fn rot_z(self, c: V3, a: f32) -> Self {
         let (s, co) = a.sin_cos();

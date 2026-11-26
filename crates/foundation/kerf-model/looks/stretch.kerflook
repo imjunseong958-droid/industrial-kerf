@@ -1,0 +1,12 @@
+kerf-look 1
+look look.stretch version=1 name="Stretch" category="Transitions" on=transition
+  doc "Stretches the outgoing shot away and the next in; playful, elastic changes."
+  param direction choice options=from-north|from-east|from-south|from-west default=from-west doc="Which side the next shot comes from."
+  a set x={0%:0:0.3333,0,0.6667,0 50%:$direction[0,-0.25,0,0.25]:0.3333,1,0.6667,1 100%:$direction[0,-0.5,0,0.5]}
+  a set y={0%:0:0.3333,0,0.6667,0 50%:$direction[0.25,0,-0.25,0]:0.3333,1,0.6667,1 100%:$direction[0.5,0,-0.5,0]}
+  a set scale_x={0%:1:0.3333,0,0.6667,0 50%:$direction[1,0.5,1,0.5]:0.3333,1,0.6667,1 100%:$direction[1,0,1,0]}
+  a set scale_y={0%:1:0.3333,0,0.6667,0 50%:$direction[0.5,1,0.5,1]:0.3333,1,0.6667,1 100%:$direction[0,1,0,1]}
+  b set x={0%:$direction[0,0.5,0,-0.5]:0.3333,0,0.6667,0 50%:$direction[0,0.25,0,-0.25]:0.3333,1,0.6667,1 100%:0}
+  b set y={0%:$direction[-0.5,0,0.5,0]:0.3333,0,0.6667,0 50%:$direction[-0.25,0,0.25,0]:0.3333,1,0.6667,1 100%:0}
+  b set scale_x={0%:$direction[1,0,1,0]:0.3333,0,0.6667,0 50%:$direction[1,0.5,1,0.5]:0.3333,1,0.6667,1 100%:1}
+  b set scale_y={0%:$direction[0,1,0,1]:0.3333,0,0.6667,0 50%:$direction[0.5,1,0.5,1]:0.3333,1,0.6667,1 100%:1}

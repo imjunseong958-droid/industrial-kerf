@@ -810,13 +810,6 @@ fn how_move(id: &str, t: &Tx) -> Option<How> {
             )
             .with_time(film_roll_blur(t, travel + gap))
         }
-        "stretch" => {
-            let e = ease_in_out(p);
-            let (len, axis_x) = if horiz { (w, true) } else { (h, false) };
-            let fwd = if horiz { dx > 0.0 } else { dy > 0.0 };
-            let split = if fwd { len * e } else { len * (1.0 - e) };
-            moves(1, vec![len, split, truth(axis_x), truth(fwd)])
-        }
         "frame" => {
             let fw = t.px("frame_width");
             let smin = t.frac("scale").clamp(0.05, 1.0);
