@@ -437,9 +437,6 @@ impl FxDef {
                 _ => Area::Motion,
             };
         }
-        if self.id.as_str() == "distort.transform" {
-            return Area::Motion;
-        }
         if self.id.as_str().starts_with("look.grade.") {
             return Area::Color;
         }

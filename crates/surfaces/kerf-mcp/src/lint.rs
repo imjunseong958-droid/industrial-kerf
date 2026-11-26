@@ -2301,7 +2301,7 @@ sequence s1 rate=24 size=1920x1080
         ));
         assert_eq!(dressed.len(), 1, "{dressed:?}");
         // An effect that may move it or draw it larger may put it over c1 again.
-        let moved = flashes(&format!("{corner}fx o2 add distort.transform"));
+        let moved = flashes(&format!("{corner}fx o2 add distort.lens"));
         assert!(moved.is_empty(), "{moved:?}");
         // Nor is it known while such a picture is dissolved into, before its own first frame:
         // o1 on the top track ends two frames before the cut, and on the track between a

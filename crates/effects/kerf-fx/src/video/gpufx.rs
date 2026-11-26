@@ -15,8 +15,7 @@ use kerf_geom::Affine;
 use rayon::prelude::*;
 
 use crate::video::effects::{
-    apply_look, b, choice, color, dec, enc, f, gaussian_boxes, grade_space, on, point, text, FxCtx,
-    Wheels,
+    apply_look, b, choice, color, dec, enc, f, gaussian_boxes, grade_space, on, text, FxCtx, Wheels,
 };
 use kerf_draw::Image;
 
@@ -264,7 +263,6 @@ impl FxOp {
                 let amt = f(e, "amount", cx) / 100.0 * (w.min(h) as f32) * 0.5;
                 FxOp::crop_rect(w, h, 0.0, 0.0, 0.0, 0.0, amt)
             }
-            "transform" => eval_transform(e, cx, w, h),
             "asc_cdl" => eval_asc_cdl(e, cx),
             "channel_mix" => eval_channel_mix(e, cx),
             "color_replace" => eval_color_replace(e, cx),
@@ -741,51 +739,6 @@ fn eval_crop(e: &EffectInstance, cx: &FxCtx, w: usize, h: usize) -> FxOp {
     } else {
         FxOp::crop_rect(w, h, l, t, r, bt, f(e, "feather", cx) * cx.px_scale)
     }
-}
-
-fn eval_transform(e: &EffectInstance, cx: &FxCtx, w: usize, h: usize) -> FxOp {
-    let img = Image {
-        w,
-        h,
-        px: Vec::new(),
-    };
-    let anchor = point(e, "anchor", cx, &img);
-    let pos = point(e, "position", cx, &img);
-    let sh = f(e, "scale_height", cx) as f64 / 100.0;
-    let sw = if b(e, "uniform_scale") {
-        sh
-    } else {
-        f(e, "scale_width", cx) as f64 / 100.0
-    };
-    let rot = f(e, "rotation", cx) as f64;
-    let skew = (f(e, "skew", cx) as f64).to_radians().tan();
-    let skew_axis = f(e, "skew_axis", cx) as f64;
-    let op = f(e, "opacity", cx) / 100.0;
-    let sk = Affine::rotate_deg(skew_axis)
-        .then_apply(&Affine {
-            a: 1.0,
-            b: 0.0,
-            c: skew,
-            d: 1.0,
-            e: 0.0,
-            f: 0.0,
-        })
-        .then_apply(&Affine::rotate_deg(-skew_axis));
-    let m = Affine::translate(pos.x, pos.y)
-        .then_apply(&Affine::rotate_deg(rot))
-        .then_apply(&sk)
-        .then_apply(&Affine::scale(sw, sh))
-        .then_apply(&Affine::translate(-anchor.x, -anchor.y));
-    if minifies(&m, w, h) {
-        // the CPU's mip path (`Image::transformed` with the forward map; `rect`
-        // u32::MAX marks it): CPU only
-        return FxOp::Resample(Resample {
-            inv: Some(m),
-            rect: [u32::MAX; 4],
-            opacity: op,
-        });
-    }
-    FxOp::Resample(resample(w, h, &m, op))
 }
 
 fn eval_asc_cdl(e: &EffectInstance, cx: &FxCtx) -> FxOp {

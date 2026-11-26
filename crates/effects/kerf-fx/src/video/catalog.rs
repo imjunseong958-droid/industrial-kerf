@@ -42,7 +42,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     // Distort
     ("corner_pin", "distort.cornerpin", 2, "Moves the four corners; fit a picture into a screen or frame."),
     ("lens_distortion", "distort.lens", 2, "Barrel or pincushion lens curvature; fisheye looks, or undoing a wide lens."),
-    ("transform", "distort.transform", 2, "Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture."),
     ("warp_stabilizer", "distort.warpstabilizer", 2, "Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage."),
     // Generate
     // Immersive Video

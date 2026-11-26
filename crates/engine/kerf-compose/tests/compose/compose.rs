@@ -534,6 +534,9 @@ fn a_clip_is_smeared_where_it_moves_while_its_shutter_is_open() {
     assert!((6..=14).contains(&half), "{half}");
     // About where it is at the frame: its middle is as white as ever.
     assert_eq!(pixel(&smeared, 160, 90), pixel(&drawn(moving), 160, 90));
-    // What holds still is drawn as it was, to the byte.
+    // What holds still is drawn as it was, to the byte, and so is the frame before it starts to
+    // move, whose shutter shuts before it does.
     assert_eq!(drawn("x=0.1 shutter=180"), drawn("x=0.1"));
+    let starting = "x={13f:-0.4 23f:0.4}";
+    assert_eq!(drawn(&format!("{starting} shutter=360")), drawn(starting));
 }
