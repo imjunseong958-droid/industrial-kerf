@@ -730,6 +730,7 @@ pub fn plan_rolled(
                 rate,
                 pass,
                 matte,
+                only_filmed,
                 from,
                 seconds,
             } => {
@@ -737,6 +738,10 @@ pub fn plan_rolled(
                     (_, Some(clip)) => format!("the matte of `{clip}` in "),
                     (Pass::Picture, None) => String::new(),
                     (pass, None) => format!("the {} of ", pass.name()),
+                };
+                let what = match only_filmed {
+                    true => format!("{what}what a model films of "),
+                    false => what,
                 };
                 let mut at = Vec::new();
                 if let Some((width, height)) = size {
@@ -1156,6 +1161,7 @@ impl Making<'_> {
                     rate,
                     pass,
                     matte,
+                    only_filmed,
                     from,
                     seconds,
                 } => {
@@ -1173,6 +1179,7 @@ impl Making<'_> {
                             rate: *rate,
                             pass: *pass,
                             matte: matte.clone(),
+                            only_filmed: *only_filmed,
                             // What a step makes is for a model to follow, or a shot of its
                             // own: a picture, with no sound.
                             sound: false,

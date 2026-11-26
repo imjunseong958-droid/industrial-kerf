@@ -168,6 +168,9 @@ pub(super) struct ClipPlan {
     pub(super) animated: bool,
     /// Placed in depth, seen by the sequence's camera.
     pub(super) three_d: bool,
+    /// A model films it (`filmed=true`): where its sequence is drawn as a clip of another, it
+    /// leaves its place clear.
+    pub(super) filmed: bool,
     /// The most of its size it is ever shown at, when under 1: its frames
     /// are decoded at that size.
     pub(super) shown: f64,
@@ -281,6 +284,32 @@ impl TrackPlan {
 impl Shown {
     pub(super) fn shows(&self, at: Time) -> bool {
         self.from <= at && at < self.to
+    }
+}
+
+/// Leave out of `sequence` every clip that draws and that no model films, so that only those
+/// one films (`filmed=true`) are drawn: its cameras, its lights, and what its clips move with
+/// draw nothing, and stay. Refused where it has no clip a model films.
+pub(super) fn only_filmed(sequence: &mut SequencePlan, id: &Id) -> Result<()> {
+    let mut any = false;
+    for shown in sequence
+        .tracks
+        .iter_mut()
+        .flat_map(|track| &mut track.shown)
+    {
+        if shown.plan.filmed {
+            any = true;
+        } else if !matches!(shown.plan.source, Source::Nothing) {
+            // It shows at no time, and is in its place for the transitions that name it.
+            shown.to = shown.from;
+        }
+    }
+    if any {
+        Ok(())
+    } else {
+        Err(ComposeError::Invalid(format!(
+            "only the clips a model films are to be drawn, and sequence `{id}` has none: a clip says so with `filmed=true`"
+        )))
     }
 }
 

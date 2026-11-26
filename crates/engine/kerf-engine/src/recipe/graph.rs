@@ -928,6 +928,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                 rate,
                 pass,
                 matte,
+                only_filmed,
                 from: starts,
                 seconds,
             } => {
@@ -964,6 +965,9 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
                         super::plain(starts.unwrap_or(0.0))
                     )),
                     (Some(starts), None) => at.push(format!("from {} s", super::plain(*starts))),
+                }
+                if *only_filmed {
+                    at.push("only what a model films".to_owned());
                 }
                 building.nodes.push(Node {
                     id: id.clone(),

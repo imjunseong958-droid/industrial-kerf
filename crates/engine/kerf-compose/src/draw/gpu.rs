@@ -439,7 +439,15 @@ impl Drawing {
         {
             let inner = &self.sequences[*nested];
             let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
-            if !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref()) {
+            // A clip a model films leaves its place clear in a sequence drawn as a clip of
+            // another, which the CPU does.
+            let leaves_clear = inner
+                .tracks
+                .iter()
+                .filter(|track| track.drawn(angle.as_ref()))
+                .flat_map(|track| &track.shown)
+                .any(|clip| clip.shows(shown) && clip.plan.filmed);
+            if leaves_clear || !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref()) {
                 return false;
             }
         }
@@ -657,6 +665,7 @@ impl Drawing {
                         at,
                         scale,
                         scene: Some(&depth.scene),
+                        clears: false,
                     };
                     self.crossing_run(plan, &tracks[next..], &moment)
                 }
@@ -809,6 +818,7 @@ impl Drawing {
                 at,
                 scale,
                 scene: depth.as_deref().map(|depth| &depth.scene),
+                clears: false,
             };
             let Some(mesh) =
                 self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))
@@ -1114,6 +1124,7 @@ impl Drawing {
                     at,
                     scale,
                     scene: Some(&depth.scene),
+                    clears: false,
                 };
                 let Some(mesh) =
                     self.mesh(sequence, shown, &moment, (size.0 as usize, size.1 as usize))

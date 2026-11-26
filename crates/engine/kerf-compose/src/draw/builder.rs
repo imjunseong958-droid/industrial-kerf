@@ -356,6 +356,7 @@ impl<'a> Builder<'a> {
             plain: false,
             animated,
             three_d,
+            filmed: matches!(param(clip, "filmed"), Param::Static(Value::Bool(true))),
             shown: 1.0,
             blend,
             effects,

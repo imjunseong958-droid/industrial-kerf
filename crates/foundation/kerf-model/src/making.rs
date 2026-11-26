@@ -465,6 +465,9 @@ pub enum Step {
         pass: Pass,
         /// A clip of the sequence drawn alone, white on black, in place of a pass.
         matte: Option<String>,
+        /// Only the clips of the sequence a model films (`filmed=true`) are drawn
+        /// (`only=filmed`): a guide without what Kerf draws over the take.
+        only_filmed: bool,
         /// The part of the sequence drawn, in seconds from its start and for
         /// how long: the whole of it where neither is said. A shot longer
         /// than a model makes at once is drawn a part at a time.
@@ -497,7 +500,7 @@ pub enum Named {
 pub const VERBS: [&str; 3] = ["render", "generate", "join"];
 
 /// How each kind of step is written, for an error that says so.
-pub const SHAPES: &str = "`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>] [from=<seconds>] [seconds=<seconds>]`, `generate model=<name> prompt=\"…\" …`, or `join {part} {part} … {name} [lap=<frames>]`";
+pub const SHAPES: &str = "`render <sequence> {name} [size=WxH] [rate=<fps>] [pass=ids|depth|relative|normals] [matte=<clip>] [only=filmed] [from=<seconds>] [seconds=<seconds>]`, `generate model=<name> prompt=\"…\" …`, or `join {part} {part} … {name} [lap=<frames>]`";
 
 impl Step {
     /// Read a step from its words, the first of which says what it is: `render`,
@@ -515,7 +518,7 @@ impl Step {
                         words[1]
                     )
                 })?;
-                let (size, rate, pass, matte, from, seconds) = drawn_at(&words[2..])?;
+                let (size, rate, pass, matte, only_filmed, from, seconds) = drawn_at(&words[2..])?;
                 Ok(Self::Render {
                     sequence: words[0].clone(),
                     to,
@@ -523,6 +526,7 @@ impl Step {
                     rate,
                     pass,
                     matte,
+                    only_filmed,
                     from,
                     seconds,
                 })
@@ -553,6 +557,7 @@ impl Step {
                 rate,
                 pass,
                 matte,
+                only_filmed,
                 from,
                 seconds,
             } => {
@@ -562,6 +567,9 @@ impl Step {
                 }
                 if let Some(clip) = matte {
                     words.push(format!("matte={clip}"));
+                }
+                if *only_filmed {
+                    words.push("only=filmed".to_owned());
                 }
                 if let Some((width, height)) = size {
                     words.push(format!("size={width}x{height}"));
@@ -741,12 +749,13 @@ pub fn size_of(value: &str) -> Option<Size> {
 }
 
 /// What the words after `render <sequence> {name}` name: the size, the rate, the pass, the
-/// clip a matte is of, and the part of the sequence.
+/// clip a matte is of, whether only what a model films is drawn, and the part of the sequence.
 type Drawn = (
     Option<Size>,
     Option<Rate>,
     Pass,
     Option<String>,
+    bool,
     Option<f64>,
     Option<f64>,
 );
@@ -800,7 +809,7 @@ fn joined(words: &[String], made: &[String]) -> Result<(Vec<String>, String, u32
 
 fn drawn_at(words: &[String]) -> Result<Drawn, String> {
     let (mut size, mut rate, mut pass, mut matte) = (None, None, Pass::Picture, None);
-    let (mut from, mut seconds) = (None, None);
+    let (mut only_filmed, mut from, mut seconds) = (false, None, None);
     for word in words {
         match word.split_once('=') {
             Some(("size", value)) => {
@@ -828,11 +837,17 @@ fn drawn_at(words: &[String]) -> Result<Drawn, String> {
                 })?;
             }
             Some(("matte", value)) if !value.is_empty() => matte = Some(value.to_owned()),
+            Some(("only", "filmed")) => only_filmed = true,
+            Some(("only", value)) => {
+                return Err(format!(
+                    "`only={value}` is not something `render` draws alone: `only=filmed` draws the clips a model films (`filmed=true`), and leaves out what Kerf draws over the take"
+                ))
+            }
             Some(("from", value)) => from = Some(seconds_of("from", value, 0.0)?),
             Some(("seconds", value)) => seconds = Some(seconds_of("seconds", value, f64::MIN_POSITIVE)?),
             _ => {
                 return Err(format!(
-                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, `matte=<clip>`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"
+                    "`{word}` is not something `render` takes; after the file it makes come `size=WxH`, `rate=<fps>`, `pass=ids|depth|relative|normals`, `matte=<clip>`, `only=filmed`, and the part of the sequence, `from=<seconds>` and `seconds=<seconds>`"
                 ))
             }
         }
@@ -843,7 +858,7 @@ fn drawn_at(words: &[String]) -> Result<Drawn, String> {
                 .to_owned(),
         );
     }
-    Ok((size, rate, pass, matte, from, seconds))
+    Ok((size, rate, pass, matte, only_filmed, from, seconds))
 }
 
 /// The name an argument that is nothing but `{name}` holds.
@@ -888,6 +903,7 @@ mod tests {
                 "s2",
                 "{guide.mp4}",
                 "size=832x480",
+                "only=filmed",
                 "rate=16",
                 "pass=depth",
             ],
@@ -939,6 +955,7 @@ mod tests {
                     "s2",
                     "{guide.mp4}",
                     "pass=depth",
+                    "only=filmed",
                     "size=832x480",
                     "rate=16"
                 ]),
@@ -988,5 +1005,16 @@ mod tests {
         }
         assert_eq!(check(&steps), Ok(()));
         assert_eq!(steps[3].reads(), ["guide.mp4", "mask.mp4", "ball.png"]);
+        // Only the first is of what a model films alone, and nothing else is drawn alone so.
+        let only: Vec<bool> = steps
+            .iter()
+            .filter_map(|step| match step {
+                Step::Render { only_filmed, .. } => Some(*only_filmed),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(only, [true, false]);
+        let refused = read(&[&["render", "s2", "{guide.mp4}", "only=sign"]]).unwrap_err();
+        assert!(refused.contains("`only=filmed`"), "{refused}");
     }
 }
