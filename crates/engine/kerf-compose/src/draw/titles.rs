@@ -19,6 +19,9 @@ pub(super) fn title_key(title: &TitlePlan, run: &SourceRun) -> String {
         title.color,
         title.justify
     );
+    if let Some((edge, width)) = title.outline {
+        let _ = write!(key, "|{edge:?}|{:x}", width.to_bits());
+    }
     let mut value = |param: &Param| {
         let _ = write!(key, "|{:x}", number(&param.value_at(time)).to_bits());
     };
@@ -67,7 +70,9 @@ pub(super) fn title_text<'a>(
         size: (title.size * height).max(1.0) as f32,
         color: title.color,
         justify: title.justify,
-        outline: None,
+        outline: title
+            .outline
+            .map(|(edge, width)| (edge, (width * height) as f32)),
         axes,
         features: &title.features,
     }
@@ -81,9 +86,13 @@ pub(super) fn title_extent(title: &TitlePlan, (w, h): (usize, usize), time: Time
     let [left, top, right, bottom] = text::extent(&text, [w as f32 / 2.0, h as f32 / 2.0], 0.5)?;
     let [mut left, mut top, mut right, mut bottom] = [left, top, right, bottom].map(f64::from);
     let em = f64::from(text.size);
-    // A glyph reaches a little past its line, as an italic's does. A reveal moves each piece of it as
-    // far as its `from_` numbers say, and grows and turns it about its own middle.
-    let mut around = em / 2.0;
+    // A glyph reaches a little past its line, as an italic's does, and its outline past that. A
+    // reveal moves each piece of it as far as its `from_` numbers say, and grows and turns it about
+    // its own middle.
+    let mut around = em / 2.0
+        + text
+            .outline
+            .map_or(0.0, |(_, width)| f64::from(width) + 2.0);
     if let Some(reveal) = &title.reveal {
         let read = |param: &Param| number(&param.value_at(time));
         let (x, y) = (

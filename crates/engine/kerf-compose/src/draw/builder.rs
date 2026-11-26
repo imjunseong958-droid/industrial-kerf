@@ -581,6 +581,12 @@ impl<'a> Builder<'a> {
                 Value::Color(color) => color,
                 _ => Rgba::WHITE,
             },
+            outline: match (get("outline")?, get("outline_width")?.as_number()) {
+                (Value::Color(edge), Some(width)) if edge.a > 0 && width > 0.0 => {
+                    Some((edge, width))
+                }
+                _ => None,
+            },
             justify: match get("align")? {
                 Value::Enum(align) if align == "left" => Justify::Left,
                 Value::Enum(align) if align == "right" => Justify::Right,

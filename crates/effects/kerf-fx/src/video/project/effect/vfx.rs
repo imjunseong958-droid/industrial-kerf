@@ -98,9 +98,6 @@ pub const LIGHT_IDS: [[&str; 8]; 5] = [
 fn pct(id: &'static str, label: &'static str, def: f64) -> ParamDef {
     f(id, label, def, 0.0, 100.0, "%")
 }
-fn px(id: &'static str, label: &'static str, def: f64, max: f64, soft: f64) -> ParamDef {
-    fs(id, label, def, (0.0, max), (0.0, soft), "", 1)
-}
 fn layout() -> ParamDef {
     ch("frame_layout", "Frame Layout", FRAME_LAYOUTS, 0)
 }
@@ -624,18 +621,6 @@ pub(super) fn defs() -> Vec<EffectDef> {
                 ),
             ],
         ),
-        video(
-            "stroke",
-            "Stroke",
-            UTILITY,
-            vec![
-                col("color", "Color", [1.0, 1.0, 1.0, 1.0]),
-                px("width", "Width", 4.0, 500.0, 100.0),
-                ch("position", "Position", &["Outside", "Center", "Inside"], 0),
-                pct("opacity", "Opacity", 100.0),
-                b("only", "Stroke Only", false),
-            ],
-        ),
         // ---- Video ----
         video(
             "metadata_burnin",
@@ -846,7 +831,7 @@ pub(super) fn apply_badges(v: &mut [EffectDef]) {
         let accel = match e.category.first().copied() {
             Some("Legacy") => true,
             _ if folder == "Obsolete" => false,
-            _ => !matches!(id, "clone" | "stroke"),
+            _ => id != "clone",
         };
         e.accelerated = accel;
         e.float32 = a32;

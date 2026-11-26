@@ -569,6 +569,46 @@ fn a_title_that_sets_no_axis_draws_as_it_does() {
     );
 }
 
+#[test]
+fn a_titles_outline_goes_around_its_letters_and_under_them() {
+    // White letters over blue, with a black edge or none, set all at once or coming in by
+    // character and all in by frame 30.
+    let drawn = |set: &str, at: i64| {
+        frame(
+            &format!(
+                "    clip b1 gen=solid@1 at=0f dur=96f\n      set color=#2060c0\n  track V2 video\n{}",
+                clip(
+                    "title",
+                    &format!("text=\"Outlined\" size=0.2 color=#ffffff {set}"),
+                )
+            ),
+            at,
+        )
+    };
+    let count = |frame: &Frame, wanted: fn([u8; 3]) -> bool| {
+        (0..frame.height)
+            .flat_map(|y| (0..frame.width).map(move |x| (x, y)))
+            .filter(|(x, y)| wanted(pixel(frame, *x, *y)))
+            .count()
+    };
+    let dark = |p: [u8; 3]| p.iter().all(|value| *value < 40);
+    let white = |p: [u8; 3]| p.iter().all(|value| *value > 235);
+    let edge = "outline=#000000 outline_width=0.02";
+    let reveal = "reveal={0f:0 24f:1} from_y=0.2";
+    for (how, at) in [("", 3), (reveal, 30)] {
+        let (plain, edged) = (drawn(how, at), drawn(&format!("{how} {edge}"), at));
+        assert_eq!(count(&plain, dark), 0, "{how}");
+        assert!(count(&edged, dark) > 400, "{how}: {}", count(&edged, dark));
+        // Under the letters, it hides none of them: but for a pixel or so of their edges, which
+        // blend into black rather than blue, they are as white as they were.
+        let (was, is) = (count(&plain, white), count(&edged, white));
+        assert!(
+            was > 400 && was.abs_diff(is) <= was / 100,
+            "{how}: {is} of {was}"
+        );
+    }
+}
+
 /// The columns a frame has anything lit in, from the first to the last.
 fn lit_span(frame: &Frame) -> u32 {
     let lit = |column: u32| (0..frame.height).any(|row| pixel(frame, column, row)[0] > 128);

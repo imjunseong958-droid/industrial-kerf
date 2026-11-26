@@ -66,7 +66,7 @@ distort.twirllegacy
 distort.warp	distort.lens@2
 generate.advancedlightning	
 generate.beam	
-generate.gluegun	utility.stroke@1
+generate.gluegun	a `gen=shape@1` clip's `stroke`
 generate.lightburst	
 generate.lightrays	
 generate.lightsweep	the prompt and references of the shot's recipe
@@ -76,7 +76,7 @@ generate.fill	a solid (gen=solid@1)
 generate.fractal	
 generate.radiowaves	a `gen=shape@1` clip
 generate.scribble	a `gen=shape@1` clip with keyframes on `trim_end`
-generate.stroke	utility.stroke@1
+generate.stroke	a `gen=shape@1` clip's `stroke`
 generate.vegas	the prompt and references of the shot's recipe
 vr.converter	vr.projection@1
 vr.spheretoplane	vr.projection@1
@@ -259,3 +259,5 @@ generate.gradientramp	a `gen=shape@1` clip with `fill_kind=linear` or `fill_kind
 generate.grid	a `gen=shape@1` clip with `fill_kind=grid`
 # And an effect that placed a picture as the clip's own properties now do.
 distort.transform	the clip's `x`, `y`, `scale`, `rotation`, `anchor_x`, `anchor_y`, `skew`, `skew_axis`, `opacity` and `shutter`
+# And an outline that a title and a shape draw of their own.
+utility.stroke	a title's `outline` and `outline_width`, or a `gen=shape@1` clip's `stroke`

@@ -17,7 +17,6 @@ pub(crate) use color::cdl;
 mod distort;
 pub mod gpu;
 mod immersive;
-mod stylize;
 mod temporal;
 mod text;
 
@@ -163,12 +162,6 @@ pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0).max(1e-6)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
-/// sRGB-encoded straight colour param → linear RGB.
-#[inline]
-pub(crate) fn lin(c: [f32; 4]) -> [f32; 3] {
-    dec([c[0], c[1], c[2]])
-}
-
 /// Premultiplied `src` over premultiplied `dst`.
 #[inline]
 pub(crate) fn over(dst: &mut [f32], src: [f32; 4]) {
@@ -218,8 +211,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         // Distort / Transform / Utility geometry
         "corner_pin" => distort::corner_pin(img, e, cx),
         "mosaic" => distort::mosaic(img, e, cx),
-        // Stylize / Perspective / Generate / Legacy & obsolete generators
-        "stroke" => stylize::stroke(img, e, cx),
         // Time / analysis
         "posterize_time" => temporal::posterize_time(img, e, cx),
         "warp_stabilizer" => temporal::warp_stabilizer(img, e, cx),

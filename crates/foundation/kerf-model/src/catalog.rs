@@ -1162,6 +1162,13 @@ fn builtin_catalog() -> Catalog {
                 .unit("frame heights"),
         )
         .param(P::color("color", Rgba::WHITE))
+        .param(P::color("outline", Rgba::BLACK).doc("An edge around its letters, under them."))
+        .param(
+            P::number("outline_width", 0.0)
+                .range(0.0, 1.0)
+                .unit("frame heights")
+                .doc("How far `outline` reaches past the letters; 0 is none."),
+        )
         .param(P::choice("align", &["center", "left", "right"])),
         FxDef::new(
             "adjustment",
