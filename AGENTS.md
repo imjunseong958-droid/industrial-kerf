@@ -12,7 +12,7 @@ Do the steps in this order. Each later round builds on the one before it and loo
 7. Push and open the PR (Git and PRs 3 and 4).
 8. Merge it without asking (Merging).
 
-Updates after the PR is open (feedback, merging the default branch in, conflict resolution): make the change, run the related tests, and commit. Do not review or run the verify skill again unless the user asks.
+Updates after the PR is open (feedback, merging the default branch in, conflict resolution): make the change, run the related tests, and commit with a `Verified:` trailer that names them. Do not review or run the verify skill again unless the user asks. The commit gate lets these commits through, also in a new session, because the branch already has a verified commit.
 
 ## Verification
 

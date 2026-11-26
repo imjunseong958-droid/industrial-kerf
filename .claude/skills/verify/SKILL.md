@@ -21,7 +21,7 @@ Goal: evidence that the change does what the task asked, gathered by running it.
 
 ## 2. Use the change the way a user would
 
-Do this only when the change alters behavior a user or caller can see. For refactors and internal changes, the tests are enough.
+For a refactor meant to keep behavior, compare the old and new output on the same inputs instead (AGENTS.md Tests 8).
 
 Run the affected entry point once with realistic input. Add one bad input only when the change is about handling input.
 
