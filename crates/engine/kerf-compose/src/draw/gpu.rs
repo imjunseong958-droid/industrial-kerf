@@ -454,6 +454,18 @@ impl Drawing {
         if plan.clip.retime != kerf_model::Retime::Frames {
             return false;
         }
+        // So is a picture smeared as it moves.
+        if self.pass == Pass::Picture {
+            let time = at - plan.clip.start;
+            let place = self.geometry(sequence, plan, time);
+            let whole = Rect::new(0.0, 0.0, f64::from(plan.size.0), f64::from(plan.size.1));
+            if self
+                .smeared(sequence, plan, time, 1.0, &place, whole)
+                .is_some()
+            {
+                return false;
+            }
+        }
         // A mesh is drawn on the CPU and handed over as a picture and how far off it is,
         // which does where its light is the scene's lights alone: a shadow is cast through
         // the GPU's own planes and a light from a picture is the GPU's to read.

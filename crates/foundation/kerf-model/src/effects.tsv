@@ -175,20 +175,6 @@ effect	distort.lens	Distort	Lens Distortion	Barrel or pincushion lens curvature;
 	number	curvature	0	-100..100		Curvature
 	number	v_decentering	0	-100..100		Vertical Decentering
 	number	h_decentering	0	-100..100		Horizontal Decentering
-effect	distort.transform	Distort	Transform	Position, scale, rotation, and skew with shutter motion blur; precise moves inside the picture.	2
-	number	anchor_x	0.5	-10..10	picture widths	Anchor Point (0 left, 1 right)
-	number	anchor_y	0.5	-10..10	picture heights	Anchor Point (0 top, 1 bottom)
-	number	position_x	0.5	-10..10	picture widths	Position (0 left, 1 right)
-	number	position_y	0.5	-10..10	picture heights	Position (0 top, 1 bottom)
-	bool	uniform_scale	true			Uniform Scale
-	number	scale_height	100	0..10000		Scale Height
-	number	scale_width	100	0..10000		Scale Width
-	number	skew	0	-70..70		Skew
-	number	skew_axis	0		degrees	Skew Axis
-	number	rotation	0		degrees	Rotation
-	number	opacity	100	0..100		Opacity
-	bool	shutter_override	false			Use Effect Shutter Angle
-	number	shutter_angle	180	0..360		Shutter Angle
 effect	distort.warpstabilizer	Distort	Warp Stabilizer	Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage.	2
 	enum	result	smooth-motion	smooth-motion|no-motion		Stabilization: Result
 	number	smoothness	50	0..1000	%	Stabilization: Smoothness

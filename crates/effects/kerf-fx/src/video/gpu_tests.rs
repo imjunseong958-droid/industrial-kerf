@@ -420,28 +420,6 @@ fn cases() -> Vec<Case> {
         ),
         ("edge_feather", vec![("amount", fl(30.0))], false),
         (
-            "transform",
-            vec![
-                ("scale_height", fl(150.0)),
-                ("rotation", fl(30.0)),
-                ("position", pt(30.0, 20.0)),
-                ("opacity", fl(60.0)),
-            ],
-            false,
-        ),
-        (
-            "transform",
-            vec![
-                ("uniform_scale", ParamValue::Bool(false)),
-                ("scale_width", fl(80.0)),
-                ("scale_height", fl(120.0)),
-                ("skew", fl(20.0)),
-                ("skew_axis", fl(45.0)),
-                ("anchor", pt(10.0, 30.0)),
-            ],
-            false,
-        ),
-        (
             "asc_cdl",
             vec![
                 ("r_slope", fl(1.4)),
@@ -874,10 +852,6 @@ fn gpu_effect_chains_match_cpu() {
                     ("bottom", fl(20.0)),
                     ("feather", fl(4.0)),
                 ],
-            ),
-            effect(
-                "transform",
-                &[("rotation", fl(-15.0)), ("scale_height", fl(110.0))],
             ),
             effect("levels", &[("in_black", fl(15.0)), ("gamma", fl(80.0))]),
             effect("invert", &[("channel", ParamValue::Choice(4))]),

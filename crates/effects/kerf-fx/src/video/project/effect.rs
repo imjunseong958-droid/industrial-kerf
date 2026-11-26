@@ -1150,40 +1150,6 @@ fn build_effects() -> Vec<EffectDef> {
             )],
         ),
         video(
-            "transform",
-            "Transform",
-            TRANSFORM,
-            vec![
-                pt("anchor", "Anchor Point", f64::NAN, f64::NAN),
-                pt("position", "Position", f64::NAN, f64::NAN),
-                b("uniform_scale", "Uniform Scale", true),
-                fs(
-                    "scale_height",
-                    "Scale Height",
-                    100.0,
-                    (0.0, 10000.0),
-                    (0.0, 600.0),
-                    "",
-                    1,
-                ),
-                fs(
-                    "scale_width",
-                    "Scale Width",
-                    100.0,
-                    (0.0, 10000.0),
-                    (0.0, 600.0),
-                    "",
-                    1,
-                ),
-                f("skew", "Skew", 0.0, -70.0, 70.0, ""),
-                ang("skew_axis", "Skew Axis", 0.0),
-                ang("rotation", "Rotation", 0.0),
-                f("opacity", "Opacity", 100.0, 0.0, 100.0, ""),
-                b("shutter_override", "Use Effect Shutter Angle", false),
-                f("shutter_angle", "Shutter Angle", 180.0, 0.0, 360.0, ""),
-            ],
-        ),
-        video(
             "lens_distortion",
             "Lens Distortion",
             DISTORT,
@@ -1438,7 +1404,7 @@ mod tests {
             let inst = e.instance();
             assert_eq!(inst.params.len(), e.params.len());
         }
-        assert!(effect_defs().len() > 60);
+        assert!(effect_defs().len() > 50);
         assert!(effect_defs()
             .iter()
             .all(|e| e.kind != EffectKind::VideoTransition));

@@ -25,7 +25,6 @@ mod text;
 mod tests;
 
 use crate::video::project::{EffectInstance, ParamValue};
-use crate::video::tick::Tick;
 use kerf_geom::{Affine, Vec2};
 
 use crate::video::effects::FxCtx;
@@ -218,9 +217,6 @@ pub fn apply(img: &mut Image, e: &EffectInstance, cx: &FxCtx) -> bool {
         "reduce_interlace_flicker" => blur::interlace_flicker(img, e, cx),
         // Distort / Transform / Utility geometry
         "corner_pin" => distort::corner_pin(img, e, cx),
-        "transform" if bv(e, "shutter_override") && fv(e, "shutter_angle", cx) > 0.5 => {
-            distort::transform_fx(img, e, cx)
-        }
         "mosaic" => distort::mosaic(img, e, cx),
         // Stylize / Perspective / Generate / Legacy & obsolete generators
         "stroke" => stylize::stroke(img, e, cx),

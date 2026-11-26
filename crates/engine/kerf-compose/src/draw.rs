@@ -25,7 +25,7 @@ use crate::{domains, frames};
 use crate::{Accel, ComposeError, ComposeOptions, Frame, Pass};
 use kerf_color::{HdrOutput, WorkingSpace};
 use kerf_core::program::{canvas, program_sequence};
-use kerf_draw::blend::{composite, composite_placed};
+use kerf_draw::blend::{composite, composite_placed, composite_smeared};
 use kerf_draw::correct::Correction;
 use kerf_draw::effect::{EffectHost, EffectRun, Files};
 use kerf_draw::source::{premultiplied, PictureSource, SourceRun};

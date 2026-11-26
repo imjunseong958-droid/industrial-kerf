@@ -4,6 +4,7 @@
 use super::*;
 use crate::video::effects::apply;
 use crate::video::project::find_effect;
+use crate::video::tick::Tick;
 use kerf_draw::blend::Blend;
 
 /// A picture with bright spots, every kind of alpha, and hues.

@@ -52,7 +52,7 @@ distort.griddler	clips side by side, each scaled
 distort.pageturn	
 distort.powerpin	distort.cornerpin@2
 distort.ripplepulse	the prompt and references of the shot's recipe
-distort.slant	distort.transform@2
+distort.slant	the clip's `skew`
 distort.pullsmear	the prompt and references of the shot's recipe
 distort.split	clips side by side, each scaled
 distort.split2	clips side by side, each scaled
@@ -140,9 +140,9 @@ stylize.scatter
 stylize.texturize	
 stylize.threshold	the prompt and references of the shot's recipe
 text.numbers	text.burnin@1
-time.forcemotionblur	distort.transform@2
+time.forcemotionblur	the clip's `shutter`
 time.widetime	the prompt and references of the shot's recipe
-time.pixelmotionblur	distort.transform@2
+time.pixelmotionblur	the clip's `shutter`
 time.timedifference	
 time.timedisplacement	the prompt and references of the shot's recipe
 time.timewarp	the clip's speed
@@ -257,3 +257,5 @@ generate.fourcolor	a `gen=shape@1` clip with `fill_kind=corners`
 generate.gradient	a `gen=shape@1` clip with `fill_kind=linear` or `fill_kind=radial`
 generate.gradientramp	a `gen=shape@1` clip with `fill_kind=linear` or `fill_kind=radial`
 generate.grid	a `gen=shape@1` clip with `fill_kind=grid`
+# And an effect that placed a picture as the clip's own properties now do.
+distort.transform	the clip's `x`, `y`, `scale`, `rotation`, `anchor_x`, `anchor_y`, `skew`, `skew_axis`, `opacity` and `shutter`

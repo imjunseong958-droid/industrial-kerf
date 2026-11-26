@@ -470,7 +470,7 @@ fn fill_scale(project: &Project, sequence: &Sequence, clip: &Clip) -> Option<f64
         Content::Generator { .. } | Content::Caption { .. } => return None,
     };
     let placed = [
-        "x", "y", "scale_x", "scale_y", "rotation", "crop_l", "crop_r", "crop_t", "crop_b",
+        "x", "y", "scale_x", "scale_y", "rotation", "skew", "crop_l", "crop_r", "crop_t", "crop_b",
     ];
     if placed.iter().any(|name| clip.props.contains_key(*name)) || width == 0 || height == 0 {
         return None;
@@ -504,14 +504,14 @@ fn covers(project: &Project, sequence: &Sequence, clip: &Clip) -> bool {
 }
 
 /// Whether a picture `width` by `height` covers the whole frame where `clip` puts it at `at`
-/// of the clip, and `None` where that is not worked out: it is turned.
+/// of the clip, and `None` where that is not worked out: it is turned or slanted.
 fn placed_over(
     sequence: &Sequence,
     clip: &Clip,
     (width, height): (u32, u32),
     at: Time,
 ) -> Option<bool> {
-    let mut values = [0.0; 10];
+    let mut values = [0.0; 11];
     for (value, name) in values.iter_mut().zip(PLACED) {
         let default = if name.starts_with("scale") { 1.0 } else { 0.0 };
         *value = match clip.props.get(name) {
@@ -519,8 +519,8 @@ fn placed_over(
             Some(param) => param.value_at(at).as_number()?,
         };
     }
-    let [x, y, scale, scale_x, scale_y, rotation, left, right, top, bottom] = values;
-    if rotation != 0.0 {
+    let [x, y, scale, scale_x, scale_y, rotation, skew, left, right, top, bottom] = values;
+    if rotation != 0.0 || skew != 0.0 {
         return None;
     }
     let (frame_width, frame_height) = (f64::from(sequence.width), f64::from(sequence.height));
@@ -1095,8 +1095,9 @@ fn layers<'a>(project: &Project, sequence: &Sequence, track: &'a Track) -> Vec<L
 }
 
 /// The properties that place a picture on the frame, as [`placed_over`] reads them.
-const PLACED: [&str; 10] = [
-    "x", "y", "scale", "scale_x", "scale_y", "rotation", "crop_l", "crop_r", "crop_t", "crop_b",
+const PLACED: [&str; 11] = [
+    "x", "y", "scale", "scale_x", "scale_y", "rotation", "skew", "crop_l", "crop_r", "crop_t",
+    "crop_b",
 ];
 
 /// How `clip` lies over what is under it at `at` of the clip, as the compositor draws it: its
@@ -1185,7 +1186,7 @@ fn padded(clip: &Clip) -> bool {
             .is_some_and(|(scale, factor)| ((scale * factor).abs() - 1.0).abs() < 5e-7)
     };
     clip.masks.is_empty()
-        && ["x", "y", "rotation", "anchor_x", "anchor_y"]
+        && ["x", "y", "rotation", "skew", "anchor_x", "anchor_y"]
             .iter()
             .all(|name| fixed(name, 0.0) == Some(0.0))
         && unit("scale_x")
@@ -2300,7 +2301,7 @@ sequence s1 rate=24 size=1920x1080
         ));
         assert_eq!(dressed.len(), 1, "{dressed:?}");
         // An effect that may move it or draw it larger may put it over c1 again.
-        let moved = flashes(&format!("{corner}fx o2 add distort.transform"));
+        let moved = flashes(&format!("{corner}fx o2 add distort.lens"));
         assert!(moved.is_empty(), "{moved:?}");
         // Nor is it known while such a picture is dissolved into, before its own first frame:
         // o1 on the top track ends two frames before the cut, and on the track between a

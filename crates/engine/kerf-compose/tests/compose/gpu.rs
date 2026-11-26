@@ -504,6 +504,8 @@ fn what_the_kernels_cannot_draw_goes_to_the_cpu() {
     let time = Rate::FPS_24.time_of(6);
     let refused = [
         format!("{CLIP}      fx noise.median\n"),
+        // A picture smeared as it moves.
+        format!("{CLIP}      set x={{0f:-0.3 23f:0.3}} shutter=180\n"),
         "  track V1 video\n    clip c1 media=m src=0f at=0f dur=12f\n    clip c2 media=m src=6f at=12f dur=12f\n    transition t1 from=c1 to=c2 fx=morph-cut@1 dur=12f\n".to_owned(),
     ];
     for body in refused {

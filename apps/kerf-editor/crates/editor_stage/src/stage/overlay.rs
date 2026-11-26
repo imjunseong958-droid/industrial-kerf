@@ -259,6 +259,8 @@ pub struct Geometry {
     pub scale_x: f64,
     pub scale_y: f64,
     pub rotation: f64,
+    /// Its slant and which way, in degrees.
+    pub skew: (f64, f64),
     pub anchor: Pt,
     pub at: Pt,
 }
@@ -276,6 +278,7 @@ pub fn geometry_at(props: &Props, clip_time: f64) -> Geometry {
         scale_x: prop("scale_x", 1.0),
         scale_y: prop("scale_y", 1.0),
         rotation: prop("rotation", 0.0),
+        skew: (prop("skew", 0.0), prop("skew_axis", 0.0)),
         anchor: (prop("anchor_x", 0.0), prop("anchor_y", 0.0)),
         at: (prop("x", 0.0), prop("y", 0.0)),
     }
@@ -330,11 +333,24 @@ pub fn placed(g: &Geometry, picture: Pt, fit: bool, canvas: Pt) -> Affine {
         fw / width * g.scale * g.scale_x,
         fh / height * g.scale * g.scale_y,
     ))
+    .then(slant(g.skew))
     .then(Affine::rotate(g.rotation))
     .then(Affine::translate(
         canvas.0 / 2.0 + g.at.0 * canvas.0 + ax * fw,
         canvas.1 / 2.0 + g.at.1 * canvas.1 + ay * fh,
     ))
+}
+
+/// A slant of `skew` degrees along its own axes turned by `axis` (kerf-compose's `placed`).
+fn slant((skew, axis): (f64, f64)) -> Affine {
+    if skew == 0.0 {
+        return Affine::IDENTITY;
+    }
+    let lean = Affine {
+        c: skew.to_radians().tan(),
+        ..Affine::IDENTITY
+    };
+    Affine::rotate(-axis).then(lean).then(Affine::rotate(axis))
 }
 
 /// How a parent has moved its children at its clip time: from where it
@@ -348,6 +364,7 @@ pub fn parent_motion(props: &Props, picture: Pt, fit: bool, canvas: Pt, clip_tim
         scale_x: 1.0,
         scale_y: 1.0,
         rotation: 0.0,
+        skew: (0.0, 0.0),
         anchor: now.anchor,
         at: (0.0, 0.0),
     };

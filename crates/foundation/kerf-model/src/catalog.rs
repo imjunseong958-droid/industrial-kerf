@@ -437,9 +437,6 @@ impl FxDef {
                 _ => Area::Motion,
             };
         }
-        if self.id.as_str() == "distort.transform" {
-            return Area::Motion;
-        }
         if self.id.as_str().starts_with("look.grade.") {
             return Area::Color;
         }
@@ -853,6 +850,21 @@ fn builtin_catalog() -> Catalog {
             .range(-36000.0, 36000.0)
             .unit("degrees")
             .doc("Clockwise rotation about the anchor."),
+        P::number("skew", 0.0)
+            .range(-85.0, 85.0)
+            .unit("degrees")
+            .doc("Slants the clip about its anchor."),
+        P::number("skew_axis", 0.0)
+            .range(-36000.0, 36000.0)
+            .unit("degrees")
+            .doc("Which way `skew` slants: at 0 its sides lean, at 90 its top and bottom."),
+        P::number("shutter", 0.0)
+            .range(0.0, 720.0)
+            .unit("degrees")
+            .doc(
+                "Motion blur: smears it over where it goes while a shutter open this many degrees \
+                 is, about its frame; 180 is film's. Not in depth.",
+            ),
         P::number("anchor_x", 0.0)
             .range(-10.0, 10.0)
             .unit("clip widths")
