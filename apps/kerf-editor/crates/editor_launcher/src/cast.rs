@@ -27,7 +27,7 @@ use gpui::{
     Focusable, FontWeight, KeyBinding, MouseButton, PathPromptOptions, Subscription, Window,
 };
 use kerf_bridge::event::CastToMake;
-use kerf_bridge::{Command, Event};
+use kerf_bridge::{Command, CommandName, Event};
 use std::path::Path;
 
 use editor_ui::input::{InputEvent, TextInput};
@@ -151,10 +151,8 @@ pub fn to_make_of(event: &Event) -> Vec<CastToMake> {
 /// into the project's `refs/`, beside the others, under a free name
 /// ("face.png", then "face-2.png"). Err when it could not be copied.
 pub fn cast_picture_path(project: &Path, file: &Path) -> std::io::Result<String> {
-    let project = project
-        .canonicalize()
-        .unwrap_or_else(|_| project.to_path_buf());
-    let file = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+    let project = kerf_paths::canonicalize(project).unwrap_or_else(|_| project.to_path_buf());
+    let file = kerf_paths::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
     if let Ok(inside) = file.strip_prefix(&project) {
         return Ok(inside
             .components()
@@ -236,7 +234,7 @@ pub fn heard(stage: Stage, event: &Event) -> Heard {
                 Heard::ToMake
             }
         }
-        Event::Error(error) if error.command.as_deref() == Some("cast") => {
+        Event::Error(error) if error.command == Some(CommandName::Cast) => {
             let (fallback, stage) = match stage {
                 Stage::Reading | Stage::Unreadable => {
                     ("The cast could not be read", Stage::Unreadable)

@@ -5,6 +5,7 @@
 
 use crate::event::{Check, ErrorEvent, Event};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::{emit, Shared};
 use kerf_engine::{CancellationToken, EngineError};
 use kerf_mcp::{CheckReport, QcLimits, FULL_ROWS};
@@ -31,7 +32,7 @@ pub(crate) fn spawn(shared: Arc<Shared>, tx: Outbox, sequence: Option<String>) {
                 &tx,
                 Event::Error(ErrorEvent {
                     message: "A check is already running".to_owned(),
-                    command: Some("check".to_owned()),
+                    command: Some(CommandName::Check),
                     ..ErrorEvent::default()
                 }),
             );

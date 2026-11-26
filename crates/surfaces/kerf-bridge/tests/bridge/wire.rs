@@ -697,13 +697,15 @@ fn error() -> impl Strategy<Value = Event> {
         some_text(),
         option::of(select(vec![ShotOf::Moves, ShotOf::Matte])),
         some_text(),
+        some_text(),
     )
         .prop_map(
-            |(message, code, command, job_id, media, clip, of, format)| {
+            |(message, code, command, job_id, media, clip, of, format, why)| {
                 Event::Error(ErrorEvent {
                     message,
+                    why,
                     code,
-                    command,
+                    command: command.map(|name| kerf_bridge::CommandName::from_name(&name)),
                     job_id,
                     media,
                     clip,

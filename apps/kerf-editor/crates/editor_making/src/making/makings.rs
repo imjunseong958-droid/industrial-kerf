@@ -4,9 +4,7 @@
 //! made, Look at it. How a card stands is worked out from what is known of
 //! its media ([`card_state`]).
 
-use super::plan::{
-    ask_words, notes_block_in, refusal, steps_block_in, takes_words, AskWords, Choose, Plan,
-};
+use super::plan::{notes_block_in, refusal, steps_block_in, takes_words, Choose, Plan};
 use crate::making::clock;
 use editor_session::session::{BridgeEvent, Session};
 use editor_state::model::Ask;
@@ -20,7 +18,7 @@ use gpui::{
     div, prelude::*, px, AnimationExt, AnyElement, Context, ElementId, Entity, Rgba, Subscription,
     Window,
 };
-use kerf_bridge::{Command, Event};
+use kerf_bridge::{Command, CommandName, Event};
 use std::collections::{HashMap, HashSet};
 
 /// How a making asked for in the conversation goes.
@@ -173,6 +171,9 @@ impl Makings {
                 rolls,
                 take,
                 text,
+                why,
+                steps,
+                notes,
                 conversation,
             } => {
                 let ask = Ask {
@@ -180,6 +181,9 @@ impl Makings {
                     rolls: rolls.filter(|rolls| *rolls > 1),
                     take: *take,
                     text: text.clone(),
+                    why: why.clone(),
+                    steps: steps.clone(),
+                    notes: notes.clone(),
                 };
                 if !ask.media.is_empty()
                     && !self.live.iter().any(|(_, known)| key(known) == key(&ask))
@@ -226,18 +230,17 @@ impl Makings {
                 );
             }
             Event::Error(error)
-                if error.command.as_deref() == Some("media_make")
+                if error.command == Some(CommandName::MediaMake)
                     && !error.media.as_deref().unwrap_or_default().is_empty() =>
             {
                 let media = error.media.clone().unwrap_or_default();
-                let message = error.message.as_str();
                 let making = self
                     .progress
                     .get(&media)
                     .filter(|known| known.state == CardState::Making)
                     .map(|known| known.take);
                 if let Some(take) = making {
-                    let detail = refusal(message, &media);
+                    let detail = refusal(error);
                     self.progress.insert(
                         media,
                         Progress {
@@ -256,7 +259,7 @@ impl Makings {
                         .collect();
                     for wanted in waiting {
                         self.asked.remove(&wanted);
-                        self.plans.insert(wanted, Err(refusal(message, &media)));
+                        self.plans.insert(wanted, Err(refusal(error)));
                     }
                 }
             }
@@ -387,7 +390,6 @@ impl Makings {
         } = facts;
         let rolls = ask.rolls.unwrap_or(1).max(1);
         let plan = self.plans.get(&(ask.media.clone(), rolls)).cloned();
-        let words = ask_words(&ask.text);
         let again = matches!(
             state,
             CardState::Stopped | CardState::Failed | CardState::Declined
@@ -417,7 +419,7 @@ impl Makings {
             busy,
             refused: matches!(plan, Some(Err(_))),
         };
-        let body = self.card_body(&shown, &words, plan.as_ref(), status);
+        let body = self.card_body(&shown, ask, plan.as_ref(), status);
         let footer = self.card_footer(ask, &shown, cx);
         let takes = takes_words(take, rolls);
         div()
@@ -477,11 +479,12 @@ impl Makings {
 
     /// A card's words: why Kerf asks, the plan's steps and notes (or why it
     /// cannot be made) while the plan is unfolded, then how the making
-    /// stands.
+    /// stands. Until the plan is read, the steps and notes are the ask's own,
+    /// as the bridge carried them: its parts, not its words read back.
     fn card_body(
         &self,
         shown: &Shown,
-        words: &AskWords,
+        ask: &Ask,
         plan: Option<&Result<Plan, String>>,
         status: Option<(String, Rgba)>,
     ) -> gpui::Div {
@@ -493,8 +496,12 @@ impl Makings {
                 .map(|shared| (shared, format!("plan-{}-{part}", shown.key).into()))
         };
         if shown.plan_open {
-            if !words.why.is_empty() {
-                let why = words.why.join(" ");
+            if let Some(why) = ask
+                .why
+                .as_deref()
+                .map(one_paragraph)
+                .filter(|why| !why.is_empty())
+            {
                 body = body.child(match choose("why") {
                     Some((shared, run)) => theme::reading(div()).text_color(theme::ink2()).child(
                         selectable::selectable(
@@ -525,8 +532,8 @@ impl Makings {
                     }
                 }
                 Some(Err(why)) => {
-                    if !words.steps.is_empty() {
-                        body = body.child(steps_block_in(&words.steps, &choose("steps")));
+                    if !ask.steps.is_empty() {
+                        body = body.child(steps_block_in(&ask.steps, &choose("steps")));
                     }
                     body = body.child(ui::label(
                         format!("It cannot be made as things stand: {why}"),
@@ -535,11 +542,11 @@ impl Makings {
                     ));
                 }
                 None => {
-                    if !words.steps.is_empty() {
-                        body = body.child(steps_block_in(&words.steps, &choose("steps")));
+                    if !ask.steps.is_empty() {
+                        body = body.child(steps_block_in(&ask.steps, &choose("steps")));
                     }
                     if let Some(notes) =
-                        notes_block_in("Before you run it", &words.notes, &choose("notes"))
+                        notes_block_in("Before you run it", &ask.notes, &choose("notes"))
                     {
                         body = body.child(notes);
                     }
@@ -729,6 +736,16 @@ pub fn card_title(state: CardState, name: &str, rolls: u32, take: u32) -> String
         CardState::Failed => format!("{name} was not made"),
         CardState::Declined => format!("Not made: {name}"),
     }
+}
+
+/// What the agent said a making is for, its lines run together as the card's one
+/// paragraph.
+fn one_paragraph(why: &str) -> String {
+    why.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A card's key: a making asked for twice is one card.

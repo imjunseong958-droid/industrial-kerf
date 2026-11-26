@@ -15,7 +15,7 @@
 //! read are left out. What only a reader takes ([`AgentUpdate::Other`],
 //! [`PreviewStatus::Other`]) is never sent.
 
-use crate::ShotOf;
+use crate::{CommandName, ShotOf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -133,7 +133,7 @@ pub enum Event {
     },
     /// A making the agent asks the person to run, as a card with Make: the media, how many
     /// takes when more than one, the first take, and the plan as the person is asked about
-    /// it.
+    /// it, in words and in parts, as [`ConversationAsk`] has them.
     AgentAsk {
         #[serde(default)]
         media: String,
@@ -141,6 +141,20 @@ pub enum Event {
         take: Option<u32>,
         #[serde(default)]
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        why: Option<String>,
+        #[serde(
+            default,
+            deserialize_with = "texts",
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        steps: Vec<String>,
+        #[serde(
+            default,
+            deserialize_with = "texts",
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        notes: Vec<String>,
         conversation: Option<String>,
     },
     /// How one of an `agent_versions` request's agents is going.
@@ -554,6 +568,11 @@ pub enum ConnectionStatus {
 #[serde(default, rename_all = "camelCase")]
 pub struct ErrorEvent {
     pub message: String,
+    /// Why, without what was refused, where the message says both: of `cannot make m1: it is
+    /// being made already`, `it is being made already`, for a window that names the media
+    /// itself. Show this rather than cut the message's words.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
     /// Which refusal it is, where it has a code: kerfd's (`INVALID_RENDER_OUTPUT`,
     /// `REVISION_CONFLICT`, ...), or the bridge's own for steps still in a recipe file
     /// (`STEPS_NOT_CARRIED`).
@@ -562,7 +581,7 @@ pub struct ErrorEvent {
     /// The command refused, by its `type` (`export`, `media_make`, `look_save`, ...), or
     /// what it is about (`agent`, `conversation`, `recipe`, `workflow`).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub command: Option<String>,
+    pub command: Option<CommandName>,
     /// The render job that failed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
@@ -804,7 +823,9 @@ pub struct ConversationItem {
 
 /// A making an agent asked for and the person has to say yes to: the media, how many
 /// takes (one unless said), the first of them, and the plan as the person is asked about
-/// it.
+/// it: `text`, the words the agent was answered with, and `why`, `steps` and `notes`, the
+/// parts kerf-mcp wrote them from. Show the parts; the words are the agent's, and change as
+/// it needs. An ask kept before the parts were carried has only its words.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ConversationAsk {
@@ -814,6 +835,15 @@ pub struct ConversationAsk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub take: Option<u32>,
     pub text: String,
+    /// What the making is for, as the agent said it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// Each step as it would run, in order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub steps: Vec<String>,
+    /// What its model has said it does not take.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<String>,
 }
 
 // ---------------------------------------------------------------- viewer

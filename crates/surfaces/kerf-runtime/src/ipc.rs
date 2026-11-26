@@ -129,28 +129,7 @@ impl EndpointAddress {
 
 fn canonical_project_directory(directory: &Path) -> Result<PathBuf, RuntimeError> {
     fs::create_dir_all(directory).map_err(io_error)?;
-    let directory = directory.canonicalize().map_err(io_error)?;
-    #[cfg(windows)]
-    let directory = without_verbatim_prefix(directory);
-    Ok(directory)
-}
-
-/// `C:\project` for the `\\?\C:\project` Windows canonicalizes to. A
-/// verbatim path takes `/` literally, so a project-relative `media/a.mov`
-/// joined to it names nothing. Paths too long without the prefix keep it.
-#[cfg(windows)]
-fn without_verbatim_prefix(directory: PathBuf) -> PathBuf {
-    let stripped = directory
-        .to_str()
-        .and_then(|text| text.strip_prefix(r"\\?\"))
-        .filter(|rest| {
-            let bytes = rest.as_bytes();
-            rest.len() < 248
-                && bytes.first().is_some_and(u8::is_ascii_alphabetic)
-                && bytes.get(1) == Some(&b':')
-        })
-        .map(PathBuf::from);
-    stripped.unwrap_or(directory)
+    kerf_paths::canonicalize(directory).map_err(io_error)
 }
 
 #[cfg(unix)]

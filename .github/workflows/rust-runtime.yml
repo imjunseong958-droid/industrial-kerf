@@ -369,6 +369,19 @@ jobs:
             cargo test -q -p kerf-bridge --test connection -- --nocapture
             if ($LASTEXITCODE -ne 0) { "failed on run $run"; exit 1 }
           }
+      # Clippy as linux-lint runs it, for what only Windows compiles and so
+      # linux-lint never sees: code under cfg(windows), such as the crash
+      # handler's exception filter, and test helpers left unused once their
+      # cfg(unix) tests drop out. Last, so a lint failure skips no test, and
+      # run whatever the tests did, so a failing test does not hide the lint.
+      # Of the builds above it reuses only the build scripts and proc macros,
+      # as it would anywhere in the job, so where it goes saves no time. The
+      # dependencies it checks afresh each run until main saves a new cache,
+      # which it does only after a change to Cargo.lock, a manifest or the
+      # toolchain (an entry is never overwritten); from then on it keeps them.
+      - name: Lint workspace
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
   macos-editor:
     needs: changes

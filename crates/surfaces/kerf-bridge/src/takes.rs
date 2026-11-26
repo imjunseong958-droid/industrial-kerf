@@ -10,6 +10,7 @@
 
 use crate::event::{ErrorEvent, Event, TakeRead, TakesRead};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::Shared;
 use kerf_engine::recipe::takes::Take;
 use kerf_shots::takes::Guide;
@@ -20,7 +21,7 @@ fn failed(tx: &Outbox, id: &str, why: String) {
         tx,
         Event::Error(ErrorEvent {
             message: why,
-            command: Some("takes_read".to_owned()),
+            command: Some(CommandName::TakesRead),
             media: Some(id.to_owned()),
             ..ErrorEvent::default()
         }),

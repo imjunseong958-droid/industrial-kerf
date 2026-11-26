@@ -21,12 +21,7 @@ pub(crate) fn run_gui(args: &Args, directory: Option<&Path>) -> Result<()> {
     let agent = gui_agent_env(&resolve_llm(args)?);
 
     if let (Some(media), Some(directory)) = (args.media.as_deref(), directory) {
-        let path = import_media(
-            directory,
-            args.kerfd.as_deref(),
-            media,
-            args.cookies.as_deref(),
-        )?;
+        let path = import_media(directory, args.kerfd.as_deref(), media)?;
         println!("imported {}", path.display());
     }
 

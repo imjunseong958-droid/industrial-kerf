@@ -5,6 +5,7 @@ use crate::support::{
     timeline_value, EXISTS,
 };
 use kerf_bridge::event::PresetInspection;
+use kerf_bridge::CommandName;
 use kerf_editor::changes::clip_changes;
 use kerf_editor::chat::try_asking;
 use kerf_editor::model::{
@@ -1356,30 +1357,30 @@ proptest! {
 #[test]
 fn while_kerfd_is_away_edits_and_playback_wait_and_reconnect_goes() {
     for waits in [
-        "edit",
-        "seek",
-        "play",
-        "pause",
-        "preview",
-        "export",
-        "undo",
-        "render_queue",
+        CommandName::Edit,
+        CommandName::Seek,
+        CommandName::Play,
+        CommandName::Pause,
+        CommandName::Preview,
+        CommandName::Export,
+        CommandName::Undo,
+        CommandName::RenderQueue,
     ] {
-        assert!(!sent_unconnected(waits), "{waits} should wait");
+        assert!(!sent_unconnected(&waits), "{waits} should wait");
     }
     for goes in [
-        "reconnect",
-        "abort",
-        "conversations",
-        "agent",
-        "preview_stop",
-        "collab_sync",
-        "cloud_status",
+        CommandName::Reconnect,
+        CommandName::Abort,
+        CommandName::Conversations,
+        CommandName::Agent,
+        CommandName::PreviewStop,
+        CommandName::CollabSync,
+        CommandName::CloudRefresh,
     ] {
-        assert!(sent_unconnected(goes), "{goes} should go");
+        assert!(sent_unconnected(&goes), "{goes} should go");
     }
     // Something with no type is never sent unconnected.
-    assert!(!sent_unconnected(""));
+    assert!(!sent_unconnected(&CommandName::from_name("")));
 }
 
 // ------------------------------------------------------------ the picture
@@ -1674,14 +1675,14 @@ fn what_plays_can_always_be_paused_even_as_a_render_runs() {
         json!({"type": "clock", "position": 0.0, "duration": 7.0}),
     ));
     state.apply(&preview("live"));
-    assert_eq!(state.playback_toggle(), Some("play"));
+    assert_eq!(state.playback_toggle(), Some(CommandName::Play));
     state.apply(&event(json!({"type": "playback", "playing": true})));
-    assert_eq!(state.playback_toggle(), Some("pause"));
+    assert_eq!(state.playback_toggle(), Some(CommandName::Pause));
     // Render Preview while it plays: kerfd plays on, and Pause still goes.
     state.apply(&preview("running"));
     assert!(state.preview_required);
     assert!(!state.play_waits());
-    assert_eq!(state.playback_toggle(), Some("pause"));
+    assert_eq!(state.playback_toggle(), Some(CommandName::Pause));
     assert!(reasons(&state).1.is_null());
     // Paused, it does not play again until the render is over.
     state.apply(&event(json!({"type": "playback", "playing": false})));
@@ -1692,7 +1693,7 @@ fn what_plays_can_always_be_paused_even_as_a_render_runs() {
         json!("Render a preview to play this timeline")
     );
     state.apply(&preview("ready"));
-    assert_eq!(state.playback_toggle(), Some("play"));
+    assert_eq!(state.playback_toggle(), Some(CommandName::Play));
     // Nothing plays and kerfd is gone: nothing to send.
     state.apply(&event(
         json!({"type": "connection", "status": "disconnected"}),
@@ -1748,13 +1749,13 @@ proptest! {
             prop_assert_eq!(state.play_waits(), waits && !playing);
             prop_assert_eq!(state.preview_renderable(), matches!(said, "required" | "live"));
             let toggle = if playing {
-                Some("pause")
+                Some(CommandName::Pause)
             } else if waits {
                 None
             } else {
-                Some("play")
+                Some(CommandName::Play)
             };
-            prop_assert_eq!(state.playback_toggle(), toggle);
+            prop_assert_eq!(state.playback_toggle(), toggle.clone());
             prop_assert_eq!(reasons(&state).1.is_null(), toggle.is_some());
         }
     }

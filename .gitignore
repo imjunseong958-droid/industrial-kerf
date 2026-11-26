@@ -1,12 +1,9 @@
 .DS_Store
-node_modules/
-dist/
 .cursor/
 .env
 .kerf/config.json
 .kerf/vision.json
 .kerf/cache/
-*.pt
 *.mp4
 *.mov
 *.mkv

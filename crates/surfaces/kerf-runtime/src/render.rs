@@ -210,7 +210,7 @@ impl RenderTarget {
 /// Whether the deepest part of `folder` that exists is, through every link
 /// it goes through, inside `directory`. A link that leads nowhere fails.
 fn stays_inside(directory: &Path, folder: &Path) -> bool {
-    let Ok(real_directory) = directory.canonicalize() else {
+    let Ok(real_directory) = kerf_paths::canonicalize(directory) else {
         return false;
     };
     let mut existing = folder;
@@ -220,9 +220,7 @@ fn stays_inside(directory: &Path, folder: &Path) -> bool {
             None => return false,
         }
     }
-    existing
-        .canonicalize()
-        .is_ok_and(|real| real.starts_with(real_directory))
+    kerf_paths::canonicalize(existing).is_ok_and(|real| real.starts_with(real_directory))
 }
 
 /// Where a render goes. `output` is a folder or a file (see
@@ -344,11 +342,11 @@ fn project_part(directory: &Path, path: &Path) -> Option<Vec<std::ffi::OsString>
         return names(relative);
     }
     // The project folder may be named through a link, such as /tmp.
-    let real = directory.canonicalize().ok()?;
+    let real = kerf_paths::canonicalize(directory).ok()?;
     let mut existing = path;
     let mut rest = Vec::new();
     loop {
-        if let Ok(found) = existing.canonicalize() {
+        if let Ok(found) = kerf_paths::canonicalize(existing) {
             let mut part = names(found.strip_prefix(&real).ok()?)?;
             part.extend(rest.into_iter().rev());
             return Some(part);

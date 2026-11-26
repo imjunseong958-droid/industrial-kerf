@@ -7,7 +7,7 @@ use crate::viewer::preview::{self, install_project, preview_unstarted};
 use crate::wake::Outbox;
 use crate::{
     analysis, emit, error, key, looks, media, paperwork, presets, queue, recipes, takes, tracks,
-    workflows, Command, Event, MediaProject, Shared,
+    workflows, Command, CommandName, Event, MediaProject, Shared,
 };
 use kerf_mcp::{KerfMcpRouter, PresetInspection, ToolError};
 use kerf_runtime::{RuntimeClient, StateSnapshot};
@@ -248,7 +248,7 @@ struct Answer {
     /// What follows that state.
     then: Option<Event>,
     /// The command a refusal of it names; with none, a refusal is a plain error.
-    refusal: Option<&'static str>,
+    refusal: Option<CommandName>,
 }
 
 /// What kerf-mcp's `edit` says of the preset it staged, as much as the editor is told.
@@ -329,40 +329,31 @@ impl Worker {
     /// Carry out a command for the render queue, a paperwork file or a saved look, which
     /// answers with its own events, never a state. Any other command is given back.
     fn side(&mut self, command: Command, active_client: &RuntimeClient) -> Option<Command> {
-        let (name, result) = match command {
+        // A refusal names the command it refused.
+        let refused = command.name();
+        let result = match command {
             Command::Export(request) => {
                 let renders: Arc<dyn queue::Renders> = Arc::new(active_client.clone());
-                (
-                    "export",
-                    queue::submit(&self.shared, renders, &request, &self.tx),
-                )
+                queue::submit(&self.shared, renders, &request, &self.tx)
             }
-            Command::ExportCancel { job_id } => (
-                "export_cancel",
-                queue::cancel(&self.shared, active_client, &job_id, &self.tx),
-            ),
-            Command::RenderQueue => (
-                "render_queue",
-                queue::publish(&self.shared, active_client, &self.tx),
-            ),
-            Command::ExportCaptions(request) => (
-                "export_captions",
-                paperwork::export_captions(active_client, &self.directory, &request, &self.tx),
-            ),
+            Command::ExportCancel { job_id } => {
+                queue::cancel(&self.shared, active_client, &job_id, &self.tx)
+            }
+            Command::RenderQueue => queue::publish(&self.shared, active_client, &self.tx),
+            Command::ExportCaptions(request) => {
+                paperwork::export_captions(active_client, &self.directory, &request, &self.tx)
+            }
             Command::LookSave {
                 clip,
                 name,
                 replace,
-            } => (
-                "look_save",
-                looks::save_from(
-                    active_client,
-                    &self.directory,
-                    &clip,
-                    &name,
-                    replace,
-                    &self.tx,
-                ),
+            } => looks::save_from(
+                active_client,
+                &self.directory,
+                &clip,
+                &name,
+                replace,
+                &self.tx,
             ),
             command => return Some(command),
         };
@@ -370,7 +361,7 @@ impl Worker {
             Ok(()) => {}
             Err(error) if error.is_transport() => self.disconnect(&error.message),
             Err(error) => {
-                queue::refused(&self.tx, name, &error);
+                queue::refused(&self.tx, refused.clone(), &error);
             }
         }
         None
@@ -386,7 +377,7 @@ impl Worker {
         preview_turn: Option<u64>,
     ) -> Option<Answer> {
         // The command a refusal names.
-        let mut refusal: Option<&'static str> = None;
+        let mut refusal: Option<CommandName> = None;
         let result = match command {
             Command::Refresh => active_client.get_state(),
             Command::Reload => {
@@ -460,7 +451,7 @@ impl Worker {
                 revision,
             } => {
                 // Its refusal is said as one, with the clip that stopped it.
-                refusal = Some("forward");
+                refusal = Some(CommandName::Forward);
                 active_client.forward_proposal(operation, revision, &proposal_id)
             }
             Command::PresetApply {
@@ -512,7 +503,7 @@ impl Worker {
     ) -> Option<Answer> {
         // What follows the state, and the command a refusal names.
         let mut then: Option<Event> = None;
-        let mut refusal: Option<&'static str> = None;
+        let mut refusal: Option<CommandName> = None;
         let opened = active_client
             .get_document(false)
             .and_then(|(revision, text)| {
@@ -523,11 +514,11 @@ impl Worker {
                 match looks::apply(&self.directory, &project, &clip, &path) {
                     Ok((ops, event)) => {
                         then = Some(event);
-                        refusal = Some("look_apply");
+                        refusal = Some(CommandName::LookApply);
                         active_client.apply_ops_request("ui", operation, ops, revision)
                     }
                     Err(message) => {
-                        looks::refused(&self.tx, "look_apply", &message);
+                        looks::refused(&self.tx, CommandName::LookApply, &message);
                         return None;
                     }
                 }

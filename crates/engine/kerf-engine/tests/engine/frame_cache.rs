@@ -1,4 +1,5 @@
 //! Rendering again after a small edit: only what changed is drawn, and the file comes out the same.
+//! And where a render keeps what it drew when nothing names a folder.
 
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
 use kerf_engine::render::{render_program, CacheFolder, RenderOptions};
@@ -99,4 +100,44 @@ fn rendering_again_reads_what_was_drawn() {
     assert_eq!(last.hits - after.hits, 12, "{last:?}");
     assert_eq!(last.writes - after.writes, 12, "{last:?}");
     assert_eq!(last.damaged, 0, "{last:?}");
+}
+
+/// Every variable Kerf's cache folder is found by, set to nothing, names no folder: a render keeps no
+/// frames and no stretches in the folder it was started from.
+#[test]
+fn a_cache_variable_set_to_nothing_keeps_nothing_where_a_render_starts() {
+    let dir = tempfile::tempdir().expect("a folder");
+    let start = dir.path().join("start");
+    std::fs::create_dir(&start).expect("a folder to start in");
+    let project = dir.path().join("project.kerf");
+    std::fs::write(
+        &project,
+        "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n  track V1 video\n    clip c1 gen=solid@1 at=0f dur=24f\n",
+    )
+    .expect("writes the project");
+    let output = Command::new(env!("CARGO_BIN_EXE_kerf-engine"))
+        .arg("render")
+        .arg(&project)
+        .arg("--draft")
+        .arg("--out")
+        .arg(dir.path().join("out.mp4"))
+        .current_dir(&start)
+        .env_remove("KERF_FRAME_CACHE")
+        .env_remove("KERF_SECTION_CACHE")
+        .env("LOCALAPPDATA", "")
+        .env("HOME", "")
+        .env("XDG_CACHE_HOME", "")
+        .output()
+        .expect("kerf-engine runs");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let kept: Vec<_> = std::fs::read_dir(&start)
+        .expect("reads the folder")
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    assert!(kept.is_empty(), "{kept:?}");
 }

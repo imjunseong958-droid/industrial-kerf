@@ -12,6 +12,7 @@
 use crate::emit;
 use crate::event::{CaptionsExport, ErrorEvent, Event, Export, ExportStatus};
 use crate::wake::Outbox;
+use crate::CommandName;
 use kerf_model::{Project, Sequence};
 use kerf_runtime::{RenderJob, RenderQuality, RenderStatus, RuntimeClient, RuntimeError};
 use serde::{Deserialize, Serialize};
@@ -42,7 +43,7 @@ pub struct CaptionsRequest {
 
 /// A paperwork export that failed: `export {status: failed, kind, format,
 /// message}`, and the error naming the command.
-fn failed(tx: &Outbox, command: &str, kind: &str, format: &str, message: &str) {
+fn failed(tx: &Outbox, command: CommandName, kind: &str, format: &str, message: &str) {
     emit(
         tx,
         Event::Export(Export::Captions(CaptionsExport {
@@ -58,7 +59,7 @@ fn failed(tx: &Outbox, command: &str, kind: &str, format: &str, message: &str) {
         tx,
         Event::Error(ErrorEvent {
             message: message.to_owned(),
-            command: Some(command.to_owned()),
+            command: Some(command),
             format: Some(format.to_owned()),
             ..ErrorEvent::default()
         }),
@@ -234,7 +235,13 @@ pub(crate) fn export_captions(
     });
     match made {
         Ok(path) => emit(tx, completed("captions", format, &path)),
-        Err(message) => failed(tx, "export_captions", "captions", format, &message),
+        Err(message) => failed(
+            tx,
+            CommandName::ExportCaptions,
+            "captions",
+            format,
+            &message,
+        ),
     }
     Ok(())
 }

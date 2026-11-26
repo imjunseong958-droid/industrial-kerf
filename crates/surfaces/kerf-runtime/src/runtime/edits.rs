@@ -432,7 +432,7 @@ fn media_file(directory: &Path, path: &str) -> Result<MediaFile, RuntimeError> {
         None if given.is_absolute() => path.to_owned(),
         None => file
             .parent()
-            .and_then(|parent| parent.canonicalize().ok())
+            .and_then(|parent| kerf_paths::canonicalize(parent).ok())
             .zip(file.file_name())
             .map_or_else(|| file.clone(), |(parent, name)| parent.join(name))
             .to_string_lossy()
@@ -453,8 +453,8 @@ fn project_relative(directory: &Path, file: &Path) -> Option<String> {
         .filter(|relative| plain(relative))
         .map(Path::to_path_buf)
         .or_else(|| {
-            let directory = directory.canonicalize().ok()?;
-            let parent = file.parent()?.canonicalize().ok()?;
+            let directory = kerf_paths::canonicalize(directory).ok()?;
+            let parent = kerf_paths::canonicalize(file.parent()?).ok()?;
             Some(parent.strip_prefix(directory).ok()?.join(file.file_name()?))
         })
         .filter(|relative| plain(relative))?;

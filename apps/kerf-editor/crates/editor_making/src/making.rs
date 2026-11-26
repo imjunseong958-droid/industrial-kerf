@@ -26,7 +26,7 @@ pub use graph::{
     PictureQueue, ShotGraph, Toward, ZOOM_LEAST, ZOOM_MOST, ZOOM_READ, ZOOM_STEP,
 };
 pub use makings::{card_state, card_title, CardState, Makings, Progress};
-pub use plan::{ask_words, takes_words, wants_carrying, AskWords, MakePlan, Plan};
+pub use plan::{takes_words, wants_carrying, MakePlan, Plan};
 pub use recipe::{
     gives_word, input_kind, link_output, part_id, port_says, ports_for, reads_port, shown_number,
     shown_value, value_of, wire_nth, GraphEdge, GraphNode, Holds, InputKind, Recipe, Workflow,

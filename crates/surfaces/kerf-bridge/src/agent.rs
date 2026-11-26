@@ -6,6 +6,7 @@ mod versions;
 
 use crate::event::{AgentState, AgentUpdate, ErrorEvent, ToolState};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::{
     claude_code, conversations, emit, error, sessions, steps, AgentRequest, AgentSettings,
     ChatProvider, Command, Event, Shared,
@@ -196,6 +197,7 @@ pub(crate) fn agent_worker(
         let mut turn_events = TurnEvents {
             tx: &tx,
             commands: &commands,
+            directory: &directory,
             conversation: conversation.clone(),
             turn: kept.as_mut().map(|(_, turn, _)| turn),
             running: std::collections::HashMap::new(),
@@ -281,7 +283,7 @@ pub(crate) fn agent_worker(
                 &tx,
                 Event::Error(ErrorEvent {
                     message: err,
-                    command: Some("agent".to_owned()),
+                    command: Some(CommandName::Agent),
                     ..ErrorEvent::default()
                 }),
             );
@@ -396,6 +398,8 @@ impl Turns {
 struct TurnEvents<'a> {
     tx: &'a Outbox,
     commands: &'a SyncSender<Command>,
+    /// The project folder, where kerf-mcp keeps what it asks the person to make.
+    directory: &'a std::path::Path,
     conversation: Option<String>,
     turn: Option<&'a mut conversations::Turn>,
     running: std::collections::HashMap<String, kerf_agent::AgentTargetSummary>,
@@ -488,16 +492,26 @@ impl TurnEvents<'_> {
                 if let Some(turn) = self.turn.as_deref_mut() {
                     turn.step(&text);
                 }
-                // A making the person is asked to run: a card with Make.
-                if let (Some("asked"), Some(media), Some(ask)) =
+                // A making the person is asked to run: a card with Make. What the card shows
+                // is the ask's parts as kerf-mcp kept them, for the ask the agent was answered
+                // with; the agent's words are not read back for them.
+                if let (Some("asked"), Some(media), Some(said)) =
                     (summary.status.as_deref(), &summary.media, &summary.ask)
                 {
+                    let parts = kerf_mcp::kept_ask(self.directory, media, said);
+                    if parts.is_none() {
+                        log::warn!(
+                            "no parts are kept for the ask to make {media}: its card shows the plan alone"
+                        );
+                    }
                     let ask = conversations::Ask {
                         media: media.clone(),
                         rolls: summary.rolls.filter(|rolls| *rolls > 1),
                         take: summary.take,
-                        text: ask.clone(),
-                    };
+                        text: said.clone(),
+                        ..conversations::Ask::default()
+                    }
+                    .with_parts(parts.unwrap_or_default());
                     emit(
                         tx,
                         Event::AgentAsk {
@@ -505,6 +519,9 @@ impl TurnEvents<'_> {
                             rolls: ask.rolls,
                             take: ask.take,
                             text: ask.text.clone(),
+                            why: ask.why.clone(),
+                            steps: ask.steps.clone(),
+                            notes: ask.notes.clone(),
                             conversation: self.conversation.clone(),
                         },
                     );

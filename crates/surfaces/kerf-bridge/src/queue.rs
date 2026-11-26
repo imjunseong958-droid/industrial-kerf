@@ -23,6 +23,7 @@
 
 use crate::event::{ErrorEvent, Event, Export, ExportStatus, QueuedRender, RenderExport};
 use crate::wake::Outbox;
+use crate::CommandName;
 use crate::{emit, Shared};
 use kerf_engine::render::RenderPreset;
 use kerf_playback::OnFrame;
@@ -200,11 +201,11 @@ impl Queue {
 }
 
 /// An `error` event naming the refused command.
-pub(crate) fn refused(tx: &Outbox, command: &str, error: &RuntimeError) -> Event {
+pub(crate) fn refused(tx: &Outbox, command: CommandName, error: &RuntimeError) -> Event {
     let event = Event::Error(ErrorEvent {
         message: error.message.clone(),
         code: Some(error.code.clone()),
-        command: Some(command.to_owned()),
+        command: Some(command),
         ..ErrorEvent::default()
     });
     emit(tx, event.clone());
@@ -490,7 +491,7 @@ fn render(shared: &Shared, queued: &Queued, tx: &Outbox, drawing: OnFrame) {
                 Event::Error(ErrorEvent {
                     message: error.message,
                     code: Some(error.code),
-                    command: Some("export".to_owned()),
+                    command: Some(CommandName::Export),
                     job_id: Some(job.job_id.clone()),
                     ..ErrorEvent::default()
                 }),
@@ -772,7 +773,7 @@ pub(crate) mod tests {
         let error = submit(&shared, fake.clone(), &request("nope", None), &tx).unwrap_err();
         assert_eq!(error.code.as_str(), "INVALID_RENDER_QUALITY");
         assert_eq!(shared.renders.waiting(), 0);
-        let event = serde_json::to_value(refused(&tx, "export", &error)).unwrap();
+        let event = serde_json::to_value(refused(&tx, CommandName::Export, &error)).unwrap();
         assert_eq!(event["command"], "export");
         assert_eq!(event["code"], "INVALID_RENDER_QUALITY");
     }

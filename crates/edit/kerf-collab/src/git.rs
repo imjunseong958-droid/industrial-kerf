@@ -536,7 +536,10 @@ pub fn is_repository(dir: &Path) -> bool {
     let Some(top) = git_text(dir, &["rev-parse", "--show-toplevel"]) else {
         return false;
     };
-    match (fs::canonicalize(&top), fs::canonicalize(dir)) {
+    match (
+        kerf_paths::canonicalize(&top),
+        kerf_paths::canonicalize(dir),
+    ) {
         (Ok(top), Ok(dir)) => top == dir,
         _ => false,
     }
