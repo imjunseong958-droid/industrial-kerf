@@ -67,6 +67,7 @@ const TITLE_GROUPS: &[Group] = &[
         &["text", "font", "size", "weight", "style", "color", "align"],
         true,
     ),
+    ("Outline", &["outline", "outline_width"], false),
     (
         "Reveal",
         &[

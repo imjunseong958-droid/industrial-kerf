@@ -68,16 +68,21 @@ pub fn draw(image: &mut Image, text: &Text, at: [f32; 2], place: f32) {
     let m = render::at(at[0], baseline);
     let (glyphs, x, y) = render::rasterize(&laid, &m);
     if let Some((edge, width)) = text.outline.filter(|(_, width)| *width > 0.0) {
-        let margin = width.ceil() as i32 + 2;
-        let mut room = Mask::new(
-            glyphs.w + 2 * margin as usize,
-            glyphs.h + 2 * margin as usize,
-        );
-        room.add(&glyphs, margin, margin);
-        let outline = stroke(&room, width, StrokeKind::Outer);
-        cover(image, &outline, x - margin, y - margin, edge);
+        outline(image, &glyphs, (x, y), edge, width);
     }
     fill(image, &laid, &m, glyphs, (x, y), text.color, 1.0);
+}
+
+/// Draw `edge` around what `glyphs`, placed at `x`, `y`, covers, reaching `width` pixels past it.
+fn outline(image: &mut Image, glyphs: &Mask, (x, y): (i32, i32), edge: Rgba, width: f32) {
+    let margin = width.ceil() as i32 + 2;
+    let mut room = Mask::new(
+        glyphs.w + 2 * margin as usize,
+        glyphs.h + 2 * margin as usize,
+    );
+    room.add(glyphs, margin, margin);
+    let around = stroke(&room, width, StrokeKind::Outer);
+    cover(image, &around, x - margin, y - margin, edge);
 }
 
 /// The lines of `text` laid out, or none for text that draws nothing.
@@ -242,6 +247,9 @@ pub fn draw_pieces(
         text.text.chars().filter(|c| !c.is_whitespace()).count()
     }
     .max(1);
+    // Each piece where it is, and how much of it shows: all their outlines go under all their
+    // glyphs, so that one's outline does not cover the glyph before it.
+    let mut placed = Vec::new();
     for glyph in &laid.glyphs {
         let piece = look(piece_of(glyph.cluster), pieces);
         if piece.opacity <= 0.0 || piece.scale == 0.0 {
@@ -277,7 +285,20 @@ pub fn draw_pieces(
             baseline + piece.offset[1] + cy - (b * cx + d * cy),
         ];
         let (mask, x, y) = render::rasterize(&single, &m);
-        fill(image, &single, &m, mask, (x, y), text.color, piece.opacity);
+        placed.push((single, m, mask, (x, y), piece.opacity));
+    }
+    if let Some((edge, width)) = text.outline.filter(|(_, width)| *width > 0.0) {
+        for (_, _, mask, at, opacity) in &placed {
+            let alpha = f32::from(edge.a) * opacity.clamp(0.0, 1.0);
+            let shown = Rgba {
+                a: alpha.round() as u8,
+                ..edge
+            };
+            outline(image, mask, *at, shown, width);
+        }
+    }
+    for (single, m, mask, at, opacity) in placed {
+        fill(image, &single, &m, mask, at, text.color, opacity);
     }
 }
 

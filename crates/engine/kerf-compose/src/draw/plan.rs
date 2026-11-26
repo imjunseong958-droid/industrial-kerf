@@ -216,6 +216,8 @@ pub(super) struct TitlePlan {
     /// In frame heights.
     pub(super) size: f64,
     pub(super) color: Rgba,
+    /// An edge around its letters, and how far it reaches past them, in frame heights.
+    pub(super) outline: Option<(Rgba, f64)>,
     pub(super) justify: Justify,
     /// Where a variable font's axes are set, by tag, as they are given.
     pub(super) axes: Vec<([u8; 4], Param)>,
