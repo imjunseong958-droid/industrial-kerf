@@ -149,7 +149,10 @@ fn span(p0: f64, s: f64, min: f64, max: f64, n: usize) -> (usize, usize) {
 }
 
 /// Fast affine rows: `blend(dst, src, x, y)` is only called for visible source pixels.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a separate input to the warp's inner loop: images, transform, sampling, opacity, bounds and blend"
+)]
 fn affine_rows(
     dst: &mut Image,
     img: &Image,

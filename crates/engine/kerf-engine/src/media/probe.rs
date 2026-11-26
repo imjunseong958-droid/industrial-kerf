@@ -1437,7 +1437,10 @@ pub fn cached_waveform(
 /// The range is included in the cache identity and passed to both the audio
 /// decoder and optional waveform image, so a targeted observation never
 /// accidentally reuses a full-source derivative.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the cache, and the source and each measure of the waveform asked for, which together are its identity in the cache"
+)]
 pub fn cached_waveform_range(
     src: &str,
     cache: &DerivativeCache,

@@ -328,7 +328,10 @@ impl Stopper {
 /// Whether process `id`, a child of this one, has exited, without reaping
 /// it: it stays listed, and its group stays its own, until it is reaped.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "looks with waitid, which std does not wrap, without reaping the child"
+)]
 fn exited(id: u32) -> bool {
     // SAFETY: `info` is zeroed, which waitid reads as no child having changed, and is
     // written only by waitid. WNOWAIT leaves the child to be reaped later.
@@ -354,7 +357,10 @@ fn ended_by(code: libc::c_int) -> bool {
 /// Wait for process `id`, a child of this one, to exit, without reaping it,
 /// as [`exited`] looks.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "waits with waitid, which std does not wrap, without reaping the child"
+)]
 fn wait_exited(id: u32) -> io::Result<()> {
     loop {
         // SAFETY: as in `exited`; without WNOHANG it returns once the child has exited.
@@ -386,7 +392,10 @@ fn wait_exited(id: u32) -> io::Result<()> {
 /// Send `signal` to the process group `leader` leads. Callers hold the
 /// running lock and have not reaped `leader`, so the group is a sidecar's.
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "signals the group with killpg, which std does not wrap"
+)]
 fn signal_group(leader: u32, signal: libc::c_int) {
     // SAFETY: killpg takes no pointers and has no memory effects here.
     unsafe {
@@ -648,7 +657,10 @@ mod windows_tests {
     }
 
     /// Whether process `pid` ends within `limit`.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "OpenProcess and WaitForSingleObject are Win32 calls with no safe wrapper"
+    )]
     fn ends_within(pid: u32, limit: Duration) -> bool {
         // SAFETY: opens the process only to wait on it, and closes it.
         unsafe {

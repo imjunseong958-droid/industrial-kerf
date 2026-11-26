@@ -14,8 +14,11 @@
 //! lies at enough depths to tell it from a camera moving along its line, which grows near things more
 //! than far ones where a zoom grows all alike. Where nothing can tell them apart it says so.
 
-// Carried from EffectCraft, whose solve indexes matrices by position and spells out nested types.
-#![allow(clippy::needless_range_loop, clippy::type_complexity)]
+#![expect(
+    clippy::needless_range_loop,
+    clippy::type_complexity,
+    reason = "carried from EffectCraft, whose solve indexes matrices by position and spells out nested types"
+)]
 
 mod adjust;
 mod follow;

@@ -554,8 +554,10 @@ fn paint_moved(
 
 /// By a dragged edge: its new timecode and how far it moved,
 /// "00:00:12:04  +00:00:01:02".
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 fn paint_readout(
     view: &Viewport,
     edge: f64,
@@ -610,8 +612,10 @@ fn paint_readout(
 /// says: under it (`over` false), the glow it rises over; over it, the
 /// cover on a clip it does not watch, or the accent's ring round one it
 /// does, where it has risen to.
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 fn paint_watched(
     view: &Viewport,
     pen: Pen,
@@ -691,8 +695,10 @@ pub(super) fn clip_box(
 }
 
 /// Where a dragged clip was.
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 fn outline_clip(
     view: &Viewport,
     pen: Pen,
@@ -718,8 +724,10 @@ fn outline_clip(
 }
 
 /// A transition: a small hatched mark over its cut.
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 fn paint_transition(
     view: &Viewport,
     pen: Pen,

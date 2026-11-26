@@ -87,6 +87,8 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 
 [package]
 name = "kerf-editor"

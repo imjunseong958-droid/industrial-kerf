@@ -113,7 +113,13 @@ impl EndpointAddress {
             };
         }
 
-        #[allow(unreachable_code)]
+        #[cfg_attr(
+            any(unix, windows),
+            expect(
+                unreachable_code,
+                reason = "Unix and Windows each return their endpoint above"
+            )
+        )]
         Self::WindowsNamedPipe {
             name: format!("kerfd-{}", project_directory_hash(directory)),
         }
@@ -186,7 +192,7 @@ fn user_runtime_directory() -> PathBuf {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-#[allow(unsafe_code)]
+#[expect(unsafe_code, reason = "calls libc's geteuid, which std does not wrap")]
 fn current_user_id() -> Option<u32> {
     // SAFETY: `geteuid` has no Rust wrapper on the supported Unix targets and
     // does not dereference pointers or depend on process-owned state.
@@ -1861,7 +1867,10 @@ fn wait_for_connection(listener: &UnixListener, timeout: Duration) -> Result<boo
         revents: 0,
     };
     let timeout = libc::c_int::try_from(timeout.as_millis()).unwrap_or(libc::c_int::MAX);
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "waits with libc's poll, which std does not wrap"
+    )]
     // SAFETY: the single `pollfd` is valid for this synchronous call, and the
     // socket descriptor is borrowed from `listener`.
     let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
@@ -2114,7 +2123,13 @@ fn write_ipc_response<W: Write>(
 }
 
 #[cfg(unix)]
-#[allow(unsafe_code)]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "macos"),
+    expect(
+        unsafe_code,
+        reason = "asks libc for the peer's user and this process's, which stable std does not"
+    )
+)]
 fn verify_unix_peer(stream: &UnixStream) -> Result<(), RuntimeError> {
     #[cfg(target_os = "linux")]
     {

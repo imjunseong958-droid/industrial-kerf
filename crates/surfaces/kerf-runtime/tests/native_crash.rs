@@ -9,7 +9,10 @@ use std::process::{Command, ExitStatus, Stdio};
 /// What the child does, as `KERF_CRASH_ON_PURPOSE` says; run only as a child of the tests below.
 #[test]
 #[ignore = "crashes on purpose: the other tests run it in a process of its own"]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "crashes on purpose: a write to an unmapped address, or an abort"
+)]
 fn crash_on_purpose() {
     let Ok(how) = std::env::var("KERF_CRASH_ON_PURPOSE") else {
         return;
@@ -34,7 +37,13 @@ fn crash_on_purpose() {
 }
 
 /// Windows would otherwise ask, on a desktop, whether to look for a solution online.
-#[allow(unsafe_code)]
+#[cfg_attr(
+    windows,
+    expect(
+        unsafe_code,
+        reason = "sets how Windows reports a crash, with Win32 and CRT calls"
+    )
+)]
 fn without_a_crash_dialog() {
     #[cfg(windows)]
     {

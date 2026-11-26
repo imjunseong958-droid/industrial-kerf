@@ -13,8 +13,10 @@
     clippy::todo,
     clippy::unreachable
 )]
-// Carried from EffectCraft, whose pixel loops index several buffers by position.
-#![allow(clippy::needless_range_loop)]
+#![expect(
+    clippy::needless_range_loop,
+    reason = "carried from EffectCraft, whose pixel loops index several buffers by position"
+)]
 
 mod blur2;
 mod blur3;

@@ -16,11 +16,10 @@
 //! written as a mask whose outline has keyframes, which merges, reads, and edits like any other, with
 //! how soft its edge is at each corner, measured from the picture ([`soft`]).
 
-// Carried from EffectCraft: loops index by position, the cut takes many inputs, tests nest types.
-#![allow(
+#![expect(
     clippy::needless_range_loop,
     clippy::too_many_arguments,
-    clippy::type_complexity
+    reason = "carried from EffectCraft: loops index by position, and the cut takes many inputs"
 )]
 
 pub mod gmm;

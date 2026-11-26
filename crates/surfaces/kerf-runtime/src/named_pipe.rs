@@ -6,8 +6,10 @@
 //! for a client can give up after a timeout; each operation still finishes,
 //! or is cancelled and waited out, before its call returns.
 
-// Nearly all of this is calls into the Win32 pipe, security and overlapped I/O APIs.
-#![allow(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "nearly all of this is calls into the Win32 pipe, security and overlapped I/O APIs"
+)]
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};

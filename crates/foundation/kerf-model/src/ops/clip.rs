@@ -251,7 +251,10 @@ impl Editor<'_> {
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each argument is a separate part of the transition the operation adds"
+    )]
     pub(super) fn add_transition(
         &mut self,
         id: Option<&Id>,

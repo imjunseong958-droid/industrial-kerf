@@ -1319,7 +1319,10 @@ impl CpalAudioOutput {
 /// multithreaded apartment open keeps COM, and those DLLs, loaded for the
 /// life of the process.
 #[cfg(all(windows, feature = "native-audio"))]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "CoIncrementMTAUsage is a Win32 call with no safe wrapper"
+)]
 fn keep_com_loaded() {
     static KEPT: std::sync::Once = std::sync::Once::new();
     KEPT.call_once(|| {

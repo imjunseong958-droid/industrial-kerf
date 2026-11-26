@@ -91,8 +91,10 @@ pub(super) struct ClipDrag {
 }
 
 impl ClipDrag {
-    // A drag starts from what its press found: the clip, where and when, the tool, the playhead.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a drag starts from what its press found: the clip, where and when, the tool, the playhead"
+    )]
     pub(super) fn new(
         lanes: &Lanes,
         row: usize,

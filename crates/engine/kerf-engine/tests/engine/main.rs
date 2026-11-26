@@ -5,6 +5,8 @@ mod eye;
 mod follows;
 mod footage_color;
 mod frame_cache;
+// Its models run `cp`.
+#[cfg(unix)]
 mod guide;
 mod media_index;
 mod placed;

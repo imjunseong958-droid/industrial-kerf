@@ -240,8 +240,10 @@ impl InspectorView {
     /// The rows of `params` in their groups, a group's head opening or
     /// closing it. A group is open at first when it says so or when any
     /// of its parameters is set.
-    // Each section hands over its own name, parameters and groups, and where they are set.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each section hands over its own name, parameters and groups, and where they are set"
+    )]
     fn group_rows(
         &self,
         section: &str,

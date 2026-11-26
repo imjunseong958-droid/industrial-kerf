@@ -52,7 +52,6 @@ const MAX_FINISHED_JOBS: usize = 50;
 /// they ended and a retried accept or reject finds its receipt.
 const MAX_SETTLED_PROPOSALS: usize = 4;
 
-#[allow(clippy::large_enum_variant)]
 enum JournalEvent {
     Mutation {
         action: JournalAction,

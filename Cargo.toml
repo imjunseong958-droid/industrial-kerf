@@ -90,18 +90,27 @@ windows-sys = "0.61"
 
 # Every crate takes these with `[lints] workspace = true`. Unsafe code is
 # denied, not forbidden, so the few places that need it (calls into the
-# operating system and FFmpeg, and a crash handler) allow it on just the
+# operating system and FFmpeg, and a crash handler) expect it on just the
 # module or item that holds it, each `unsafe` block saying why it is sound
 # (`// SAFETY:`). Clippy runs on its defaults. Where code needs one loosened it
-# allows it on that code alone, with the reason: at the root of what is
-# carried from EffectCraft and FilmCraft (licenses/README.md), and on the
-# functions of Kerf's own whose many arguments stay separate.
+# expects it on that code alone: at the root of what is carried from
+# EffectCraft and FilmCraft (licenses/README.md), and on the functions of
+# Kerf's own whose many arguments stay separate.
+#
+# A lint is loosened with `#[expect(lint, reason = "...")]`, not `allow`: an
+# expectation warns once the code it excused is gone, where an `allow` stays
+# on, silently, and the reason says why. Where the excused code is built only
+# on some systems, so is the expectation (`cfg_attr`): unfulfilled, it warns.
+# allow_attributes catches an outer `#[allow]` but not an inner `#![allow]`,
+# so a module's or crate's own is left to review.
 [workspace.lints.rust]
 unsafe_code = "deny"
 
 [workspace.lints.clippy]
 dbg_macro = "warn"
 todo = "warn"
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
 
 # Extreme runtime profile for the media engine CLI. Thin LTO is almost as
 # fast to run and much faster to link; fat LTO is reserved for maxperf.

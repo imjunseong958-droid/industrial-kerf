@@ -377,7 +377,10 @@ mod windows_tests {
     }
 
     /// Whether process `pid` ends within `limit`.
-    #[allow(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "OpenProcess and WaitForSingleObject are Win32 calls with no safe wrapper"
+    )]
     fn ends_within(pid: u32, limit: Duration) -> bool {
         // SAFETY: opens the process only to wait on it, and closes it.
         unsafe {

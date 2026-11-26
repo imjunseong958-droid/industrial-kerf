@@ -55,8 +55,10 @@ struct ClipPaint<'a> {
     absent: bool,
 }
 
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 pub(super) fn paint_clip(
     frame: &Frame,
     pen: Pen,
@@ -411,8 +413,10 @@ impl<'a> ClipPaint<'a> {
 /// has effects. Over a filmstrip it stands on a dark bar; over a waveform
 /// it is shadowed; a caption's is in its middle; with nothing under it,
 /// its length goes under it in a tall clip.
-// Painting takes the window, where the canvas is and each measure it draws with.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "painting takes the window, where the canvas is and each measure it draws with"
+)]
 fn paint_name(
     frame: &Frame,
     pen: Pen,
