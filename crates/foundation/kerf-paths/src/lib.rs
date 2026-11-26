@@ -1,11 +1,10 @@
 //! Where a person's own Kerf files are kept: their home folder, `~/.kerf` in it, and Kerf's
-//! folder in the system's cache folder.
+//! cache and crash folders in the system's own folders for them.
 //!
 //! What looks for one of the person's own files asks here rather than reading `HOME`
 //! itself. Windows sets no `HOME`, so a place that reads it alone finds none of them there,
-//! and each place that read it for itself had to be taught so on its own. The cache folder
-//! is found by its system's own rule, which names `HOME` only off Windows. (So is a log
-//! folder, which is not found here.)
+//! and each place that read it for itself had to be taught so on its own. The cache and crash
+//! folders are found by their system's own rules, which name `HOME` only off Windows.
 
 mod canonical;
 
@@ -33,6 +32,14 @@ pub fn user_dir() -> Option<PathBuf> {
 /// cache keeps its own folder in it, and its own variable to move or turn it off.
 pub fn cache_dir() -> Option<PathBuf> {
     cache_dir_on(System::current(), |name| std::env::var_os(name))
+}
+
+/// Kerf's crash folder, in the system's folder for an app's logs: `%LOCALAPPDATA%\Kerf\crashes`
+/// on Windows, `$HOME/Library/Logs/Kerf` on macOS, and `$XDG_STATE_HOME/kerf/crashes`, else
+/// `$HOME/.local/state/kerf/crashes`, elsewhere. `None` when the variable the system's rule
+/// needs is not set; one set to nothing counts as not set.
+pub fn crash_dir() -> Option<PathBuf> {
+    crash_dir_on(System::current(), |name| std::env::var_os(name))
 }
 
 fn home_from(home: Option<OsString>, user_profile: Option<OsString>) -> Option<PathBuf> {
@@ -67,13 +74,58 @@ impl System {
 
 /// [`cache_dir`] on `system`, with `var` the environment.
 fn cache_dir_on(system: System, var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    // Unlike the crash folder's rule, this takes a variable set to nothing as a folder, as the
+    // caches always have.
+    kerf_dir_on(system, Kind::Cache, var)
+}
+
+/// [`crash_dir`] on `system`, with `var` the environment.
+fn crash_dir_on(system: System, var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let var = |name: &str| var(name).filter(|value| !value.is_empty());
+    let folder = kerf_dir_on(system, Kind::Logs, var)?;
+    Some(match system {
+        System::MacOs => folder,
+        System::Windows | System::Other => folder.join("crashes"),
+    })
+}
+
+/// The kinds of the system's folders for an app that Kerf keeps a folder in.
+#[derive(Clone, Copy)]
+enum Kind {
+    /// For what can be made again.
+    Cache,
+    /// For what an app leaves to be read later: logs on macOS, state elsewhere.
+    Logs,
+}
+
+/// Kerf's folder in the system's folder of `kind`, with `var` the environment:
+/// `%LOCALAPPDATA%\Kerf` on Windows, which has one folder for every kind;
+/// `$HOME/Library/<Caches or Logs>/Kerf` on macOS; and `$XDG_<CACHE or STATE>_HOME/kerf`, else
+/// `$HOME/<.cache or .local/state>/kerf`, elsewhere.
+fn kerf_dir_on(
+    system: System,
+    kind: Kind,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
     let var = |name: &str| var(name).map(PathBuf::from);
     match system {
         System::Windows => var("LOCALAPPDATA").map(|folder| folder.join("Kerf")),
-        System::MacOs => var("HOME").map(|home| home.join("Library/Caches/Kerf")),
-        System::Other => var("XDG_CACHE_HOME")
-            .or_else(|| var("HOME").map(|home| home.join(".cache")))
-            .map(|folder| folder.join("kerf")),
+        System::MacOs => {
+            let library = match kind {
+                Kind::Cache => "Library/Caches",
+                Kind::Logs => "Library/Logs",
+            };
+            var("HOME").map(|home| home.join(library).join("Kerf"))
+        }
+        System::Other => {
+            let (xdg, in_home) = match kind {
+                Kind::Cache => ("XDG_CACHE_HOME", ".cache"),
+                Kind::Logs => ("XDG_STATE_HOME", ".local/state"),
+            };
+            var(xdg)
+                .or_else(|| var("HOME").map(|home| home.join(in_home)))
+                .map(|folder| folder.join("kerf"))
+        }
     }
 }
 
