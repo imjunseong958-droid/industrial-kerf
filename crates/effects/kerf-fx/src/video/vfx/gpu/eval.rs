@@ -101,42 +101,6 @@ impl Kernel {
                 }))
             }
             "lumetri" => Kernel::Lumetri(Box::new(Lumetri::eval(e, cx, size)?)),
-            "corner_pin" => {
-                let (w, h) = (size.0 as f64, size.1 as f64);
-                let sized = Image {
-                    w: size.0,
-                    h: size.1,
-                    px: Vec::new(),
-                };
-                let q = [
-                    pv(e, "upper_left", cx, &sized),
-                    pv(e, "upper_right", cx, &sized),
-                    pv(e, "lower_right", cx, &sized),
-                    pv(e, "lower_left", cx, &sized),
-                ];
-                let ident = [
-                    Vec2::new(0.0, 0.0),
-                    Vec2::new(w, 0.0),
-                    Vec2::new(w, h),
-                    Vec2::new(0.0, h),
-                ];
-                // Corners left where they are change nothing, and neither does a map with no way back.
-                if q.iter().zip(&ident).all(|(a, b)| (*a - *b).length() < 1e-6) {
-                    return Some(Kernel::Nothing);
-                }
-                let Some(inverse) = distort::h_inverse(&distort::square_to_quad(q)) else {
-                    return Some(Kernel::Nothing);
-                };
-                let map = inverse.map(|value| value as f32);
-                // Corners in a line divide by nothing, and what comes of that is the CPU's to draw.
-                if map.iter().any(|value| !value.is_finite()) {
-                    return None;
-                }
-                Kernel::CornerPin {
-                    map,
-                    size: [w as f32, h as f32],
-                }
-            }
             "drop_shadow" => {
                 let c = crate::video::effects::color(e, "color", cx);
                 let direction = f64::from(f(e, "direction", cx)).to_radians();

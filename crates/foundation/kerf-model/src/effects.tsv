@@ -162,15 +162,6 @@ effect	color.videolimiter	Color Correction	Video Limiter	Limits luma and chroma 
 	enum	axis	smart-limit	luma|chroma|luma-and-chroma|smart-limit		Reduce Axis
 	bool	gamut_warning	false			Gamut Warning
 	color	warning_color	#ff0000			Gamut Warning Color
-effect	distort.cornerpin	Distort	Corner Pin	Moves the four corners; fit a picture into a screen or frame.	2
-	number	upper_left_x	0	-10..10	picture widths	Upper Left (0 left, 1 right)
-	number	upper_left_y	0	-10..10	picture heights	Upper Left (0 top, 1 bottom)
-	number	upper_right_x	1	-10..10	picture widths	Upper Right (0 left, 1 right)
-	number	upper_right_y	0	-10..10	picture heights	Upper Right (0 top, 1 bottom)
-	number	lower_left_x	0	-10..10	picture widths	Lower Left (0 left, 1 right)
-	number	lower_left_y	1	-10..10	picture heights	Lower Left (0 top, 1 bottom)
-	number	lower_right_x	1	-10..10	picture widths	Lower Right (0 left, 1 right)
-	number	lower_right_y	1	-10..10	picture heights	Lower Right (0 top, 1 bottom)
 effect	distort.lens	Distort	Lens Distortion	Barrel or pincushion lens curvature; fisheye looks, or undoing a wide lens.	2
 	number	curvature	0	-100..100		Curvature
 	number	v_decentering	0	-100..100		Vertical Decentering

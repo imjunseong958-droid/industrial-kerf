@@ -40,7 +40,6 @@ pub(crate) const CARRIED: &[(&str, &str, u32, &str)] = &[
     // Channel
     ("invert", "channel.invert", 2, "Inverts colors or one channel; negative-film looks, flash frames, glitches."),
     // Distort
-    ("corner_pin", "distort.cornerpin", 2, "Moves the four corners; fit a picture into a screen or frame."),
     ("lens_distortion", "distort.lens", 2, "Barrel or pincushion lens curvature; fisheye looks, or undoing a wide lens."),
     ("warp_stabilizer", "distort.warpstabilizer", 2, "Smooths or removes camera shake from an analysis of the clip's frames; handheld and shaky footage."),
     // Generate
@@ -479,11 +478,9 @@ fn lines(def: &EffectDef, param: &ParamDef, label: &str) -> Vec<String> {
 }
 
 /// Where a point starts, across the picture: where FilmCraft puts an "auto" point (`end`, the
-/// bottom centre; otherwise the effect's auto position or the centre), or the edge its default
-/// (0 pixels) names.
+/// bottom centre; otherwise the centre), or the edge its default (0 pixels) names.
 fn place(effect: &str, param: &str, v: kerf_geom::Vec2) -> (f64, f64) {
-    let (ax, ay) = super::project::effect::auto_point(effect, param)
-        .unwrap_or((0.5, if param == "end" { 1.0 } else { 0.5 }));
+    let (ax, ay) = (0.5, if param == "end" { 1.0 } else { 0.5 });
     let at = |v: f64, auto: f64| {
         assert!(
             v.is_nan() || v == 0.0,

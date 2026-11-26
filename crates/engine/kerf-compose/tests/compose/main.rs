@@ -19,7 +19,6 @@ mod multicam;
 mod parent;
 mod parent_depth;
 mod passes;
-mod pin;
 mod retime;
 mod soft_masks;
 mod strokes;

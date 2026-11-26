@@ -444,3 +444,199 @@ pub fn matte<G>(
         as_a_thing: false,
     }))
 }
+
+/// Where a clip in depth is put, by its own numbers, for the corners of its picture to land on a
+/// followed surface: its middle across and down the frame, turned in the frame and in depth,
+/// slanted along its width, and scaled across and down, at `z=0` before a camera left where it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InDepth {
+    /// In frame widths and heights from the frame's middle, as `x` and `y` are.
+    pub x: f64,
+    pub y: f64,
+    /// In degrees, as `rotation`, `rotate_x`, and `rotate_y` are.
+    pub rotation: f64,
+    pub rotate_x: f64,
+    pub rotate_y: f64,
+    /// In degrees, as `skew` is with `skew_axis=0`.
+    pub skew: f64,
+    pub scale_x: f64,
+    pub scale_y: f64,
+}
+
+/// [`InDepth`] for a picture that fills `picture` pixels of a frame of `frame` pixels, fitted to
+/// it, for its upper left, upper right, lower right, and lower left corners to land on `quad`'s, in
+/// shares of the frame. A plane seen by a camera puts any four corners somewhere, so the distance
+/// of one is not in them: its middle is at `z=0`, where a picture is its own size, and how large it
+/// is says the rest. Four corners need not be a rectangle's seen in depth, and a slant along the
+/// picture makes up the difference. None for corners no plane puts there, as three in a line are.
+pub fn in_depth(quad: [[f64; 2]; 4], picture: (f64, f64), frame: (f64, f64)) -> Option<InDepth> {
+    let (wide, high) = frame;
+    let fov = kerf_model::Catalog::builtin()
+        .fx("camera")
+        .and_then(|camera| camera.find("fov"))
+        .and_then(|fov| fov.default.as_number())
+        .unwrap_or(40.0);
+    // How far the camera is from what is at `z=0`, in pixels of the frame.
+    let distance = high / 2.0 / (fov.to_radians() / 2.0).tan();
+    let (across, down) = (picture.0 / 2.0, picture.1 / 2.0);
+    let corners = [
+        [-across, -down],
+        [across, -down],
+        [across, down],
+        [-across, down],
+    ];
+    // The plane's picture to the frame, from the frame's middle: the 3 × 3 map that takes each corner
+    // where it lands, its last number 1.
+    let mut rows = [[0.0; 9]; 8];
+    for (index, ([u, v], [qx, qy])) in corners.iter().zip(quad).enumerate() {
+        let (x, y) = ((qx - 0.5) * wide, (qy - 0.5) * high);
+        rows[2 * index] = [*u, *v, 1.0, 0.0, 0.0, 0.0, -u * x, -v * x, x];
+        rows[2 * index + 1] = [0.0, 0.0, 0.0, *u, *v, 1.0, -u * y, -v * y, y];
+    }
+    let [a, b, c, d, e, f, g, h] = solved(rows)?;
+    // Its columns, once the camera's distance is taken out of them: where a pixel across and a pixel
+    // down the picture go in the world, and where its middle is from the camera.
+    let first = [a, d, g * distance];
+    let second = [b, e, h * distance];
+    let facing = unit(crossed(first, second))?;
+    // Turned in depth as `rotate_x` then `rotate_y` turn a clip to face that way.
+    let pitch = (-facing[1]).atan2(facing[0].hypot(facing[2]));
+    let yaw = facing[0].atan2(facing[2]);
+    // The picture's own ways across and down, so turned, and the two columns in their terms: the
+    // flat placing that the turn takes into depth.
+    let turned = |[x, y, z]: [f64; 3]| {
+        let (sin, cos) = pitch.sin_cos();
+        let (y, z) = (y * cos - z * sin, y * sin + z * cos);
+        let (sin, cos) = yaw.sin_cos();
+        [x * cos + z * sin, y, -x * sin + z * cos]
+    };
+    let (right, below) = (turned([1.0, 0.0, 0.0]), turned([0.0, 1.0, 0.0]));
+    let flat = |column: [f64; 3]| [dotted(column, right), dotted(column, below)];
+    let (first, second) = (flat(first), flat(second));
+    // Turned in the frame, then slanted and scaled: the first column is the width turned, and the
+    // second, turned back, is what the slant leans over and the height.
+    let roll = first[1].atan2(first[0]);
+    let scale_x = first[0].hypot(first[1]);
+    let (sin, cos) = roll.sin_cos();
+    let (lean, scale_y) = (
+        second[0] * cos + second[1] * sin,
+        -second[0] * sin + second[1] * cos,
+    );
+    if !(scale_x > 1e-9 && scale_y > 1e-9) {
+        return None;
+    }
+    let skew = (lean / scale_y).atan().to_degrees();
+    if skew.abs() > 85.0 {
+        return None;
+    }
+    Some(InDepth {
+        x: c / wide,
+        y: f / high,
+        rotation: roll.to_degrees(),
+        rotate_x: pitch.to_degrees(),
+        rotate_y: yaw.to_degrees(),
+        skew,
+        scale_x,
+        scale_y,
+    })
+}
+
+/// The line that puts `clip` in depth on a followed surface, keyframed at the frames kept of
+/// `quads`, frame `index` of what was followed written as frame `index + offset` of the clip; none
+/// where no plane puts a frame's corners where they were followed. Its turns go the short way from
+/// each keyframe to the next.
+pub fn depth_script(
+    clip: &str,
+    quads: &[[[f64; 2]; 4]],
+    kept: &[usize],
+    offset: i64,
+    picture: (f64, f64),
+    frame: (f64, f64),
+) -> Option<String> {
+    let placed: Vec<(i64, InDepth)> = kept
+        .iter()
+        .map(|index| {
+            Some((
+                *index as i64 + offset,
+                in_depth(quads[*index], picture, frame)?,
+            ))
+        })
+        .collect::<Option<_>>()?;
+    let rounded = |value: f64, places: i32| {
+        let by = 10f64.powi(places);
+        (value * by).round() / by
+    };
+    let keys = |name: &str, of: &dyn Fn(&InDepth) -> f64, turn: bool, places: i32| {
+        let mut before: Option<f64> = None;
+        let words: Vec<String> = placed
+            .iter()
+            .map(|(at, depth)| {
+                let mut value = of(depth);
+                if let (true, Some(before)) = (turn, before) {
+                    value -= 360.0 * ((value - before) / 360.0).round();
+                }
+                before = Some(value);
+                format!("{at}f:{}", rounded(value, places))
+            })
+            .collect();
+        format!("{name}={{{}}}", words.join(" "))
+    };
+    Some(format!(
+        "set {clip} three_d=true z=0 scale=1 anchor_x=0 anchor_y=0 skew_axis=0 {} {} {} {} {} {} {} {}",
+        keys("x", &|depth| depth.x, false, 5),
+        keys("y", &|depth| depth.y, false, 5),
+        keys("rotation", &|depth| depth.rotation, true, 3),
+        keys("rotate_x", &|depth| depth.rotate_x, true, 3),
+        keys("rotate_y", &|depth| depth.rotate_y, true, 3),
+        keys("skew", &|depth| depth.skew, false, 3),
+        keys("scale_x", &|depth| depth.scale_x, false, 5),
+        keys("scale_y", &|depth| depth.scale_y, false, 5),
+    ))
+}
+
+/// The eight numbers that meet eight equations, each a row of their factors and what it comes
+/// to; none where they do not say them.
+fn solved(mut rows: [[f64; 9]; 8]) -> Option<[f64; 8]> {
+    for column in 0..8 {
+        let pivot =
+            (column..8).max_by(|a, b| rows[*a][column].abs().total_cmp(&rows[*b][column].abs()))?;
+        if rows[pivot][column].abs() < 1e-12 {
+            return None;
+        }
+        rows.swap(column, pivot);
+        for row in 0..8 {
+            if row != column {
+                let by = rows[row][column] / rows[column][column];
+                for at in column..9 {
+                    rows[row][at] -= by * rows[column][at];
+                }
+            }
+        }
+    }
+    Some(std::array::from_fn(|row| rows[row][8] / rows[row][row]))
+}
+
+fn dotted(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn length(a: [f64; 3]) -> f64 {
+    (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt()
+}
+
+fn scaled(a: [f64; 3], by: f64) -> [f64; 3] {
+    a.map(|value| value * by)
+}
+
+fn unit(a: [f64; 3]) -> Option<[f64; 3]> {
+    let long = length(a);
+    (long > 1e-12).then(|| scaled(a, 1.0 / long))
+}
+
+fn crossed(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}

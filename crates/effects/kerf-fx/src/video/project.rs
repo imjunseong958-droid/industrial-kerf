@@ -55,15 +55,13 @@ impl Project {
 }
 
 #[cfg(test)]
-/// Fill a point parameter left "auto" (a NaN coordinate) in with where it starts: the effect's
-/// auto position across the frame (`anchor`: across the source), or else the centre (`end`: the
-/// bottom centre).
+/// Fill a point parameter left "auto" (a NaN coordinate) in with where it starts: the centre of
+/// the frame (`anchor`: of the source; `end`: the bottom centre).
 pub fn resolve_auto_points(e: &mut EffectInstance, frame: (u32, u32), source: (u32, u32)) {
     for (k, p) in e.params.iter_mut() {
         if let ParamValue::Vec2(v) = &mut p.value {
             let (w, h) = if k == "anchor" { source } else { frame };
-            let (fx, fy) = effect::auto_point(&e.effect, k)
-                .unwrap_or((0.5, if k == "end" { 1.0 } else { 0.5 }));
+            let (fx, fy) = (0.5, if k == "end" { 1.0 } else { 0.5 });
             if v.x.is_nan() {
                 v.x = w as f64 * fx;
             }

@@ -2046,7 +2046,7 @@ fn look_follows_a_surface_and_gives_lines_that_pin_and_mask_to_it() {
     // The lines are ones the language takes.
     let script = followed["script"].as_str().unwrap();
     assert!(
-        script.starts_with("fx sq add distort.cornerpin@2 upper_left_x={0f:"),
+        script.starts_with("set sq three_d=true z=0 ") && script.contains(" x={0f:"),
         "{script}"
     );
     let outline = followed["outline"].as_str().unwrap();
