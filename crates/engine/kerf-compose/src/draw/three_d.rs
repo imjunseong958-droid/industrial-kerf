@@ -34,6 +34,11 @@
 //! another [`Affine3`] ([`mesh`]), and so is each node of a file ([`gltf`]). The camera is in
 //! none of them: it sees what they place.
 //!
+//! All of that is of a clip at a moment, and is asked with the moment whole: the clip's own
+//! time and its placing on the frame then, one [`Placement`]. Its plane is lifted from the
+//! two at once, and a mesh is posed as its file's animation has it at that time and put in the
+//! space that plane makes, by one sum for whoever draws it, lights it, or measures it.
+//!
 //! The sums of all that are kerf-geom's ([`kerf_geom::place`]), where whatever draws over the
 //! picture asks them too: the lift into depth ([`lifted`]), how parents take what they hold
 //! ([`Taken`]), and the camera, from its numbers to its rays ([`Camera`]). Here a clip's
@@ -665,9 +670,9 @@ impl Scene {
 
     /// How far away a clip is, along the camera's way, for drawing far to near: its middle, where
     /// its plane has it.
-    pub fn depth(&self, plan: &ClipPlan, to_output: &Affine, time: Time) -> f64 {
+    pub fn depth(&self, plan: &ClipPlan, placement: &Placement) -> f64 {
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-        let middle = Plane::of(self, plan, size, to_output, time).middle;
+        let middle = Plane::of(self, plan, size, placement).middle;
         dot(minus(middle, self.camera.eye), self.camera.forward)
     }
 
@@ -774,11 +779,10 @@ pub(super) fn shade_by_depth(
     scene: &Scene,
     plan: &ClipPlan,
     picture: &mut Image,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
 ) {
     let (w, h) = (picture.w, picture.h);
-    let plane = Plane::of(scene, plan, (w as f64, h as f64), to_output, time);
+    let plane = Plane::of(scene, plan, (w as f64, h as f64), placement);
     picture
         .px
         .par_chunks_mut(4 * w.max(1))
@@ -848,21 +852,19 @@ pub(super) fn shade_by_motion_flat(
 
 /// `picture`, a clip in depth's own, as a motion pass has it: each of its pixels by how far the
 /// place of the clip it shows goes on the screen in a frame, from where the scene `now` sees it,
-/// the clip placed as `to_output.0` has it, to where the scene a frame on sees it, placed as
-/// `to_output.1` has it, of a frame `height` tall. A place behind either camera is said to hold
-/// still.
+/// the clip as `placement.0` has it, to where the scene a frame on sees it, as `placement.1`
+/// has it then, of a frame `height` tall. A place behind either camera is said to hold still.
 pub(super) fn shade_by_motion(
     (now, next): (&Scene, &Scene),
     plan: &ClipPlan,
     picture: &mut Image,
-    to_output: (&Affine, &Affine),
-    (time, step): (Time, Time),
+    placement: (&Placement, &Placement),
     height: f64,
 ) {
     let (w, h) = (picture.w, picture.h);
     let size = (w as f64, h as f64);
-    let here = Plane::of(now, plan, size, to_output.0, time);
-    let there = Plane::of(next, plan, size, to_output.1, time + step);
+    let here = Plane::of(now, plan, size, placement.0);
+    let there = Plane::of(next, plan, size, placement.1);
     picture
         .px
         .par_chunks_mut(4 * w.max(1))
@@ -891,11 +893,10 @@ pub(super) fn shade_by_facing(
     scene: &Scene,
     plan: &ClipPlan,
     picture: &mut Image,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
 ) {
     let (w, h) = (picture.w, picture.h);
-    let plane = Plane::of(scene, plan, (w as f64, h as f64), to_output, time);
+    let plane = Plane::of(scene, plan, (w as f64, h as f64), placement);
     let color = scene.facing(plane.point(w as f64 / 2.0, h as f64 / 2.0), plane.normal);
     picture.px.par_chunks_mut(4).for_each(|pixel| {
         let alpha = pixel[3];
@@ -920,19 +921,14 @@ pub(super) struct Plane {
 }
 
 impl Plane {
-    /// The plane of a clip of `size` pixels at clip time `time`, which `to_output` takes to where its
-    /// 2D geometry puts them, its parents' with its own: that as it is in depth, about the world's
-    /// middle, then held in depth by the clip about its own middle, and then by its parents in
-    /// depth as `scene` has them.
-    pub fn of(
-        scene: &Scene,
-        plan: &ClipPlan,
-        size: (f64, f64),
-        to_output: &Affine,
-        time: Time,
-    ) -> Self {
+    /// The plane of a clip of `size` pixels as `placement` has it: at that time of its own, its
+    /// pixels taken to where its 2D geometry puts them, its parents' with its own. That as it is
+    /// in depth, about the world's middle, then held in depth by the clip about its own middle
+    /// as its numbers are at that time, and then by its parents in depth as `scene` has them.
+    pub fn of(scene: &Scene, plan: &ClipPlan, size: (f64, f64), placement: &Placement) -> Self {
         let clip = &plan.clip;
-        let read = |name: &str| number(&param(clip, name).value_at(time));
+        let Placement { time, to_output } = placement;
+        let read = |name: &str| number(&param(clip, name).value_at(*time));
         let numbers = [
             read("z") * scene.camera.height,
             read("rotate_x"),
@@ -1305,20 +1301,19 @@ pub(super) struct Caster {
 }
 
 impl Caster {
-    /// `picture`, as much of it as `crop` leaves, is where `to_output` puts it, on a clip at clip time
-    /// `time`. With a depth, it is what [`Self::through_its_depth`] makes.
+    /// `picture`, as much of it as `crop` leaves, is where `placement` has it, of a clip at that
+    /// time of its own. With a depth, it is what [`Self::through_its_depth`] makes.
     pub fn new(
         scene: &Scene,
         plan: &ClipPlan,
         picture: Arc<Image>,
-        (to_output, crop): (&Affine, Option<Rect>),
+        (placement, crop): (&Placement, Option<Rect>),
         opacity: f32,
-        time: Time,
     ) -> Self {
         let (pw, ph) = (picture.w as f64, picture.h as f64);
         Self::on(
             plan.clip.id.clone(),
-            Plane::of(scene, plan, (pw, ph), to_output, time),
+            Plane::of(scene, plan, (pw, ph), placement),
             crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph)),
             Arc::new(if scene.is_wide() {
                 Held::of(&picture)
@@ -1548,19 +1543,19 @@ impl Caster {
     }
 }
 
-/// `picture` as a clip in depth on an output picture of `(w, h)`, transparent around it. `to_output`
-/// takes its pixels to where its 2D geometry puts them. With a `share`, what the camera sees of the
-/// picture is found once for every pass that shares it ([`Seen`]), and `picture` read by it.
+/// `picture` as a clip in depth on an output picture of `(w, h)`, transparent around it. What it is
+/// `placed` by takes its pixels to where its 2D geometry puts them, at that time of the clip's
+/// own, and says what its crop leaves of it. With a `share`, what the camera sees of the picture
+/// is found once for every pass that shares it ([`Seen`]), and `picture` read by it.
 pub(super) fn project(
     scene: &Scene,
     plan: &ClipPlan,
     picture: &Image,
-    placed: (&Affine, Option<Rect>),
-    time: Time,
+    placed: (&Placement, Option<Rect>),
     size: (usize, usize),
     share: Option<Share<'_>>,
 ) -> Image {
-    projected(scene, plan, picture, placed, time, size, false, share).0
+    projected(scene, plan, picture, placed, size, false, share).0
 }
 
 /// [`project`], with how far along the camera's way its plane is at each pixel, inside the picture
@@ -1569,30 +1564,25 @@ pub(super) fn project_with_depth(
     scene: &Scene,
     plan: &ClipPlan,
     picture: &Image,
-    placed: (&Affine, Option<Rect>),
-    time: Time,
+    placed: (&Placement, Option<Rect>),
     size: (usize, usize),
     share: Option<Share<'_>>,
 ) -> (Image, Vec<f32>) {
-    projected(scene, plan, picture, placed, time, size, true, share)
+    projected(scene, plan, picture, placed, size, true, share)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "project and project_with_depth, which say what each is, call it alone"
-)]
 fn projected(
     scene: &Scene,
     plan: &ClipPlan,
     picture: &Image,
-    (to_output, crop): (&Affine, Option<Rect>),
-    time: Time,
+    (placement, crop): (&Placement, Option<Rect>),
     (w, h): (usize, usize),
     with_depth: bool,
     share: Option<Share<'_>>,
 ) -> (Image, Vec<f32>) {
     let (pw, ph) = (picture.w as f64, picture.h as f64);
-    let plane = Plane::of(scene, plan, (pw, ph), to_output, time);
+    let time = placement.time;
+    let plane = Plane::of(scene, plan, (pw, ph), placement);
     let (source, by) = match read_smaller(scene, &plane, (pw, ph)) {
         Some(by) => {
             let (sw, sh) = smaller_size((pw, ph), by);

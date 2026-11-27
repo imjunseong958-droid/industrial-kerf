@@ -11,6 +11,10 @@
 //! A source position is exact to the flick. The frame of a source showing there
 //! ([`TimeMap::frame`]) is worked out before that rounding, so a speed that is a ratio never moves
 //! the edge of a frame.
+//!
+//! A source that ends is asked for past its end where a clip runs longer than it, and before its
+//! start. What it plays there is one more step of the map ([`PastEnd`]): the animation of a mesh's
+//! file goes round again, or holds at its end.
 
 use crate::speed::Speed;
 use crate::time::{Rate, Time, FLICKS_PER_SECOND};
@@ -180,6 +184,29 @@ impl<'a> TimeMap<'a> {
             self.source_in.seconds() + (whole - played)
         } else {
             self.source_in.seconds() + played
+        }
+    }
+}
+
+/// What a source that ends plays where it is asked for past its end, or before its start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PastEnd {
+    /// The end it is past, for as long as it is asked.
+    Held,
+    /// Itself again, from its start, as often as it is asked.
+    Again,
+}
+
+impl PastEnd {
+    /// Where in a source `length` seconds long the second `seconds` of it is: where it is,
+    /// within the source, and past either end at that end, or as far into another round. A
+    /// source of no length has its start alone.
+    pub fn within(self, seconds: f64, length: f64) -> f64 {
+        match self {
+            Self::Again if length > 0.0 && !(0.0..=length).contains(&seconds) => {
+                seconds.rem_euclid(length)
+            }
+            Self::Held | Self::Again => seconds.clamp(0.0, length),
         }
     }
 }

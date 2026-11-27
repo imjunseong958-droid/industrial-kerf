@@ -38,7 +38,7 @@ pub use ops::{
 pub use path::{parse_moves, parse_path_points, parse_points, MotionPath, PathPoint};
 pub use speed::{Ramp, RampKey, Speed};
 pub use time::{Rate, Ratio, Time, TimeError};
-pub use time_map::{TimeChain, TimeMap};
+pub use time_map::{PastEnd, TimeChain, TimeMap};
 pub use validate::validate;
 
 /// The effect that gives a `gen=shape` clip another outline. It draws no pass of its own: the shape

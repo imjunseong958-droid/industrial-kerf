@@ -37,7 +37,7 @@ use kerf_geom::place::{fitted, Camera, Geometry, Lens, Parent, Taken};
 use kerf_model::time::format_timecode;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, FxDef, Id, Media, MotionPath, Param, ParamType, Params,
-    Project, Rate, Rgba, Sequence, Time, TimeMap, Track, TrackKind, Value,
+    PastEnd, Project, Rate, Rgba, Sequence, Time, TimeMap, Track, TrackKind, Value,
 };
 use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -233,29 +233,30 @@ impl Drawing {
         }
     }
 
-    /// `picture`, a clip's own with all done to it, as the pass drawn has it: where it was, in the
-    /// clip's color, or by how near each of its pixels is.
+    /// `picture`, a clip's own with all done to it, which `placement` has on the output, as the
+    /// pass drawn has it: where it was, in the clip's color, or by how near each of its pixels is.
     fn as_pass(
         &self,
         sequence: &SequencePlan,
         plan: &ClipPlan,
         picture: &mut Image,
-        to_output: &Affine,
+        placement: &Placement,
         (at, scale): (Time, f64),
         size: (usize, usize),
     ) {
+        let to_output = &placement.to_output;
         match self.pass {
             Pass::Picture => {}
             Pass::Motion => {
-                let time = plan.clip.time_at(at);
-                let placed = |time: Time| {
-                    Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time))
-                };
+                // The clip now, and a frame on.
+                let here = sequence.placement(plan, at).scaled(scale);
+                let there = sequence.placement(plan, at + self.step).scaled(scale);
                 // Where what is at an output pixel now is a frame on, as the clip is placed
                 // then. One placed nowhere now, at no size, goes nowhere.
-                let Some(moved) = placed(time)
+                let Some(moved) = here
+                    .to_output
                     .inverse()
-                    .map(|back| placed(time + self.step).then_apply(&back))
+                    .map(|back| there.to_output.then_apply(&back))
                 else {
                     three_d::shade_still(picture);
                     return;
@@ -264,13 +265,13 @@ impl Drawing {
                 if plan.three_d {
                     let now = three_d::Scene::at(sequence, at, size);
                     let next = three_d::Scene::ahead(sequence, at, self.step, size);
-                    let to_output_next = moved.then_apply(to_output);
+                    // The picture's own pixels a frame on, as they are now in `placement`.
+                    let there = there.with(moved.then_apply(to_output));
                     three_d::shade_by_motion(
                         (&now, &next),
                         plan,
                         picture,
-                        (to_output, &to_output_next),
-                        (time, self.step),
+                        (placement, &there),
                         height,
                     );
                 } else {
@@ -283,12 +284,12 @@ impl Drawing {
             }
             Pass::Depth | Pass::Relative if plan.three_d => {
                 let scene = three_d::Scene::at(sequence, at, size);
-                three_d::shade_by_depth(&scene, plan, picture, to_output, plan.clip.time_at(at));
+                three_d::shade_by_depth(&scene, plan, picture, placement);
             }
             Pass::Depth | Pass::Relative => flat(picture, [0.0; 3]),
             Pass::Normals if plan.three_d => {
                 let scene = three_d::Scene::at(sequence, at, size);
-                three_d::shade_by_facing(&scene, plan, picture, to_output, plan.clip.time_at(at));
+                three_d::shade_by_facing(&scene, plan, picture, placement);
             }
             Pass::Normals => flat(picture, [0.0; 3]),
         }
@@ -341,8 +342,7 @@ impl Drawing {
         }
         let size = (sequence.width as usize, sequence.height as usize);
         let scene = three_d::Scene::at(sequence, at, size);
-        let to_output = self.geometry(sequence, plan, time);
-        three_d::mesh::camera(&scene, plan, &to_output, time, camera)
+        three_d::mesh::camera(&scene, plan, &sequence.placement(plan, at), camera)
     }
 
     /// See [`Compositor::mesh_view`](crate::Compositor::mesh_view).
@@ -359,8 +359,7 @@ impl Drawing {
         }
         let size = (sequence.width as usize, sequence.height as usize);
         let scene = three_d::Scene::at(sequence, at, size);
-        let to_output = self.geometry(sequence, plan, time);
-        three_d::mesh::view(&scene, plan, &to_output, time, view)
+        three_d::mesh::view(&scene, plan, &sequence.placement(plan, at), view)
     }
 
     /// See [`Compositor::in_depth`](crate::Compositor::in_depth).
@@ -400,10 +399,13 @@ impl Drawing {
                 let fall = (moved.c.abs() <= 1e-9 * moved.d.abs() && moved.d.abs() > 1e-9)
                     .then_some(moved.d)
                     .and_then(|fall| scene.falls(plan, fall));
-                let to_output = moved.then_apply(&own);
-                world.clips.push(three_d::world::of(
-                    &scene, plan, &to_output, time, held, fall,
-                ));
+                let placement = Placement {
+                    time,
+                    to_output: moved.then_apply(&own),
+                };
+                world
+                    .clips
+                    .push(three_d::world::of(&scene, plan, &placement, held, fall));
             }
         }
         world
@@ -453,7 +455,7 @@ impl Drawing {
         let (wide, tall) = (f64::from(plan.size.0), f64::from(plan.size.1));
         let canvas = (f64::from(sequence.width), f64::from(sequence.height));
         let placed = Affine::scale(1.0 / canvas.0.max(1.0), 1.0 / canvas.1.max(1.0))
-            .then_apply(&self.geometry(sequence, plan, time))
+            .then_apply(&sequence.placement(plan, at).to_output)
             .then_apply(&Affine::scale(wide, tall));
         let [left, right, top, bottom] = ["crop_l", "crop_r", "crop_t", "crop_b"]
             .map(|name| number(&param(&plan.clip, name).value_at(time)));
@@ -663,8 +665,9 @@ mod tests {
             let sequence = &drawing.sequences[0];
             let plan = &sequence.tracks[1].shown[0].plan;
             let scene = three_d::Scene::at(sequence, Time::ZERO, (1920, 1080));
-            let place = drawing.geometry(sequence, plan, Time::ZERO);
-            let plane = three_d::Plane::of(&scene, plan, (1920.0, 1080.0), &place, Time::ZERO);
+            let placement = sequence.placement(plan, Time::ZERO);
+            let place = placement.to_output;
+            let plane = three_d::Plane::of(&scene, plan, (1920.0, 1080.0), &placement);
             // Its top left corner, and where one pixel across it and one down it go.
             let on_frame = [
                 (place.e - 960.0, place.f - 540.0),
@@ -760,8 +763,8 @@ mod tests {
             let scene =
                 three_d::Scene::at(sequence, Time::ZERO, (canvas.0 as usize, canvas.1 as usize));
             let (w, h) = (f64::from(size.0), f64::from(size.1));
-            let place = drawing.geometry(sequence, plan, Time::ZERO);
-            let plane = three_d::Plane::of(&scene, plan, (w, h), &place, Time::ZERO);
+            let placement = sequence.placement(plan, Time::ZERO);
+            let plane = three_d::Plane::of(&scene, plan, (w, h), &placement);
             let wanted = (from.0 * w, from.1 * h);
             match to {
                 Some(to) => {

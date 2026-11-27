@@ -501,7 +501,7 @@ impl Drawing {
         }
         let size = output_size(sequence.width, sequence.height, scale);
         let scene = three_d::Scene::at(sequence, at, size);
-        self.reach(sequence, plan, plan.clip.time_at(at), scale, Some(&scene))
+        self.reach(sequence, plan, at, scale, Some(&scene))
     }
 
     /// The numbers [`Drawing::input`] works out for a clip's picture, a generator's reaching as far
@@ -960,7 +960,11 @@ impl Drawing {
                 };
                 let time = shown.plan.clip.time_at(at);
                 let (pw, ph) = (f64::from(one.picture.w), f64::from(one.picture.h));
-                let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &one.to_output, time);
+                let placement = Placement {
+                    time,
+                    to_output: one.to_output,
+                };
+                let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &placement);
                 let height = size.1 as f64;
                 let deep = three_d::depth_of(&shown.plan, time, height);
                 let bevel = three_d::bevel_of(&shown.plan, time, height);
@@ -1076,7 +1080,11 @@ impl Drawing {
             })
         });
         let scene = &depth.scene;
-        let plane = three_d::Plane::of(scene, plan, (pw, ph), &ready.to_output, time);
+        let placement = Placement {
+            time,
+            to_output: ready.to_output,
+        };
+        let plane = three_d::Plane::of(scene, plan, (pw, ph), &placement);
         let smaller = three_d::read_smaller(scene, &plane, (pw, ph)).map(|by| {
             let (sw, sh) = three_d::smaller_size((pw, ph), by);
             let empty = frame.clear(sw as u32, sh as u32);
@@ -1220,7 +1228,7 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = clip.time_at(at);
-        let reach = self.reach(sequence, plan, time, scale, scene);
+        let reach = self.reach(sequence, plan, at, scale, scene);
         let shape = self.gpu_shape(sequence, plan, time, scale, reach);
         let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
         // Media that cannot be read draws nothing, as on the CPU.

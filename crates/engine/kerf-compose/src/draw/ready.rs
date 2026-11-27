@@ -8,8 +8,8 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct Ready {
     pub(super) picture: Arc<Image>,
-    /// Its pixels to output pixels.
-    pub(super) to_output: Affine,
+    /// The clip's own time then, and its picture's pixels to output pixels.
+    pub(super) placement: Placement,
     /// What its crop leaves of it, in its pixels.
     pub(super) crop: Option<Rect>,
     pub(super) opacity: f32,
@@ -70,7 +70,7 @@ impl Reach {
 }
 
 impl Drawing {
-    /// How far past its frame a generator in depth is drawn at clip time `time` and `scale`, so that
+    /// How far past its frame a generator in depth is drawn at sequence time `at` and `scale`, so that
     /// all of it that the camera of `scene` may see is drawn: as far as its own outline goes, cut where
     /// its crop cuts, and no further than the camera sees. All of its outline where its effects run on
     /// its picture, which is not to change as the camera moves, and where a light casts shadows, which
@@ -83,11 +83,12 @@ impl Drawing {
         &self,
         sequence: &SequencePlan,
         plan: &ClipPlan,
-        time: Time,
+        at: Time,
         scale: f64,
         scene: Option<&three_d::Scene>,
     ) -> Option<Reach> {
         let scene = scene.filter(|_| plan.three_d && !plan.letterboxed)?;
+        let time = plan.clip.time_at(at);
         let size = (plan.size.0 as usize, plan.size.1 as usize);
         let own = match &plan.source {
             Source::Title(title) => title_extent(title, size, time)?,
@@ -103,9 +104,8 @@ impl Drawing {
         }
         let (cw, ch) = output_size(sequence.width, sequence.height, scale);
         let kept = if plan.effects.is_empty() && !scene.casts_shadows() {
-            let place =
-                Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
-            let plane = three_d::Plane::of(scene, plan, (w, h), &place, time);
+            let placement = sequence.placement(plan, at).scaled(scale);
+            let plane = three_d::Plane::of(scene, plan, (w, h), &placement);
             let deep = three_d::depth_of(plan, time, ch as f64);
             three_d::seen_of(scene, &plane, deep, kept, SEEN_PAST)?
         } else {
@@ -150,7 +150,7 @@ impl Drawing {
         scene: Option<&three_d::Scene>,
     ) -> Option<Ready> {
         let plan = &shown.plan;
-        let reach = self.reach(sequence, plan, plan.clip.time_at(at), scale, scene);
+        let reach = self.reach(sequence, plan, at, scale, scene);
         let before = || self.before_pass(sequence, shown, (at, scale), size, reach);
         let mut ready = match self.share_of(sequence, shown, (at, scale), size, reach) {
             Some(share) => self.shared_ready(share, || {
@@ -163,7 +163,7 @@ impl Drawing {
         };
         if self.pass != Pass::Picture {
             let picture = Arc::make_mut(&mut ready.picture);
-            self.as_pass(sequence, plan, picture, &ready.to_output, (at, scale), size);
+            self.as_pass(sequence, plan, picture, &ready.placement, (at, scale), size);
         }
         Some(ready)
     }
@@ -233,7 +233,7 @@ impl Drawing {
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         Some(Ready {
             picture,
-            to_output,
+            placement: Placement { time, to_output },
             crop,
             opacity,
             share: None,

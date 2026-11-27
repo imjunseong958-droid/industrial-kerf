@@ -2,20 +2,66 @@
 //! here and placed by kerf-geom ([`Geometry::placed`]), which whatever draws over the picture
 //! asks as well, and then moved with each of its parents; and what its crop leaves of its
 //! picture, of a generator's that reaches past its frame as well.
+//!
+//! A clip lands somewhere at a moment, and the moment is part of the answer: a moment of its
+//! sequence is one of the clip's own time, which its numbers are read at, and each of its
+//! parents is read at its own. So when a clip is and where it is are worked out together and
+//! kept together ([`Placement`]), for what is drawn on the frame and what is lifted into depth
+//! alike.
 
 use super::*;
 
+/// A clip at a moment: when that is of the clip's own time, which its keyframes are read at,
+/// and where the pixels of a picture of it are on the output then. The two are one answer of a
+/// moment of the clip's sequence ([`SequencePlan::placement`]) and go about as one: a clip in
+/// depth is lifted from both at once ([`three_d::Plane::of`]), so that none is put where it is
+/// at one time and turned as it is at another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Placement {
+    pub(super) time: Time,
+    pub(super) to_output: Affine,
+}
+
+impl Placement {
+    /// The same moment, drawn at `scale` of what it was.
+    pub(super) fn scaled(self, scale: f64) -> Self {
+        self.with(Affine::scale(scale, scale).then_apply(&self.to_output))
+    }
+
+    /// The same moment, with a picture that `to_output` puts on the output: one made of the
+    /// clip's own, at another size or with more around it.
+    pub(super) fn with(self, to_output: Affine) -> Self {
+        Self { to_output, ..self }
+    }
+}
+
+impl SequencePlan {
+    /// The clip of `plan` at `at` of the sequence: its own time then, and where its source
+    /// pixels land on the canvas, in canvas pixels: cropped, fitted, scaled, flipped, rotated
+    /// about its anchor, and moved, as the graph places it, and then moved with each of its
+    /// parents, each as it is at that moment. Where its parents are in depth is not in this: a
+    /// clip in depth takes that where its plane is made ([`three_d::Plane::of`]), from the
+    /// scene.
+    pub(super) fn placement(&self, plan: &ClipPlan, at: Time) -> Placement {
+        let canvas = (f64::from(self.width), f64::from(self.height));
+        let time = plan.clip.time_at(at);
+        Placement {
+            time,
+            to_output: self
+                .moved_by_parents(&plan.clip, at)
+                .then_apply(&place(plan, canvas, time).0),
+        }
+    }
+}
+
 impl Drawing {
-    /// Where a clip's source pixels land on the canvas at clip time `time`,
-    /// in canvas pixels: cropped, fitted, scaled, flipped, rotated about
-    /// its anchor, and moved, as the graph places it, and then moved with each of its parents.
-    /// Where its parents are in depth is not in this: a clip in depth takes that where its
-    /// plane is made ([`three_d::Plane::of`]), from the scene.
+    /// Where a clip's source pixels land on the canvas at clip time `time`, in canvas pixels:
+    /// where it is at that moment of its sequence ([`SequencePlan::placement`]), for one who
+    /// has the clip's own time alone.
     pub(super) fn geometry(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time) -> Affine {
-        let canvas = (f64::from(sequence.width), f64::from(sequence.height));
         sequence
-            .moved_by_parents(&plan.clip, plan.clip.sequence_time(time))
-            .then_apply(&place(plan, canvas, time).0)
+            .placement(plan, plan.clip.sequence_time(time))
+            .to_output
     }
 }
 

@@ -98,13 +98,12 @@ pub struct World {
     pub flat: Vec<String>,
 }
 
-/// The clip of `plan` at clip time `time` in the world, where `to_output` puts it: a mesh,
-/// or a picture that `held` says where in its own pixels it is, and whether it fills that.
+/// The clip of `plan` in the world as `placement` has it: a mesh, or a picture that `held`
+/// says where in its own pixels it is, and whether it fills that.
 pub(in crate::draw) fn of(
     scene: &Scene,
     plan: &ClipPlan,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
     held: Option<(Rect, bool)>,
     fall: Option<f64>,
 ) -> InDepth {
@@ -117,7 +116,7 @@ pub(in crate::draw) fn of(
             triangles,
             closed,
             convex,
-        } = mesh::in_the_world(scene, plan, to_output, time);
+        } = mesh::in_the_world(scene, plan, placement);
         let corners: Vec<Vector> = points.iter().map(|point| times(*point, by)).collect();
         return InDepth {
             surface: surface(&clip, &corners, &triangles),
@@ -133,7 +132,8 @@ pub(in crate::draw) fn of(
         };
     };
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let front = Plane::of(scene, plan, size, to_output, time);
+    let time = placement.time;
+    let front = Plane::of(scene, plan, size, placement);
     let deep = depth_of(plan, time, scene.camera.height);
     let mut corners: Vec<Vector> = front.corners(rect).to_vec();
     let (mut sides, mut triangles) = (
