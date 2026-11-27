@@ -216,7 +216,7 @@ impl<F> GenerateRequest<F> {
         mut file: impl FnMut(F) -> Result<G, E>,
     ) -> Result<GenerateRequest<G>, E> {
         let optional = |said: Option<F>, file: &mut dyn FnMut(F) -> Result<G, E>| {
-            said.map(|said| file(said)).transpose()
+            said.map(&mut *file).transpose()
         };
         Ok(GenerateRequest {
             version: self.version,
