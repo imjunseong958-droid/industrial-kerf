@@ -440,6 +440,69 @@ fn a_url_to_import_is_refused_as_one() {
     );
 }
 
+/// `kerf --terminal <media>` with no API key imports the file and ends well, saying no agent
+/// session started, so a script can import with no editor and no key. With `-p` there is an
+/// instruction no agent carried out, and that fails.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
+fn a_media_is_imported_from_a_terminal_with_no_api_key() {
+    let Some(kerfd) = kerfd() else {
+        return;
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    std::fs::write(directory.join("project.kerf"), DOCUMENT).unwrap();
+    let shot = directory.join("shot.mp4");
+    let made = Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("color=c=gray:s=64x36:r=24:d=1")
+        .args(["-c:v", "mpeg4", "-pix_fmt", "yuv420p", "-y"])
+        .arg(&shot)
+        .output()
+        .expect("ffmpeg runs");
+    assert!(made.status.success(), "{made:?}");
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).unwrap();
+    let _held = runtime.hold();
+    // No key in the environment, and none in the settings of whoever runs the tests.
+    let run = |words: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .env("HOME", directory)
+            .env("USERPROFILE", directory)
+            .env("KERF_MODELS", directory.join("models.json"))
+            .arg("--terminal")
+            .arg("--dir")
+            .arg(directory)
+            .arg("--kerfd")
+            .arg(&kerfd)
+            .args(words)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("kerf runs");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            output.status.success(),
+        )
+    };
+
+    let (imported, said, ok) = run(&["shot.mp4"]);
+    assert!(ok, "{said}");
+    assert!(imported.starts_with("imported "), "{imported}");
+    assert!(imported.trim_end().ends_with("shot.mp4"), "{imported}");
+    assert!(said.contains("no agent session started"), "{said}");
+    let document = runtime.get_state().unwrap().document;
+    assert!(document.contains("path=\"shot.mp4\""), "{document}");
+
+    let (_, said, ok) = run(&["shot.mp4", "-p", "trim the first clip to two seconds"]);
+    assert!(!ok);
+    assert!(said.contains("kerf: no API key configured"), "{said}");
+}
+
 /// A server `.kerf/mcp.json` configures runs as Kerf's sidecars do. A SIGTERM that ends `kerf`
 /// while it waits on one ends the server too, and what its launcher started; and what the server
 /// started in a session of its own, out of reach of that, does not hold `kerf`'s stderr open.

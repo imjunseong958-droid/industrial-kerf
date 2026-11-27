@@ -458,6 +458,13 @@ fn run() -> Result<()> {
     let router = open_router(&directory, args.kerfd.as_deref())?;
     let llm = resolve_llm(&args)?;
     if llm.api_key.is_none() {
+        // The media is in the project: with no instruction to carry out, that is done.
+        if args.media.is_some() && args.prompt.is_none() {
+            eprintln!(
+                "no agent session started: no API key configured; set ANTHROPIC_API_KEY or OPENAI_API_KEY, or pass --key"
+            );
+            return Ok(());
+        }
         if args.prompt.is_some() || args.terminal || inbound_mcp_enabled {
             bail!("no API key configured; set ANTHROPIC_API_KEY or OPENAI_API_KEY, or pass --key");
         }

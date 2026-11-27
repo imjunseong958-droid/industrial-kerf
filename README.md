@@ -181,7 +181,10 @@ target/release/kerf --terminal --dir ./my-project --mcp-tools -p "use the connec
 
 In editor mode, `kerf` imports a local media file before opening the
 native window; in a project with a `media/` folder, or a shared one, the
-file is copied into `media/` first, as the editor's import does. `kerf`
+file is copied into `media/` first, as the editor's import does. With
+`--terminal` it imports the file and starts the terminal agent; with no API
+key it imports the file, says no agent session started, and exits 0 (with
+`-p` and no key it fails, since the instruction was not carried out). `kerf`
 does not download a URL: download it first and pass the file. The terminal
 workflow, `kerf preset`, `kerf sync`,
 and a media import use the current directory unless `--dir` or
