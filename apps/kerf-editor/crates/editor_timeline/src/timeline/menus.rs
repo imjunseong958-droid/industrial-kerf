@@ -127,7 +127,8 @@ impl TimelineView {
         item
     }
 
-    /// A clip's menu: Ask Kerf…, the edits on it, Focus Region…,
+    /// A clip's menu: Ask Kerf…, the edits on it, Attach to Its Shot or
+    /// Detach, Focus Region…,
     /// Start Motion Path where it can take one, and for a shot made from
     /// steps Open Graph, or Carry Steps into the Document… while its
     /// steps are still in a recipe file.
@@ -158,6 +159,27 @@ impl TimelineView {
         items.push(self.command_item("clip.delete", "Delete", &states, cx));
         items.push(self.command_item("clip.rippleDelete", "Ripple Delete", &states, cx));
         items.push(self.command_item("clip.extract", "Extract", &states, cx));
+        // One that follows a clip can let go, and one off the shots' own track can follow
+        // its shot.
+        let on_shots_track = self
+            .session
+            .read(cx)
+            .timeline()
+            .tracks
+            .iter()
+            .find(|track| track.kind == TrackKind::Video)
+            .is_some_and(|track| track.id == lane.id);
+        if clip.clip.follows.is_some() {
+            items.push(
+                self.command_item("clip.detach", "Detach", &states, cx)
+                    .separated(),
+            );
+        } else if !on_shots_track {
+            items.push(
+                self.command_item("clip.attach", "Attach to Its Shot", &states, cx)
+                    .separated(),
+            );
+        }
         items.push(
             self.command_item("clip.focusRegion", "Focus Region…", &states, cx)
                 .separated(),

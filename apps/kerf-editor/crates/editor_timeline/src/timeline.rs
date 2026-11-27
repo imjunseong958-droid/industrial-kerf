@@ -26,6 +26,12 @@
 //! track's (Sync lock, heights); a double-click on a clip of a shot made
 //! from steps opens its graph.
 //!
+//! A clip that follows another (a title its shot, music a scene's first
+//! shot) is joined to it by a line from where it starts, with a dot on the
+//! clip it follows: it moves when that one moves, and ripple edits pass
+//! under it. A clip's menu has it follow its shot, the clip of the first
+//! video track where it starts, or lets it go.
+//!
 //! The program stays editable while proposals are open: each open proposal
 //! has a band on the ruler ("Proposal · author"), a veil over the lanes it
 //! changes, and the program's clips it changes are outlined in sage. While

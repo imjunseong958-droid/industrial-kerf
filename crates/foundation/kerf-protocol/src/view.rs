@@ -274,6 +274,10 @@ pub struct ViewClip {
     /// The clip it is placed relative to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// The clip it follows in time: it moves when that one moves, and ripple
+    /// edits pass under it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follows: Option<String>,
     /// Where in its source it starts and ends, in seconds; media and nested
     /// sequence clips only, as are `speed` and `speedRatio`.
     #[serde(rename = "in", skip_serializing_if = "Option::is_none")]

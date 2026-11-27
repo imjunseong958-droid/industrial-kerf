@@ -362,6 +362,7 @@ fn paint_lanes(
     let lanes = &*frame.lanes;
     paint_grounds(frame, pen, width, height, window);
     paint_rows(frame, pen, width, height, fonts, window, cx);
+    paint_tethers(frame, pen, width, height, window);
     paint_moved(frame, pen, width, fonts, window, cx);
     if let Some(time) = frame.snapped {
         let x = view.x(time).floor();
@@ -490,6 +491,68 @@ fn paint_rows(
         }
         for &(start, end) in &row.transitions {
             paint_transition(view, pen, width, row, y, start, end, window);
+        }
+    }
+}
+
+/// From each clip that follows another to the one it follows: a line from where the
+/// follower starts, across the lanes between them, to a dot on the followed clip. Where the
+/// follower starts before or after that clip, the line runs along the clip's lane to its
+/// nearer end.
+fn paint_tethers(frame: &Frame, pen: Pen, width: f32, height: f32, window: &mut Window) {
+    let view = &frame.view;
+    let lanes = &*frame.lanes;
+    let ink = theme::with_alpha(theme::ink(), 0.5);
+    for row in &lanes.rows {
+        for clip in &row.clips {
+            let Some(followed) = clip.clip.follows.as_deref() else {
+                continue;
+            };
+            let Some((lead_row, lead)) = lanes.rows.iter().find_map(|other| {
+                let lead = other.clips.iter().find(|lead| lead.id == followed)?;
+                Some((other, lead))
+            }) else {
+                continue;
+            };
+            let (y, lead_y) = (view.row_y(row), view.row_y(lead_row));
+            if y == lead_y {
+                continue;
+            }
+            // From the follower's edge that faces the followed clip, to that clip's edge
+            // that faces the follower.
+            let (from, to) = if y < lead_y {
+                (y + row.height - CLIP_INSET, lead_y + CLIP_INSET)
+            } else {
+                (y + CLIP_INSET, lead_y + lead_row.height - CLIP_INSET)
+            };
+            let (top, bottom) = (from.min(to).max(layout::RULER), from.max(to).min(height));
+            let x = view.x(clip.start).floor();
+            // Where on the followed clip the line ends: under the follower's start, or at
+            // the end of the clip nearer to it.
+            let (lead_x0, lead_x1) = (view.x(lead.start), view.x(lead.end()));
+            let end_x = x.clamp(lead_x0.floor(), (lead_x1 - 1.0).max(lead_x0).floor());
+            if bottom <= top || (x < 0.0 && end_x < 0.0) || (x > width && end_x > width) {
+                continue;
+            }
+            if (0.0..width).contains(&x) {
+                window.paint_quad(fill(pen.rect(x, top, 1.0, bottom - top), ink));
+            }
+            if end_x != x {
+                let (left, right) = (x.min(end_x).max(0.0), x.max(end_x).min(width));
+                if right > left && (layout::RULER..height).contains(&to) {
+                    window.paint_quad(fill(pen.rect(left, to, right - left + 1.0, 1.0), ink));
+                }
+            }
+            if (0.0..width).contains(&end_x) && (layout::RULER..height).contains(&to) {
+                window.paint_quad(quad(
+                    pen.rect(end_x - 2.0, to - 2.0, 5.0, 5.0),
+                    px(2.5),
+                    theme::ink(),
+                    px(0.0),
+                    gpui::transparent_black(),
+                    BorderStyle::Solid,
+                ));
+            }
         }
     }
 }
