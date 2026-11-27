@@ -1,11 +1,12 @@
 //! The elements of a project that merge by id, as flat lists in document
 //! order, and the markers and tracks their parameters name.
 
+use super::Conflict;
 use kerf_model::{
     Catalog, Clip, Content, Effect, Id, Marker, Media, Param, ParamDef, ParamType, Params, Project,
-    Sequence, Track, Transition, Value,
+    Sequence, Time, Track, Transition, Value,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 /// A clip or transition with the sequence and track it sits on.
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +29,156 @@ impl<T> Placed<T> {
     pub(super) fn path(id: &Id, placed: &Self) -> String {
         format!("{}/{}/{id}", placed.sequence, placed.track)
     }
+}
+
+/// Where a clip is, as the merge compares it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum At {
+    /// It starts then.
+    Start(Time),
+    /// It follows that clip, so long after it starts (before it, when negative), as its line in
+    /// the document says: an edit that took it along with that clip has not changed it.
+    After(Id, Time),
+}
+
+/// A clip as the merge compares it: where it is, and the rest of it.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Written {
+    pub(super) at: At,
+    /// Its start is zero, and when `at` says what it follows, it follows nothing here.
+    pub(super) placed: Placed<Clip>,
+}
+
+impl Written {
+    fn new(placed: &Placed<Clip>, at: At) -> Self {
+        let mut placed = placed.clone();
+        placed.item.start = Time::ZERO;
+        if let At::After(..) = at {
+            placed.item.follows = None;
+        }
+        Self { at, placed }
+    }
+
+    /// `s1/V1/c3`.
+    pub(super) fn path(id: &Id, written: &Self) -> String {
+        Placed::path(id, &written.placed)
+    }
+}
+
+/// The clips of each side as the merge compares them. A clip that follows the same clip on
+/// every side that has it, a clip of its sequence on each, is where it is by its distance
+/// from that one; any other by its start.
+pub(super) fn written(sides: [&Flat; 3]) -> [Vec<(Id, Written)>; 3] {
+    let clips = sides.map(Flat::clips_by_id);
+    let followed = |id: &Id| {
+        let mut versions = clips.iter().filter_map(|side| Some((side, *side.get(id)?)));
+        let (_, first) = versions.clone().next()?;
+        let followed = first.item.follows.as_ref()?;
+        versions
+            .all(|(side, placed)| {
+                placed.item.follows.as_ref() == Some(followed)
+                    && side
+                        .get(followed)
+                        .is_some_and(|other| other.sequence == placed.sequence)
+            })
+            .then_some(followed)
+    };
+    std::array::from_fn(|side| {
+        sides[side]
+            .clips
+            .iter()
+            .map(|(id, placed)| {
+                let start = placed.item.start;
+                let at = match followed(id)
+                    .and_then(|followed| Some((followed, clips[side].get(followed)?)))
+                {
+                    Some((followed, other)) => {
+                        At::After(followed.clone(), start - other.item.start)
+                    }
+                    None => At::Start(start),
+                };
+                (id.clone(), Written::new(placed, at))
+            })
+            .collect()
+    })
+}
+
+/// The merged clips where they are. One merged by its distance from the clip it follows is
+/// that far from where that one is now, those that are themselves followed placed first;
+/// when that one is not in its sequence after the merge, from where it is on the side that
+/// has it, ours first. One that would then start before its sequence starts with it.
+pub(super) fn place(
+    merged: Vec<(Id, Written)>,
+    [ours, theirs, base]: [&Flat; 3],
+    conflicts: &mut Vec<Conflict>,
+) -> Vec<(Id, Placed<Clip>)> {
+    let sides = [ours, theirs, base].map(Flat::clips_by_id);
+    let was = |id: &Id| {
+        sides
+            .iter()
+            .find_map(|side| side.get(id))
+            .map_or(Time::ZERO, |placed| placed.item.start)
+    };
+    let by_id: HashMap<&Id, &Written> = merged.iter().map(|(id, written)| (id, written)).collect();
+    let mut starts: HashMap<&Id, Time> = HashMap::new();
+    for (id, _) in &merged {
+        // This clip and those it follows, each the distance from the next, up to one whose
+        // start is known.
+        let mut chain: Vec<(&Id, Time)> = Vec::new();
+        let mut at = id;
+        let mut start = loop {
+            if let Some(&start) = starts.get(at) {
+                break start;
+            }
+            let written = by_id[at];
+            let (followed, distance) = match &written.at {
+                At::Start(start) => {
+                    starts.insert(at, *start);
+                    break *start;
+                }
+                At::After(followed, distance) => (followed, *distance),
+            };
+            chain.push((at, distance));
+            let next = by_id.get(followed).is_some_and(|next| {
+                next.placed.sequence == written.placed.sequence
+                    && chain.iter().all(|(clip, _)| *clip != followed)
+            });
+            if !next {
+                break was(followed);
+            }
+            at = followed;
+        };
+        for (clip, distance) in chain.into_iter().rev() {
+            start += distance;
+            starts.insert(clip, start);
+        }
+    }
+    let starts: HashMap<Id, Time> = starts
+        .into_iter()
+        .map(|(id, start)| (id.clone(), start))
+        .collect();
+    merged
+        .into_iter()
+        .map(|(id, written)| {
+            let mut placed = written.placed;
+            let start = starts[&id];
+            placed.item.start = start.max(Time::ZERO);
+            if let At::After(followed, _) = written.at {
+                if start.is_negative() {
+                    conflicts.push(Conflict {
+                        path: Placed::path(&id, &placed),
+                        what: format!(
+                            "its distance from {followed} and where {followed} is now put it \
+                             before the sequence; starts with it"
+                        ),
+                        kept: "ours",
+                    });
+                }
+                placed.item.follows = Some(followed);
+            }
+            (id, placed)
+        })
+        .collect()
 }
 
 /// A project as lists of elements keyed by identity, in document order.
@@ -88,6 +239,11 @@ impl Flat {
             );
         }
         flat
+    }
+
+    /// Its clips by id.
+    pub(super) fn clips_by_id(&self) -> HashMap<&Id, &Placed<Clip>> {
+        self.clips.iter().map(|(id, placed)| (id, placed)).collect()
     }
 
     /// The project these elements make: clips in start order, markers in

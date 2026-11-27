@@ -1,9 +1,9 @@
 //! Three-way merges: of one field, of one kind of element by key, and of
 //! the fields of media, sequences, tracks, and clips.
 
-use super::elements::Placed;
+use super::elements::{At, Placed, Written};
 use super::Conflict;
-use kerf_model::{Clip, Id, Media, Sequence, Track};
+use kerf_model::{Clip, Id, Media, Sequence, Time, Track};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// One field merged three ways: the side that changed it, or ours when both
@@ -247,16 +247,27 @@ pub(super) fn merge_track(
     }
 }
 
+/// A clip's fields merged three ways. Where it is merges as its distance from the clip it
+/// follows when that is how all three say where it is, and else as its start.
 pub(super) fn merge_clip(
-    base: &Placed<Clip>,
-    ours: &Placed<Clip>,
-    theirs: &Placed<Clip>,
+    base: &Written,
+    ours: &Written,
+    theirs: &Written,
     clashes: &mut Vec<String>,
-) -> Placed<Clip> {
-    let place = |placed: &Placed<Clip>| (placed.sequence.clone(), placed.track.clone());
+) -> Written {
+    let place = |written: &Written| {
+        (
+            written.placed.sequence.clone(),
+            written.placed.track.clone(),
+        )
+    };
     let (sequence, track) = pick("track", &place(base), &place(ours), &place(theirs), clashes);
-    let (b, o, t) = (&base.item, &ours.item, &theirs.item);
-    let start = pick("start", &b.start, &o.start, &t.start, clashes);
+    let (b, o, t) = (&base.placed.item, &ours.placed.item, &theirs.placed.item);
+    let at_name = match &base.at {
+        At::After(followed, _) => format!("distance from {followed}"),
+        At::Start(_) => start_name(b.follows.as_ref(), o.follows.as_ref(), t.follows.as_ref()),
+    };
+    let at = pick(&at_name, &base.at, &ours.at, &theirs.at, clashes);
     let duration = pick("duration", &b.duration, &o.duration, &t.duration, clashes);
     let content = pick("content", &b.content, &o.content, &t.content, clashes);
     let enabled = pick("enabled", &b.enabled, &o.enabled, &t.enabled, clashes);
@@ -299,24 +310,47 @@ pub(super) fn merge_clip(
     let retime = pick("retime", &b.retime, &o.retime, &t.retime, clashes);
     let angle = pick("angle", &b.angle, &o.angle, &t.angle, clashes);
     let effects = pick("effects", &b.effects, &o.effects, &t.effects, clashes);
-    Placed {
-        sequence,
-        track,
-        item: Clip {
-            id: o.id.clone(),
-            start,
-            duration,
-            content,
-            enabled,
-            name,
-            parent,
-            follows,
-            retime,
-            angle,
-            link,
-            props,
-            masks,
-            effects,
+    Written {
+        at,
+        placed: Placed {
+            sequence,
+            track,
+            item: Clip {
+                id: o.id.clone(),
+                start: Time::ZERO,
+                duration,
+                content,
+                enabled,
+                name,
+                parent,
+                follows,
+                retime,
+                angle,
+                link,
+                props,
+                masks,
+                effects,
+            },
         },
     }
+}
+
+/// The name of a clip's start, merged as a time, for a clash: with what the sides make it
+/// follow when they differ, which is why it is not merged as a distance.
+fn start_name(base: Option<&Id>, ours: Option<&Id>, theirs: Option<&Id>) -> String {
+    let clip = |id: Option<&Id>| id.map_or_else(|| "nothing".to_owned(), Id::to_string);
+    let why = match (base, ours, theirs) {
+        _ if base == ours && ours == theirs => return "start".to_owned(),
+        (Some(was), None, None) => format!("detached from {was} on both sides"),
+        (Some(was), None, _) if theirs == base => format!("detached from {was} here"),
+        (Some(was), _, None) if ours == base => format!("detached from {was} there"),
+        (None, Some(now), _) if ours == theirs => format!("attached to {now} on both sides"),
+        (None, Some(now), None) => format!("attached to {now} here"),
+        (None, None, Some(now)) => format!("attached to {now} there"),
+        _ if ours == theirs => {
+            format!("following {} on both sides, not {}", clip(ours), clip(base))
+        }
+        _ => format!("following {} here, {} there", clip(ours), clip(theirs)),
+    };
+    format!("start ({why})")
 }

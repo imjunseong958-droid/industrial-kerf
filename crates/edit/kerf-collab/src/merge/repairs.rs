@@ -1,6 +1,6 @@
 //! Repairs to what the merge kept: what one side removed and the other
-//! still uses comes back, clips that overlap move to a free track, and
-//! transitions follow their clips or go.
+//! still uses comes back, clips follow clips of their sequence, clips that
+//! overlap move to a free track, and transitions follow their clips or go.
 
 use super::collisions::prefix;
 use super::elements::{clip_reads, landings, track_reads, Flat, Placed};
@@ -256,6 +256,130 @@ fn put_back_contents(
         }
     }
     restored
+}
+
+/// Have every clip that follows another follow a clip of its sequence, and none follow itself
+/// through others, each staying where it is. One whose clip one side removed follows another
+/// as the edit that removed it would have it: the clip of the track that one was on that is
+/// where it started, or failing one the next after, or the last; with none, nothing. Of clips
+/// that follow one another round, each side having made one of them follow the next, the
+/// first by id that does not follow what it does in ours follows that instead, or nothing.
+pub(super) fn repair_follows(
+    project: &mut Project,
+    sides: [&Flat; 3],
+    conflicts: &mut Vec<Conflict>,
+) {
+    let sides = sides.map(Flat::clips_by_id);
+    let ours = &sides[0];
+    let ours_follows = |id: &Id| ours.get(id).and_then(|placed| placed.item.follows.clone());
+    for sequence in &mut project.sequences {
+        let mut follows: HashMap<Id, Option<Id>> = sequence
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .map(|clip| (clip.id.clone(), clip.follows.clone()))
+            .collect();
+        let mut changes: Vec<(Id, String, &'static str)> = Vec::new();
+        let mut orphans: Vec<(Id, Id)> = follows
+            .iter()
+            .filter_map(|(clip, followed)| {
+                let followed = followed.as_ref()?;
+                (!follows.contains_key(followed)).then(|| (clip.clone(), followed.clone()))
+            })
+            .collect();
+        orphans.sort();
+        for (clip, gone) in orphans {
+            let was = sides
+                .iter()
+                .find_map(|side| side.get(&gone).filter(|was| was.sequence == sequence.id));
+            let stand_in = was
+                .and_then(|was| {
+                    let track = sequence.track(was.track.as_str())?;
+                    let others = || track.clips.iter().filter(|other| other.id != clip);
+                    others()
+                        .find(|other| other.end() > was.item.start)
+                        .or_else(|| others().next_back())
+                        .map(|other| other.id.clone())
+                })
+                .filter(|other| !reaches(&follows, other, &clip));
+            let what = format!(
+                "follows {} now: {gone} is gone",
+                stand_in.as_ref().map_or("nothing", Id::as_str)
+            );
+            // Ours has it there: theirs removed it.
+            let ours_had = ours
+                .get(&gone)
+                .is_some_and(|was| was.sequence == sequence.id);
+            follows.insert(clip.clone(), stand_in);
+            changes.push((clip, what, if ours_had { "theirs" } else { "ours" }));
+        }
+        let mut ids: Vec<Id> = follows.keys().cloned().collect();
+        ids.sort();
+        for clip in ids {
+            let Some(followed) = follows[&clip].clone() else {
+                continue;
+            };
+            if !reaches(&follows, &followed, &clip) {
+                continue;
+            }
+            let mut round = vec![clip.clone()];
+            let mut at = followed;
+            while at != clip {
+                let next = follows[&at].clone();
+                round.push(at);
+                at = next.expect("a clip that follows itself through others follows one");
+            }
+            round.sort();
+            let undone = round
+                .iter()
+                .find(|id| follows[*id] != ours_follows(id))
+                .unwrap_or(&clip)
+                .clone();
+            let was = follows.insert(undone.clone(), None).flatten();
+            let to = ours_follows(&undone)
+                .filter(|to| follows.contains_key(to) && !reaches(&follows, to, &undone));
+            let what = format!(
+                "followed {}, which follows it; follows {} now",
+                was.as_ref().map_or("nothing", Id::as_str),
+                to.as_ref().map_or("nothing", Id::as_str)
+            );
+            follows.insert(undone.clone(), to);
+            changes.push((undone, what, "ours"));
+        }
+        for track in &mut sequence.tracks {
+            for clip in &mut track.clips {
+                if let Some(followed) = follows.remove(&clip.id) {
+                    clip.follows = followed;
+                }
+            }
+        }
+        for (clip, what, kept) in changes {
+            let track = sequence
+                .tracks
+                .iter()
+                .find(|track| track.clip(clip.as_str()).is_some())
+                .map_or("", |track| track.id.as_str());
+            conflicts.push(Conflict {
+                path: format!("{}/{track}/{clip}", sequence.id),
+                what,
+                kept,
+            });
+        }
+    }
+}
+
+/// Whether the clips each follows lead from `from` to `to`.
+fn reaches(follows: &HashMap<Id, Option<Id>>, from: &Id, to: &Id) -> bool {
+    let mut at = Some(from);
+    // More steps than clips go round without coming to it.
+    for _ in 0..=follows.len() {
+        match at {
+            Some(id) if id == to => return true,
+            Some(id) => at = follows.get(id).and_then(Option::as_ref),
+            None => return false,
+        }
+    }
+    false
 }
 
 /// Move clips that overlap on a track after merging, each side having put
