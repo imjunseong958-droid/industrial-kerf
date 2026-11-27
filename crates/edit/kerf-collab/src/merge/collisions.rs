@@ -124,6 +124,9 @@ impl Renames {
                     if let Some(link) = &mut clip.link {
                         rename(link);
                     }
+                    if let Some(followed) = &mut clip.follows {
+                        rename(followed);
+                    }
                     match &mut clip.content {
                         Content::Media { media, .. } => rename(media),
                         Content::Sequence { sequence, .. } => rename(sequence),

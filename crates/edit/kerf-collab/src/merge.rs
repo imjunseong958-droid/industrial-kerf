@@ -12,10 +12,10 @@ mod summary;
 mod three_way;
 
 use collisions::rename_collisions;
-use elements::{Flat, Placed};
+use elements::{place, written, Flat, Placed, Written};
 use kerf_lang::{parse_document, print_document, PrintOptions};
 use kerf_model::{Catalog, Diagnostic, Id, Project};
-use repairs::{repair_transitions, restore, separate_overlaps};
+use repairs::{repair_follows, repair_transitions, restore, separate_overlaps};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use three_way::{
@@ -95,6 +95,7 @@ pub fn merge_projects(
     let mut renamed_theirs = theirs.clone();
     let renamed = rename_collisions(base, ours, &mut renamed_theirs, catalog);
     let (b, o, t) = (Flat::of(base), Flat::of(ours), Flat::of(&renamed_theirs));
+    let [base_clips, ours_clips, theirs_clips] = written([&b, &o, &t]);
     let mut conflicts = Vec::new();
     let mut clashes = Vec::new();
     let name = pick("name", &base.name, &ours.name, &theirs.name, &mut clashes);
@@ -124,12 +125,15 @@ pub fn merge_projects(
             |(sequence, track), _| format!("{sequence}/{track}"),
             &mut conflicts,
         ),
-        clips: merge_list(
-            [&b.clips, &o.clips, &t.clips],
-            merge_clip,
-            Placed::path,
-            &mut conflicts,
-        ),
+        clips: {
+            let merged = merge_list(
+                [&base_clips, &ours_clips, &theirs_clips],
+                merge_clip,
+                Written::path,
+                &mut conflicts,
+            );
+            place(merged, [&o, &t, &b], &mut conflicts)
+        },
         transitions: merge_list(
             [&b.transitions, &o.transitions, &t.transitions],
             whole,
@@ -145,6 +149,7 @@ pub fn merge_projects(
     };
     restore(&mut flat, &o, &t, catalog, &mut conflicts);
     let mut project = flat.build(name)?;
+    repair_follows(&mut project, [&o, &t, &b], &mut conflicts);
     let mut track_ids: HashMap<Id, Vec<Id>> = HashMap::new();
     for ((sequence, track), _) in b.tracks.iter().chain(&o.tracks).chain(&t.tracks) {
         track_ids

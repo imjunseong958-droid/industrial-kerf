@@ -179,6 +179,39 @@ fn edits_made_at_the_same_time_on_two_machines_both_survive_a_sync() {
 }
 
 #[test]
+fn a_title_moved_on_its_shot_on_one_machine_stays_on_the_shot_moved_on_the_other() {
+    let team = team("follow");
+    let alice = daemon(&team.alice);
+    let bob = daemon(&team.bob);
+    edit(
+        &alice,
+        "a1",
+        "track add V1 video\ntrack add V2 video\n\
+         overwrite gen=solid@1 at=0f dur=96f on=V1 as=shot\n\
+         overwrite gen=title@1 at=12f dur=24f on=V2 as=title\n\
+         attach title to=shot",
+    );
+    sync(&team.alice, &alice, "sync-a1");
+    sync(&team.bob, &bob, "sync-b1");
+
+    edit(&alice, "a2", "move shot by=24f");
+    sync(&team.alice, &alice, "sync-a2");
+    // Bob moved the title along the shot before he saw Alice move the shot.
+    edit(&bob, "b2", "move title by=6f");
+    let report = sync(&team.bob, &bob, "sync-b2");
+    assert_eq!(report["conflicts"], serde_json::json!([]), "{report}");
+    let document = bob.get_state().unwrap().document;
+    assert!(
+        document.contains("clip shot gen=solid@1 at=00:00:01:00 "),
+        "{document}"
+    );
+    assert!(
+        document.contains("clip title gen=title@1 at=shot.start+18f "),
+        "{document}"
+    );
+}
+
+#[test]
 fn a_sync_with_nothing_new_changes_nothing() {
     let team = team("idle");
     let alice = daemon(&team.alice);

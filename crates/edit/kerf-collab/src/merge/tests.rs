@@ -735,3 +735,288 @@ fn a_merge_that_cannot_be_valid_says_why() {
     let error = merge_documents(BASE, "kerf 1\nclip\n", BASE, Catalog::builtin()).unwrap_err();
     assert!(error.starts_with("ours does not parse"), "{error}");
 }
+
+/// A title on a track of its own over `c2`, which it follows, 12 frames in.
+const TITLE: &str = "    clip t1 media=m2 src=00:05:00:00 at=c2.start+12f dur=00:00:01:00\n";
+const T1_AT: &str = "at=c2.start+12f";
+const C2_AT: &str = "c2 media=m2 src=00:01:00:00 at=01:00:04:00";
+/// `c2` a second later, and its title with it.
+const C2_MOVED: (&str, &str) = (C2_AT, "c2 media=m2 src=00:01:00:00 at=01:00:05:00");
+
+/// BASE with `TITLE` on V2.
+fn titled() -> String {
+    edit(
+        BASE,
+        &[(
+            "  track A1 audio\n",
+            &format!("  track V2 video\n{TITLE}  track A1 audio\n"),
+        )],
+    )
+}
+
+#[test]
+fn a_title_nudged_on_one_side_stays_on_its_shot_moved_on_the_other() {
+    let base = titled();
+    let nudged = (T1_AT, "at=c2.start+18f");
+    let ours = edit(&base, &[C2_MOVED]);
+    let theirs = edit(&base, &[nudged]);
+    for (ours, theirs) in [(&ours, &theirs), (&theirs, &ours)] {
+        let merged = merge(&base, ours, theirs);
+        assert_eq!(merged.text, edit(&base, &[C2_MOVED, nudged]));
+        assert_eq!(merged.conflicts, vec![]);
+    }
+    // Both moving it on the shot, differently, clash on how far into the shot it is.
+    let ours = edit(&ours, &[(T1_AT, "at=c2.start+6f")]);
+    let merged = merge(&base, &ours, &theirs);
+    assert_eq!(merged.text, ours);
+    assert_eq!(
+        merged.conflicts,
+        vec![conflict(
+            "s1/V2/t1",
+            "distance from c2 changed on both sides",
+            "ours"
+        )]
+    );
+    // When the shot follows another, ours moving that one and theirs nudging the shot on it
+    // put the shot where both moves do, and the title on it.
+    let base = edit(
+        &base,
+        &[(C2_AT, "c2 media=m2 src=00:01:00:00 at=c1.start+96f")],
+    );
+    let moved = [
+        (
+            C1,
+            "clip c1 media=m1 src=00:00:10:00 at=01:00:01:00 dur=00:00:04:00",
+        ),
+        (
+            "a1 media=m1 src=00:00:10:00 at=01:00:00:00",
+            "a1 media=m1 src=00:00:10:00 at=01:00:01:00",
+        ),
+    ];
+    let nudged = ("at=c1.start+96f", "at=c1.start+102f");
+    let merged = merge(&base, &edit(&base, &moved), &edit(&base, &[nudged]));
+    assert_eq!(merged.text, edit(&edit(&base, &moved), &[nudged]));
+    assert_eq!(merged.conflicts, vec![]);
+}
+
+#[test]
+fn a_title_one_side_detached_merges_by_its_start_and_says_so() {
+    let base = titled();
+    // Detached where it is, while theirs moves the shot and the title with it: it goes along.
+    let detached = edit(&base, &[(T1_AT, "at=01:00:04:12")]);
+    let merged = merge(&base, &detached, &edit(&base, &[C2_MOVED]));
+    assert_eq!(
+        merged.text,
+        edit(&base, &[C2_MOVED, (T1_AT, "at=01:00:05:12")])
+    );
+    assert_eq!(merged.conflicts, vec![]);
+    // Detached and moved here, nudged there: the starts clash.
+    let moved = edit(&base, &[(T1_AT, "at=01:00:06:00")]);
+    let merged = merge(&base, &moved, &edit(&base, &[(T1_AT, "at=c2.start+18f")]));
+    assert_eq!(merged.text, moved);
+    assert_eq!(
+        merged.conflicts,
+        vec![conflict(
+            "s1/V2/t1",
+            "start (detached from c2 here) changed on both sides",
+            "ours"
+        )]
+    );
+}
+
+#[test]
+fn a_title_on_a_shot_the_other_side_removed_follows_the_clip_in_its_place() {
+    let base = titled();
+    let second = "    clip t2 media=m2 src=00:06:00:00 at=c2.start+48f dur=00:00:01:00\n";
+    let ours = edit(&base, &[(TITLE, &format!("{TITLE}{second}"))]);
+    // Theirs deletes c2, and its title follows the last clip of the track, as the edit has it.
+    let retire = ("project name=\"Film\"", "project name=\"Film\" retired=c2");
+    let theirs = edit(&base, &[retire, (C2, ""), (T1_AT, "at=c1.start+108f")]);
+    let merged = merge(&base, &ours, &theirs);
+    let second = second.replace(
+        "t2 media=m2 src=00:06:00:00 at=c2.start+48f",
+        "t2 media=m2 src=00:06:00:00 at=c1.start+144f",
+    );
+    assert_eq!(
+        merged.text,
+        edit(
+            &theirs,
+            &[(
+                "at=c1.start+108f dur=00:00:01:00\n",
+                &format!("at=c1.start+108f dur=00:00:01:00\n{second}")
+            )]
+        )
+    );
+    assert_eq!(
+        merged.conflicts,
+        vec![conflict("s1/V2/t2", "follows c1 now: c2 is gone", "theirs")]
+    );
+}
+
+#[test]
+fn clips_each_side_had_follow_the_other_do_not_follow_each_other() {
+    let ours = titled();
+    let base = edit(&ours, &[(T1_AT, "at=01:00:04:12")]);
+    let theirs = edit(
+        &base,
+        &[(C2_AT, "c2 media=m2 src=00:01:00:00 at=t1.start-12f")],
+    );
+    let merged = merge(&base, &ours, &theirs);
+    assert_eq!(merged.text, ours);
+    assert_eq!(
+        merged.conflicts,
+        vec![conflict(
+            "s1/V1/c2",
+            "followed t1, which follows it; follows nothing now",
+            "ours"
+        )]
+    );
+}
+
+#[test]
+fn a_title_following_a_clip_renamed_for_a_collision_follows_it_by_its_new_id() {
+    let shot = |media: &str, at: &str| {
+        format!("dur=00:00:03:00\n    clip c3 media={media} src=00:02:00:00 at=01:00:{at}:00 dur=00:00:02:00\n")
+    };
+    let ours = edit(BASE, &[(C2_END, &shot("m1", "07"))]);
+    let title = |shot: &str| {
+        format!("  track V2 video\n    clip t1 media=m2 src=00:05:00:00 at={shot}.start dur=00:00:01:00\n  track A1 audio\n")
+    };
+    let theirs = edit(
+        BASE,
+        &[
+            (C2_END, &shot("m2", "09")),
+            ("  track A1 audio\n", &title("c3")),
+        ],
+    );
+    let merged = merge(BASE, &ours, &theirs);
+    assert_eq!(
+        merged.text,
+        edit(
+            &ours,
+            &[
+                (
+                    "at=01:00:07:00 dur=00:00:02:00\n",
+                    &format!(
+                        "at=01:00:07:00 dur=00:00:02:00\n{}",
+                        shot("m2", "09")
+                            .replace("dur=00:00:03:00\n", "")
+                            .replace("c3", "c4")
+                    )
+                ),
+                ("  track A1 audio\n", &title("c4"))
+            ]
+        )
+    );
+    assert_eq!(merged.conflicts, vec![]);
+    assert_eq!(merged.renamed, renames(&[("c3", "c4")]));
+}
+
+#[test]
+fn a_title_that_would_start_before_its_sequence_starts_with_it() {
+    let base = edit(&titled(), &[(T1_AT, "at=c2.start-48f")]);
+    // Ours takes out c1 and its sound and moves c2 to where the title began; theirs moves the
+    // title two seconds earlier on c2.
+    let retire = (
+        "project name=\"Film\"",
+        "project name=\"Film\" retired=L1,a1,c1",
+    );
+    let ours = edit(
+        &base,
+        &[
+            retire,
+            (&format!("    {C1} link=L1\n"), ""),
+            (
+                "    clip a1 media=m1 src=00:00:10:00 at=01:00:00:00 dur=00:00:04:00 link=L1\n",
+                "",
+            ),
+            (C2_AT, "c2 media=m2 src=00:01:00:00 at=01:00:02:00"),
+        ],
+    );
+    let theirs = edit(&base, &[("at=c2.start-48f", "at=c2.start-96f")]);
+    let merged = merge(&base, &ours, &theirs);
+    assert_eq!(merged.text, ours);
+    assert_eq!(
+        merged.conflicts,
+        vec![conflict(
+            "s1/V2/t1",
+            "its distance from c2 and where c2 is now put it before the sequence; starts with it",
+            "ours"
+        )]
+    );
+}
+
+/// Invariants, over every combination of the shot moved or not and its title moved on it or
+/// not, on each side, by amounts the same on both sides or not: the shot is where the side
+/// that moved it put it, or ours when both did differently; the title follows it, as far into
+/// it as the side that moved the title there put it, or ours when both did differently; only
+/// those two clash, each under its own name; and the merged project is valid.
+#[test]
+fn a_shot_and_its_title_moved_on_either_side_merge_as_each_side_meant() {
+    use kerf_model::{apply, Op, Rate};
+    let base = project(&titled());
+    let rate = Rate::new(24, 1).unwrap();
+    let id = |text: &str| Id::new(text).unwrap();
+    let start = |project: &Project, clip: &str| project.clip(clip).unwrap().start;
+    // A side that moved the shot and then the title on it, by so many frames each.
+    let side = |shot: i64, title: i64| {
+        let ops: Vec<Op> = [("c2", shot), ("t1", title)]
+            .into_iter()
+            .filter(|(_, frames)| *frames != 0)
+            .map(|(clip, frames)| Op::Move {
+                clip: id(clip),
+                track: None,
+                delta: rate.time_of(frames),
+            })
+            .collect();
+        apply(&base, Catalog::builtin(), &ops).unwrap().0
+    };
+    let changed = |ours: i64, theirs: i64| if ours == 0 { theirs } else { ours };
+    let clash = |ours: i64, theirs: i64| ours != 0 && theirs != 0 && ours != theirs;
+    let shots = [0, 24, 48];
+    let titles = [0, 6, 12];
+    for ours_shot in shots {
+        for ours_title in titles {
+            for theirs_shot in shots {
+                for theirs_title in titles {
+                    let case = format!(
+                        "shot {ours_shot}f and title {ours_title}f here, \
+                         shot {theirs_shot}f and title {theirs_title}f there"
+                    );
+                    let ours = side(ours_shot, ours_title);
+                    let theirs = side(theirs_shot, theirs_title);
+                    let merged = merge_projects(&base, &ours, &theirs, Catalog::builtin())
+                        .unwrap_or_else(|error| panic!("{case}: {error}"));
+                    let shot = start(&base, "c2") + rate.time_of(changed(ours_shot, theirs_shot));
+                    let into = start(&base, "t1") - start(&base, "c2")
+                        + rate.time_of(changed(ours_title, theirs_title));
+                    let project = &merged.project;
+                    assert_eq!(start(project, "c2"), shot, "{case}");
+                    assert_eq!(start(project, "t1"), shot + into, "{case}");
+                    assert_eq!(
+                        project.clip("t1").unwrap().follows,
+                        Some(id("c2")),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        kerf_model::validate::errors(project, Catalog::builtin()),
+                        vec![],
+                        "{case}"
+                    );
+                    let mut conflicts = Vec::new();
+                    if clash(ours_shot, theirs_shot) {
+                        conflicts.push(conflict("s1/V1/c2", "start changed on both sides", "ours"));
+                    }
+                    if clash(ours_title, theirs_title) {
+                        conflicts.push(conflict(
+                            "s1/V2/t1",
+                            "distance from c2 changed on both sides",
+                            "ours",
+                        ));
+                    }
+                    assert_eq!(merged.conflicts, conflicts, "{case}");
+                }
+            }
+        }
+    }
+}
