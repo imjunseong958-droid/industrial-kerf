@@ -44,7 +44,10 @@ pub use flights::{
     landing_in, lerp_bounds, let_go_flight_at, placed_since, FlightKind, PaneGoes, PlacedClip,
 };
 pub use keys::{escape_goes, holds_keys_itself, settle_keys, EscapeAt, EscapeGoes, Holder, KeysGo};
-pub use panel::{panel_heights, panes_opening, picture_in, picture_within, timeline_split};
+pub use panel::{
+    panel_heights, panel_layout, panes_opening, picture_in, picture_within, timeline_split,
+    PanelLayout,
+};
 pub use projects::{
     folder_media, open_conversation_in, open_folder, open_folder_in, open_folder_with,
     window_title, FOLDER_MEDIA,
@@ -422,7 +425,8 @@ impl Workspace {
         // How far the stage reaches over the conversation while changes are watched.
         let reach = REEL_REACH.min(conversation_width) * reach * panel;
         let leading = sidebar < 0.02;
-        // The chosen clip's inspector stands beside the picture when there is room.
+        // The chosen clip's inspector stands beside the picture when there is
+        // room, taking its side of the picture's row (`panel_layout`).
         let inspecting = !session.selection.is_empty() && panel_width > layout::INSPECTOR * 2.2;
         // The picture's shape, which splits the panel.
         let aspect = editor_stage::stage::shown_aspect(session);

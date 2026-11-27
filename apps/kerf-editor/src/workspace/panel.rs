@@ -194,30 +194,24 @@ impl Workspace {
     /// Where the stage's slot is once the panel has come to rest, as
     /// `regions` lay the window out now: what the picture grows into.
     pub(super) fn picture_slot(&self, regions: &Regions) -> Bounds<Pixels> {
-        let stage_width = regions.panel_width
-            - 8.0
-            - if regions.inspecting {
-                layout::INSPECTOR
-            } else {
-                0.0
-            };
         let shown = |tween: &Tween| tween.target().clamp(0.0, 1.0);
-        let (picture_height, _, _) = panel_heights(
+        let laid = panel_layout(
+            regions.panel_width - 8.0,
             regions.content_height - 8.0,
-            stage_width,
             regions.aspect,
             (
                 shown(&self.picture_shown),
                 shown(&self.timeline_shown),
                 shown(&self.media_shown),
             ),
+            regions.inspecting,
         );
         Bounds::new(
             point(
                 px(regions.rest_left),
                 px(layout::TOOLBAR + regions.bars_height),
             ),
-            size(px(stage_width.max(1.0)), px(picture_height)),
+            size(px(laid.stage_width.max(1.0)), px(laid.picture)),
         )
     }
 
@@ -240,9 +234,18 @@ impl Workspace {
         let picture = self.picture_shown.sample(window);
         let timeline = self.timeline_shown.sample(window);
         let media = self.media_shown.sample(window);
-        let stage_width = width - if inspecting { layout::INSPECTOR } else { 0.0 };
-        let (picture_height, band, timeline_height) =
-            panel_heights(height, stage_width, aspect, (picture, timeline, media));
+        let PanelLayout {
+            picture: picture_height,
+            band,
+            timeline: timeline_height,
+            ..
+        } = panel_layout(
+            width,
+            height,
+            aspect,
+            (picture, timeline, media),
+            inspecting,
+        );
         let (stage_shows, timeline_shows) = shows;
         div()
             .w(px(width))
@@ -415,7 +418,7 @@ pub fn timeline_split(height: f32, band: f32, width: f32, aspect: f32) -> f32 {
     (height - band - picture).max(0.0)
 }
 
-/// How a panel `height` tall, its stage `stage_width` wide showing a
+/// How a panel `height` tall, its picture's row `width` wide showing a
 /// picture `aspect` wide to its height, is shared with the picture, the
 /// timeline and the Media band shown `(picture, timeline, media)` (each
 /// 0..1, as far as they have come): the picture's height, the band's and
@@ -424,17 +427,52 @@ pub fn timeline_split(height: f32, band: f32, width: f32, aspect: f32) -> f32 {
 /// has all of it.
 pub fn panel_heights(
     height: f32,
-    stage_width: f32,
+    width: f32,
     aspect: f32,
     (picture, timeline, media): (f32, f32, f32),
 ) -> (f32, f32, f32) {
     let band = layout::MEDIA_BAND * media;
     let timeline_full = (height - band).max(0.0);
-    let timeline_tall = timeline_split(height, band, stage_width, aspect);
+    let timeline_tall = timeline_split(height, band, width, aspect);
     let timeline_height = timeline_tall + (timeline_full - timeline_tall) * (1.0 - picture);
     let timeline_height = timeline_height * timeline;
     let picture_height = (height - band - timeline_height).max(0.0);
     (picture_height, band, timeline_height)
+}
+
+/// Where the panel's panes go: the stage's width, and the heights of the
+/// picture's row (the transport at its foot), the Media band and the
+/// timeline.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PanelLayout {
+    pub stage_width: f32,
+    pub picture: f32,
+    pub band: f32,
+    pub timeline: f32,
+}
+
+/// How a panel `width` × `height` is laid out ([`panel_heights`]), with
+/// the chosen clip's inspector beside the picture or not (`inspecting`).
+/// The heights are split by the picture's row as wide as the panel, the
+/// inspector in it or not: it takes its side of the row from the stage,
+/// and the picture is drawn smaller in what is left. Choosing a clip, or
+/// letting it go, moves neither the transport nor the lanes under the
+/// pointer, so the next press lands where it was aimed.
+pub fn panel_layout(
+    width: f32,
+    height: f32,
+    aspect: f32,
+    shown: (f32, f32, f32),
+    inspecting: bool,
+) -> PanelLayout {
+    let (picture, band, timeline) = panel_heights(height, width, aspect, shown);
+    let inspector = if inspecting { layout::INSPECTOR } else { 0.0 };
+    PanelLayout {
+        stage_width: (width - inspector).max(0.0),
+        picture,
+        band,
+        timeline,
+    }
 }
 
 /// The stage's air round its device, and the device's bezel.
