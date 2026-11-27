@@ -1123,10 +1123,9 @@ impl Worker {
         } else if self
             .decoder
             .as_ref()
-            .is_some_and(|decoder| decoder.is_cancelled())
+            .is_none_or(|decoder| decoder.is_cancelled())
         {
-            self.preview_requested = false;
-        } else if self.decoder.is_none() {
+            // No picture will come: there is no decoder, or it was cancelled.
             self.preview_requested = false;
         }
     }
