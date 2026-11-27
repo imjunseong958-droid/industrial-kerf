@@ -124,14 +124,7 @@ impl VideoDecoder {
         serve_epoch: u64,
     ) -> Result<Self, PlaybackError> {
         libav::ensure_init()?;
-        let width = match requested_width {
-            Some(width) => width.min(timeline.width).max(2),
-            None => timeline.width.max(2),
-        };
-        let height = match requested_height {
-            Some(height) => height.min(timeline.height).max(2),
-            None => timeline.height.max(2),
-        };
+        let (width, height) = frame_size(timeline, requested_width, requested_height);
 
         let input = ffmpeg::format::input(&source.path).map_err(libav::map_error)?;
         let (stream_index, time_base, first_pts, parameters) = {
@@ -630,6 +623,27 @@ fn video_filter(
     filters.join(",")
 }
 
+/// The size the program's frames are given at: the size asked for, no larger than the
+/// program's, and 2 by 2 at least.
+pub(crate) fn frame_size(
+    timeline: &PlaybackTimeline,
+    requested_width: Option<u32>,
+    requested_height: Option<u32>,
+) -> (u32, u32) {
+    let width = requested_width.map_or(timeline.width, |width| width.min(timeline.width));
+    let height = requested_height.map_or(timeline.height, |height| height.min(timeline.height));
+    (width.max(2), height.max(2))
+}
+
+/// An opaque black RGBA picture: the program's empty canvas, as the compositor draws it.
+pub(crate) fn black(width: u32, height: u32) -> Vec<u8> {
+    let mut frame = vec![0; width as usize * height as usize * 4];
+    for alpha in frame.iter_mut().skip(3).step_by(4) {
+        *alpha = 255;
+    }
+    frame
+}
+
 /// Center an RGBA picture on a black frame, as the graph's `pad` would,
 /// showing black through whatever the masks or effects made transparent.
 fn letterbox(
@@ -639,10 +653,7 @@ fn letterbox(
     frame_width: u32,
     frame_height: u32,
 ) -> Vec<u8> {
-    let mut frame = vec![0; frame_width as usize * frame_height as usize * 4];
-    for alpha in frame.iter_mut().skip(3).step_by(4) {
-        *alpha = 255;
-    }
+    let mut frame = black(frame_width, frame_height);
     let (left, top) = (
         (frame_width.saturating_sub(width) / 2) as usize,
         (frame_height.saturating_sub(height) / 2) as usize,

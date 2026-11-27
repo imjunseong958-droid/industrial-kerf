@@ -70,8 +70,10 @@ pub struct PlaybackClip {
 }
 
 impl PlaybackClip {
+    /// Where the clip ends in the program, from its span: the start and length added in
+    /// seconds can land a hair past a cut, and take in the next frame.
     pub fn timeline_end(&self) -> f64 {
-        self.timeline_start + self.duration
+        self.span.1.seconds()
     }
 
     pub fn contains(&self, timeline_time: f64) -> bool {
@@ -177,6 +179,13 @@ impl PlaybackTimeline {
     pub(crate) fn frame_at(&self, seconds: f64) -> i64 {
         let frames = seconds * f64::from(self.rate.num()) / f64::from(self.rate.den());
         ((frames + 1e-6).floor() as i64).max(0)
+    }
+
+    /// When the program's frame after the one showing at `seconds` starts. A time stepped on
+    /// by this lands on each frame's start, and on a cut there, where one stepped on by adding
+    /// a frame's length in seconds drifts a hair to either side.
+    pub(crate) fn next_frame_start(&self, seconds: f64) -> f64 {
+        self.rate.time_of(self.frame_at(seconds) + 1).seconds()
     }
 
     /// The rate the program's frames are counted at.

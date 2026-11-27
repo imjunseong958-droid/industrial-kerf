@@ -422,6 +422,8 @@ impl PlaybackSession {
             drawn_ready: BTreeMap::new(),
             drawn_shown: None,
             dropped: 0,
+            gap_shown: None,
+            blank: Arc::from([]),
         };
         thread::Builder::new()
             .name("kerf-playback".into())
@@ -627,6 +629,11 @@ struct Worker {
     drawn_shown: Option<i64>,
     /// Frames skipped as late since the last open or seek.
     dropped: u64,
+    /// The program's frame whose empty canvas, where no clip shows, was the last picture
+    /// shown, until a decoded frame or a seek follows it.
+    gap_shown: Option<i64>,
+    /// The empty canvas's pixels, kept for the frames of a gap after the first.
+    blank: Arc<[u8]>,
 }
 
 impl Worker {
@@ -761,6 +768,7 @@ impl Worker {
                     self.timeline = timeline.clone();
                     self.audio.open(timeline);
                     self.dropped = 0;
+                    self.gap_shown = None;
                     self.position = 0.0;
                     self.decode_cursor = 0.0;
                     self.decode_queue.clear();
@@ -842,6 +850,8 @@ impl Worker {
         self.audio.seek(next);
         self.position = next;
         self.dropped = 0;
+        // What was shown before the seek may never reach the client, its epoch passed.
+        self.gap_shown = None;
         self.reset_drawn();
         let picture = self.picture_time();
         let scrub = !exact && !was_playing;
@@ -949,7 +959,6 @@ impl Worker {
         ) {
             return false;
         }
-        let interval = frame_interval(self.timeline.fps);
         while self.timeline.frame_at(self.decode_cursor) < wanted {
             if self
                 .decoder
@@ -963,7 +972,9 @@ impl Worker {
                 .as_mut()
                 .and_then(|decoder| decoder.skip_frame().ok())
             {
-                Some(true) => self.decode_cursor += interval,
+                Some(true) => {
+                    self.decode_cursor = self.timeline.next_frame_start(self.decode_cursor);
+                }
                 None => return false,
                 Some(false) => return false,
             }
@@ -996,7 +1007,55 @@ impl Worker {
         }
 
         self.fill_decode_queue();
-        self.present_due(position);
+        if self.timeline.video_at_ref(position).is_some() {
+            self.present_due(position);
+        } else {
+            self.present_gap(position);
+        }
+    }
+
+    /// Playing through a gap: show its empty canvas on each of its frames. The decoded
+    /// frames before it that have not been shown came too late and are skipped as dropped;
+    /// those of the clip after it wait until they are due.
+    fn present_gap(&mut self, position: f64) {
+        let now = self.timeline.frame_at(position);
+        while self
+            .decode_queue
+            .front()
+            .is_some_and(|frame| self.timeline.frame_at(frame.timeline_time) < now)
+        {
+            self.decode_queue.pop_front();
+            self.dropped += 1;
+        }
+        if self.gap_shown != Some(now) {
+            self.show_gap(position);
+        }
+    }
+
+    /// Show the program's empty canvas at `timeline_time`, where no clip shows: black, as a
+    /// render draws it, at the size decoded frames come at.
+    fn show_gap(&mut self, timeline_time: f64) {
+        let (width, height) = decoder::frame_size(
+            &self.timeline,
+            self.config.frame_width,
+            self.config.frame_height,
+        );
+        if self.blank.len() != width as usize * height as usize * 4 {
+            self.blank = decoder::black(width, height).into();
+        }
+        let frame = PlaybackFrame {
+            sequence: self.sequence,
+            timeline_time,
+            source_time: timeline_time,
+            clip_id: String::new(),
+            width,
+            height,
+            pixels: Arc::clone(&self.blank),
+            captions: self.timeline.captions_at(timeline_time),
+        };
+        self.sequence += 1;
+        self.emit(PlaybackEvent::Frame(frame));
+        self.gap_shown = Some(self.timeline.frame_at(timeline_time));
     }
 
     /// Show the newest decoded frame due at `position`. The frames due
@@ -1015,6 +1074,7 @@ impl Worker {
             }
         }
         if let Some(frame) = newest {
+            self.gap_shown = None;
             self.emit(PlaybackEvent::Frame(frame));
         }
     }
@@ -1038,6 +1098,16 @@ impl Worker {
                 return;
             }
         }
+        // Where no clip shows, the program shows its empty canvas, as a render does, not the
+        // first frame of the clip after the gap, which reading on to fill the queue would give.
+        let picture = self.picture_time();
+        if self.timeline.video_at_ref(picture).is_none() {
+            self.stop_decoder();
+            self.show_gap(picture);
+            self.preview_requested = false;
+            self.preview_rough = false;
+            return;
+        }
         if self.preview_rough {
             self.preview_rough = false;
             self.emit_rough_frame();
@@ -1053,13 +1123,9 @@ impl Worker {
         } else if self
             .decoder
             .as_ref()
-            .is_some_and(|decoder| decoder.is_cancelled())
+            .is_none_or(|decoder| decoder.is_cancelled())
         {
-            self.preview_requested = false;
-        } else if self.timeline.video_at_ref(self.picture_time()).is_none() {
-            self.stop_decoder();
-            self.preview_requested = false;
-        } else if self.decoder.is_none() {
+            // No picture will come: there is no decoder, or it was cancelled.
             self.preview_requested = false;
         }
     }
@@ -1195,7 +1261,7 @@ impl Worker {
                     }
                     let frame = self.make_frame(clip_index, decoded, timeline_time);
                     self.decode_queue.push_back(frame);
-                    self.decode_cursor += frame_interval(self.timeline.fps);
+                    self.decode_cursor = self.timeline.next_frame_start(self.decode_cursor);
                 }
                 Ok(None) => {
                     if self
@@ -1538,6 +1604,8 @@ mod tests {
             drawn_ready: BTreeMap::new(),
             drawn_shown: None,
             dropped: 0,
+            gap_shown: None,
+            blank: Arc::from([]),
         };
         (worker, event_receiver)
     }
