@@ -894,6 +894,12 @@ impl Worker {
             .is_some()
     }
 
+    /// Keep the open decoder for a seek to `target` when it can give the frame of the program
+    /// there: from the queue, or by passing by the few frames before it. It reads only
+    /// forward, so a frame already decoded, such as the one a paused seek has just shown, can
+    /// come only from the queue. Frames are compared as [`PlaybackTimeline::frame_at`] counts
+    /// them, not by their times, which are off the frame's start when decoding began part way
+    /// through one.
     fn keep_decoder_for_seek(&mut self, target: f64) -> bool {
         if self
             .decoder
@@ -922,39 +928,29 @@ impl Worker {
         if let Some(decoder) = self.decoder.as_mut() {
             decoder.serve(serve);
         }
-        let interval = frame_interval(self.timeline.fps);
+        let wanted = self.timeline.frame_at(target);
         while self
             .decode_queue
             .front()
-            .is_some_and(|frame| frame.timeline_time < target - interval * 0.5)
+            .is_some_and(|frame| self.timeline.frame_at(frame.timeline_time) < wanted)
         {
             self.decode_queue.pop_front();
         }
-        if self
-            .decode_queue
-            .front()
-            .is_some_and(|frame| frame.timeline_time > target + interval * 0.75)
-        {
-            return false;
+        if let Some(frame) = self.decode_queue.front() {
+            return self.timeline.frame_at(frame.timeline_time) == wanted;
         }
-        if self
-            .decode_queue
-            .front()
-            .is_some_and(|frame| (frame.timeline_time - target).abs() <= interval * 0.75)
-        {
-            return true;
-        }
+        // Nothing queued: the decoder gives the frame at `decode_cursor` next.
         if !can_reuse_ffmpeg_decoder(
-            clip_id.as_str(),
-            self.decode_cursor,
+            self.timeline.frame_at(self.decode_cursor),
+            wanted,
             target,
-            clip_id.as_str(),
             clip_end,
             self.timeline.fps,
         ) {
             return false;
         }
-        while self.decode_cursor < target - interval * 0.5 {
+        let interval = frame_interval(self.timeline.fps);
+        while self.timeline.frame_at(self.decode_cursor) < wanted {
             if self
                 .decoder
                 .as_ref()
@@ -1462,25 +1458,14 @@ fn frame_interval(fps: f64) -> f64 {
     }
 }
 
-fn can_reuse_ffmpeg_decoder(
-    decoder_clip_id: &str,
-    decode_cursor: f64,
-    target: f64,
-    clip_id: &str,
-    clip_end: f64,
-    fps: f64,
-) -> bool {
-    if decoder_clip_id != clip_id {
-        return false;
-    }
+/// Whether a decoder of the clip ending at `clip_end` whose next picture is of the program's
+/// frame `next` can give frame `wanted`, at `target`, by passing the frames between by. It
+/// reads only forward, and a long way on, seeking the file is quicker.
+fn can_reuse_ffmpeg_decoder(next: i64, wanted: i64, target: f64, clip_end: f64, fps: f64) -> bool {
     if !target.is_finite() || target < 0.0 || target >= clip_end {
         return false;
     }
-    let interval = frame_interval(fps);
-    if target + interval * 1.5 < decode_cursor {
-        return false;
-    }
-    target - decode_cursor <= SMALL_FORWARD_SEEK_SECONDS
+    next <= wanted && (wanted - next) as f64 * frame_interval(fps) <= SMALL_FORWARD_SEEK_SECONDS
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackSession};
+use kerf_playback::{PlaybackConfig, PlaybackEvent, PlaybackSession, PlaybackState};
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
@@ -765,4 +765,74 @@ fn native_playback_shows_the_frame_of_the_media_a_render_shows() {
             played += 1;
         }
     }
+}
+
+/// A paused seek shows the frame of the program at the playhead when it keeps the decoder it
+/// has as well as when it opens one: asked again for the frame it has just shown, which that
+/// decoder has read past; a little way on from part way through a frame; and onto a frame
+/// decoded ahead while playing from part way through one.
+#[test]
+fn a_paused_seek_shows_the_frame_at_the_playhead() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = numbered_source(&binary, directory.path(), 10, 28);
+    // The clip starts on the sequence's frame 3, after a gap, with the media's first frame.
+    let text = format!(
+        "kerf 1\nproject name=\"Seeks\"\n\
+         media m path=\"{}\" rate=10 dur=28f video=64x36\n\
+         sequence s1 rate=10 size=64x36 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m src=0f at=3f dur=28f\n",
+        source.display()
+    );
+    let project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    let session = PlaybackSession::open(
+        project,
+        PlaybackConfig::default()
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36)
+            .with_decode_queue_capacity(24),
+    )
+    .expect("open playback session");
+    // Seek `part` of the way through the program's `frame`: the picture shown is of that
+    // frame, the media's frame 3 before it.
+    let seek = |frame: i64, part: f64, what: &str| {
+        session.seek((frame as f64 + part) / 10.0).expect("seek");
+        let shown = next_frame(&session, |_| true);
+        let at = (shown.timeline_time * 10.0 + 1e-6).floor() as i64;
+        assert_eq!((at, numbered(&shown)), (frame, frame - 3), "{what}");
+    };
+
+    seek(3, 0.0, "the clip's first frame");
+    seek(3, 0.0, "the clip's first frame again");
+    seek(10, 0.0, "a frame a little way on");
+    seek(10, 0.0, "that frame again");
+    seek(5, 0.6, "part way through a frame before");
+    seek(8, 0.0, "a frame a little way on from part way through one");
+
+    seek(5, 0.6, "part way through a frame before, to play from");
+    session.play().expect("play");
+    next_frame(&session, |_| true);
+    session.pause().expect("pause");
+    // Where the pause left the playhead: the clock it says after it says it paused.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (mut paused, mut position) = (false, None);
+    while position.is_none() && Instant::now() < deadline {
+        match session.next_event_timeout(Duration::from_millis(100)) {
+            Some(PlaybackEvent::StateChanged(PlaybackState::Paused)) => paused = true,
+            Some(PlaybackEvent::Clock(clock)) if paused => position = Some(clock.position),
+            _ => {}
+        }
+    }
+    let paused = position.expect("playback paused");
+    // Three frames on from the playhead, past what playing has shown, so the frame before it
+    // is still queued.
+    let ahead = (paused * 10.0 + 1e-6).floor() as i64 + 3;
+    seek(ahead, 0.0, "a frame decoded ahead while playing");
 }
