@@ -396,18 +396,34 @@ impl Drawing {
         world
     }
 
+    /// See [`Compositor::showing`](crate::Compositor::showing).
+    pub fn showing(&self, at: Time) -> Vec<String> {
+        self.sequences.first().map_or_else(Vec::new, |sequence| {
+            sequence
+                .tracks
+                .iter()
+                .filter(|track| track.shows)
+                .flat_map(|track| &track.shown)
+                .filter(|shown| shown.shows(at))
+                .map(|shown| shown.plan.clip.id.to_string())
+                .collect()
+        })
+    }
+
     /// See [`Compositor::lands`](crate::Compositor::lands).
     pub fn lands(&self, id: &str, at: Time) -> std::result::Result<crate::Landing, String> {
         let sequence = self.sequences.first().ok_or("there is no sequence")?;
-        let plan = sequence
+        let shown = sequence
             .tracks
             .iter()
             .flat_map(|track| &track.shown)
-            .map(|shown| &shown.plan)
-            .find(|plan| plan.clip.id.as_str() == id)
+            .find(|shown| shown.plan.clip.id.as_str() == id)
             .ok_or("it is no clip of this sequence that draws")?;
+        let plan = &shown.plan;
         let time = at - plan.clip.start;
-        if time.is_negative() || time >= plan.clip.duration {
+        // Past its ends, where a transition draws it, it is placed as it is drawn then.
+        let within = !time.is_negative() && time < plan.clip.duration;
+        if !within && !shown.shows(at) {
             return Err("it does not show then".to_owned());
         }
         let Source::Media { picture } = plan.source else {

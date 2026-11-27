@@ -1143,8 +1143,8 @@ fn imported_media_is_indexed_and_proxied_in_the_background() {
 }
 
 /// An edit's preview reads a media's proxy, a quick read, where the proxy shows the frame as
-/// the media does, and the media itself where a clip of it is grown past what its proxy has.
-/// The proxy here is red and the media blue, so a frame says which was read.
+/// the media does, and the media itself where a clip of it is grown past what its proxy has,
+/// or may be. The proxy here is red and the media blue, so a frame says which was read.
 #[test]
 #[expect(
     clippy::disallowed_methods,
@@ -1196,13 +1196,22 @@ sequence s1 rate=30 size=1280x720
 sequence s2 rate=30 size=1280x720
   track V1 video
     clip n1 seq=s1 src=0f at=0f dur=00:00:02:00
+sequence s3 rate=30 size=1280x720
+  track V1 video
+    clip d1 media=m1 at=00:00:00:00 dur=00:00:01:00
+      set scale=3
+    clip d2 media=m1 src=00:00:01:00 at=00:00:01:00 dur=00:00:01:00
 ",
     )
     .unwrap();
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = router_on(directory.path(), Some(&kerfd));
-    // Red or blue, in the middle of a sheet's first frame.
+    // Red or blue, in the middle of a sheet's first frame; nothing where no frame shows what
+    // the edit changed.
     let read = |side: &Value| {
+        if side["empty"] == true {
+            return "nothing";
+        }
         let pixel = Command::new("ffmpeg")
             .args(["-hide_banner", "-loglevel", "error", "-i"])
             .arg(side["path"].as_str().unwrap())
@@ -1223,11 +1232,23 @@ sequence s2 rate=30 size=1280x720
         // Grown three times, the picture is 1440 pixels across a frame of 480, and the proxy
         // has 960.
         ("set c1 scale=3", "proxy", "media"),
-        // And a lens may grow it, and a transition.
+        // And a lens may grow it, and a transition of FilmCraft's.
         ("fx c1 add distort.lens", "proxy", "media"),
+        (
+            "split c1 at=1s as=c2\ntransition add from=c1 to=c2 fx=cross-zoom dur=10f",
+            "proxy",
+            "media",
+        ),
+        // A dissolve draws each picture where it lands, past its clip's ends too.
         (
             "split c1 at=1s as=c2\ntransition add from=c1 to=c2 fx=dissolve dur=10f",
             "proxy",
+            "proxy",
+        ),
+        // Where it is drawn only past its end, after the cut, `d1` is as grown as ever.
+        (
+            "transition add from=d1 to=d2 fx=dissolve dur=10f align=start",
+            "nothing",
             "media",
         ),
         // How large a sequence nested in another draws it is not told.

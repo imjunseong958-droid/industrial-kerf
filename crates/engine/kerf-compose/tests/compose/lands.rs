@@ -177,3 +177,28 @@ fn a_landing_says_which_frame_shows_and_what_is_done_to_it() {
         .unwrap_err()
         .contains("no clip of this sequence"));
 }
+
+#[test]
+fn a_landing_is_read_past_a_clips_ends_where_a_transition_draws_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let compositor = compositor(
+        dir.path(),
+        concat!(
+            "  track V1 video\n",
+            "    clip c1 media=m src=0f at=0f dur=8f\n",
+            "    clip c2 media=m src=12f at=8f dur=8f\n",
+            "    transition t1 from=c1 to=c2 fx=dissolve@1 dur=4f\n",
+        ),
+    );
+    let at = |frame: i64| Rate::FPS_24.time_of(frame);
+    // The dissolve is drawn from 6 to 10, about the cut at 8.
+    assert_eq!(compositor.showing(at(5)), ["c1"]);
+    assert_eq!(compositor.showing(at(9)), ["c1", "c2"]);
+    // Each shows its media on past its own end, or from before its start.
+    assert_eq!(compositor.lands("c1", at(9)).unwrap().frame, 9);
+    assert_eq!(compositor.lands("c2", at(6)).unwrap().frame, 10);
+    assert!(compositor
+        .lands("c1", at(10))
+        .unwrap_err()
+        .contains("does not show then"));
+}

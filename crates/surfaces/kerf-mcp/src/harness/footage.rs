@@ -10,7 +10,7 @@ use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_engine::media::derivatives::{DerivativeCache, SourceIdentity};
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::{print_document, Clock, PrintOptions};
-use kerf_model::{Content, Media, Project, Time, TrackKind};
+use kerf_model::{Clip, Content, Media, Project, Time};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -41,6 +41,16 @@ const AT_ITS_SIZE: [&str; 10] = [
     "Matte",
     "Time",
     "Utility",
+];
+/// The transitions Kerf draws itself, each picture where it lands and at its size: a dissolve,
+/// a dip through a color, a wipe, and a look's incoming clip over the outgoing one. The others
+/// are FilmCraft's, which mix the two pictures and may move or grow them.
+const REVEALS: [&str; 5] = [
+    "dissolve",
+    "crossfade",
+    "dip",
+    "wipe",
+    kerf_model::look::STACK,
 ];
 
 /// The cues of `transcript`, `offset` seconds later, on `clock`; with
@@ -400,9 +410,10 @@ impl KerfMcpRouter {
     /// `sequence`'s frames at `times`, at most `width` wide, where the proxy shows them as the
     /// media does: at each of `times`, every clip of it drawn then is no larger on such a
     /// frame than the proxy, and nothing makes it larger. Its effects draw it at its size
-    /// ([`AT_ITS_SIZE`]), no transition is over it, and it is neither in depth nor in a
-    /// sequence nested in this one. A frame of the original is mostly the keyframe before it
-    /// decoded on to it, which for 4K HEVC can be seconds; a proxy's keyframes are close.
+    /// ([`AT_ITS_SIZE`]), a transition over it is one of Kerf's own ([`REVEALS`]), and it is
+    /// neither in depth nor in a sequence nested in this one. A frame of the original is mostly
+    /// the keyframe before it decoded on to it, which for 4K HEVC can be seconds; a proxy's
+    /// keyframes are close.
     pub(super) fn with_proxies(
         &self,
         project: &Project,
@@ -443,35 +454,38 @@ impl KerfMcpRouter {
             across * f64::from(canvas.1) / f64::from(canvas.0.max(1)),
         );
         let rate = drawn.rate;
+        let clips: HashMap<&str, &Clip> = drawn
+            .tracks
+            .iter()
+            .flat_map(|track| &track.clips)
+            .map(|clip| (clip.id.as_str(), clip))
+            .collect();
         let mut original = HashSet::new();
         for &at in times {
-            for track in &drawn.tracks {
-                for clip in track
-                    .clips
-                    .iter()
-                    .filter(|clip| clip.start <= at && at < clip.end())
-                {
-                    match &clip.content {
-                        Content::Media { media, .. } => {
-                            let Some((_, of)) = proxies.get(media.as_str()) else {
-                                continue;
-                            };
-                            // What is not drawn shows nothing of it.
-                            if track.kind != TrackKind::Video || !track.enabled || !clip.enabled {
-                                continue;
-                            }
-                            let shown = compositor.lands(clip.id.as_str(), at);
-                            if !shown.is_ok_and(|landing| within_proxy(&landing, of, frame)) {
-                                original.insert(media.to_string());
-                            }
+            // What is drawn then, past a clip's ends where a transition draws it.
+            for id in compositor.showing(at) {
+                match clips.get(id.as_str()).map(|clip| &clip.content) {
+                    Some(Content::Media { media, .. }) => {
+                        let Some((_, of)) = proxies.get(media.as_str()) else {
+                            continue;
+                        };
+                        let shown = compositor.lands(&id, at);
+                        if !shown.is_ok_and(|landing| within_proxy(&landing, of, frame)) {
+                            original.insert(media.to_string());
                         }
-                        Content::Sequence { sequence, .. } => {
-                            nested_media(project, sequence.as_str(), &mut original);
-                        }
-                        Content::Generator { .. } | Content::Caption { .. } => {}
                     }
+                    Some(Content::Sequence { sequence, .. }) => {
+                        nested_media(project, sequence.as_str(), &mut original);
+                    }
+                    _ => {}
                 }
-                for transition in &track.transitions {
+            }
+            for track in &drawn.tracks {
+                let mixes = track
+                    .transitions
+                    .iter()
+                    .filter(|transition| !REVEALS.contains(&transition.fx.as_str()));
+                for transition in mixes {
                     let Some(from) = track.clip(transition.from.as_str()) else {
                         continue;
                     };

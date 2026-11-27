@@ -251,11 +251,18 @@ impl Compositor {
 
     /// Where the program's clip `clip` has its media's picture on the frame at sequence time
     /// `at`: the placing a frame is drawn by, its crop, fit, scale, turn, and move, its motion
-    /// path, and its parents', as [`Self::frame`] puts it down. It is refused, with why,
+    /// path, and its parents', as [`Self::frame`] puts it down. It is answered from the clip's
+    /// start to its end, and past them where a transition draws it. It is refused, with why,
     /// for a clip that does not show then, one that plays no footage, and one in depth, which
     /// a camera puts on the frame.
     pub fn lands(&self, clip: &str, at: Time) -> Result<Landing, String> {
         self.drawing.lands(clip, at)
+    }
+
+    /// The program's clips drawn at sequence time `at`, by their ids: on tracks that show,
+    /// and past their own ends where a transition draws them, as [`Self::frame`] draws them.
+    pub fn showing(&self, at: Time) -> Vec<String> {
+        self.drawing.showing(at)
     }
 
     /// The canvas, made even as a render makes it.
