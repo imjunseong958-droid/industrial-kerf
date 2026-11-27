@@ -19,7 +19,12 @@
 //!   the size, and what is over is cut off evenly. The file has no sound.
 //!   `pass=ids` or `pass=depth` draws, in place of the picture, which clip
 //!   each pixel is of or how near it is ([`kerf_compose::Pass`]), written
-//!   with no loss in the container the file's extension names.
+//!   with no loss in the container the file's extension names. `render`
+//!   steps that follow one another and draw the same part of a sequence at
+//!   one size and rate are drawn together, as the guides of a model handed a
+//!   picture, its depth and its ids are: what is the same in every pass,
+//!   each clip's picture and what the camera sees of it, is drawn once a
+//!   frame for all of them ([`kerf_compose::Compositor::passes`]).
 //! - `generate` asks a model ([`model`]) for the file: what it should show
 //!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), when
 //!   it happens (`signal=`, a signal clip of the project: [`signal`]), and
@@ -65,7 +70,9 @@ pub mod told;
 
 use crate::error::{EngineError, Result};
 use crate::process::sidecar::{self, CancellationToken};
-use crate::render::{render_program_with_cancellation, RenderOptions};
+use crate::render::{
+    render_passes_with_cancellation, render_program_with_cancellation, RenderOptions,
+};
 use kerf_compose::Pass;
 use kerf_model::Media;
 use model::{Models, Source};
@@ -1306,8 +1313,10 @@ impl Making<'_> {
         Ok(regions)
     }
 
-    /// Run each step of `recipe`, in order, stopping at the first that fails.
+    /// Run each step of `recipe`, in order, stopping at the first that fails. A `render` step
+    /// draws with those that follow it that are drawn with it ([`drawn_together`]).
     fn run(&self, recipe: &Recipe, on_line: &mut dyn FnMut(&str)) -> Result<()> {
+        let mut drawn = vec![false; recipe.steps.len()];
         for (index, step) in recipe.steps.iter().enumerate() {
             match step {
                 Step::Join { parts, to, lap } => {
@@ -1322,37 +1331,50 @@ impl Making<'_> {
                     let command = join_command(&files, &to, *lap, lossless.as_ref());
                     self.supervised(command, "ffmpeg", &mut |_| {})?;
                 }
+                Step::Render { .. } if drawn[index] => {}
                 Step::Render {
                     sequence,
-                    to,
                     size,
                     rate,
-                    pass,
-                    matte,
                     only_filmed,
                     from,
                     seconds,
+                    ..
                 } => {
+                    let together = drawn_together(&recipe.steps, index);
+                    let opts = together
+                        .iter()
+                        .map(|at| {
+                            let Step::Render {
+                                to, pass, matte, ..
+                            } = &recipe.steps[*at]
+                            else {
+                                unreachable!("only render steps are drawn together");
+                            };
+                            drawn[*at] = true;
+                            RenderOptions {
+                                output: self.file_for(to).to_string_lossy().into_owned(),
+                                project_dir: Some(self.directory.to_path_buf()),
+                                size: *size,
+                                rate: *rate,
+                                pass: *pass,
+                                matte: matte.iter().cloned().collect(),
+                                only_filmed: *only_filmed,
+                                // What a step makes is for a model to follow, or a shot of its
+                                // own: a picture, with no sound.
+                                sound: false,
+                                ..RenderOptions::default()
+                            }
+                        })
+                        .collect::<Vec<_>>();
                     let mut resolved = self.project.clone();
                     resolved.resolve_paths(kerf_model::Catalog::builtin(), self.directory);
                     let range = part_of(&resolved, sequence, *from, *seconds)?;
-                    render_program_with_cancellation(
+                    render_passes_with_cancellation(
                         &resolved,
                         Some(sequence),
                         range,
-                        &RenderOptions {
-                            output: self.file_for(to).to_string_lossy().into_owned(),
-                            project_dir: Some(self.directory.to_path_buf()),
-                            size: *size,
-                            rate: *rate,
-                            pass: *pass,
-                            matte: matte.iter().cloned().collect(),
-                            only_filmed: *only_filmed,
-                            // What a step makes is for a model to follow, or a shot of its
-                            // own: a picture, with no sound.
-                            sound: false,
-                            ..RenderOptions::default()
-                        },
+                        &opts,
                         self.cancellation,
                         Some(|done: f64| {
                             on_line(&format!("rendering {sequence}: {:.0}%", done * 100.0));
@@ -1494,6 +1516,53 @@ fn still_command(file: &Path, still: &Path, last: bool) -> Command {
     }
     command.arg(still);
     command
+}
+
+/// The `render` steps of `steps` drawn with the one at `index`, itself first: those of the steps
+/// that follow it with no other kind between that draw the same part of the same sequence, at
+/// the same size and rate and of the same clips, each a pass of what the others draw, which the
+/// passes then share ([`kerf_compose::Compositor::passes`]). A step whose file another of those
+/// steps writes too is drawn alone, where it comes, so that each file is what the last step to
+/// write it made.
+fn drawn_together(steps: &[Step], index: usize) -> Vec<usize> {
+    let drawn = |step: &Step| match step {
+        Step::Render {
+            sequence,
+            size,
+            rate,
+            only_filmed,
+            from,
+            seconds,
+            ..
+        } => Some((
+            sequence.clone(),
+            *size,
+            *rate,
+            *only_filmed,
+            from.map(f64::to_bits),
+            seconds.map(f64::to_bits),
+        )),
+        _ => None,
+    };
+    let run = &steps[index..];
+    let run = &run[..run
+        .iter()
+        .position(|step| drawn(step).is_none())
+        .unwrap_or(run.len())];
+    let alone = |at: usize| {
+        let writes = run[at].makes();
+        run.iter()
+            .enumerate()
+            .any(|(other, step)| other != at && step.makes() == writes)
+    };
+    if alone(0) {
+        return vec![index];
+    }
+    let first = drawn(&run[0]);
+    (0..run.len())
+        .filter(|at| drawn(&run[*at]) == first && !alone(*at))
+        .map(|at| index + at)
+        .collect()
 }
 
 /// Whether each of `parts` is a pass that one of `before` renders, and all of one kind: then

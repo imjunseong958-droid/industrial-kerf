@@ -5,6 +5,7 @@
 use super::*;
 
 /// A clip's picture with all done to it that is done to the picture itself, and how it goes down.
+#[derive(Clone)]
 pub(super) struct Ready {
     pub(super) picture: Arc<Image>,
     /// Its pixels to output pixels.
@@ -12,6 +13,9 @@ pub(super) struct Ready {
     /// What its crop leaves of it, in its pixels.
     pub(super) crop: Option<Rect>,
     pub(super) opacity: f32,
+    /// Where it was shared with the drawings of other passes before this one's was made of it,
+    /// which share what the camera sees of it too.
+    pub(super) share: Option<ReadyKey>,
 }
 
 /// A clip's picture as its effects get it.
@@ -132,22 +136,50 @@ impl Drawing {
         Some(Reach { beyond, per })
     }
 
-    /// A shown clip's picture at sequence time `at` with its effects and reveal done, and how it goes
-    /// down, for a canvas of `(w, h)`. A generator in depth is drawn as far past its frame as `scene`
-    /// may see of it ([`Self::reach`]).
+    /// A shown clip's picture at sequence time `at` with its effects and reveal done, and the pass
+    /// drawn made of it, and how it goes down, for a canvas of `(w, h)`. A generator in depth is
+    /// drawn as far past its frame as `scene` may see of it ([`Self::reach`]). What is shared with the
+    /// drawings of other passes is drawn once for them all.
     pub(super) fn ready(
         &self,
         sequence: &SequencePlan,
         shown: &Shown,
         at: Time,
         scale: f64,
-        (w, h): (usize, usize),
+        size: (usize, usize),
         scene: Option<&three_d::Scene>,
+    ) -> Option<Ready> {
+        let plan = &shown.plan;
+        let reach = self.reach(sequence, plan, at - plan.clip.start, scale, scene);
+        let before = || self.before_pass(sequence, shown, (at, scale), size, reach);
+        let mut ready = match self.share_of(sequence, shown, (at, scale), size, reach) {
+            Some(share) => self.shared_ready(share, || {
+                before().map(|ready| Ready {
+                    share: Some(share.ready),
+                    ..ready
+                })
+            })?,
+            None => before()?,
+        };
+        if self.pass != Pass::Picture {
+            let picture = Arc::make_mut(&mut ready.picture);
+            self.as_pass(sequence, plan, picture, &ready.to_output, (at, scale), size);
+        }
+        Some(ready)
+    }
+
+    /// [`Self::ready`] before the pass drawn is made of it, drawn `reach` past its frame.
+    fn before_pass(
+        &self,
+        sequence: &SequencePlan,
+        shown: &Shown,
+        (at, scale): (Time, f64),
+        (w, h): (usize, usize),
+        reach: Option<Reach>,
     ) -> Option<Ready> {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let time = at - clip.start;
-        let reach = self.reach(sequence, plan, time, scale, scene);
         let Input {
             mut picture,
             mut to_output,
@@ -199,15 +231,12 @@ impl Drawing {
             _ => 1.0,
         };
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
-        if self.pass != Pass::Picture {
-            let picture = Arc::make_mut(&mut picture);
-            self.as_pass(sequence, plan, picture, &to_output, (at, scale), (w, h));
-        }
         Some(Ready {
             picture,
             to_output,
             crop,
             opacity,
+            share: None,
         })
     }
 
