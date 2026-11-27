@@ -95,14 +95,8 @@ impl Drawing {
         let size = output_size(plan.width, plan.height, scale);
         let scene = three_d::Scene::at(plan, at, size);
         let depth = |track: &TrackPlan| {
-            in_depth(track, at).map(|clip| {
-                let place = Affine::scale(scale, scale).then_apply(&self.geometry(
-                    plan,
-                    clip,
-                    clip.clip.time_at(at),
-                ));
-                scene.depth(clip, &place, clip.clip.time_at(at))
-            })
+            in_depth(track, at)
+                .map(|clip| scene.depth(clip, &plan.placement(clip, at).scaled(scale)))
         };
         let mut start = 0;
         while start < tracks.len() {
@@ -183,14 +177,13 @@ impl Drawing {
             })
             .filter_map(|shown| {
                 let ready = self.ready(plan, shown, at, scale, size, Some(scene))?;
-                let time = shown.plan.clip.time_at(at);
+                let time = ready.placement.time;
                 let caster = three_d::Caster::new(
                     scene,
                     &shown.plan,
                     ready.picture,
-                    (&ready.to_output, ready.crop),
+                    (&ready.placement, ready.crop),
                     ready.opacity,
-                    time,
                 );
                 let height = size.1 as f64;
                 let depth = three_d::depth_of(&shown.plan, time, height);
@@ -216,16 +209,11 @@ impl Drawing {
             .flat_map(|track| &track.shown)
             .filter(|shown| shown.shows(at) && matches!(shown.plan.source, Source::Mesh))
             .filter_map(|shown| {
-                let time = shown.plan.clip.time_at(at);
-                let opacity = number(&param(&shown.plan.clip, "opacity").value_at(time)) as f32;
-                (opacity > 0.0).then(|| {
-                    let to_output = Affine::scale(scale, scale).then_apply(&self.geometry(
-                        plan,
-                        &shown.plan,
-                        time,
-                    ));
-                    three_d::mesh::Standing::of(scene, &shown.plan, &to_output, time, opacity)
-                })
+                let placement = plan.placement(&shown.plan, at).scaled(scale);
+                let opacity = param(&shown.plan.clip, "opacity").value_at(placement.time);
+                let opacity = number(&opacity) as f32;
+                (opacity > 0.0)
+                    .then(|| three_d::mesh::Standing::of(scene, &shown.plan, &placement, opacity))
             })
             .collect()
     }
@@ -288,12 +276,12 @@ impl Drawing {
         scale: f64,
         scene: &three_d::Scene,
     ) -> (three_d::Plane, Rect) {
-        let time = clip.clip.time_at(at);
-        let place = Affine::scale(scale, scale).then_apply(&self.geometry(plan, clip, time));
+        let placement = plan.placement(clip, at).scaled(scale);
+        let time = placement.time;
         let (w, h) = (f64::from(clip.size.0), f64::from(clip.size.1));
         let frame = Rect::new(0.0, 0.0, w, h);
         // As far as its picture reaches, for a generator that reaches past its frame.
-        let crop = match self.reach(plan, clip, time, scale, Some(scene)) {
+        let crop = match self.reach(plan, clip, at, scale, Some(scene)) {
             Some(Reach { beyond: (x, y), .. }) => {
                 let whole = Rect::new(-x, -y, w + 2.0 * x, h + 2.0 * y);
                 crop_past(clip, time, frame, whole).unwrap_or(whole)
@@ -303,7 +291,7 @@ impl Drawing {
                 crop_rect(clip, time, (w, h), 1.0, size).unwrap_or(frame)
             }
         };
-        (three_d::Plane::of(scene, clip, (w, h), &place, time), crop)
+        (three_d::Plane::of(scene, clip, (w, h), &placement), crop)
     }
 
     /// Clips in depth that cross, each cut where it meets another, over `canvas`.
@@ -358,8 +346,7 @@ impl Drawing {
             scene,
             &shown.plan,
             &ready.picture,
-            (&ready.to_output, ready.crop),
-            shown.plan.clip.time_at(at),
+            (&ready.placement, ready.crop),
             size,
             self.shared_by(ready.share),
         );
@@ -565,7 +552,7 @@ impl Drawing {
         }
         let Some(Ready {
             picture,
-            to_output,
+            placement,
             crop,
             opacity,
             share,
@@ -575,18 +562,12 @@ impl Drawing {
         };
         if let (true, Some(scene)) = (plan.three_d, scene) {
             let share = self.shared_by(share);
-            let projected = three_d::project(
-                scene,
-                plan,
-                &picture,
-                (&to_output, crop),
-                time,
-                (w, h),
-                share,
-            );
+            let projected =
+                three_d::project(scene, plan, &picture, (&placement, crop), (w, h), share);
             composite(canvas, &projected, opacity, blend);
             return;
         }
+        let to_output = placement.to_output;
         let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
         // A picture that moves while its shutter is open is smeared over where it goes; a pass,
         // which says one thing of each pixel, is not.
@@ -623,7 +604,8 @@ impl Drawing {
         let scene = scene?;
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = clip.time_at(at);
+        let placement = sequence.placement(plan, at).scaled(scale);
+        let time = placement.time;
         // Its picture is the one the camera sees of it, on the canvas: that is what a wipe
         // crosses, a mask cuts, and an effect is done to.
         let reveal = shown
@@ -637,11 +619,9 @@ impl Drawing {
         if opacity <= 0.0 {
             return None;
         }
-        let to_output =
-            Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
         // What it is drawn as in the pass drawn: lit, in its color, by how near it is, by the
         // way it faces, or by how far it goes in a frame, which is read from where the scene a
-        // frame on has it.
+        // frame on has it, and the clip is then.
         let next;
         let shade = match self.pass {
             Pass::Picture => three_d::mesh::Shade::Lit(&clip.id),
@@ -654,16 +634,12 @@ impl Drawing {
             Pass::Motion => {
                 next = (
                     three_d::Scene::ahead(sequence, at, self.step, size),
-                    Affine::scale(scale, scale).then_apply(&self.geometry(
-                        sequence,
-                        plan,
-                        time + self.step,
-                    )),
+                    sequence.placement(plan, at + self.step).scaled(scale),
                 );
-                three_d::mesh::Shade::Moving(&next.0, &next.1, self.step, size.1 as f64 * self.kept)
+                three_d::mesh::Shade::Moving(&next.0, &next.1, size.1 as f64 * self.kept)
             }
         };
-        let (mut picture, depth) = three_d::mesh::draw(scene, plan, &to_output, time, size, shade);
+        let (mut picture, depth) = three_d::mesh::draw(scene, plan, &placement, size, shade);
         if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
             let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
             picture.mul_coverage(&covered);

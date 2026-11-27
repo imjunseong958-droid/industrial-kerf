@@ -84,9 +84,9 @@ pub(in crate::draw) enum Shade<'a> {
     /// Colored by the way each place faces, as a normals pass has it.
     Facing,
     /// Colored by how far each place goes on the screen in a frame, as a motion pass has it:
-    /// to where the scene `0` sees it a frame on, the clip placed as `1` has it then, a frame
-    /// being `2` long, by a frame `3` tall.
-    Moving(&'a Scene, &'a Affine, Time, f64),
+    /// to where the scene `0` sees it a frame on, the clip as `1` has it then, by a frame `2`
+    /// tall.
+    Moving(&'a Scene, &'a Placement, f64),
 }
 
 impl Mesh {
@@ -276,12 +276,7 @@ impl Mesh {
         if let Some(path) = file_of(clip) {
             // A file that cannot be read was said when the sequence was planned.
             return match loaded(&path) {
-                Ok(read) => {
-                    let pose = animation_of(clip, &read)
-                        .and_then(|which| which.ok())
-                        .map(|which| (which, seconds_into(clip, def, &read, which, at)));
-                    Self::fitted(&read, size[1], [r, g, b], pose)
-                }
+                Ok(read) => Self::fitted(&read, size[1], [r, g, b], pose_of(clip, &read, at)),
                 Err(_) => Self::new(),
             };
         }
@@ -397,36 +392,30 @@ pub(in crate::draw) fn holds(clip: &Clip) -> std::result::Result<crate::MeshFile
     })
 }
 
-/// Where camera `which` of the file of the mesh clip of `plan` is at clip time `time`, as a
-/// `gen=camera@1` clip of the same sequence says it: the mesh being where its clip puts it, and
-/// its file's animation as far in as the clip has it.
+/// Where camera `which` of the file of the mesh clip of `plan` is as `placement` has the clip,
+/// as a `gen=camera@1` clip of the same sequence says it: the mesh being where its clip puts
+/// it, and its file's animation as far in as the clip has it then.
 pub(in crate::draw) fn camera(
     scene: &Scene,
     plan: &ClipPlan,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
     which: usize,
 ) -> Option<crate::CameraPlace> {
     let clip = &plan.clip;
     let read = loaded(&file_of(clip)?).ok()?;
-    let def = Catalog::builtin().fx("mesh");
-    let at = clip.sequence_time(time);
-    let pose = animation_of(clip, &read)
-        .and_then(|which| which.ok())
-        .map(|which| (which, seconds_into(clip, def, &read, which, at)));
-    let seen = read.seen_from(which, pose)?;
+    let at = clip.sequence_time(placement.time);
+    let seen = read.seen_from(which, pose_of(clip, &read, at))?;
     let fov = read.cameras[which].fov;
-    Some(placed(scene, plan, to_output, time, &read, &seen, fov))
+    Some(placed(scene, plan, placement, &read, &seen, fov))
 }
 
-/// Where a camera that is at `view` in the space of the file of the mesh clip of `plan` is at
-/// clip time `time`, as a `gen=camera@1` clip of the same sequence says it. It is a camera the
-/// file does not hold: the one a set was seen by, or one found from a shot's frames.
+/// Where a camera that is at `view` in the space of the file of the mesh clip of `plan` is as
+/// `placement` has the clip, as a `gen=camera@1` clip of the same sequence says it. It is a
+/// camera the file does not hold: the one a set was seen by, or one found from a shot's frames.
 pub(in crate::draw) fn view(
     scene: &Scene,
     plan: &ClipPlan,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
     view: &crate::FileView,
 ) -> Option<crate::CameraPlace> {
     let read = loaded(&file_of(&plan.clip)?).ok()?;
@@ -437,29 +426,28 @@ pub(in crate::draw) fn view(
         right: turned(view.right),
         forward: turned(view.forward),
     };
-    Some(placed(scene, plan, to_output, time, &read, &seen, None))
+    Some(placed(scene, plan, placement, &read, &seen, None))
 }
 
-/// A camera `seen` in the space of a mesh clip's file, as a camera of the clip's sequence.
+/// A camera `seen` in the space of a mesh clip's file, as a camera of the clip's sequence,
+/// the clip being as `placement` has it.
 fn placed(
     scene: &Scene,
     plan: &ClipPlan,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
     read: &super::gltf::Read,
     seen: &super::gltf::Seen,
     fov: Option<f64>,
 ) -> crate::CameraPlace {
     let clip = &plan.clip;
     let def = Catalog::builtin().fx("mesh");
-    let at = clip.sequence_time(time);
+    let at = clip.sequence_time(placement.time);
     let height = generated(def, clip, "height", at)
         .and_then(|value| value.as_number())
         .unwrap_or(0.0)
         .max(0.0);
     let (middle, _, tall) = fit(read);
-    let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
+    let space = space_at(scene, plan, placement);
     let eye = space.apply(times(minus(seen.eye, middle), height / tall));
     let (right, forward) = (
         unit(space.apply_vec(seen.right)),
@@ -535,16 +523,19 @@ fn animation_of(
     }))
 }
 
+/// The animation of its file a `gen=mesh` clip plays, and how many seconds into it the clip is
+/// at sequence time `at`: none for a clip that plays none.
+fn pose_of(clip: &Clip, read: &super::gltf::Read, at: Time) -> Option<(usize, f64)> {
+    let which = animation_of(clip, read)?.ok()?;
+    Some((which, seconds_into(clip, read, which, at)))
+}
+
 /// How many seconds into animation `which` of its file a `gen=mesh` clip is at sequence time
-/// `at`: what its `seconds` says, or with none as long as the clip has run; from the start again
-/// past its end where it loops, and held at its end where it does not.
-fn seconds_into(
-    clip: &Clip,
-    def: Option<&FxDef>,
-    read: &super::gltf::Read,
-    which: usize,
-    at: Time,
-) -> f64 {
+/// `at`: what its `seconds` says, or with none as long as the clip has run; and past the
+/// animation's end as the model has a source that ends ([`PastEnd`]), from the start again
+/// where it loops, and held at its end where it does not.
+fn seconds_into(clip: &Clip, read: &super::gltf::Read, which: usize, at: Time) -> f64 {
+    let def = Catalog::builtin().fx("mesh");
     let told = match &clip.content {
         Content::Generator { params, .. } => params.get("seconds"),
         _ => None,
@@ -553,13 +544,11 @@ fn seconds_into(
         Some(told) => told.value_at(clip.time_at(at)).as_number().unwrap_or(0.0),
         None => clip.time_at(at).seconds(),
     };
-    let length = read.animations[which].length;
-    let loops = !matches!(generated(def, clip, "loop", at), Some(Value::Bool(false)));
-    if loops && length > 0.0 && !(0.0..=length).contains(&seconds) {
-        seconds.rem_euclid(length)
-    } else {
-        seconds.clamp(0.0, length)
-    }
+    let past_end = match generated(def, clip, "loop", at) {
+        Some(Value::Bool(false)) => PastEnd::Held,
+        _ => PastEnd::Again,
+    };
+    past_end.within(seconds, read.animations[which].length)
 }
 
 /// What a file holds, read once for as long as the file is what it was.
@@ -721,12 +710,34 @@ fn space_of(plane: &Plane, size: (f64, f64)) -> Affine3 {
     }
 }
 
+/// The own space in the world of the mesh of the clip of `plan`, the clip being as `placement`
+/// has it ([`space_of`] its plane then).
+fn space_at(scene: &Scene, plan: &ClipPlan, placement: &Placement) -> Affine3 {
+    let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+    space_of(&Plane::of(scene, plan, size, placement), size)
+}
+
 /// The corners of `mesh` in the world, its own space being `space` there.
 fn in_world(mesh: &Mesh, space: &Affine3) -> Vec<Vector> {
     mesh.points
         .iter()
         .map(|point| space.apply(*point))
         .collect()
+}
+
+/// The mesh of the clip of `plan` as `placement` has the clip: as its numbers and its file's
+/// animation make it at that time of the clip's own, its own space in the world then, and its
+/// corners there. How it is posed and where it is are the one moment's, whoever asks: to draw
+/// it, to find the light it stops, or to measure it.
+fn at_moment(
+    scene: &Scene,
+    plan: &ClipPlan,
+    placement: &Placement,
+) -> (Mesh, Affine3, Vec<Vector>) {
+    let mesh = Mesh::of(&plan.clip, plan.clip.sequence_time(placement.time));
+    let space = space_at(scene, plan, placement);
+    let points = in_world(&mesh, &space);
+    (mesh, space, points)
 }
 
 /// A mesh in the world at a moment.
@@ -742,18 +753,13 @@ pub(in crate::draw) struct InWorld {
     pub convex: bool,
 }
 
-/// The mesh of the clip of `plan` at clip time `time` in the world, where `to_output` puts its
-/// clip.
+/// The mesh of the clip of `plan` in the world, its clip being as `placement` has it.
 pub(in crate::draw) fn in_the_world(
     scene: &Scene,
     plan: &ClipPlan,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
 ) -> InWorld {
-    let mesh = Mesh::of(&plan.clip, plan.clip.sequence_time(time));
-    let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
-    let points = in_world(&mesh, &space);
+    let (mesh, _, points) = at_moment(scene, plan, placement);
     InWorld {
         points,
         closed: mesh.closed(),
@@ -1018,18 +1024,11 @@ impl Beam {
 }
 
 impl Standing {
-    /// The mesh clip `plan` at clip time `time`, where `to_output` puts it, as opaque as
-    /// `opacity`.
-    pub fn of(
-        scene: &Scene,
-        plan: &ClipPlan,
-        to_output: &Affine,
-        time: Time,
-        opacity: f32,
-    ) -> Self {
+    /// The mesh clip `plan` as `placement` has it, as opaque as `opacity`.
+    pub fn of(scene: &Scene, plan: &ClipPlan, placement: &Placement, opacity: f32) -> Self {
         let InWorld {
             points, triangles, ..
-        } = in_the_world(scene, plan, to_output, time);
+        } = in_the_world(scene, plan, placement);
         let corners = triangles
             .iter()
             .map(|triangle| triangle.map(|corner| points[corner as usize]))
@@ -1237,20 +1236,17 @@ impl InTheWay {
     }
 }
 
-/// The mesh of the clip of `plan` at clip time `time` as `scene` sees it on a picture of `(w, h)`,
-/// and how far along the camera's way it is at each pixel: infinite where it is not.
+/// The mesh of the clip of `plan`, its clip as `placement` has it, as `scene` sees it on a
+/// picture of `(w, h)`, and how far along the camera's way it is at each pixel: infinite where
+/// it is not.
 pub(in crate::draw) fn draw(
     scene: &Scene,
     plan: &ClipPlan,
-    to_output: &Affine,
-    time: Time,
+    placement: &Placement,
     (w, h): (usize, usize),
     shade: Shade,
 ) -> (Image, Vec<f32>) {
-    let mesh = Mesh::of(&plan.clip, plan.clip.sequence_time(time));
-    let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
-    let points = in_world(&mesh, &space);
+    let (mesh, space, points) = at_moment(scene, plan, placement);
     // The ways are square to each other, so a side faces along each by its length less.
     let ways = [space.x, space.y, space.z];
     let normals: Vec<Vector> = mesh
@@ -1342,10 +1338,8 @@ pub(in crate::draw) fn draw(
     // Where each point of the mesh is a frame on, for a motion pass. A file's animation that
     // gives it other points then tells nothing of where each went, and it is said to hold still.
     let then: Option<(&Scene, Vec<Vector>)> = match &shade {
-        Shade::Moving(next, to_output, step, _) => {
-            let later = Mesh::of(&plan.clip, plan.clip.sequence_time(time + *step));
-            let space = space_of(&Plane::of(next, plan, size, to_output, time + *step), size);
-            let later = in_world(&later, &space);
+        Shade::Moving(next, placement, _) => {
+            let (_, _, later) = at_moment(next, plan, placement);
             (later.len() == points.len()).then_some((*next, later))
         }
         _ => None,
@@ -1368,7 +1362,7 @@ pub(in crate::draw) fn draw(
     let colored = |triangle: u32, of: [f32; 2], ahead: f32| -> [f32; 3] {
         match &shade {
             Shade::Flat(color) => *color,
-            Shade::Moving(_, _, _, height) => {
+            Shade::Moving(_, _, height) => {
                 let moved = then.as_ref().and_then(|(next, later)| {
                     let from = scene.on_screen(place(triangle, of, &points))?;
                     let to = next.on_screen(place(triangle, of, later))?;
