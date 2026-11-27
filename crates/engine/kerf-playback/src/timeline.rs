@@ -5,8 +5,8 @@ use kerf_core::program::{
     compile_program, program_sequence, program_sound, ProgramError, ProgramOptions, ProgramSound,
 };
 use kerf_model::{
-    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Sequence, Time,
-    TrackKind, Value,
+    Catalog, Clip, Content, Domain, Effect, Id, Mask, Param, ParamType, Project, Rate, Sequence,
+    Time, TimeChain, TimeMap, TrackKind, Value,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -36,11 +36,14 @@ pub struct PlaybackSource {
     pub id: String,
     pub path: PathBuf,
     pub duration: Option<f64>,
+    /// The rate its frames are counted at.
+    pub rate: Rate,
     pub has_audio: bool,
     pub subtitles: Vec<PathBuf>,
 }
 
-/// A source-backed clip normalized for playback.
+/// A source-backed clip normalized for playback: the part of a media clip the program plays,
+/// where it plays it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackClip {
     pub id: String,
@@ -49,9 +52,6 @@ pub struct PlaybackClip {
     pub source_id: String,
     pub timeline_start: f64,
     pub duration: f64,
-    pub source_in: f64,
-    pub source_out: f64,
-    pub speed: f64,
     pub volume: f32,
     pub track_muted: bool,
     /// Raster effects run on each picture, in stack order; empty for sound.
@@ -60,10 +60,13 @@ pub struct PlaybackClip {
     pub masks: Vec<Mask>,
     /// The picture size the effects measure against: the media's.
     pub layer: (u32, u32),
-    /// The clip time at `timeline_start`, where its keyframes are read.
-    pub clip_offset: f64,
     /// The seed of its random effects, as a bake uses.
     pub seed: u32,
+    /// The part of the program it plays over, `[from, to)`.
+    span: (Time, Time),
+    /// How the program's time maps onto the media's: down the clips holding the sequence the
+    /// clip is in, and by the clip itself.
+    plays: TimeChain<'static>,
 }
 
 impl PlaybackClip {
@@ -77,21 +80,39 @@ impl PlaybackClip {
             && timeline_time < self.timeline_end()
     }
 
-    /// Map a timeline timestamp into the source interval, including speed.
+    /// The second of its media the clip plays at `timeline_time`, kept within the part of the
+    /// program it plays over.
     pub fn source_time_at(&self, timeline_time: f64) -> f64 {
-        let elapsed = (timeline_time - self.timeline_start).max(0.0);
-        (self.source_in + elapsed * self.speed).min(self.source_out)
+        let at = Time::from_seconds(timeline_time).unwrap_or(self.span.0);
+        self.plays
+            .source(at.clamp(self.span.0, self.span.1))
+            .seconds()
+    }
+
+    /// The frame of its media, at the media's `rate`, the clip shows at `at` of the program:
+    /// the one the compositor draws there.
+    pub fn source_frame_at(&self, at: Time, rate: Rate) -> i64 {
+        self.plays.frame(at, rate).max(0)
     }
 
     /// Map a source timestamp back into this clip's timeline interval.
     pub fn timeline_time_for_source(&self, source_time: f64) -> f64 {
-        let speed = if self.speed.is_finite() && self.speed > 0.0 {
-            self.speed
-        } else {
-            1.0
-        };
-        let time = self.timeline_start + (source_time - self.source_in) / speed;
-        time.clamp(self.timeline_start, self.timeline_end())
+        Time::from_seconds(source_time)
+            .map_or(self.timeline_start, |source| {
+                self.plays.played_at(source).seconds()
+            })
+            .clamp(self.timeline_start, self.timeline_end())
+    }
+
+    /// The clip's own time at `at` of the program, where its keyframes are read.
+    pub(crate) fn clip_time_at(&self, at: Time) -> Time {
+        self.plays.clip().time(self.plays.own(at))
+    }
+
+    /// The clip's own time where it plays second `source_time` of its media.
+    pub(crate) fn clip_time_of_source(&self, source_time: f64) -> Time {
+        let own = self.plays.clip();
+        Time::from_seconds(source_time).map_or(Time::ZERO, |source| own.time(own.played_at(source)))
     }
 }
 
@@ -122,6 +143,8 @@ impl ResolvedClip {}
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlaybackTimeline {
     pub fps: f64,
+    /// The rate `fps` is of, which the program's frames are counted at.
+    rate: Rate,
     pub width: u32,
     pub height: u32,
     pub duration: f64,
@@ -147,6 +170,18 @@ impl PlaybackTimeline {
     /// Clips in their original project order, which defines overlap priority.
     pub fn clips(&self) -> &[PlaybackClip] {
         &self.clips
+    }
+
+    /// The program's frame showing at `seconds`, as the compositor counts it when it draws
+    /// the picture ([`crate::drawn`]).
+    pub(crate) fn frame_at(&self, seconds: f64) -> i64 {
+        let frames = seconds * f64::from(self.rate.num()) / f64::from(self.rate.den());
+        ((frames + 1e-6).floor() as i64).max(0)
+    }
+
+    /// The rate the program's frames are counted at.
+    pub(crate) fn rate(&self) -> Rate {
+        self.rate
     }
 
     /// The program's sound clip by clip, as a render mixes it.
@@ -179,6 +214,7 @@ impl PlaybackTimeline {
                 id: media.id.to_string(),
                 path: PathBuf::from(&media.path),
                 duration: Some(media.duration.seconds()),
+                rate: media.rate,
                 has_audio: media.audio.is_some(),
                 subtitles: Vec::new(),
             })
@@ -187,7 +223,7 @@ impl PlaybackTimeline {
             project,
             clips: Vec::new(),
             captions: Vec::new(),
-            depth: 0,
+            holders: Vec::new(),
         };
         let duration = sequence.map_or(Time::ZERO, Sequence::duration);
         if let Some(sequence) = sequence {
@@ -240,8 +276,10 @@ impl PlaybackTimeline {
         let heard = kerf_compose::ramps::with_sound(project, |_, _, _| None);
         let sounds = program_sound(&heard, Catalog::builtin(), None).unwrap_or_default();
         let program = heard.into_owned();
+        let rate = sequence.map_or(Rate::FPS_30, |sequence| sequence.rate);
         Ok(Self {
-            fps: sequence.map_or(30.0, |sequence| sequence.rate.fps()),
+            fps: rate.fps(),
+            rate,
             width,
             height,
             duration: duration.seconds(),
@@ -375,16 +413,18 @@ struct Flattener<'a> {
     project: &'a Project,
     clips: Vec<PlaybackClip>,
     captions: Vec<CaptionCue>,
-    depth: usize,
+    /// The clips holding the sequence being laid, from the program's in, each with the rate
+    /// of the sequence it holds.
+    holders: Vec<(TimeMap<'static>, Rate)>,
 }
 
 impl Flattener<'_> {
     /// Add `[from, to)` of `sequence`, starting at program time `at`.
     fn sequence(&mut self, sequence: &Sequence, from: Time, to: Time, at: Time, muted: bool) {
-        if self.depth > MAX_NESTING {
+        if self.holders.len() > MAX_NESTING {
             return;
         }
-        let place = |time: Time| (time - from + at).seconds();
+        let place = |time: Time| time - from + at;
         for track in &sequence.tracks {
             if !track.enabled {
                 continue;
@@ -394,24 +434,22 @@ impl Flattener<'_> {
                 if lo >= hi {
                     continue;
                 }
-                let speed = clip.speed();
-                let Some((source_in, _)) = clip.source_range() else {
+                let Some(map) = clip.time_map() else {
                     if let (TrackKind::Subtitle, Content::Caption { text }) =
                         (track.kind, &clip.content)
                         && !text.trim().is_empty()
                     {
                         self.captions.push(CaptionCue {
-                            start: place(lo),
-                            end: place(hi),
+                            start: place(lo).seconds(),
+                            end: place(hi).seconds(),
                             text: text.trim().to_owned(),
                         });
                     }
                     continue;
                 };
-                if speed.is_reverse() {
+                if map.is_reverse() {
                     continue;
                 }
-                let source_at = |time: Time| source_in + speed.played(time - clip.start);
                 match &clip.content {
                     Content::Media { media, .. } => {
                         let kind = match track.kind {
@@ -444,31 +482,30 @@ impl Flattener<'_> {
                             track_id: track.id.to_string(),
                             track_kind: kind,
                             source_id: media.to_string(),
-                            timeline_start: place(lo),
+                            timeline_start: place(lo).seconds(),
                             duration: (hi - lo).seconds(),
-                            source_in: source_at(lo).seconds(),
-                            source_out: source_at(hi).seconds(),
-                            speed: speed.average(clip.duration),
                             volume: 10f64.powf(gain / 20.0) as f32,
                             track_muted: muted || track.muted,
                             effects,
                             masks,
                             layer: video.map_or((0, 0), |video| (video.width, video.height)),
-                            clip_offset: (lo - clip.start).seconds(),
                             seed: kerf_core::raster::seed(clip.id.as_str()),
+                            span: (place(lo), place(hi)),
+                            plays: TimeChain::new(self.holders.clone(), map.into_owned()),
                         });
                     }
-                    Content::Sequence { sequence: id, .. } if speed.is_one() => {
+                    Content::Sequence { sequence: id, .. } if map.speed().is_one() => {
                         if let Some(nested) = self.project.sequence(id.as_str()) {
-                            self.depth += 1;
+                            let (inner_from, inner_to) = map.window(lo, hi);
+                            self.holders.push((map.into_owned(), nested.rate));
                             self.sequence(
                                 nested,
-                                source_at(lo),
-                                source_at(hi),
-                                lo - from + at,
+                                inner_from,
+                                inner_to,
+                                place(lo),
                                 muted || track.muted,
                             );
-                            self.depth -= 1;
+                            self.holders.pop();
                         }
                     }
                     _ => {}
@@ -655,8 +692,9 @@ impl NativeCheck<'_> {
                     && let Some(nested) = self.project.sequence(id.as_str())
                 {
                     self.depth += 1;
-                    let source_in = clip.source_range().map_or(Time::ZERO, |(start, _)| start);
-                    self.sequence(nested, clip.start + at - source_in, shows);
+                    // Where the nested sequence's own start falls in the program.
+                    let starts = clip.played_at(Time::ZERO).unwrap_or(clip.start);
+                    self.sequence(nested, starts + at, shows);
                     self.depth -= 1;
                 }
             }
