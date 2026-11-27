@@ -247,6 +247,17 @@ a source position
 clip says with `captions c1 on=S1 [words=<n>]`, which uses a transcript of
 its media made earlier and stages the caption lines it becomes.
 
+A clip can follow another. `attach t1 to=c3` leaves the title `t1` where it
+is, and from then on it moves when `c3` does (a move, a slide, a ripple edit
+before it), while a ripple edit passes under it without cutting or moving
+it: music attached to a scene's first clip stays whole as the shots over it
+come and go. The document writes such a clip by the one it follows,
+`at=c3.start+12f`, so its line changes only when it is itself moved.
+`detach t1` lets go. A trim, roll, slip, or change of speed of `c3` leaves
+`t1` where it is; where `c3` is cut in two it follows the part under its
+start, and with `c3` removed the clip in its place, though a ripple delete of
+`c3` takes `t1` out with it when it was wholly over it.
+
 When media is imported, `kerfd` indexes it in the background — one FFmpeg
 pass for scene cuts and a loudness envelope, a hundredth of a second at a
 time, from which pauses, loudest moments, onsets, and tempo are found and

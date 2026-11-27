@@ -977,6 +977,7 @@ pub fn instantiate_with_ids(
                 }
                 clip.id = ids[&clip.id].clone();
                 clip.link = clip.link.as_ref().map(|id| ids[id].clone());
+                clip.follows = clip.follows.as_ref().map(|id| ids[id].clone());
                 // A look's time that lands on a marker follows its new id.
                 for effect in &mut clip.effects {
                     let Some(def) = catalog.fx(effect.fx.as_str()) else {
@@ -1157,6 +1158,7 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
         });
     }
     let mut links = BTreeMap::<Id, Vec<Id>>::new();
+    let mut follows = Vec::new();
     // Every track before any clip: an effect may name another track, as a
     // track matte names the one above it.
     for track in &sequence.tracks {
@@ -1199,6 +1201,9 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
             if let Some(link) = &clip.link {
                 links.entry(link.clone()).or_default().push(clip.id.clone());
             }
+            if let Some(followed) = &clip.follows {
+                follows.push((clip.id.clone(), followed.clone()));
+            }
         }
         for transition in &track.transitions {
             ops.push(Op::AddTransition {
@@ -1212,6 +1217,14 @@ fn append_sequence(sequence: &Sequence, ops: &mut Vec<Op>) {
                 params: transition.params.clone(),
             });
         }
+    }
+    // Once every clip is placed, and before any is linked: attaching one takes what is
+    // linked to it, and each says for itself what it follows.
+    for (clip, to) in follows {
+        ops.push(Op::Attach {
+            clips: vec![clip],
+            to,
+        });
     }
     for (group, clips) in links {
         ops.push(Op::Link {

@@ -200,6 +200,24 @@ impl Script<'_> {
                 fields.finish(count)?;
                 Ok(vec![Op::Link { clips, group }])
             }
+            "attach" => {
+                let clips = clip_list(&fields, 1)?;
+                let to = fields.take_id("to")?.ok_or_else(|| {
+                    line.error(
+                        1,
+                        "`attach` says which clip to follow, as `attach c5 to=c2`",
+                    )
+                })?;
+                let count = fields.positional().len();
+                fields.finish(count)?;
+                Ok(vec![Op::Attach { clips, to }])
+            }
+            "detach" => {
+                let clips = clip_list(&fields, 1)?;
+                let count = fields.positional().len();
+                fields.finish(count)?;
+                Ok(vec![Op::Detach { clips }])
+            }
             "lift" | "extract" => self.take_out(fields, command == "extract"),
             "trim" => self.trim(fields),
             "roll" | "slip" | "slide" => self.roll_slip_slide(fields, command),

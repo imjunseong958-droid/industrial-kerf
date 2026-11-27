@@ -290,6 +290,7 @@ fn clip_changes(
     differs(&mut fields, "name", &before.name, &after.name);
     differs(&mut fields, "link", &before.link, &after.link);
     differs(&mut fields, "parent", &before.parent, &after.parent);
+    differs(&mut fields, "follows", &before.follows, &after.follows);
     differs(&mut fields, "retime", &before.retime, &after.retime);
     differs(&mut fields, "angle", &before.angle, &after.angle);
     param_changes(&mut fields, &before.props, &after.props);

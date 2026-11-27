@@ -17,6 +17,12 @@
 //! Positions are timecode; durations count frames as `HH:MM:SS:FF`. Printing
 //! is deterministic and omits defaults, so a document diff is an edit diff.
 //!
+//! A clip that follows another ([`Clip::follows`]) says where it is by that
+//! one, `at=c1.start+12f`: so long after it starts, or with `-` before, or
+//! with no amount as it does. Where it is on the sequence is worked out as
+//! the document is read, whichever of the two comes first in it, so the line
+//! of a clip that only went where the one it follows went does not change.
+//!
 //! A media that Kerf or a model makes has the steps that make it under its
 //! line ([`crate::making`]):
 //!
@@ -65,10 +71,14 @@ pub fn parse_document(text: &str, catalog: &Catalog) -> Result<Document, Vec<Dia
         project: Project::default(),
         lines: HashMap::new(),
         errors: Vec::new(),
+        following: Vec::new(),
     };
     parser.headers(&lines);
     if parser.errors.is_empty() {
         parser.bodies(&lines);
+    }
+    if parser.errors.is_empty() {
+        parser.follow();
     }
     if !parser.errors.is_empty() {
         return Err(parser.errors);
@@ -101,6 +111,55 @@ struct Parser<'c> {
     project: Project,
     lines: HashMap<Id, usize>,
     errors: Vec<Diagnostic>,
+    /// The clips that say where they are by another, each with how long after that one
+    /// starts it does: placed once every clip is read ([`Parser::follow`]).
+    following: Vec<Following>,
+}
+
+/// A clip whose line says `at=<clip>.start` and an amount.
+struct Following {
+    sequence: usize,
+    clip: Id,
+    followed: Id,
+    after: Time,
+    line: usize,
+    column: usize,
+}
+
+/// `at=` as a clip's line has it: a place on the sequence, or another clip's start and how
+/// long after it.
+enum At {
+    Placed(Time),
+    Following(Id, Time),
+}
+
+/// Read a clip's `at=`. A clip's id may hold `.start` and `-` itself, so of every `.start`
+/// in it the last that leaves nothing or an amount is the one meant.
+fn read_at(text: &str, clock: &Clock) -> Result<At, String> {
+    const START: &str = ".start";
+    if !text.contains(START) {
+        if text.contains(".end") || text.contains('@') {
+            return Err(format!(
+                "`{text}`: a clip follows another from its start, as `at=c1.start+12f`; the other anchors are a script's"
+            ));
+        }
+        return clock.position(text).map(At::Placed);
+    }
+    text.rmatch_indices(START)
+        .find_map(|(at, _)| {
+            let id = Id::new(&text[..at]).ok()?;
+            let after = match &text[at + START.len()..] {
+                "" => Time::ZERO,
+                amount if amount.starts_with(['+', '-']) => clock.delta(amount).ok()?,
+                _ => return None,
+            };
+            Some(At::Following(id, after))
+        })
+        .ok_or_else(|| {
+            format!(
+                "`{text}`: after `<clip>.start` comes an amount such as +12f or -0.5s, or nothing"
+            )
+        })
 }
 
 type Step<T = ()> = Result<T, Diagnostic>;
@@ -396,15 +455,36 @@ impl Parser<'_> {
         let mut fields = Fields::new(line)?;
         let id = fields.id(1, "a clip id")?;
         let (content, _) = content(&mut fields, &self.project, self.catalog, clock.rate)?;
-        let start = fields
-            .take_with("at", |text| clock.position(text))?
+        let at_column = line
+            .args
+            .iter()
+            .find(|arg| arg.key.as_deref() == Some("at"))
+            .map_or(1, |arg| arg.column);
+        let at = fields
+            .take_with("at", |text| read_at(text, &clock))?
             .ok_or_else(|| line.error(1, "missing `at=`"))?;
         let duration = fields
             .take_with("dur", |text| clock.duration(text))?
             .ok_or_else(|| {
                 line.error(1, "missing `dur=`; `look` with `file` gives the whole line")
             })?;
+        // What follows another is placed once every clip is read.
+        let start = match &at {
+            At::Placed(start) => *start,
+            At::Following(..) => Time::ZERO,
+        };
         let mut clip = Clip::new(id, content, start, duration);
+        if let At::Following(followed, after) = at {
+            self.following.push(Following {
+                sequence: s,
+                clip: clip.id.clone(),
+                followed: followed.clone(),
+                after,
+                line: line.number,
+                column: at_column,
+            });
+            clip.follows = Some(followed);
+        }
         clip.name = fields.take_text("name")?.map(str::to_owned);
         clip.enabled = fields.take_bool("enabled")?.unwrap_or(true);
         clip.link = fields.take_id("link")?;
@@ -424,6 +504,87 @@ impl Parser<'_> {
         let clips = &mut self.project.sequences[s].tracks[t].clips;
         clips.push(clip);
         Ok(clips.len() - 1)
+    }
+
+    /// Place every clip that follows another: so long after that one starts, those that are
+    /// themselves followed first, and each put on its track where it then starts. One that
+    /// follows no clip of its sequence, or itself through others, is an error at its `at=`.
+    fn follow(&mut self) {
+        let mut waiting = std::mem::take(&mut self.following);
+        let followers: Vec<Id> = waiting.iter().map(|one| one.clip.clone()).collect();
+        while !waiting.is_empty() {
+            let unplaced: Vec<Id> = waiting.iter().map(|one| one.clip.clone()).collect();
+            let (mut placed, mut rest) = (false, Vec::new());
+            for one in waiting {
+                let tracks = &mut self.project.sequences[one.sequence].tracks;
+                let followed = tracks
+                    .iter()
+                    .find_map(|track| track.clip(one.followed.as_str()))
+                    .map(|clip| clip.start);
+                let Some(followed) = followed else {
+                    self.errors.push(
+                        Diagnostic::error(
+                            "clip.follows",
+                            format!(
+                                "`{}` follows `{}`, not a clip of its sequence",
+                                one.clip, one.followed
+                            ),
+                        )
+                        .entity(&one.clip)
+                        .at(one.line, one.column),
+                    );
+                    // Read, though placed nowhere: what follows it is not told it follows itself.
+                    placed = true;
+                    continue;
+                };
+                if unplaced.contains(&one.followed) {
+                    rest.push(one);
+                    continue;
+                }
+                let clip = tracks.iter_mut().find_map(|track| {
+                    let index = track.clip_index(one.clip.as_str())?;
+                    Some(&mut track.clips[index])
+                });
+                if let Some(clip) = clip {
+                    clip.start = followed + one.after;
+                }
+                placed = true;
+            }
+            if !placed {
+                // Each of the rest waits for another of them.
+                for one in &rest {
+                    self.errors.push(
+                        Diagnostic::error(
+                            "clip.follows",
+                            format!("`{}` follows itself through `{}`", one.clip, one.followed),
+                        )
+                        .entity(&one.clip)
+                        .at(one.line, one.column),
+                    );
+                }
+                return;
+            }
+            waiting = rest;
+        }
+        // Each onto its track where it starts, among the clips whose lines say where they
+        // are, which stay in the order the document has them: every follower of a track
+        // taken off it first, so that each goes in among clips that are in order.
+        for sequence in &mut self.project.sequences {
+            for track in &mut sequence.tracks {
+                let (following, placed): (Vec<Clip>, Vec<Clip>) = std::mem::take(&mut track.clips)
+                    .into_iter()
+                    .partition(|clip| followers.contains(&clip.id));
+                track.clips = placed;
+                for clip in following {
+                    let before = track
+                        .clips
+                        .iter()
+                        .position(|other| other.start > clip.start)
+                        .unwrap_or(track.clips.len());
+                    track.clips.insert(before, clip);
+                }
+            }
+        }
     }
 
     fn set_line(&mut self, s: usize, t: usize, c: usize, line: &Line) -> Step {
@@ -1421,12 +1582,21 @@ fn print_clip(
     catalog: &Catalog,
     options: PrintOptions,
 ) {
+    // Where it is by the clip it follows, when it follows one.
+    let followed = clip.follows.as_ref().and_then(|followed| {
+        let start = project.clip(followed.as_str())?.start;
+        Some((followed, clip.start - start))
+    });
+    let at = match followed {
+        Some((followed, Time::ZERO)) => format!("{followed}.start"),
+        Some((followed, after)) => format!("{followed}.start{}", clock.print_delta(after)),
+        None => clock.print_position(clip.start),
+    };
     write!(
         out,
-        "    clip {} {} at={} dur={}",
+        "    clip {} {} at={at} dur={}",
         clip.id,
         content_text(project, &clip.content),
-        clock.print_position(clip.start),
         clock.print_duration(clip.duration)
     )
     .expect("writing to a String cannot fail");
@@ -1453,9 +1623,14 @@ fn print_clip(
         write!(out, " parent={parent}").expect("writing to a String cannot fail");
     }
     if options.annotate {
+        out.push_str("  #");
+        if followed.is_some() {
+            write!(out, " at {},", clock.print_position(clip.start))
+                .expect("writing to a String cannot fail");
+        }
         write!(
             out,
-            "  # ends {} ({})",
+            " ends {} ({})",
             clock.print_position(clip.end()),
             clip.duration
         )

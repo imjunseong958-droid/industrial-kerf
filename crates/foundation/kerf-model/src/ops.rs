@@ -22,6 +22,7 @@ use crate::value::Param;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 mod clip;
+mod follow;
 mod lookup;
 mod media;
 mod sequence;
@@ -400,6 +401,16 @@ pub enum Op {
     Unlink {
         clips: Vec<Id>,
     },
+    /// Have clips, and the clips linked to them, follow `to` ([`Clip::follows`]): they stay
+    /// where they are, and from then on move when it moves.
+    Attach {
+        clips: Vec<Id>,
+        to: Id,
+    },
+    /// Have clips, and the clips linked to them, follow nothing.
+    Detach {
+        clips: Vec<Id>,
+    },
 }
 
 /// What an applied list of operations did beyond its literal request.
@@ -456,6 +467,7 @@ impl<'a> Steps<'a> {
                 catalog,
                 ids: IdGen::default(),
                 notes: Vec::new(),
+                followed: follow::Followed::new(),
             },
             done: 0,
         }
@@ -473,6 +485,7 @@ impl<'a> Steps<'a> {
         let editor = &mut self.editor;
         editor.ids = editor.project.id_gen();
         let before: Vec<Id> = editor.project.ids().cloned().collect();
+        editor.followed = editor.followed();
         editor.apply(op).map_err(|diagnostic| Rejected {
             op: Some(self.done),
             diagnostics: vec![diagnostic],
@@ -540,6 +553,9 @@ struct Editor<'a> {
     catalog: &'a Catalog,
     ids: IdGen,
     notes: Vec<String>,
+    /// Where each clip another follows stood before the operation at hand, for what follows
+    /// one it removes.
+    followed: follow::Followed,
 }
 
 impl Editor<'_> {
@@ -691,12 +707,17 @@ impl Editor<'_> {
             Op::RemoveMarker { id } => self.remove_marker(id),
             Op::Link { clips, group } => self.link(clips, group.as_ref()),
             Op::Unlink { clips } => self.unlink(clips),
+            Op::Attach { clips, to } => self.attach(clips, to),
+            Op::Detach { clips } => self.detach(clips),
         }
     }
 
     /// Drop transitions whose clips no longer meet, link groups left with a single clip, and
-    /// parents that no longer exist.
+    /// parents that no longer exist, and give what followed a clip that is gone another to
+    /// follow.
     fn housekeep(&mut self) {
+        let followed = std::mem::take(&mut self.followed);
+        self.refollow(&followed);
         for sequence in &mut self.project.sequences {
             for track in &mut sequence.tracks {
                 let clips = &track.clips;

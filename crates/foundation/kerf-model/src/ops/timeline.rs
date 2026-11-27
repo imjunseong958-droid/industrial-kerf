@@ -48,6 +48,11 @@ impl Editor<'_> {
             track.clips.insert(c + 1, tail);
             tails.push(tail_id);
         }
+        // Once every one is cut, so that the tail of a follower cut with the clip it follows
+        // is there to follow that clip's tail.
+        for ((_, head), tail) in members.iter().zip(&tails) {
+            self.follow_tail(s, head, tail, at);
+        }
         for group in tails_by_group.into_values().filter(|g| g.len() > 1) {
             let link = self.ids.next("L");
             for tail in group {
@@ -60,7 +65,8 @@ impl Editor<'_> {
 
     /// Open `amount` of time at `at` on the ripple tracks of an edit on
     /// `edited`, splitting clips that span `at`. Clips in `exclude` neither
-    /// split nor move.
+    /// split nor move, and nor does a clip that follows another, for where it
+    /// is itself: it goes as far as the one it follows.
     pub(super) fn open_time(
         &mut self,
         s: usize,
@@ -68,29 +74,37 @@ impl Editor<'_> {
         at: Time,
         amount: Time,
         exclude: &HashSet<Id>,
-    ) {
+    ) -> Outcome {
         let tracks = self.ripple_tracks(s, edited);
         let mut spanning = Vec::new();
         for &t in &tracks {
             for clip in &self.project.sequences[s].tracks[t].clips {
-                if !exclude.contains(&clip.id) && clip.start < at && clip.end() > at {
+                if !exclude.contains(&clip.id)
+                    && clip.follows.is_none()
+                    && clip.start < at
+                    && clip.end() > at
+                {
                     spanning.push((t, clip.id.clone()));
                 }
             }
         }
         self.split_all(s, &spanning, at, None);
+        let mut moved = HashSet::new();
         for t in tracks {
             for clip in &mut self.project.sequences[s].tracks[t].clips {
-                if !exclude.contains(&clip.id) && clip.start >= at {
+                if !exclude.contains(&clip.id) && clip.follows.is_none() && clip.start >= at {
                     clip.start += amount;
+                    moved.insert(clip.id.clone());
                 }
             }
         }
+        self.carry(s, moved, amount)
     }
 
     /// Close `[from, to)` on the ripple tracks of an edit on `edited`.
     /// Fails when a clip outside `exclude` occupies the range, because
-    /// closing it would cut that clip.
+    /// closing it would cut that clip. A clip that follows another is not
+    /// in the way, and goes as far as the one it follows.
     pub(super) fn close_time(
         &mut self,
         s: usize,
@@ -102,11 +116,9 @@ impl Editor<'_> {
         let tracks = self.ripple_tracks(s, edited);
         for &t in &tracks {
             let track = &self.project.sequences[s].tracks[t];
-            if let Some(blocker) = track
-                .clips
-                .iter()
-                .find(|c| !exclude.contains(&c.id) && c.start < to && c.end() > from)
-            {
+            if let Some(blocker) = track.clips.iter().find(|c| {
+                !exclude.contains(&c.id) && c.follows.is_none() && c.start < to && c.end() > from
+            }) {
                 return Err(fail(
                     "ripple.blocked",
                     format!(
@@ -119,14 +131,16 @@ impl Editor<'_> {
                 ));
             }
         }
+        let mut moved = HashSet::new();
         for t in tracks {
             for clip in &mut self.project.sequences[s].tracks[t].clips {
-                if !exclude.contains(&clip.id) && clip.start >= to {
+                if !exclude.contains(&clip.id) && clip.follows.is_none() && clip.start >= to {
                     clip.start -= to - from;
+                    moved.insert(clip.id.clone());
                 }
             }
         }
-        Ok(())
+        self.carry(s, moved, from - to)
     }
 
     /// Remove `[from, to)` from `tracks`, trimming or splitting clips at
@@ -217,7 +231,7 @@ impl Editor<'_> {
         }
         let edited: Vec<usize> = placed.iter().map(|(t, _)| *t).collect();
         if ripple {
-            self.open_time(s, &edited, at, duration, &HashSet::new());
+            self.open_time(s, &edited, at, duration, &HashSet::new())?;
         } else {
             self.clear_tracks(s, &edited, at, at + duration);
         }
@@ -261,8 +275,13 @@ impl Editor<'_> {
         for at in &selection {
             self.unlocked(s, at.track)?;
         }
-        let mut ranges: Vec<(Time, Time)> = selection
-            .iter()
+        // What follows another is taken out and closes nothing: a ripple edit passes under it.
+        let rippling = || {
+            selection
+                .iter()
+                .filter(|at| self.clip(**at).follows.is_none())
+        };
+        let mut ranges: Vec<(Time, Time)> = rippling()
             .map(|at| (self.clip(*at).start, self.clip(*at).end()))
             .collect();
         ranges.sort();
@@ -279,7 +298,30 @@ impl Editor<'_> {
             .iter()
             .map(|at| self.clip(*at).id.clone())
             .collect();
-        let edited: Vec<usize> = selection.iter().map(|at| at.track).collect();
+        // What follows one of them and is wholly over it goes with it: a title over a shot
+        // that is cut out has nothing left to be over. What runs on past it stays, as music
+        // under the next shots does.
+        let riders: Vec<(Id, Id)> = self.project.sequences[s]
+            .tracks
+            .iter()
+            .filter(|track| !track.locked)
+            .flat_map(|track| &track.clips)
+            .filter(|clip| !ids.contains(&clip.id))
+            .filter_map(|clip| {
+                let followed = rippling()
+                    .map(|at| self.clip(*at))
+                    .find(|followed| clip.follows.as_ref() == Some(&followed.id))?;
+                (clip.start >= followed.start && clip.end() <= followed.end())
+                    .then(|| (clip.id.clone(), followed.id.clone()))
+            })
+            .collect();
+        let edited: Vec<usize> = rippling().map(|at| at.track).collect();
+        for (rider, followed) in riders {
+            self.notes.push(format!(
+                "took `{rider}` out with `{followed}`, which it followed and was wholly over"
+            ));
+            ids.insert(rider);
+        }
         for &(from, to) in merged.iter().rev() {
             let here: HashSet<Id> = ids
                 .iter()
@@ -297,6 +339,12 @@ impl Editor<'_> {
                     .remove(at.clip);
             }
             ids.retain(|id| !here.contains(id));
+        }
+        for id in ids {
+            let at = self.find(&id);
+            self.project.sequences[s].tracks[at.track]
+                .clips
+                .remove(at.clip);
         }
         Ok(())
     }
@@ -319,15 +367,46 @@ impl Editor<'_> {
             ));
         }
         let tracks = self.track_set(s, tracks)?;
+        // The clips the end of the range is inside. Of those, the ones whose head is in the
+        // range too: what each shows from the range's end on comes earlier when it closes,
+        // and what it showed before that is gone.
+        let across = |clip: &&Clip| clip.start < to && clip.end() > to;
+        let clips = || {
+            tracks
+                .iter()
+                .flat_map(|t| &self.project.sequences[s].tracks[*t].clips)
+        };
+        let cut_through: HashSet<Id> = clips().filter(across).map(|c| c.id.clone()).collect();
+        let headless: HashSet<Id> = clips()
+            .filter(across)
+            .filter(|clip| clip.start >= from)
+            .map(|clip| clip.id.clone())
+            .collect();
+        let was_there: HashSet<Id> = clips().map(|clip| clip.id.clone()).collect();
         self.clear_tracks(s, &tracks, from, to);
         if close {
+            // The range is cut out of every clip in it, followers too, and the part of each
+            // after it closes up to the part before. What follows another and was whole
+            // after the range goes as far as the one it follows.
+            let (mut whole, mut cut) = (HashSet::new(), HashSet::new());
             for t in tracks {
                 for clip in &mut self.project.sequences[s].tracks[t].clips {
-                    if clip.start >= to {
+                    let part_after = clip.start == to
+                        && (cut_through.contains(&clip.id) || !was_there.contains(&clip.id));
+                    if clip.start >= to && (clip.follows.is_none() || part_after) {
                         clip.start -= to - from;
+                        if headless.contains(&clip.id) {
+                            cut.insert(clip.id.clone());
+                        } else {
+                            whole.insert(clip.id.clone());
+                        }
                     }
                 }
             }
+            let moved: HashSet<Id> = whole.union(&cut).cloned().collect();
+            self.carry_past(s, whole, moved.clone(), from - to, None)?;
+            // A follower that stood over a head that went stays where it is.
+            self.carry_past(s, cut, moved, from - to, Some(to))?;
         }
         Ok(())
     }
@@ -439,10 +518,12 @@ impl Editor<'_> {
             clip.start += delta;
             lifted.push((target, clip));
         }
+        let mut moved = HashSet::new();
         for (target, clip) in lifted {
+            moved.insert(clip.id.clone());
             self.project.sequences[s].tracks[target].insert_sorted(clip);
         }
-        Ok(())
+        self.carry(s, moved, delta)
     }
 
     pub(super) fn link(&mut self, clips: &[Id], group: Option<&Id>) -> Outcome {

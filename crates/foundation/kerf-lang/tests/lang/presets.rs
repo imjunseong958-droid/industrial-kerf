@@ -96,6 +96,40 @@ fn a_preset_leaves_behind_what_its_footage_was_recorded_beside() {
 }
 
 #[test]
+fn a_pattern_keeps_what_follows_what() {
+    // The title follows the second shot, and starts with the first.
+    let edit = EDIT.replace(
+        "clip title1 gen=title@1 at=01:00:00:00",
+        "clip title1 gen=title@1 at=c2.start-60f",
+    );
+    assert_ne!(edit, EDIT);
+    let document = preset::export(
+        &parse(&edit),
+        Catalog::builtin(),
+        &Id::new("s1").unwrap(),
+        "Pattern",
+    )
+    .unwrap();
+    let destination = destination();
+    let script = preset::instantiate(
+        &destination,
+        Catalog::builtin(),
+        &document,
+        &Id::new("target").unwrap(),
+        &bindings(),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let applied = apply_script(&destination, Catalog::builtin(), &script)
+        .unwrap()
+        .project;
+    let tracks = &applied.sequence("target").unwrap().tracks;
+    let (shot, title) = (&tracks[0].clips[1], &tracks[2].clips[0]);
+    assert_eq!(title.follows.as_ref(), Some(&shot.id));
+    assert_eq!(title.start, Time::ZERO);
+}
+
+#[test]
 fn exports_independent_cuts_but_keeps_linked_audio_in_the_same_slot() {
     let document = exported();
     assert!(!document.contains("original-footage"));
