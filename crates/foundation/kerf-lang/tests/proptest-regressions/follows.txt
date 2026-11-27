@@ -9,3 +9,4 @@ cc 0215ce076c7bfa64a5184a5e897d43f215043c47ca0e28e3e98023ab8ef47212 # shrinks to
 cc 03784290d49105baa2e6eeed94146477949b3f8e838f1ceb71141127ef660524 # shrinks to edits = [Insert(Index(0), 0, 1)]
 cc 2afadeb6ed9c955d53557169542eb4c42969da2e1ce2b64c0982525cdc7d5969 # shrinks to edits = [Delete(Index(0)), Insert(Index(0), 1, 1)]
 cc b099bba5eb8b548b32413fbddb5c42489acd58a0e4e8bef26f25924d813d01ae # shrinks to edits = [Trim { shot: Index(4611686018427387904), tail: false, by: -2, ripple: true }]
+cc 377a8d51e7d2a076f22fcb2cfccee387dc92153040df902a7d413bdeda828527 # shrinks to edits = [Blade(Index(4611686018427387904), 16), Overwrite(Index(3689348814741910324), 17, 9), RippleDelete(Index(0)), RippleDelete(Index(3074457345618258603)), Overwrite(Index(0), 2, 15)]
