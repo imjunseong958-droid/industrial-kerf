@@ -9,10 +9,10 @@ use kerf_editor::prefs::TrackHeights;
 use kerf_editor::store::MediaActivity;
 use kerf_editor::theme::{layout, motion};
 use kerf_editor::timeline::{
-    activity_label, add_gain_key, band_line, extend, gain_at, gain_y, shown_version, signal_at,
-    signal_points, stepped_height, strip_has_transport, watch_look, watched_clips, zoom_of_share,
-    zoom_share, ClipWatch, StripFit, Tool, WatchLook, GAIN_CEILING, GAIN_FLOOR, TRACK_LEAST,
-    TRACK_MOST, TRACK_STEPS,
+    activity_label, add_gain_key, band_line, drawn_along, extend, gain_at, gain_y, shown_version,
+    signal_at, signal_points, stepped_height, strip_has_transport, watch_look, watched_clips,
+    zoom_of_share, zoom_share, ClipWatch, StripFit, Tool, WatchLook, GAIN_CEILING, GAIN_FLOOR,
+    TRACK_LEAST, TRACK_MOST, TRACK_STEPS,
 };
 use proptest::prelude::*;
 use serde_json::json;
@@ -389,6 +389,74 @@ fn targeting_a_second_track_of_a_kind_moves_the_source_there() {
     // kind takes the source.
     let chosen: Vec<String> = ["V3", "V2", "V1", "A2", "A1"].map(String::from).to_vec();
     assert_eq!(source_targets(&program, media, Some(&chosen)), ["V1", "A1"]);
+}
+
+/// A shot (`c1`) with its sound linked to it (`s1`); a title over the shot (`t1`), music
+/// following the title (`m1`) and a sound following the shot's (`n1`); a title on a locked
+/// track (`k1`) and what follows that (`k2`); and the next shot (`c2`), which nothing follows.
+fn followed() -> Timeline {
+    let clip = |id: &str, start: f64, duration: f64, also: serde_json::Value| {
+        let mut clip = json!({"id": id, "kind": "generator", "enabled": true,
+            "timelineStart": start, "duration": duration,
+            "startFrame": (start * 24.0) as i64, "durationFrames": (duration * 24.0) as i64});
+        clip.as_object_mut()
+            .unwrap()
+            .extend(also.as_object().unwrap().clone());
+        clip
+    };
+    timeline(json!({
+        "fps": 24.0,
+        "tracks": [
+            {"id": "V1", "type": "video", "enabled": true, "clips": [
+                clip("c1", 0.0, 4.0, json!({"link": "l1"})),
+                clip("c2", 6.0, 4.0, json!({}))
+            ]},
+            {"id": "V2", "type": "video", "enabled": true, "clips": [
+                clip("t1", 1.0, 2.0, json!({"follows": "c1"}))
+            ]},
+            {"id": "V3", "type": "video", "enabled": true, "locked": true, "clips": [
+                clip("k1", 2.0, 1.0, json!({"follows": "c1"}))
+            ]},
+            {"id": "A1", "type": "audio", "enabled": true, "clips": [
+                clip("s1", 0.0, 4.0, json!({"kind": "media", "link": "l1"})),
+                clip("k2", 5.0, 1.0, json!({"follows": "k1"}))
+            ]},
+            {"id": "A2", "type": "audio", "enabled": true, "clips": [
+                clip("m1", 0.5, 6.0, json!({"follows": "t1"})),
+                clip("n1", 8.0, 1.0, json!({"follows": "s1"}))
+            ]}
+        ]
+    }))
+}
+
+/// What a drag draws moving besides the dragged clip, by id, with where each starts.
+fn along(program: &Timeline, clip: &str, tool: Tool, frames: i64) -> BTreeMap<String, f64> {
+    drawn_along(program, clip, tool, frames)
+        .into_iter()
+        .collect()
+}
+
+#[test]
+fn a_moved_shot_draws_what_moves_with_it_as_far_along() {
+    let program = followed();
+    // Half a second later: its sound, what follows either and what follows those, but
+    // nothing on the locked track, nor what follows that.
+    let moved = BTreeMap::from([
+        ("m1".to_owned(), 1.0),
+        ("n1".to_owned(), 8.5),
+        ("s1".to_owned(), 0.5),
+        ("t1".to_owned(), 1.5),
+    ]);
+    assert_eq!(along(&program, "c1", Tool::Selection, 12), moved);
+    assert_eq!(along(&program, "c1", Tool::Slide, 12), moved);
+    // A slip leaves the shot where it is, and so all the rest.
+    assert_eq!(along(&program, "c1", Tool::Slip, 12), BTreeMap::new());
+    // A follower moved takes what follows it, not what it follows.
+    assert_eq!(
+        along(&program, "t1", Tool::Selection, -12),
+        BTreeMap::from([("m1".to_owned(), 0.0)])
+    );
+    assert_eq!(along(&program, "c2", Tool::Selection, 12), BTreeMap::new());
 }
 
 #[test]

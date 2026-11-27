@@ -336,7 +336,6 @@ impl TimelineView {
                 return;
             }
         };
-        let (start, duration) = drag.span(lanes.fps);
         let revision = self.session.read(cx).revision();
         let sent = self.session.update(cx, |session, cx| {
             let sent = session.edit(vec![op]);
@@ -344,6 +343,7 @@ impl TimelineView {
             sent
         });
         if sent {
+            // Where it was dropped, with what it took along.
             let head_shift = if drag.edit == Edit::TrimIn {
                 drag.frames as f64 / lanes.fps
             } else {
@@ -351,13 +351,10 @@ impl TimelineView {
             };
             self.pending = Some(Pending {
                 ghost: Ghost {
-                    id: drag.id,
-                    row: drag.target,
-                    start,
-                    duration,
                     edge: None,
                     dragging: false,
                     head_shift,
+                    ..drag.ghost(&lanes)
                 },
                 revision,
                 at: Instant::now(),
@@ -377,6 +374,8 @@ impl TimelineView {
                 edge: None,
                 dragging: false,
                 head_shift: 0.0,
+                along: Vec::new(),
+                shift: 0.0,
             },
             revision,
             at: Instant::now(),

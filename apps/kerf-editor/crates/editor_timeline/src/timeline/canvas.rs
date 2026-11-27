@@ -2,10 +2,11 @@
 //! the view as it stands), the area it fills with what a press, a
 //! right-click and the pointer moving over it do, and its painting: the
 //! lanes under the clips, each lane's clips and transitions, a clip being
-//! dragged and where it was, the snap line and a drag's readout, then the
-//! ruler, Kerf's cursor, the playhead, the skimmer and the scroll bar over
-//! them. The pieces every painting family shares are here too ([`Pen`],
-//! [`Fonts`], [`shape`], [`masked`]).
+//! dragged and where it was with what it takes along, the line from each
+//! clip that follows another to that one, the snap line and a drag's
+//! readout, then the ruler, Kerf's cursor, the playhead, the skimmer and the
+//! scroll bar over them. The pieces every painting family shares are here
+//! too ([`Pen`], [`Fonts`], [`shape`], [`masked`]).
 
 use super::activity::{activities, Activity};
 use super::clip::paint_clip;
@@ -29,7 +30,7 @@ use gpui::{
     MouseButton, MouseMoveEvent, MouseUpEvent, Pixels, Point, Rgba, ShapedLine, SharedString,
     TextRun, WeakEntity, Window,
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -362,8 +363,8 @@ fn paint_lanes(
     let lanes = &*frame.lanes;
     paint_grounds(frame, pen, width, height, window);
     paint_rows(frame, pen, width, height, fonts, window, cx);
-    paint_tethers(frame, pen, width, height, window);
     paint_moved(frame, pen, width, fonts, window, cx);
+    paint_tethers(frame, pen, width, height, window);
     if let Some(time) = frame.snapped {
         let x = view.x(time).floor();
         window.paint_quad(fill(
@@ -432,8 +433,9 @@ fn paint_grounds(frame: &Frame, pen: Pen, width: f32, height: f32, window: &mut 
 }
 
 /// Each lane that shows: where a previewed proposal's clips are now
-/// (dashed), its clips (a dragged one's outline where it was; a change
-/// reel's glow, cover and ring round each), its transitions.
+/// (dashed), its clips (a dragged one's outline where it was, and of each
+/// it takes along; a change reel's glow, cover and ring round each), its
+/// transitions.
 fn paint_rows(
     frame: &Frame,
     pen: Pen,
@@ -462,8 +464,9 @@ fn paint_rows(
             }
         }
         for clip in &row.clips {
-            match ghost.filter(|ghost| ghost.id == clip.id && !row.previewed) {
-                // Where a dragged clip was shows as an outline; a dropped one is drawn where it went.
+            match ghost.filter(|ghost| ghost.moves(&clip.id) && !row.previewed) {
+                // Where a dragged clip was shows as an outline, as does each it takes along; a
+                // dropped one is drawn where it went.
                 Some(ghost) if ghost.dragging => {
                     outline_clip(view, pen, width, row, y, clip.start, clip.end(), window)
                 }
@@ -495,29 +498,74 @@ fn paint_rows(
     }
 }
 
+/// Points across the line from a clip to the one it follows, of the dark
+/// edge on either side of it that keeps it apart from a filmstrip, and
+/// across the dot it ends in.
+const TETHER: f32 = 2.0;
+const TETHER_EDGE: f32 = 1.0;
+const TETHER_DOT: f32 = 7.0;
+
+/// A line from a clip that follows another to the one it follows, as drawn:
+/// down (or up) the lanes from where the follower starts (`x`, from `top`
+/// to `bottom`), then along the followed clip's facing edge (`to`) to the
+/// dot (`end_x`).
+#[derive(Clone, Copy)]
+struct Tether {
+    x: f32,
+    top: f32,
+    bottom: f32,
+    to: f32,
+    end_x: f32,
+    /// The follower or the clip it follows is chosen.
+    lit: bool,
+}
+
 /// From each clip that follows another to the one it follows: a line from where the
 /// follower starts, across the lanes between them, to a dot on the followed clip. Where the
 /// follower starts before or after that clip, the line runs along the clip's lane to its
-/// nearer end.
+/// nearer end. A dragged clip, and what it takes along, are joined where they are drawn.
+/// The lines of the chosen clips, and of the clips they follow, are in the accent, over
+/// the others.
 fn paint_tethers(frame: &Frame, pen: Pen, width: f32, height: f32, window: &mut Window) {
     let view = &frame.view;
     let lanes = &*frame.lanes;
-    let ink = theme::with_alpha(theme::ink(), 0.5);
-    for row in &lanes.rows {
+    // Where a clip drawn elsewhere is drawn: its row, start and end.
+    let placed: HashMap<&str, (usize, f64, f64)> = frame
+        .ghost
+        .iter()
+        .flat_map(|ghost| ghost.placed(lanes))
+        .map(|placed| {
+            (
+                placed.clip.id.as_str(),
+                (placed.row, placed.start, placed.end()),
+            )
+        })
+        .collect();
+    let at = |row: usize, clip: &ClipBox| {
+        placed
+            .get(clip.id.as_str())
+            .copied()
+            .unwrap_or((row, clip.start, clip.end()))
+    };
+    let mut tethers = Vec::new();
+    for (index, row) in lanes.rows.iter().enumerate() {
         for clip in &row.clips {
             let Some(followed) = clip.clip.follows.as_deref() else {
                 continue;
             };
-            let Some((lead_row, lead)) = lanes.rows.iter().find_map(|other| {
-                let lead = other.clips.iter().find(|lead| lead.id == followed)?;
-                Some((other, lead))
-            }) else {
+            let Some((lead_index, lead)) = lanes
+                .find(followed)
+                .map(|(lead_row, lead)| (lead_row, &lanes.rows[lead_row].clips[lead]))
+            else {
                 continue;
             };
-            let (y, lead_y) = (view.row_y(row), view.row_y(lead_row));
-            if y == lead_y {
+            let (index, start, _) = at(index, clip);
+            let (lead_index, lead_start, lead_end) = at(lead_index, lead);
+            if index == lead_index {
                 continue;
             }
+            let (row, lead_row) = (&lanes.rows[index], &lanes.rows[lead_index]);
+            let (y, lead_y) = (view.row_y(row), view.row_y(lead_row));
             // From the follower's edge that faces the followed clip, to that clip's edge
             // that faces the follower.
             let (from, to) = if y < lead_y {
@@ -526,40 +574,91 @@ fn paint_tethers(frame: &Frame, pen: Pen, width: f32, height: f32, window: &mut 
                 (y + CLIP_INSET, lead_y + lead_row.height - CLIP_INSET)
             };
             let (top, bottom) = (from.min(to).max(layout::RULER), from.max(to).min(height));
-            let x = view.x(clip.start).floor();
+            let x = view.x(start).floor();
             // Where on the followed clip the line ends: under the follower's start, or at
             // the end of the clip nearer to it.
-            let (lead_x0, lead_x1) = (view.x(lead.start), view.x(lead.end()));
-            let end_x = x.clamp(lead_x0.floor(), (lead_x1 - 1.0).max(lead_x0).floor());
+            let (lead_x0, lead_x1) = (view.x(lead_start), view.x(lead_end));
+            let end_x = x.clamp(lead_x0.floor(), (lead_x1 - TETHER).max(lead_x0).floor());
             if bottom <= top || (x < 0.0 && end_x < 0.0) || (x > width && end_x > width) {
                 continue;
             }
-            if (0.0..width).contains(&x) {
-                window.paint_quad(fill(pen.rect(x, top, 1.0, bottom - top), ink));
-            }
-            if end_x != x {
-                let (left, right) = (x.min(end_x).max(0.0), x.max(end_x).min(width));
-                if right > left && (layout::RULER..height).contains(&to) {
-                    window.paint_quad(fill(pen.rect(left, to, right - left + 1.0, 1.0), ink));
-                }
-            }
-            if (0.0..width).contains(&end_x) && (layout::RULER..height).contains(&to) {
-                window.paint_quad(quad(
-                    pen.rect(end_x - 2.0, to - 2.0, 5.0, 5.0),
-                    px(2.5),
-                    theme::ink(),
-                    px(0.0),
-                    gpui::transparent_black(),
-                    BorderStyle::Solid,
-                ));
-            }
+            let lit = frame
+                .selection
+                .iter()
+                .any(|chosen| *chosen == clip.id || chosen == followed);
+            tethers.push(Tether {
+                x,
+                top,
+                bottom,
+                to,
+                end_x,
+                lit,
+            });
+        }
+    }
+    tethers.sort_by_key(|tether| tether.lit);
+    for tether in &tethers {
+        paint_tether(tether, pen, width, height, window);
+    }
+}
+
+/// One line and its dot: a dark edge under all of it first, so where it
+/// crosses a filmstrip it stays apart from the picture, then the line, in
+/// ink2, or the accent's ink when it is lit.
+fn paint_tether(tether: &Tether, pen: Pen, width: f32, height: f32, window: &mut Window) {
+    let Tether {
+        x,
+        top,
+        bottom,
+        to,
+        end_x,
+        lit,
+    } = *tether;
+    let ink = if lit {
+        theme::accent_ink()
+    } else {
+        theme::ink2()
+    };
+    let shows = |x: f32| (-TETHER..width).contains(&x);
+    let along = (layout::RULER..height).contains(&to);
+    let (left, right) = (x.min(end_x).max(-TETHER), x.max(end_x).min(width));
+    for (grow, ink) in [(TETHER_EDGE, theme::lane::name_shadow()), (0.0, ink)] {
+        if shows(x) {
+            window.paint_quad(fill(
+                pen.rect(x - grow, top, TETHER + 2.0 * grow, bottom - top),
+                ink,
+            ));
+        }
+        if end_x != x && right > left && along {
+            let half = TETHER / 2.0 + grow;
+            window.paint_quad(fill(
+                pen.rect(
+                    left - grow,
+                    to - half,
+                    right - left + TETHER + 2.0 * grow,
+                    2.0 * half,
+                ),
+                ink,
+            ));
+        }
+        if shows(end_x) && along {
+            let across = TETHER_DOT + 2.0 * grow;
+            let middle = end_x + TETHER / 2.0;
+            window.paint_quad(quad(
+                pen.rect(middle - across / 2.0, to - across / 2.0, across, across),
+                px(across / 2.0),
+                ink,
+                px(0.0),
+                gpui::transparent_black(),
+                BorderStyle::Solid,
+            ));
         }
     }
 }
 
 /// A clip drawn other than where the snapshot has it, on the row it would
-/// land on: where a moved clip will overwrite a neighbour, a dashed box
-/// inside it.
+/// land on, and each it takes along, as far along on its own row: where one
+/// of them will meet another clip on its row, a dashed box where they meet.
 fn paint_moved(
     frame: &Frame,
     pen: Pen,
@@ -573,44 +672,63 @@ fn paint_moved(
     let Some(ghost) = frame.ghost.as_ref() else {
         return;
     };
-    let found = lanes.find(&ghost.id);
-    if let (Some((from, index)), Some(row)) = (found, lanes.rows.get(ghost.row)) {
-        let clip = &lanes.rows[from].clips[index];
-        let y = view.row_y(row);
+    let placed = ghost.placed(lanes);
+    for moved in &placed {
+        let row = &lanes.rows[moved.row];
+        let (edge, head_shift) = if moved.clip.id == ghost.id {
+            (ghost.edge, ghost.head_shift)
+        } else {
+            (None, 0.0)
+        };
         paint_clip(
             frame,
             pen,
             width,
             row,
-            y,
-            clip,
-            (ghost.start, ghost.duration),
-            ghost.edge,
-            ghost.head_shift,
+            view.row_y(row),
+            moved.clip,
+            (moved.start, moved.duration),
+            edge,
+            head_shift,
             fonts,
             window,
             cx,
         );
-        // Where a moved clip will overwrite a neighbour, a dashed box inside it.
-        if ghost.dragging && ghost.edge.is_none() && frame.tool != Tool::Slip {
-            let (g0, g1) = (view.x(ghost.start), view.x(ghost.start + ghost.duration));
-            for other in row.clips.iter().filter(|other| other.id != ghost.id) {
-                let (o0, o1) = (view.x(other.start), view.x(other.end()));
-                let (left, right) = (g0.max(o0).max(-4.0), g1.min(o1).min(width + 4.0));
-                if right - left < 6.0 {
-                    continue;
-                }
-                let top = y + CLIP_INSET + 2.5;
-                let tall = row.height - 2.0 * CLIP_INSET - 5.0;
-                window.paint_quad(quad(
-                    pen.rect(left + 2.5, top, right - left - 5.0, tall),
-                    px(0.0),
-                    gpui::transparent_black(),
-                    px(1.0),
-                    theme::ink(),
-                    BorderStyle::Dashed,
-                ));
+    }
+    // Where a moved clip will meet another, a dashed box where they meet.
+    if !ghost.dragging || ghost.edge.is_some() || frame.tool == Tool::Slip {
+        return;
+    }
+    for (index, moved) in placed.iter().enumerate() {
+        let row = &lanes.rows[moved.row];
+        let y = view.row_y(row);
+        // The others on its row where they will be: those that stay, and those moved after it.
+        let staying = row
+            .clips
+            .iter()
+            .filter(|other| !ghost.moves(&other.id))
+            .map(|other| (other.start, other.end()));
+        let moved_after = placed[index + 1..]
+            .iter()
+            .filter(|other| other.row == moved.row)
+            .map(|other| (other.start, other.end()));
+        let (g0, g1) = (view.x(moved.start), view.x(moved.end()));
+        for (start, end) in staying.chain(moved_after) {
+            let (o0, o1) = (view.x(start), view.x(end));
+            let (left, right) = (g0.max(o0).max(-4.0), g1.min(o1).min(width + 4.0));
+            if right - left < 6.0 {
+                continue;
             }
+            let top = y + CLIP_INSET + 2.5;
+            let tall = row.height - 2.0 * CLIP_INSET - 5.0;
+            window.paint_quad(quad(
+                pen.rect(left + 2.5, top, right - left - 5.0, tall),
+                px(0.0),
+                gpui::transparent_black(),
+                px(1.0),
+                theme::ink(),
+                BorderStyle::Dashed,
+            ));
         }
     }
 }
