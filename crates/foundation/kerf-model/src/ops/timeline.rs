@@ -11,7 +11,10 @@ impl Editor<'_> {
     // ---- primitives -------------------------------------------------------
 
     /// Split each `(track, clip)` at `at`. Tails of clips that were linked
-    /// together are linked together in a new group.
+    /// together are linked together in a new group, and with them what was
+    /// linked to them that is not cut and starts at or after `at`: the
+    /// picture of a sound that came in before it, which goes with the part
+    /// of that sound under it and not with the part before.
     fn split_all(
         &mut self,
         s: usize,
@@ -53,10 +56,23 @@ impl Editor<'_> {
         for ((_, head), tail) in members.iter().zip(&tails) {
             self.follow_tail(s, head, tail, at);
         }
-        for group in tails_by_group.into_values().filter(|g| g.len() > 1) {
+        for (group, mut after) in tails_by_group {
+            // The heads start before the cut, so what else of the group starts from it on
+            // was not cut.
+            after.extend(
+                self.project.sequences[s]
+                    .tracks
+                    .iter()
+                    .flat_map(|track| &track.clips)
+                    .filter(|clip| clip.link.as_ref() == Some(&group) && clip.start >= at)
+                    .map(|clip| clip.id.clone()),
+            );
+            if after.len() < 2 {
+                continue;
+            }
             let link = self.ids.next("L");
-            for tail in group {
-                let at = self.find(&tail);
+            for clip in after {
+                let at = self.find(&clip);
                 self.project.clip_at_mut(at).link = Some(link.clone());
             }
         }
