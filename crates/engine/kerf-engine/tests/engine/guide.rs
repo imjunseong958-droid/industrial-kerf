@@ -215,6 +215,54 @@ fn a_pass_of_a_guide_is_a_file_of_its_own() {
     assert!(near(middle, [128, 128, 128]), "{middle:?}");
 }
 
+/// Render steps of a sequence at one size and rate that follow one another are drawn together,
+/// but one whose file another of them writes too is drawn where it comes: the file is what the
+/// last step to write it made.
+#[test]
+fn a_file_render_steps_write_twice_is_what_the_last_made() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let directory = folder.path();
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    let project = parse_document(
+        "kerf 1\nproject name=\"guide\"\n\
+         media m1 path=\"shots/open.mp4\" rate=24 dur=1s video=160x90\n\
+         \x20 render s2 {other.mp4} pass=depth\n\
+         \x20 render s2 {twice.mp4} pass=ids size=80x46\n\
+         \x20 render s2 {twice.mp4} pass=depth\n\
+         \x20 generate model=copy guide={other.mp4}\n\
+         sequence s1 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         sequence s2 rate=24 size=160x90 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip sky gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#ff0000\n\
+         \x20 track V2 video\n\
+         \x20   clip square gen=solid@1 at=0f dur=12f\n\
+         \x20     set color=#00ff00 scale=0.5 three_d=true\n",
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let copy = copy(directory);
+    let planned = plan(&project, directory, "m1", &copy).expect("a plan");
+    make(
+        &project,
+        directory,
+        &planned,
+        &copy,
+        &CancellationToken::new(),
+        |_| {},
+    )
+    .expect("made");
+    // The depth the last step drew, at the sequence's size, and not the ids of the step before.
+    let file = directory.join("shots/open.takes/001.work/twice.mp4");
+    assert_eq!(probe(&file, "v:0", "stream=width,height"), "160,90");
+    let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 8);
+    let (corner, middle) = (pixel(&file, 4, 4), pixel(&file, 80, 45));
+    assert!(near(corner, [0, 0, 0]), "{corner:?}");
+    assert!(near(middle, [128, 128, 128]), "{middle:?}");
+}
+
 /// Every frame of `file`, decoded to `pix_fmt`, one after another.
 #[expect(
     clippy::disallowed_methods,

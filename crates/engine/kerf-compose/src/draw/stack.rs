@@ -361,6 +361,7 @@ impl Drawing {
             (&ready.to_output, ready.crop),
             at - shown.plan.clip.start,
             size,
+            self.shared_by(ready.share),
         );
         Some(three_d::Layer {
             picture,
@@ -567,13 +568,22 @@ impl Drawing {
             to_output,
             crop,
             opacity,
+            share,
         }) = self.ready(sequence, shown, at, scale, (w, h), scene)
         else {
             return;
         };
         if let (true, Some(scene)) = (plan.three_d, scene) {
-            let projected =
-                three_d::project(scene, plan, &picture, (&to_output, crop), time, (w, h));
+            let share = self.shared_by(share);
+            let projected = three_d::project(
+                scene,
+                plan,
+                &picture,
+                (&to_output, crop),
+                time,
+                (w, h),
+                share,
+            );
             composite(canvas, &projected, opacity, blend);
             return;
         }
