@@ -34,4 +34,4 @@ pub mod wipe;
 
 pub use blend::Blend;
 pub use image::{Image, Landing};
-pub use kerf_geom::{Affine, Rect, Vec2};
+pub use kerf_geom::{Affine, Affine3, Rect, Vec2};
