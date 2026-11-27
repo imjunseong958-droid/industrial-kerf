@@ -41,8 +41,10 @@ impl KerfMcpRouter {
                 result[side] = json!({"empty": true});
                 continue;
             }
+            // Frames this small are as the proxies show them, where they show as much.
+            let shown = self.with_proxies(project, sequence.id.as_str(), &times, PREVIEW_WIDTH);
             let capture = self.capture_frames(
-                project,
+                &shown,
                 sequence.id.as_str(),
                 &times,
                 PREVIEW_WIDTH,
