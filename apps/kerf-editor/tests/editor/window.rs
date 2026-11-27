@@ -31,9 +31,10 @@ use kerf_editor::ui::{
 };
 use kerf_editor::workspace::{
     app_menu_place, app_menu_room, bar_takes_error, edited_ago_changes_in, edited_ago_in,
-    first_line, frame_step, kept_in_bar, local_day, panel_heights, panes_opening, picture_in,
-    picture_within, readable_error, running_words, standing_problem, sync_failed, sync_params,
-    sync_question, timeline_split, title_tip, toolbar_places, StandingInput, ToolbarPlaces,
+    first_line, frame_step, kept_in_bar, local_day, panel_heights, panel_layout, panes_opening,
+    picture_in, picture_within, readable_error, running_words, standing_problem, sync_failed,
+    sync_params, sync_question, timeline_split, title_tip, toolbar_places, StandingInput,
+    ToolbarPlaces,
 };
 use kerf_editor::{commands, keymap, sidebar, theme};
 use proptest::prelude::*;
@@ -279,6 +280,30 @@ proptest! {
         if timeline == 0.0 {
             prop_assert_eq!(lanes, 0.0);
         }
+    }
+
+    #[test]
+    fn choosing_a_clip_moves_neither_the_transport_nor_the_lanes(
+        height in 0.0f32..2000.0,
+        // Wide enough for the inspector to stand beside the picture.
+        width in 660.0f32..3000.0,
+        aspect in 0.3f32..3.0,
+        picture in 0.0f32..=1.0,
+        timeline in 0.0f32..=1.0,
+        media in 0.0f32..=1.0,
+    ) {
+        let shown = (picture, timeline, media);
+        let none = panel_layout(width, height, aspect, shown, false);
+        let chosen = panel_layout(width, height, aspect, shown, true);
+        // The picture's row (the transport at its foot), the band and the
+        // lanes under it are where they were.
+        prop_assert_eq!(
+            (chosen.picture, chosen.band, chosen.timeline),
+            (none.picture, none.band, none.timeline)
+        );
+        // The inspector takes its side of the row from the stage.
+        prop_assert_eq!(none.stage_width, width);
+        prop_assert!((chosen.stage_width - (width - layout::INSPECTOR)).abs() < 1e-3);
     }
 
     #[test]
