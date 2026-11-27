@@ -44,6 +44,10 @@ def main(argv):
         )
         return 2
     os.makedirs(said.data, exist_ok=True)
+    # A model that cannot load says so now, not at its first request.
+    for model in served.values():
+        if hasattr(model, "prepare"):
+            model.prepare()
     httpd = server.make_server(said.data, said.listen, served)
     host, port = httpd.server_address[:2]
     # The first line says where it listens, which a program that started it reads.
