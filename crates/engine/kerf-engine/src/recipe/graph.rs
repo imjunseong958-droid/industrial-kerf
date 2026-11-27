@@ -301,21 +301,6 @@ pub struct Knob {
     pub default: Option<Json>,
 }
 
-/// The program a model is run with, where its workflow can be opened.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum RunnerKind {
-    /// `kerf-comfy`.
-    Comfy,
-}
-
-/// What runs a model: which program, and which workflow.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Runner {
-    pub kind: RunnerKind,
-    pub workflow: String,
-}
-
 /// A `generate` step: what its line asks (`null` where it says none), whether the model
 /// is set up on this computer, and what the person's models file says the model takes,
 /// each left out where the file does not say.
@@ -330,8 +315,6 @@ pub struct ModelNode {
     pub from: Option<f64>,
     pub size: Option<String>,
     pub makes: String,
-    /// The shot's own workflow, as the line names it.
-    pub workflow: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub about: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -345,10 +328,6 @@ pub struct ModelNode {
     pub knobs: Vec<Knob>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub made: Option<Made>,
-    /// Said by whoever knows which program runs the model, which is not this crate:
-    /// `kerf-shots`, for a model `kerf-comfy` runs.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub runner: Option<Runner>,
 }
 
 /// One take of the shot, as the takes' node lists it.
@@ -804,10 +783,6 @@ impl Building<'_> {
             from: ask.from,
             size: ask.size.map(sized),
             makes: ask.out.clone(),
-            workflow: ask.workflow.as_ref().map(|workflow| match workflow {
-                Source::File(file) => file.clone(),
-                Source::Made(name) => format!("{{{name}}}"),
-            }),
             about: takes.and_then(|takes| takes.about.clone()),
             reads: takes.and_then(|takes| takes.reads.clone()),
             model_size: takes.and_then(|takes| takes.size).map(sized),
@@ -815,7 +790,6 @@ impl Building<'_> {
             model_seconds: takes.and_then(|takes| takes.seconds),
             knobs,
             made: None,
-            runner: None,
         };
         // What it reads first, so that each stands before it in the list, as it does on the page.
         if let Some(guide) = &ask.guide {
@@ -837,10 +811,6 @@ impl Building<'_> {
         for (nth, reference) in ask.references.iter().enumerate() {
             let (from, gives) = self.source(reference);
             self.edge(from, &id, "ref", nth, gives);
-        }
-        if let Some(workflow) = &ask.workflow {
-            let (from, gives) = self.source(workflow);
-            self.edge(from, &id, super::model::WORKFLOW, 0, gives);
         }
         for (nth, clip) in ask.moves.iter().enumerate() {
             let from = self.moves(clip);

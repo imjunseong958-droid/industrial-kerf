@@ -8,12 +8,10 @@
 //! draws from a sequence and hands to a model.
 //!
 //! In a file of its own: it reads a models file of its own for the whole
-//! process ([`Models::use_file`]), and gives the programs they run no ComfyUI
-//! server in `KERF_COMFY` ([`model::set_program_env`]), which the other tests'
-//! process must not see.
+//! process ([`Models::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
 
-use kerf_engine::recipe::model::{self, Models};
+use kerf_engine::recipe::model::Models;
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -123,25 +121,18 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     assert!(made.success());
     std::fs::write(dir.join("project.kerf"), PROJECT).unwrap();
     // The person's own models: three that are run here, each standing in for the model its
-    // name says, and one run with kerf-comfy, whose workflow is read and never run.
+    // name says.
     let models = dir.join("models.json");
     std::fs::write(
         &models,
         format!(
             r#"{{"matte": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a matte of the thing the prompt names", "reads": ["guide"]}}}},
                 "plate": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "the guide with what guide_mask is white on taken out", "reads": ["guide", "guide_mask"]}}}},
-                "shot": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a shot that follows a depth guide", "size": [160, 90], "rate": 12, "seconds": 5, "reads": ["guide"]}}}},
-                "video": {{"run": ["kerf-comfy", "--workflow", "shot", "{{request}}"]}}}}"#
+                "shot": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a shot that follows a depth guide", "size": [160, 90], "rate": 12, "seconds": 5, "reads": ["guide"]}}}}}}"#
         ),
     )
     .unwrap();
     Models::use_file(&models);
-    // No server a person has named is asked what the workflow's nodes take: the file named
-    // here is not there, and nothing else names one.
-    model::set_program_env("KERF_COMFY", dir.join("no-such-comfy.json"));
-    for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
-        model::remove_program_env(names_one);
-    }
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     // The person lets an agent's edits through and its makings run, up to a limit of theirs.
@@ -460,74 +451,4 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
         "{document}"
     );
     assert!(dir.join("shots/shown.takes/001.mp4").is_file());
-
-    // ---- A value of the workflow a model is run with: a copy the shot keeps beside its
-    // takes, which the step names from the project's folder by a line of the edit.
-    ok(
-        &router,
-        "edit",
-        json!({"script": "media add bounce path=\"shots/bounce.mp4\" rate=16 dur=65f video=832x480\n\
-            step bounce add render s2 {depth.mp4} pass=depth size=832x480 rate=16\n\
-            step bounce add generate model=video prompt=\"a ball bounces\" guide={depth.mp4} seed=7"}),
-    );
-    let workflow = ok(
-        &router,
-        "look",
-        json!({"workflow": {"media": "bounce", "line": 2}}),
-    );
-    assert_eq!(
-        (workflow["name"].as_str(), workflow["origin"].as_str()),
-        (Some("shot"), Some("bundled"))
-    );
-    // With no server named, none was asked: the workflow is read without, and says why.
-    assert!(
-        workflow.get("taken").is_none() && workflow["takenError"].is_string(),
-        "{workflow}"
-    );
-    assert_eq!(workflow["blanks"]["seed"]["given"], "7");
-    let loader = workflow["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| {
-            node["inputs"]
-                .as_array()
-                .is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))
-        })
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let kept = ok(
-        &router,
-        "edit",
-        json!({"workflowSet": [{"media": "bounce", "line": 2, "node": loader, "input": "weight_dtype", "value": "fp8_e4m3fn"}]}),
-    );
-    assert_eq!(
-        kept["workflows"][0],
-        json!({"media": "bounce", "line": 2, "of": "shot", "keptAs": "shots/bounce.video.comfy.json",
-               "set": [{"node": loader, "input": "weight_dtype", "value": "fp8_e4m3fn"}]})
-    );
-    let script = kept["script"].as_str().unwrap();
-    assert!(
-        script.contains(
-            "step bounce set 2 generate model=video prompt=\"a ball bounces\" guide={depth.mp4} seed=7 workflow=shots/bounce.video.comfy.json"
-        ),
-        "{script}"
-    );
-    assert!(steps(&router, "bounce")[1].ends_with("seed=7 workflow=shots/bounce.video.comfy.json"));
-    assert!(
-        std::fs::read_to_string(dir.join("shots/bounce.video.comfy.json"))
-            .unwrap()
-            .contains("\"weight_dtype\": \"fp8_e4m3fn\"")
-    );
-    let own = ok(
-        &router,
-        "look",
-        json!({"workflow": {"media": "bounce", "line": 2}}),
-    );
-    assert_eq!(
-        (own["origin"].as_str(), own["file"].as_str()),
-        (Some("own"), Some("shots/bounce.video.comfy.json"))
-    );
 }

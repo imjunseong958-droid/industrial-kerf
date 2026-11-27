@@ -1884,7 +1884,6 @@ fn what_a_view_answers_in_place_stays_out_of_the_error_bar() {
         CommandName::TakesRead,
         CommandName::RecipeEdit,
         CommandName::ShotPicture,
-        CommandName::WorkflowGet,
     ] {
         assert!(!kept_in_bar(Some(&command)), "{command}");
     }

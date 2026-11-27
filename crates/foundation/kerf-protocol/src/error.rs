@@ -100,7 +100,7 @@ named! {
         MediaDoesNotFit = "MEDIA_DOES_NOT_FIT",
         /// A media's steps are still in the recipe file it names, where a making does not
         /// read them: carried into the document, they are made from. The bridge's, of a
-        /// making, a shot's graph or its model's workflow it refuses; kerfd makes nothing.
+        /// making or a shot's graph it refuses; kerfd makes nothing.
         StepsNotCarried = "STEPS_NOT_CARRIED",
 
         // Proposals.

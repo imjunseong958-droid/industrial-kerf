@@ -25,7 +25,6 @@ pub(crate) fn shared(directory: &Path) -> Shared {
         tool_renders: Default::default(),
         workers: crate::Workers::new(),
         analysis: Default::default(),
-        workflows: Default::default(),
         drawers: Default::default(),
     }
 }

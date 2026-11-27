@@ -124,14 +124,6 @@ impl Place {
         self.directory.join(&self.takes)
     }
 
-    /// The folder the takes' folder is in, from the project's.
-    pub(crate) fn beside(&self) -> PathBuf {
-        self.takes
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default()
-    }
-
     fn name(&self, take: u32) -> String {
         match &self.extension {
             Some(extension) => format!("{take:03}.{extension}"),
@@ -769,29 +761,18 @@ pub struct Take {
 /// What a take keeps of the steps it was made from, in its working folder: named as it
 /// was when steps were a recipe's, so that a take made then and one made now read alike.
 const KEPT_RECIPE: &str = "made-from.kerfrecipe";
-/// What a file its recipe named is kept as there, before its own name.
-const KEPT_FILE: &str = "made-from.";
 
 /// What a take was made from, kept with it: the recipe's text as it was asked, each seed as
-/// that take had it, and the files its lines named as `workflow=`, by the names they had.
+/// that take had it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kept {
     pub recipe: String,
-    /// Each file a `generate` line named as its workflow: its name from the recipe's
-    /// folder, and what it held.
-    pub files: Vec<(String, String)>,
 }
 
 /// Keep with `take` what it was made from: `text`, the recipe as the making read it with
-/// `roll` added to each seed its lines give, and each workflow file a line names. A take
-/// made before this kept none, and has nothing to go back to but its record's hashes.
-pub(crate) fn keep(
-    place: &Place,
-    take: u32,
-    text: &str,
-    roll: u32,
-    read: &dyn Fn(&str) -> Option<String>,
-) -> Result<()> {
+/// `roll` added to each seed its lines give. A take made before this kept none, and has
+/// nothing to go back to but its record's hashes.
+pub(crate) fn keep(place: &Place, take: u32, text: &str, roll: u32) -> Result<()> {
     use super::text::{changed, step_lines, Change};
     use super::Step;
     let steps = Recipe::parse(text)?.steps;
@@ -813,14 +794,6 @@ pub(crate) fn keep(
                 },
             )?;
         }
-        if let Some(super::model::Source::File(named)) = &ask.workflow {
-            let own = Path::new(named)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned());
-            if let (Some(own), Some(held)) = (own, read(named)) {
-                std::fs::write(working.join(format!("{KEPT_FILE}{own}")), held)?;
-            }
-        }
     }
     std::fs::write(working.join(KEPT_RECIPE), kept)?;
     Ok(())
@@ -829,7 +802,6 @@ pub(crate) fn keep(
 /// What take `take` of `media` keeps of what it was made from. `None` for a take that
 /// kept none: one made before takes kept it, or whose working folder is gone.
 pub fn kept(directory: &Path, media: &Media, take: u32) -> Option<Kept> {
-    use super::Step;
     let place = super::place_of(directory, media)?.ok()?;
     let working = place.working(take);
     let mut recipe = std::fs::read_to_string(working.join(KEPT_RECIPE)).ok()?;
@@ -843,27 +815,7 @@ pub fn kept(directory: &Path, media: &Media, take: u32) -> Option<Kept> {
             recipe = super::steps_text(&steps);
         }
     }
-    let files = Recipe::parse(&recipe)
-        .ok()?
-        .steps
-        .iter()
-        .filter_map(|step| match step {
-            Step::Generate(ask) => match &ask.workflow {
-                Some(super::model::Source::File(named)) => Some(named.clone()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .filter_map(|named| {
-            let own = Path::new(&named)
-                .file_name()?
-                .to_string_lossy()
-                .into_owned();
-            let held = std::fs::read_to_string(working.join(format!("{KEPT_FILE}{own}"))).ok()?;
-            Some((named, held))
-        })
-        .collect();
-    Some(Kept { recipe, files })
+    Some(Kept { recipe })
 }
 
 /// The file a step of `media`'s recipe made as `{name}` on the way to take `take`, a guide

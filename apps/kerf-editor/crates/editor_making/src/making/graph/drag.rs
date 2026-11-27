@@ -5,13 +5,13 @@
 
 use super::layout::{card_rect, nearest_toward, save_places, Toward};
 use super::{MenuKind, ShotGraph};
-use crate::making::{link_output, port_says, ports_for, value_of, wire_nth, GraphNode};
+use crate::making::{port_says, ports_for, value_of, wire_nth};
 use editor_ui::ui;
 use gpui::{
     Context, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollDelta,
     ScrollWheelEvent, Window,
 };
-use kerf_bridge::{RecipeEdit, WorkflowEdit};
+use kerf_bridge::RecipeEdit;
 
 /// A drag under way on the canvas.
 pub(super) enum Drag {
@@ -105,19 +105,6 @@ impl ShotGraph {
         cx: &mut Context<Self>,
     ) {
         window.focus(&self.canvas_focus);
-        // A double-click goes into a model that has a workflow behind it.
-        if event.click_count >= 2 {
-            let line = self
-                .shown()
-                .and_then(|graph| graph.node(id))
-                .filter(|node| node.has_workflow() && self.workflow.is_none())
-                .and_then(|node| node.line);
-            if let Some(line) = line {
-                self.drag = Drag::None;
-                self.open_workflow(line, window, cx);
-                return;
-            }
-        }
         let place = self.places().get(id).copied().unwrap_or((0.0, 0.0));
         self.drag = Drag::Card {
             id: id.to_owned(),
@@ -280,7 +267,7 @@ impl ShotGraph {
 
     /// An edge drawn from `from` let go over `to`: what it gives is written
     /// on `to`'s line under the name it reads it by, asked first where
-    /// several would; in a workflow, an input of `to` re-pointed at it.
+    /// several would.
     fn wire(
         &mut self,
         from: &str,
@@ -299,26 +286,6 @@ impl ShotGraph {
         if ports.is_empty() {
             return;
         }
-        let this = cx.weak_entity();
-        if from.is_part() {
-            if let [port] = ports.as_slice() {
-                self.link(&from, &to, port, cx);
-                return;
-            }
-            let items = ports
-                .iter()
-                .map(|port| {
-                    let (this, from, to, port) =
-                        (this.clone(), from.clone(), to.clone(), port.clone());
-                    ui::MenuItem::new(port.clone()).on_choose(move |_, cx| {
-                        let _ = this.update(cx, |graph, cx| graph.link(&from, &to, &port, cx));
-                    })
-                })
-                .collect();
-            let header = format!("{} reads {} at", to.title, from.title);
-            self.open_menu(MenuKind::Port, items, Some(header), at, window, cx);
-            return;
-        }
         let value = value_of(&from);
         if value.is_empty() {
             return;
@@ -328,6 +295,7 @@ impl ShotGraph {
             return;
         }
         // More than one name would read it: which is the person's to say.
+        let this = cx.weak_entity();
         let reads = to.model().and_then(|model| model.reads.clone());
         let items = ports
             .iter()
@@ -370,23 +338,6 @@ impl ShotGraph {
                 nth,
                 value: Some(value.to_owned()),
                 ..RecipeEdit::default()
-            },
-            cx,
-        );
-    }
-
-    /// Input `input` of workflow node `to` re-pointed at `from`'s output
-    /// that gives what it takes.
-    fn link(&mut self, from: &GraphNode, to: &GraphNode, input: &str, cx: &mut Context<Self>) {
-        let output = link_output(from, to, input);
-        let id_of = |node: &GraphNode| node.part().map_or_else(String::new, |part| part.id.clone());
-        let (node, source) = (id_of(to), id_of(from));
-        self.edit_workflow(
-            WorkflowEdit {
-                node,
-                input: input.to_owned(),
-                link: Some((source, output as u64)),
-                ..WorkflowEdit::default()
             },
             cx,
         );

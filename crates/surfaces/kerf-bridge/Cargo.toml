@@ -24,9 +24,7 @@ kerf-collab = { path = "../../edit/kerf-collab" }
 kerf-commands = { path = "../../surfaces/kerf-commands" }
 kerf-mcp = { path = "../../surfaces/kerf-mcp" }
 kerf-engine = { path = "../../engine/kerf-engine" }
-# A shot's graph and the workflow behind its model, read and changed as an
-# agent's tools read and change them. ComfyUI itself is another program,
-# never linked: it is asked over HTTP by kerf-comfy when a shot is made.
+# A shot's graph, read and changed as an agent's tools read and change it.
 kerf-shots = { path = "../../surfaces/kerf-shots" }
 # The editor waits on the bridge for events and frames (`Wake`) rather than
 # asking on a timer.

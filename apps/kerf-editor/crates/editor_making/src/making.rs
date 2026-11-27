@@ -21,15 +21,14 @@ mod recipe;
 pub use graph::{
     another_seed, arrange, card_height, card_rect, card_size, draw_signal, draws_curve, extent,
     fitted_in, graph_start, in_port, nearest_toward, one_line, open_when_ready, out_port,
-    output_within, part_number, placed_over, placement_key, point_on, reading_lines, settle,
-    signal_keys, signal_line, signal_under, take_tip, workflow_key, zoom_about, Camera, GraphStart,
-    PictureQueue, ShotGraph, Toward, ZOOM_LEAST, ZOOM_MOST, ZOOM_READ, ZOOM_STEP,
+    output_within, placed_over, placement_key, point_on, reading_lines, settle, signal_keys,
+    signal_line, signal_under, take_tip, zoom_about, Camera, GraphStart, PictureQueue, ShotGraph,
+    Toward, ZOOM_LEAST, ZOOM_MOST, ZOOM_READ, ZOOM_STEP,
 };
 pub use makings::{card_state, card_title, CardState, Makings, Progress};
 pub use plan::{takes_words, wants_carrying, MakePlan, Plan};
 pub use recipe::{
-    gives_word, input_kind, link_output, part_id, port_says, ports_for, reads_port, shown_number,
-    shown_value, value_of, wire_nth, GraphEdge, GraphNode, Holds, InputKind, Recipe, Workflow,
+    gives_word, port_says, ports_for, reads_port, value_of, wire_nth, GraphEdge, GraphNode, Recipe,
 };
 
 /// Open the graph of the steps that make `media`.

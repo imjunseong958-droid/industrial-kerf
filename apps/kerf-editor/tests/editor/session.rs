@@ -2195,13 +2195,7 @@ fn a_making_that_fails_stops_showing_and_is_said_where_it_was_asked() {
         state.notices.is_empty(),
         "the plan or the card says it, not a notice over the conversation"
     );
-    for command in [
-        "recipe_edit",
-        "shot_follow",
-        "workflow_get",
-        "takes_read",
-        "media_carry",
-    ] {
+    for command in ["recipe_edit", "shot_follow", "takes_read", "media_carry"] {
         state.apply(&event(
             json!({"type": "error", "command": command, "message": "refused"}),
         ));

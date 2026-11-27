@@ -212,7 +212,7 @@ impl KerfMcpRouter {
                 .take_placed(&project, input.sequence.as_deref(), revision, placed)
                 .map(Some);
         }
-        if input.graph.is_some() || input.workflow.is_some() || input.takes.is_some() {
+        if input.graph.is_some() || input.takes.is_some() {
             return self.look_at_shot(input).map(Some);
         }
         if let Some(mesh) = &input.mesh {
@@ -235,32 +235,23 @@ impl KerfMcpRouter {
         Ok(None)
     }
 
-    /// `look` with `graph`, `workflow`, or `takes`: a shot as the editor's graph shows it, the
-    /// workflow a step's model is run with, or its takes held to its guide.
+    /// `look` with `graph` or `takes`: a shot as the editor's graph shows it, or its takes
+    /// held to its guide.
     fn look_at_shot(&self, input: &LookInput) -> Result<Value, McpError> {
-        if [
-            input.graph.is_some(),
-            input.workflow.is_some(),
-            input.takes.is_some(),
-        ]
-        .into_iter()
-        .filter(|given| *given)
-        .count()
-            > 1
+        if (input.graph.is_some() && input.takes.is_some())
             || input.media.is_some()
             || !input.at.is_empty()
             || input.sequence.is_some()
         {
             return Err(McpError::new(
                 McpCode::InvalidArguments,
-                "`graph` and `takes` name a media and `workflow` a step of one: each is used alone, or with `proposal`",
+                "`graph` and `takes` name a media: each is used alone, or with `proposal`",
             ));
         }
         let (revision, project) = self.project_at(input.proposal.as_deref())?;
-        let mut result = match (&input.graph, &input.workflow, &input.takes) {
-            (Some(media), ..) => self.shot_graph(&project, media)?,
-            (_, Some(step), _) => self.shot_workflow(&project, step)?,
-            (.., Some(media)) => self.shot_takes(&project, media)?,
+        let mut result = match (&input.graph, &input.takes) {
+            (Some(media), _) => self.shot_graph(&project, media)?,
+            (_, Some(media)) => self.shot_takes(&project, media)?,
             _ => unreachable!("one of them is given"),
         };
         result["revision"] = json!(revision);

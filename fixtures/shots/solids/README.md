@@ -19,10 +19,8 @@ does. How each media is made is in
 | `gaze`, `ready`, `voyage`, `landed` | The same robot and rocket | The film's shots that the scenes above do not block |
 | `film` | Six shots, three titles, two sounds | The cut: `f1` to `f6` on one track, three dissolves, a fade |
 
-With seven models set up as `kerf-comfy`'s workflows (`kerf-comfy --describe`
-prints them all), `shot`,
-`still`, `depth`, `cameras`, and `matte` by their own names, `directed` as
-`shot-directed`, and `led` as `shot-led`, from a copy of this folder:
+With seven models set up in `~/.kerf/models.json`, `shot`, `still`, `depth`,
+`cameras`, `matte`, `directed` and `led`, from a copy of this folder:
 
 ```bash
 kerf load --yes

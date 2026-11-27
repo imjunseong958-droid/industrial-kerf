@@ -9,7 +9,7 @@ use super::layout::INSPECTOR;
 use super::pictures::picture_box;
 use super::{MenuKind, ShotGraph};
 use crate::making::plan::notes_block;
-use crate::making::{gives_word, GraphNode, Holds, Recipe};
+use crate::making::{gives_word, GraphNode, Recipe};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, text};
 use editor_ui::ui::{self, icon_button};
@@ -28,8 +28,7 @@ const PASSES: [(&str, &str); 6] = [
 ];
 
 impl ShotGraph {
-    /// The column at the right: the chosen node and its settings, the shot,
-    /// or the model's workflow.
+    /// The column at the right: the chosen node and its settings, or the shot.
     pub(super) fn inspector(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut column = div()
             .flex()
@@ -51,26 +50,18 @@ impl ShotGraph {
             (None, _) => {
                 column = column.child(ui::label(self.media.to_string(), text::TITLE, theme::ink()));
             }
-            (Some(_), None) if self.workflow.is_some() => {
-                column = column.child(self.workflow_column(cx));
-            }
             (Some(recipe), None) => {
                 column = column.child(self.shot_column(&recipe, making, connected, cx));
             }
             (Some(graph), Some(node)) => {
                 let color = gives_color(node.gives);
-                let tag = match node.part() {
-                    Some(part) => format!("#{}", part.id),
-                    None => gives_word(node.gives).to_owned(),
-                };
+                let tag = gives_word(node.gives).to_owned();
                 column = column.child(
                     div()
                         .flex()
                         .items_center()
                         .gap(px(theme::space::S8))
-                        .when(!node.is_part(), |head| {
-                            head.child(kind_icon(node.kind()).view(16.0, color))
-                        })
+                        .child(kind_icon(node.kind()).view(16.0, color))
                         .child(
                             ui::line(node.title.clone(), text::TITLE, theme::ink())
                                 .flex_1()
@@ -79,7 +70,7 @@ impl ShotGraph {
                         .child(ui::label(tag, text::MONO_SMALL, theme::ink3())),
                 );
                 column = column.child(self.node_column(&graph, &node, making, connected, cx));
-                if let Some(line) = node.line.filter(|_| !node.is_part()) {
+                if let Some(line) = node.line {
                     column = column.child(
                         div().flex().pt(px(theme::space::S8)).child(
                             ui::button("graph-remove-step", "Delete step")
@@ -201,10 +192,7 @@ impl ShotGraph {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let mut column = div().flex().flex_col().gap(px(theme::space::S8));
-        let what = match &node.holds {
-            Holds::Part(_) => return column.child(self.part_column(graph, node, cx)),
-            Holds::Shot(what) => what,
-        };
+        let what = &node.what;
         let missing = !what.there();
         match what {
             What::Model(_) => return column.child(self.model_column(graph, node, cx)),
@@ -368,42 +356,13 @@ impl ShotGraph {
             .child(section("Knobs"))
             .children(self.fields_named(&knobs));
         column = column.children(self.fields_named(&[ADD]));
-        // A model its entry runs with kerf-comfy has a workflow behind it.
-        if node.has_workflow() {
-            let own = model.workflow.as_deref().filter(|own| !own.is_empty());
-            let says = match own {
-                Some(own) => format!("{own}, this shot's own copy."),
-                None => format!(
-                    "{}, as it comes with kerf-comfy.",
-                    model
-                        .runner
-                        .as_ref()
-                        .map_or("", |runner| runner.workflow.as_str())
-                ),
-            };
-            let line = node.line.unwrap_or(0);
-            column = column
-                .child(section("Workflow"))
-                .child(note(says, theme::ink2()))
-                .child(
-                    div().flex().child(
-                        ui::button("graph-open-workflow", "Open workflow")
-                            .tooltip(
-                                "Every node and input of the ComfyUI graph this model is run with",
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_workflow(line, window, cx)
-                            })),
-                    ),
-                );
-        }
         column.child(self.reads(graph, node, cx))
     }
 
     /// A guide's Draws, chosen from a menu with the one it draws ticked.
     fn pass_row(&self, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
-        let pass = match &node.holds {
-            Holds::Shot(What::Render(render)) if !render.pass.is_empty() => render.pass.clone(),
+        let pass = match &node.what {
+            What::Render(render) if !render.pass.is_empty() => render.pass.clone(),
             _ => "picture".to_owned(),
         };
         let shown = PASSES

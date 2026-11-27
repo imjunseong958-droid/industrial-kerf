@@ -116,7 +116,6 @@ mod updates;
 mod viewer;
 mod wake;
 mod workers;
-mod workflows;
 
 pub use claude_code::SERVE_MCP;
 pub use command::{AgentSettings, ChatProvider, Command, CommandName, UnnamedCommand};
@@ -146,7 +145,6 @@ pub use tracks::{Follow as ShotFollow, Of as ShotOf};
 pub use updates::UpdateCheck;
 pub use wake::Wake;
 pub use workers::Workers;
-pub use workflows::Edit as WorkflowEdit;
 
 use agent::{agent_worker, permission_mode, Agent};
 use event::{CloudAccess, CloudStatus, ErrorEvent};
@@ -207,8 +205,6 @@ struct Shared {
     workers: Workers,
     /// Loudness, media info and media index work.
     analysis: analysis::Analysis,
-    /// The workflow last said of each step a graph has open.
-    workflows: workflows::Said,
     /// What lets the bridge draw a frame with the compositor in this process, for its
     /// playback, an effect preview, the scope signal, a shot picture or follow, a take
     /// reading, a render, a QC check, a making, and what Kerf's own tools do here for its
@@ -393,7 +389,6 @@ impl Bridge {
             tool_renders: Default::default(),
             workers: Workers::new(),
             analysis: analysis::Analysis::default(),
-            workflows: Default::default(),
             drawers: Default::default(),
         });
         let workers = shared.workers.clone();

@@ -37,16 +37,7 @@ pub use kerf_shots::takes::ClipReading;
 pub mod graph {
     pub use kerf_shots::graph::{
         Edge, FileNode, Gives, Graph, JoinNode, Kind, Knob, Made, ModelNode, MovesNode, NamedNode,
-        Node, RenderNode, Runner, RunnerKind, SequenceNode, SignalNode, Sound, TakeSaid, TakesNode,
-        What,
-    };
-}
-
-/// The workflow a model is run with, as a `workflow` event says it: every node and input
-/// of it, and of each blank what fills it.
-pub mod workflow {
-    pub use kerf_shots::workflow::{
-        Blank, By, Described, DescribedFrames, DescribedInput, DescribedNode, OriginKind, Shown,
+        Node, RenderNode, SequenceNode, SignalNode, Sound, TakeSaid, TakesNode, What,
     };
 }
 pub use kerf_runtime::{
@@ -355,16 +346,6 @@ pub enum Event {
     },
     /// How a media is made, as a graph of its steps.
     Recipe(Recipe),
-    /// The workflow a `generate` step's model is run with, every node and input of it, as
-    /// kerf-shots' `workflow::shown` gives it ([`workflow::Shown`]): `media`, `line`,
-    /// `model`, `name`, `text`, `origin` (`bundled`, `file` or `own`), `file` (the shot's
-    /// own copy, else `null`), `about`, `frames`, `size`, `nodes`, `blanks` and `fps` (left
-    /// out when not positive).
-    /// A second one comes once the model's program has said what the server takes at each
-    /// input: `taken: true` with each input's `choices` or `min`, `max` and `step`, or
-    /// `takenError` with why it could not be asked. That one is always of the step's
-    /// workflow as last sent. After `workflow_edit` it has `edited: true`.
-    Workflow(Box<workflow::Shown>),
     /// The picture a person points on to read a clip from footage: a PNG file, its size,
     /// and the document revision it was drawn from.
     ShotPicture {
@@ -1304,7 +1285,7 @@ pub struct MediaMakePlan {
 
 /// How a media is made: the graph kerf-shots' `graph::shown` lays out ([`graph::Graph`]:
 /// `media`, `recipe`, `document` when its steps are the document's own, `name`, `text`,
-/// `nodes` with the `runner` of a model a workflow runs, `edges`, `error` and `cannot` when
+/// `nodes`, `edges`, `error` and `cannot` when
 /// there is one, `notes`), with why the person's models file does not read where it does
 /// not. After `recipe_edit` it has `edited: true`, and `added`, the line of the step added,
 /// when one was.

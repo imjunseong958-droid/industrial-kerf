@@ -6,7 +6,6 @@
 
 use super::layout::INSPECTOR;
 use super::ShotGraph;
-use crate::making::Holds;
 use editor_ui::theme::radius;
 use gpui::{canvas, div, prelude::*, px, App, Context, RenderImage, Window};
 use kerf_bridge::event::graph::{Gives, What};
@@ -236,9 +235,7 @@ impl ShotGraph {
         let mut paths: Vec<PathBuf> = Vec::new();
         if let Some(recipe) = &self.recipe {
             for node in &recipe.nodes {
-                let Holds::Shot(what) = &node.holds else {
-                    continue;
-                };
+                let what = &node.what;
                 let mut named = vec![what.made().map_or("", |made| made.path.as_str())];
                 if let What::File(file) = what
                     && node.gives == Gives::Image

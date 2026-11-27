@@ -3,7 +3,6 @@
 //! person lets an agent's edits be; and a stale proposal brought onto the project as it is.
 
 use super::preview::changed_range;
-use super::shots::{ShotChanges, WorkflowKept};
 use super::tools::{input, EditInput};
 use super::{catalog, diagnostics, not_pending, operation_key, parse};
 use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
@@ -82,14 +81,14 @@ impl KerfMcpRouter {
         let facts = CachedFacts::new(&self.dir);
         let mut applied =
             apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
-        // A value set in a model's workflow, and a take gone back to, change steps: by lines
-        // of the script itself, after its own. No file says how a media is made, and undo
-        // takes them back with the rest of the edit. They are read from the steps as the
-        // script left them, so that a word it set on the same step stays.
-        let ShotChanges { workflows, steps } = self.shot_changes(&applied.project, &input)?;
+        // A take gone back to changes steps: by lines of the script itself, after its own.
+        // No file says how a media is made, and undo takes them back with the rest of the
+        // edit. They are read from the steps as the script left them, so that a word it set
+        // on the same step stays.
+        let steps = self.shot_changes(&applied.project, &input)?;
         let mut source_script = source_script;
-        if !workflows.is_empty() || !steps.is_empty() {
-            source_script = with_shot_lines(&workflows, &steps, &source_script);
+        if !steps.is_empty() {
+            source_script = with_shot_lines(&steps, &source_script);
             applied =
                 apply_script_with(&before, catalog(), &facts, &source_script).map_err(refused)?;
         }
@@ -136,16 +135,10 @@ impl KerfMcpRouter {
         let staged = first_pending(&snapshot)?;
         let proposal_id = staged.proposal_id.clone();
         let carried_said = self.takes_carried(&before, &applied.project, &carried)?;
-        // And each workflow a recipe of it names: a new file, beside the ones before it.
-        self.workflows_written(&workflows, &proposal_id)?;
         let mut result = self.staged(staged, revision, &before, &applied.project)?;
         // Where `snap=` put each edge it moved, which the diff shows only as where it is.
         if !applied.snapped.is_empty() {
             result["snapped"] = json!(applied.snapped);
-        }
-        if !workflows.is_empty() {
-            result["workflows"] =
-                json!(workflows.iter().map(WorkflowKept::json).collect::<Vec<_>>());
         }
         if !carried_said.is_empty() {
             result["carried"] = json!(carried_said);
@@ -336,29 +329,6 @@ impl KerfMcpRouter {
         Ok(carried_said)
     }
 
-    /// Write the workflow copies an edit keeps, each a new file beside the ones before it;
-    /// where one cannot be written, the proposal `proposal_id` it was staged as is rejected.
-    fn workflows_written(
-        &self,
-        workflows: &[WorkflowKept],
-        proposal_id: &str,
-    ) -> Result<(), McpError> {
-        for workflow in workflows {
-            if let Err(why) = kerf_shots::workflow::write(&workflow.copy.file, &workflow.copy.text)
-            {
-                if let Err(error) = self.runtime.reject_proposal(proposal_id) {
-                    log::warn!(
-                        "proposal {proposal_id} is still pending though its workflow copy was \
-                         not written: {}",
-                        error.message
-                    );
-                }
-                return Err(McpError::new(McpCode::InvalidRecipe, why));
-            }
-        }
-        Ok(())
-    }
-
     /// What scopes read at `positions` of what an edit makes, `after`, each beside what they
     /// read there `before` it; or why they could not be read.
     fn scopes_after(
@@ -502,7 +472,6 @@ impl KerfMcpRouter {
 fn one_kind_asked(input: &EditInput) -> Result<(), McpError> {
     if [
         input.script.is_some()
-            || !input.workflow_set.is_empty()
             || input.restore_take.is_some()
             || !input.carry.is_empty()
             || !input.cast.is_empty(),
@@ -516,12 +485,12 @@ fn one_kind_asked(input: &EditInput) -> Result<(), McpError> {
     {
         return Err(McpError::new(
             McpCode::InvalidArguments,
-            "pass exactly one of script (with or without workflowSet, carry and cast), any of those alone, preset, or savePreset",
+            "pass exactly one of script (with or without restoreTake, carry and cast), any of those alone, preset, or savePreset",
         ));
     }
     // A recipe carried is read as it stands: what else this edit would write of one,
     // it writes after, as lines of a script that set the steps it became.
-    if !input.carry.is_empty() && (!input.workflow_set.is_empty() || input.restore_take.is_some()) {
+    if !input.carry.is_empty() && input.restore_take.is_some() {
         return Err(McpError::new(
             McpCode::InvalidArguments,
             "`carry` writes a recipe's steps under its media as they are: change them in the script of the same edit (`step <media> set <n> …`), or in an edit after it",
@@ -580,12 +549,10 @@ fn with_carried(carried: &[(String, kerf_engine::recipe::Carry)], source_script:
     }
 }
 
-/// `source_script` with the lines that write what `workflowSet` and `restoreTake` set: the
-/// workflow copies it keeps, as comments, before it, and the steps' lines after it.
-fn with_shot_lines(workflows: &[WorkflowKept], steps: &[String], source_script: &str) -> String {
-    let shown: String = workflows.iter().map(WorkflowKept::lines).collect();
+/// `source_script` with the lines that write what `restoreTake` sets after it.
+fn with_shot_lines(steps: &[String], source_script: &str) -> String {
     let steps: String = steps.iter().map(|line| format!("{line}\n")).collect();
-    format!("{shown}{}{steps}", with_newline(source_script))
+    format!("{}{steps}", with_newline(source_script))
 }
 
 /// A script refusal, with each line numbered as the agent wrote it, and what it named that is

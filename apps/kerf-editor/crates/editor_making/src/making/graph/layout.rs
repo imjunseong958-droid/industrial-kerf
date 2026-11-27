@@ -4,7 +4,7 @@
 //! it on the graph, the card an arrow goes to, and the places a person put
 //! cards, kept with the editor's settings.
 
-use crate::making::{GraphEdge, GraphNode, Holds, Recipe};
+use crate::making::{GraphEdge, GraphNode, Recipe};
 use editor_session::session::Session;
 use editor_ui::ui;
 use gpui::{px, App, Entity};
@@ -21,12 +21,6 @@ pub(super) const CARD_MODEL: f32 = 18.0;
 pub(super) const CARD_CURVE: f32 = 36.0;
 const COLUMN_GAP: f32 = 112.0;
 const ROW_GAP: f32 = 20.0;
-/// A node of a model's workflow: its name over a row an input; and between
-/// its columns, as its rows name what comes in.
-pub(super) const PART_W: f32 = 232.0;
-pub(super) const PART_HEAD: f32 = 28.0;
-pub(super) const PART_ROW: f32 = 20.0;
-const PART_GAP: f32 = 64.0;
 /// What floats over the canvas keeps this far from its edges.
 pub(super) const PAD: f32 = 12.0;
 /// The panel at most, less where the window is smaller; the column that
@@ -62,24 +56,19 @@ pub(super) fn graph_size(viewport: (f32, f32)) -> (f32, f32) {
 /// Whether a card draws something under its lines: a signal's number over
 /// its time, or the path a clip is led along.
 pub fn draws_curve(node: &GraphNode) -> bool {
-    match &node.holds {
-        Holds::Shot(What::Signal(signal)) => signal
+    match &node.what {
+        What::Signal(signal) => signal
             .values
             .as_ref()
             .is_some_and(|values| !values.is_empty()),
-        Holds::Shot(What::Moves(moves)) => moves.path.as_ref().is_some_and(|path| !path.is_empty()),
+        What::Moves(moves) => moves.path.as_ref().is_some_and(|path| !path.is_empty()),
         _ => false,
     }
 }
 
-/// A card's size, before what it reads makes it taller: a workflow's node
-/// is its name and a row for each input; a model says a third thing; a
-/// signal or a clip's way draws under its lines.
+/// A card's size, before what it reads makes it taller: a model says a
+/// third thing; a signal or a clip's way draws under its lines.
 pub fn card_size(node: &GraphNode) -> (f32, f32) {
-    if let Some(part) = node.part() {
-        let rows = part.inputs.len();
-        return (PART_W, PART_HEAD + PART_ROW * rows as f32 + 8.0);
-    }
     let mut height = CARD_H;
     if node.is(Kind::Model) {
         height += CARD_MODEL;
@@ -91,12 +80,9 @@ pub fn card_size(node: &GraphNode) -> (f32, f32) {
 }
 
 /// A card's height: room for its lines, and for each thing it reads to
-/// come in apart (a workflow's node has a row for each already).
+/// come in apart.
 pub fn card_height(node: &GraphNode, inputs: usize) -> f32 {
     let (_, height) = card_size(node);
-    if node.is_part() {
-        return height;
-    }
     height.max(16.0 + 24.0 * inputs as f32)
 }
 
@@ -183,7 +169,7 @@ pub fn arrange(recipe: &Recipe) -> HashMap<String, (f32, f32)> {
         for (place, (node, height)) in here.iter().zip(heights).enumerate() {
             row.insert(*node, place);
             let card = &recipe.nodes[*node];
-            let pitch = card_size(card).0 + if card.is_part() { PART_GAP } else { COLUMN_GAP };
+            let pitch = card_size(card).0 + COLUMN_GAP;
             places.insert(card.id.clone(), (at as f32 * pitch, y.round()));
             y += height + ROW_GAP;
         }
@@ -218,38 +204,24 @@ pub fn card_rect(
     Some([*x, *y, width, height])
 }
 
-/// Where an edge leaves `id`, on the scene: its right edge, at its middle;
-/// a workflow's node beside its name, over its rows.
+/// Where an edge leaves `id`, on the scene: its right edge, at its middle.
 pub fn out_port(
     recipe: &Recipe,
     places: &HashMap<String, (f32, f32)>,
     id: &str,
 ) -> Option<(f32, f32)> {
     let [x, y, width, height] = card_rect(recipe, places, id)?;
-    if recipe.node(id).is_some_and(GraphNode::is_part) {
-        return Some((x + width, y + PART_HEAD / 2.0 + 2.0));
-    }
     Some((x + width, y + height / 2.0))
 }
 
-/// Where `edge` comes into its card, on the scene: at the row of the input
-/// it is, in a workflow; else spread down its left edge in the order the
-/// steps give what it reads.
+/// Where `edge` comes into its card, on the scene: spread down its left
+/// edge in the order the steps give what it reads.
 pub fn in_port(
     recipe: &Recipe,
     places: &HashMap<String, (f32, f32)>,
     edge: &GraphEdge,
 ) -> Option<(f32, f32)> {
     let [x, y, _, height] = card_rect(recipe, places, &edge.to)?;
-    let to = recipe.node(&edge.to)?;
-    if let Some(part) = to.part() {
-        let row = part
-            .inputs
-            .iter()
-            .rposition(|input| input.name == edge.port)
-            .unwrap_or(0);
-        return Some((x, y + PART_HEAD + PART_ROW * (row as f32 + 0.5)));
-    }
     let into = recipe.reads_into(&edge.to);
     let index = into
         .iter()
@@ -431,12 +403,6 @@ pub fn placement_key(project: Option<&Path>, media: &str) -> String {
     format!("{}\nmedia {media}", project.unwrap_or_default())
 }
 
-/// The key a model's workflow's cards are kept under: another arrangement
-/// than its shot's.
-pub fn workflow_key(shot: &str, workflow: &str) -> String {
-    format!("{shot}\nworkflow {workflow}")
-}
-
 pub(super) fn load_places(
     session: &Entity<Session>,
     key: &str,
@@ -469,7 +435,7 @@ mod tests {
             detail: String::new(),
             gives: Gives::Video,
             line: None,
-            holds: Holds::Shot(what),
+            what,
         }
     }
 

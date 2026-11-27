@@ -13,8 +13,8 @@ mkdir -p footage
 ffmpeg -ss 11 -i chimera.mp4 -vf "fps=16,scale=854:480:flags=area,crop=832:480,format=yuv420p" -frames:v 81 -an -c:v libx264 -crf 14 footage/walk.mp4
 ```
 
-With four models set up as `kerf-comfy`'s workflows, `matte` as `matte`, `shown` as
-`matte-shown`, `into` as `shot-into`, and `plate` as `plate`:
+With four models set up in `~/.kerf/models.json`, `matte`, `shown`, `into` and
+`plate`:
 
 ```bash
 kerf load --yes
