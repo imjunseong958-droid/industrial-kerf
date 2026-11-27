@@ -19,6 +19,8 @@ anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-compose = { path = "../../engine/kerf-compose" }
+# What a model is asked, as the Kerf generation API says it.
+kerf-generate-api = { path = "../../foundation/kerf-generate-api" }
 kerf-core = { path = "../../engine/kerf-core" }
 kerf-lang = { path = "../../foundation/kerf-lang" }
 kerf-model = { path = "../../foundation/kerf-model" }

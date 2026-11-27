@@ -3597,7 +3597,7 @@ fn a_medias_takes_are_listed_and_what_changed_since_is_named() {
         kerf_lang::parse_document(&document("shots/open.mp4"), kerf_model::Catalog::builtin())
             .unwrap()
             .project;
-    let models = kerf_engine::recipe::model::Models::default();
+    let models = kerf_generate::Generator::default();
     let token = kerf_engine::CancellationToken::new();
     let make = || {
         let plan = kerf_engine::recipe::plan(&unmade, dir, "m1", &models).unwrap();
@@ -3671,7 +3671,7 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
         return;
     }
     // No models a person has set up are read.
-    kerf_engine::recipe::model::Models::use_file("/no-such-kerf-models.json");
+    kerf_generate::Generator::use_file("/no-such-kerf-generation.json");
     let Some((directory, router)) = router() else {
         return;
     };
@@ -3721,7 +3721,7 @@ fn what_would_refuse_a_making_is_said_before_anyone_is_asked_to_make_it() {
     // The same when it looks. A model that is not set up, without where the person keeps
     // their models:
     step("generate model=dawn prompt=\"a boat\"");
-    let said = "no model `dawn` is set up: none is; a person sets one up in their own models file";
+    let said = "no model `dawn` is set up: none is; a person sets one up in Settings ▸ Generation";
     let looked = ok(&router, "look", json!({}));
     assert_eq!(looked["toMake"][0]["cannot"], said);
     // So it is where the graph of how it is made says it, and where it is asked to be made.

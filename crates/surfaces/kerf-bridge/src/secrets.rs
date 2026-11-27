@@ -1,121 +1,31 @@
-//! API keys and the Kerf Cloud token kept in the operating system's own store, the macOS Keychain,
-//! Windows Credential Manager, or the Secret Service on Linux, rather than in the editor's plain
-//! settings or a file (`cloud_session.rs`).
+//! API keys and the Kerf Cloud token kept in the operating system's own store (`kerf-secrets`),
+//! rather than in the editor's plain settings or a file (`cloud_session.rs`).
 //!
 //! `KERF_SECRETS=off` turns the store off, so a test never reads or writes a developer's real
 //! keychain, and so does [`turn_off`] (the editor's `--settings-dir`); the editor then keeps keys
 //! in its settings, and the token in its file, as it does wherever the store cannot be reached.
 
+pub(crate) use kerf_secrets::{turn_off, Keychain, SystemKeychain};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// The service every key is kept under.
-const SERVICE: &str = "Industrial Kerf";
-
-/// The store is off for this process: [`turn_off`] said so.
-static OFF: AtomicBool = AtomicBool::new(false);
-
-/// Turn the store off for this process from here on, as `KERF_SECRETS=off` does, leaving its
-/// environment as it is.
-pub(crate) fn turn_off() {
-    OFF.store(true, Ordering::SeqCst);
-}
-
-fn off() -> bool {
-    OFF.load(Ordering::SeqCst)
-        || std::env::var_os("KERF_SECRETS").is_some_and(|value| value == "off" || value == "0")
-}
-
-fn entry(name: &str, enabled: bool) -> Result<keyring::Entry, String> {
-    if !enabled {
-        return Err("the system keychain is off (KERF_SECRETS=off)".into());
-    }
-    if name.is_empty() {
-        return Err("a secret needs a name".into());
-    }
-    keyring::Entry::new(SERVICE, name).map_err(|error| error.to_string())
-}
-
-/// The secret kept as `name`, `None` when there is none.
-fn get(name: &str, enabled: bool) -> Result<Option<String>, String> {
-    match entry(name, enabled)?.get_password() {
-        Ok(value) => Ok(Some(value)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// Keep `value` as `name`.
-fn set(name: &str, value: &str, enabled: bool) -> Result<(), String> {
-    entry(name, enabled)?
-        .set_password(value)
-        .map_err(|error| error.to_string())
-}
-
-/// Forget `name`; forgetting what is not there succeeds.
-fn delete(name: &str, enabled: bool) -> Result<(), String> {
-    match entry(name, enabled)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-/// A store of named secrets: the system's keychain, or, in a test, one in memory.
-pub(crate) trait Keychain {
-    /// The secret kept as `name`, `None` when there is none; an error when the store cannot be
-    /// reached.
-    fn get(&self, name: &str) -> Result<Option<String>, String>;
-    fn set(&self, name: &str, value: &str) -> Result<(), String>;
-    /// Forgetting what is not there succeeds.
-    fn delete(&self, name: &str) -> Result<(), String>;
-}
-
-/// The operating system's keychain, unless `KERF_SECRETS=off` or [`turn_off`].
-pub(crate) struct SystemKeychain {
-    enabled: bool,
-}
-
-impl SystemKeychain {
-    pub(crate) fn new() -> Self {
-        Self { enabled: !off() }
-    }
-
-    /// The keychain as `KERF_SECRETS=off` leaves it: refusing everything.
-    #[cfg(test)]
-    pub(crate) fn turned_off() -> Self {
-        Self { enabled: false }
-    }
-}
-
-impl Keychain for SystemKeychain {
-    fn get(&self, name: &str) -> Result<Option<String>, String> {
-        get(name, self.enabled)
-    }
-
-    fn set(&self, name: &str, value: &str) -> Result<(), String> {
-        set(name, value, self.enabled)
-    }
-
-    fn delete(&self, name: &str) -> Result<(), String> {
-        delete(name, self.enabled)
-    }
-}
 
 /// `{op: get|set|delete, name, value?}` -> `{ok: true, value?}` (value null when get finds none),
 /// or `{error}` when the store cannot be used.
 pub(crate) fn request(request: &Value) -> Value {
-    request_with(request, !off())
+    request_with(request, !kerf_secrets::off())
 }
 
 fn request_with(request: &Value, enabled: bool) -> Value {
     let name = request["name"].as_str().unwrap_or_default();
+    let keychain = SystemKeychain::enabled(enabled);
     let result = match request["op"].as_str() {
-        Some("get") => get(name, enabled).map(|value| json!({"ok": true, "value": value})),
+        Some("get") => keychain
+            .get(name)
+            .map(|value| json!({"ok": true, "value": value})),
         Some("set") => match request["value"].as_str() {
-            Some(value) => set(name, value, enabled).map(|()| json!({"ok": true})),
+            Some(value) => keychain.set(name, value).map(|()| json!({"ok": true})),
             None => Err("set needs a value".into()),
         },
-        Some("delete") => delete(name, enabled).map(|()| json!({"ok": true})),
+        Some("delete") => keychain.delete(name).map(|()| json!({"ok": true})),
         _ => Err("op is get, set, or delete".into()),
     };
     result.unwrap_or_else(|error| json!({"error": error}))

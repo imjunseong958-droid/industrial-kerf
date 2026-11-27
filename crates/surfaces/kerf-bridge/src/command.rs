@@ -369,7 +369,7 @@ pub enum Command {
     TakesRead {
         media: String,
     },
-    /// The person's models a recipe's `generate` can name, from their own models file:
+    /// The person's models a recipe's `generate` can name, from their own generation file:
     /// `models {file, exists, models, error?}`.
     Models,
     /// Load a `project.kerf` changed outside Kerf (a git pull in a terminal, a text

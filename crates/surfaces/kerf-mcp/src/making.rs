@@ -12,8 +12,9 @@
 
 use super::{Begins, KerfMcpRouter, McpCode, McpError};
 use crate::harness::operation_key;
-use kerf_engine::recipe::{self, model::Models};
+use kerf_engine::recipe;
 use kerf_engine::{CancellationToken, EngineError};
+use kerf_generate::Generator;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -369,7 +370,7 @@ impl KerfMcpRouter {
                 ));
             }
         }
-        let models = Models::load()
+        let models = Generator::load()
             .map_err(|error| McpError::new(McpCode::CannotMake, error.to_string()))?;
         let cannot = |error: EngineError| {
             McpError::new(

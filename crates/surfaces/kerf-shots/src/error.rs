@@ -16,13 +16,14 @@ pub enum ShotError {
     /// them into the document.
     #[error("{}", EngineError::NotCarried { media: media.clone(), recipe: recipe.clone() })]
     NotCarried { media: String, recipe: String },
-    /// No model by this name is set up in the person's models file, which names the models of
-    /// `have`. An agent is told which those are, and not where the file is.
-    #[error("{}", EngineError::NoModel { name: name.clone(), file: file.clone(), have: have.clone() })]
+    /// No model by this name is set up in the file the person sets models up in, where the
+    /// models of `have` are. An agent is told which those are, and not where the file is.
+    #[error("{}", EngineError::NoModel { name: name.clone(), file: file.clone(), have: have.clone(), note: note.clone() })]
     NoModel {
         name: String,
         file: PathBuf,
         have: Vec<String>,
+        note: Option<String>,
     },
     /// The project has no clip by the id asked for: what [`kerf_model::Project::no_clip`]
     /// says of it.
@@ -38,7 +39,17 @@ impl From<EngineError> for ShotError {
         match error {
             EngineError::NoMedia(id) => Self::NoMedia(id),
             EngineError::NotCarried { media, recipe } => Self::NotCarried { media, recipe },
-            EngineError::NoModel { name, file, have } => Self::NoModel { name, file, have },
+            EngineError::NoModel {
+                name,
+                file,
+                have,
+                note,
+            } => Self::NoModel {
+                name,
+                file,
+                have,
+                note,
+            },
             other => Self::Other(other.to_string()),
         }
     }

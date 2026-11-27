@@ -82,6 +82,15 @@ impl Signal {
         })
     }
 
+    /// As a model is handed it, in a request.
+    pub fn handed(&self) -> kerf_generate_api::Signal {
+        kerf_generate_api::Signal {
+            name: self.name.clone(),
+            rate: self.rate,
+            values: self.values.clone(),
+        }
+    }
+
     /// The value it holds on every frame, where it never changes: such a
     /// signal says nothing of when.
     pub fn steady(&self) -> Option<f64> {

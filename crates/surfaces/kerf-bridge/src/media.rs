@@ -80,7 +80,7 @@ pub(crate) fn make(
         .and_then(|(_, text)| kerf_runtime::parse_document(&text))
         .map_err(BridgeError::from)
         .and_then(|project| {
-            let models = kerf_engine::recipe::model::Models::load()?;
+            let models = kerf_generate::Generator::load()?;
             // One making is the recipe as it is written. Several are rolls of it, each with
             // its seeds one on from the last, from the first roll no take of it has had.
             let first = if rolls > 1 {

@@ -7,11 +7,11 @@
 //! one model's matte is read by the next, and a shot from a guide, which Kerf
 //! draws from a sequence and hands to a model.
 //!
-//! In a file of its own: it reads a models file of its own for the whole
-//! process ([`Models::use_file`]), which the other tests' process must not see.
+//! In a file of its own: it reads a generation file of its own for the whole
+//! process ([`Generator::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
 
-use kerf_engine::recipe::model::Models;
+use kerf_generate::Generator;
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -122,17 +122,17 @@ fn an_agent_writes_a_makings_steps_in_the_document_and_makes_it() {
     std::fs::write(dir.join("project.kerf"), PROJECT).unwrap();
     // The person's own models: three that are run here, each standing in for the model its
     // name says.
-    let models = dir.join("models.json");
+    let models = dir.join("generation.json");
     std::fs::write(
         &models,
         format!(
-            r#"{{"matte": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a matte of the thing the prompt names", "reads": ["guide"]}}}},
+            r#"{{"providers": {{"matte": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a matte of the thing the prompt names", "reads": ["guide"]}}}},
                 "plate": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "the guide with what guide_mask is white on taken out", "reads": ["guide", "guide_mask"]}}}},
-                "shot": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a shot that follows a depth guide", "size": [160, 90], "rate": 12, "seconds": 5, "reads": ["guide"]}}}}}}"#
+                "shot": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a shot that follows a depth guide", "size": [160, 90], "rate": 12, "seconds": 5, "reads": ["guide"]}}}}}}}}"#
         ),
     )
     .unwrap();
-    Models::use_file(&models);
+    Generator::use_file(&models);
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     // The person lets an agent's edits through and its makings run, up to a limit of theirs.

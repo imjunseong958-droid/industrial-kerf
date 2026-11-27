@@ -28,27 +28,30 @@ pub enum EngineError {
         "the steps of media `{media}` are in the recipe file `{recipe}`, and a media is made from the steps under its line: `kerf carry {media}`, or an agent's `edit` with `carry: [\"{media}\"]`, writes them there"
     )]
     NotCarried { media: String, recipe: String },
-    /// No model by this name is set up in the person's models file, `file`, which names the
-    /// models of `have`: said with how one is.
+    /// No model by this name is set up in the file the person sets models up in, `file`, where
+    /// the models of `have` are: said with how one is, and with `note` where there is one.
     #[error(
-        "no model `{name}` is set up: {} {}. A model is a program named there, as `{{\"{name}\": {{\"run\": [\"<program>\", \"{}\"]}}}}`",
+        "no model `{name}` is set up: {} {}. A model is reached by a provider named there under \"providers\": a server, `{{\"<name>\": {{\"url\": \"https://…\"}}}}`, or a program, `{{\"{}\": {{\"run\": [\"<program>\", \"{{request}}\"]}}}}`{}",
         .file.display(),
         names_said(.have),
-        crate::recipe::model::REQUEST
+        // A program is one model by its provider's name, which holds no `/`.
+        .name.rsplit('/').next().unwrap_or_default(),
+        .note.as_ref().map(|note| format!(". {note}")).unwrap_or_default()
     )]
     NoModel {
         name: String,
         file: PathBuf,
         have: Vec<String>,
+        note: Option<String>,
     },
 }
 
-/// The models a models file names, as [`EngineError::NoModel`] says them.
+/// The models a person has set up, as [`EngineError::NoModel`] says them.
 fn names_said(have: &[String]) -> String {
     if have.is_empty() {
-        "names none".to_owned()
+        "sets up none".to_owned()
     } else {
-        format!("names {}", have.join(", "))
+        format!("sets up {}", have.join(", "))
     }
 }
 

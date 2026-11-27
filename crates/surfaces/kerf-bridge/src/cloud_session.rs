@@ -171,7 +171,7 @@ mod tests {
     fn without_a_keychain_the_token_stays_in_the_file() {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join(".kerf/cloud.json");
-        let keychain = SystemKeychain::turned_off();
+        let keychain = SystemKeychain::enabled(false);
 
         keep_token(&path, &keychain, Some("tok-file")).unwrap();
         assert_eq!(

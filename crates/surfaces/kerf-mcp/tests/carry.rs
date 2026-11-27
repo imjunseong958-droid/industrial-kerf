@@ -5,11 +5,11 @@
 //! next change are of steps in the document. Nothing is made from a recipe's
 //! file, so the take one made is written here as such a making left it.
 //!
-//! In a file of its own: it reads a models file of its own for the whole
-//! process ([`Models::use_file`]), which the other tests' process must not see.
+//! In a file of its own: it reads a generation file of its own for the whole
+//! process ([`Generator::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
 
-use kerf_engine::recipe::model::Models;
+use kerf_generate::Generator;
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
@@ -129,13 +129,13 @@ fn an_agent_carries_a_recipe_into_the_document_and_its_takes_stay() {
     std::fs::write(dir.join("shots/gone.kerfrecipe"), GONE).unwrap();
     std::fs::write(dir.join("shots/open.kerfrecipe"), OPEN).unwrap();
     legacy_take(dir);
-    let models = dir.join("models.json");
+    let models = dir.join("generation.json");
     std::fs::write(
         &models,
-        format!(r#"{{"matte": {{"run": {ANSWERS_ITS_GUIDE}}}, "plate": {{"run": {ANSWERS_ITS_GUIDE}}}}}"#),
+        format!(r#"{{"providers": {{"matte": {{"run": {ANSWERS_ITS_GUIDE}}}, "plate": {{"run": {ANSWERS_ITS_GUIDE}}}}}}}"#),
     )
     .unwrap();
-    Models::use_file(&models);
+    Generator::use_file(&models);
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(Permissions {

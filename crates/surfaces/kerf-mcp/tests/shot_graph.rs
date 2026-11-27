@@ -3,10 +3,10 @@
 //! set, an input wired in and let go, a step added and one taken out, and a
 //! take gone back to.
 //!
-//! In a file of its own: it reads a models file of its own for the whole
-//! process ([`Models::use_file`]), which the other tests' process must not see.
+//! In a file of its own: it reads a generation file of its own for the whole
+//! process ([`Generator::use_file`]), which the other tests' process must not see.
 
-use kerf_engine::recipe::model::Models;
+use kerf_generate::Generator;
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -106,14 +106,14 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     std::fs::create_dir(dir.join("shots")).unwrap();
     std::fs::write(dir.join("project.kerf"), PROJECT).unwrap();
     // The person's own models.
-    let models = dir.join("models.json");
+    let models = dir.join("generation.json");
     std::fs::write(
         &models,
-        r#"{"still": {"run": ["a-still-program", "{request}"]},
-            "video": {"run": ["a-video-program", "{request}"]}}"#,
+        r#"{"providers": {"still": {"run": ["a-still-program", "{request}"]},
+            "video": {"run": ["a-video-program", "{request}"]}}}"#,
     )
     .unwrap();
-    Models::use_file(&models);
+    Generator::use_file(&models);
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
@@ -305,7 +305,7 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     // edit that write them under the media again.
     let (_, document) = router.runtime().get_document(false).unwrap();
     let project = kerf_runtime::parse_document(&document).unwrap();
-    let none = kerf_engine::recipe::model::Models::default();
+    let none = kerf_generate::Generator::default();
     let planned = kerf_engine::recipe::plan(&project, dir, "card", &none).unwrap();
     kerf_engine::recipe::make(
         &project,

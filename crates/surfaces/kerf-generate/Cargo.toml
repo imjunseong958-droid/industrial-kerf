@@ -1,0 +1,29 @@
+[package]
+name = "kerf-generate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Where Kerf asks a model for a file: the providers a person sets up in ~/.kerf/generation.json, a server that speaks the Kerf generation API or a program on their computer"
+
+[dependencies]
+kerf-engine = { path = "../../engine/kerf-engine" }
+kerf-generate-api = { path = "../../foundation/kerf-generate-api" }
+kerf-model = { path = "../../foundation/kerf-model" }
+kerf-paths = { path = "../../foundation/kerf-paths" }
+kerf-secrets = { path = "../../foundation/kerf-secrets" }
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+# A server's API, trusting the system's certificates as well, so a network that
+# inspects TLS with its own CA still works.
+ureq = { workspace = true, features = ["json", "platform-verifier"] }
+
+[dev-dependencies]
+kerf-lang = { path = "../../foundation/kerf-lang" }
+tempfile.workspace = true
+
+[lints]
+workspace = true

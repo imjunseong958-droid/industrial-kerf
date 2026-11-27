@@ -37,10 +37,11 @@
 //! makes on the way and a later one reads. A file of the project is named
 //! from the project's folder.
 //!
-//! No step names a program. Kerf draws, and a model, or a renderer that is
-//! handed its arguments, is a program the person names in a file of their
-//! own ([`model`]). Kerf runs steps only when a media is asked to be made,
-//! never on opening or drawing a project.
+//! No step names a program or a server. Kerf draws, and a model, or a
+//! renderer that is handed its arguments, is reached as the person has set
+//! it up in a file of their own, by a [`model::Generator`] the host hands
+//! the engine. Kerf runs steps only when a media is asked to be made, never
+//! on opening or drawing a project.
 //!
 //! Each making is a take, kept beside the ones before it; the document says
 //! which one the media is ([`mod@takes`]).
@@ -73,7 +74,7 @@ use crate::render::{
 };
 use kerf_compose::Pass;
 use kerf_model::Media;
-use model::{Models, Source};
+use model::{Generation, Generator, Source};
 use moves::Moves;
 use signal::Signal;
 use std::path::{Component, Path, PathBuf};
@@ -167,7 +168,7 @@ fn steps_of_text(
         match words.first().map(String::as_str) {
             Some("run") => {
                 return Err(wrong(format!(
-                    "`run {program}` runs a program, and a document names none: the steps it holds are `render`, `generate`, and `join`. Name the program in your models file, with `{{out}}` where its file goes ({{\"{program}\": {{\"run\": [\"{program}\", …, \"{{out}}\"]}}}}), and write this line of the recipe as `generate model={program} … out={{<name>}}`: it is carried then",
+                    "`run {program}` runs a program, and a document names none: the steps it holds are `render`, `generate`, and `join`. Name the program in your generation.json, with `{{out}}` where its file goes ({{\"providers\": {{\"{program}\": {{\"run\": [\"{program}\", …, \"{{out}}\"]}}}}}}), and write this line of the recipe as `generate model={program} … out={{<name>}}`: it is carried then",
                     program = words.get(1).map_or("", String::as_str)
                 )))
             }
@@ -512,21 +513,6 @@ impl Recipe {
     }
 }
 
-/// `words` as a person reads a command, quoted where one holds a space.
-fn shown(words: impl IntoIterator<Item = String>) -> String {
-    words
-        .into_iter()
-        .map(|word| {
-            if word.is_empty() || word.contains(char::is_whitespace) {
-                format!("\"{word}\"")
-            } else {
-                word
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// What making a media runs and writes, for a person to see before it is
 /// run.
 #[derive(Clone, Debug, PartialEq)]
@@ -631,9 +617,9 @@ pub fn plan(
     project: &kerf_model::Project,
     directory: &Path,
     id: &str,
-    models: &Models,
+    generator: &dyn Generator,
 ) -> Result<Plan> {
-    plan_rolled(project, directory, id, models, 0)
+    plan_rolled(project, directory, id, generator, 0)
 }
 
 /// The roll a making of media `id` that is to be another of the same shot takes: one past
@@ -657,7 +643,7 @@ pub fn plan_rolled(
     project: &kerf_model::Project,
     directory: &Path,
     id: &str,
-    models: &Models,
+    generator: &dyn Generator,
     roll: u32,
 ) -> Result<Plan> {
     // Each path a plan holds is whole: a step runs in the project's folder, where a path
@@ -718,8 +704,9 @@ pub fn plan_rolled(
             )));
         }
     }
+    let catalog = generator.catalog();
     for model in recipe.models() {
-        models.command(model)?;
+        catalog.find(model)?;
     }
     let place = takes::Place::of_media(directory, &media.path)?;
     let take = place.next();
@@ -790,17 +777,13 @@ pub fn plan_rolled(
                 )
             }
             Step::Generate(ask) => {
-                let request = request_file(&working, &recipe.steps, index);
-                let command = models
-                    .command(&ask.model)
+                let reached = catalog
+                    .find(&ask.model)
                     .expect("every model the steps ask for was looked up above");
                 format!(
-                    "{} asks model `{}` for {}",
-                    shown(
-                        command
-                            .iter()
-                            .map(|word| word.replace(model::REQUEST, &request.to_string_lossy()))
-                    ),
+                    "{} is handed {} and asks model `{}` for {}",
+                    reached.by,
+                    request_file(&working, &recipe.steps, index).display(),
                     ask.model,
                     ask.shown()
                 )
@@ -813,7 +796,7 @@ pub fn plan_rolled(
         stored: place.stored(take),
         command: steps.join("\n"),
         steps,
-        notes: notes(project, &recipe, models),
+        notes: notes(project, &recipe, catalog),
         roll,
         media: id.to_owned(),
         text,
@@ -855,8 +838,8 @@ pub fn guide_only_filmed(project: &kerf_model::Project, sequence: &str) -> bool 
 /// What `recipe` asks of its models that they have said they do not take,
 /// each as a line for whoever is about to make it, and what it hands one
 /// that says nothing. A model that has not said what it takes
-/// ([`model::Takes`]) is asked nothing of here.
-fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec<String> {
+/// ([`model::ModelSpec`]) is asked nothing of here.
+fn notes(project: &kerf_model::Project, recipe: &Recipe, catalog: &model::Catalog) -> Vec<String> {
     let mut notes = Vec::new();
     // A pass of how near things are, or which way they face, of a sequence with nothing in
     // depth is black on every frame: what a model is then handed tells it nothing.
@@ -925,7 +908,7 @@ fn notes(project: &kerf_model::Project, recipe: &Recipe, models: &Models) -> Vec
                 ));
             }
         }
-        let Some(takes) = models.takes(&ask.model) else {
+        let Some(takes) = catalog.spec(&ask.model) else {
             continue;
         };
         let model = &ask.model;
@@ -1098,7 +1081,7 @@ pub fn make(
     project: &kerf_model::Project,
     directory: &Path,
     plan: &Plan,
-    models: &Models,
+    generator: &dyn Generator,
     cancellation: &CancellationToken,
     mut on_line: impl FnMut(&str),
 ) -> Result<Made> {
@@ -1113,7 +1096,7 @@ pub fn make(
     // What the take is made from, read before anything runs.
     let from = takes::from(project, directory, &plan.text, &recipe)?;
     for model in recipe.models() {
-        models.command(model)?;
+        generator.catalog().find(model)?;
     }
     // A take made since the plan was shown keeps its number.
     let take = place.next().max(plan.take);
@@ -1134,7 +1117,7 @@ pub fn make(
         directory,
         place: &place,
         take,
-        models,
+        generator,
         cancellation,
     };
     let telling = told::Telling::begin(directory, &plan.media, take, cancellation);
@@ -1185,7 +1168,7 @@ struct Making<'a> {
     directory: &'a Path,
     place: &'a takes::Place,
     take: u32,
-    models: &'a Models,
+    generator: &'a dyn Generator,
     cancellation: &'a CancellationToken,
 }
 
@@ -1228,8 +1211,9 @@ impl Making<'_> {
         on_line: &mut dyn FnMut(&str),
     ) -> Result<Vec<model::Region>> {
         let reads = self
-            .models
-            .takes(&ask.model)
+            .generator
+            .catalog()
+            .spec(&ask.model)
             .and_then(|takes| takes.reads.as_ref());
         if !reads.is_some_and(|reads| reads.iter().any(|read| read == model::REGIONS)) {
             return Ok(Vec::new());
@@ -1394,7 +1378,7 @@ impl Making<'_> {
                         &|name| self.file_for(name),
                         &signals,
                         &moves,
-                        &regions,
+                        regions,
                     )?;
                     // A picture in motion given as the first frame is where it ended, and as
                     // the last, where it began: a shot that goes on from another, or into one.
@@ -1423,16 +1407,15 @@ impl Making<'_> {
                         }
                     }
                     std::fs::write(&request, asked.file()?)?;
-                    let words = model::command_for(
-                        &ask.model,
-                        self.models.command(&ask.model)?,
-                        &request,
-                        &asked,
-                        self.models.takes(&ask.model),
+                    self.generator.generate(
+                        &Generation {
+                            request: &asked,
+                            file: &request,
+                            directory: self.directory,
+                            cancellation: self.cancellation,
+                        },
+                        on_line,
                     )?;
-                    let mut command = model::program(&words[0]);
-                    command.args(&words[1..]);
-                    self.supervised(command, &words[0], on_line)?;
                 }
             }
         }

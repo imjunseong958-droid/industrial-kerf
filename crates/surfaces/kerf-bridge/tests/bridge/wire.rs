@@ -444,7 +444,7 @@ fn cloud() -> impl Strategy<Value = Event> {
         })
 }
 
-/// Values under names of `names`, as a models file says them.
+/// Values under names of `names`, as what a model takes says them.
 fn said(
     names: Vec<&'static str>,
 ) -> impl Strategy<Value = serde_json::Map<String, serde_json::Value>> {

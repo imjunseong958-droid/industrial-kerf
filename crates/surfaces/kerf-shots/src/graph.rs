@@ -1,7 +1,7 @@
 //! The steps that make a media as a graph.
 
 use crate::ShotError;
-use kerf_engine::recipe::model::Models;
+use kerf_engine::recipe::model::Generator;
 use kerf_engine::recipe::text::{self, Change};
 use kerf_model::Project;
 use std::path::Path;
@@ -18,9 +18,9 @@ pub fn shown(
     project: &Project,
     directory: &Path,
     id: &str,
-    models: &Models,
+    generator: &dyn Generator,
 ) -> Result<Graph, ShotError> {
-    kerf_engine::recipe::graph(project, directory, id, models).map_err(ShotError::from)
+    kerf_engine::recipe::graph(project, directory, id, generator).map_err(ShotError::from)
 }
 
 /// One name on one line of a recipe to set, or with no `value` to take off.
@@ -76,7 +76,7 @@ pub fn removed(recipe: &str, line: usize) -> Result<String, ShotError> {
 /// join of parts goes in its place where that was one of the parts.
 pub fn step(
     project: &Project,
-    models: &Models,
+    generator: &dyn Generator,
     recipe: &str,
     kind: &str,
 ) -> Result<(usize, String), ShotError> {
@@ -121,8 +121,8 @@ pub fn step(
             });
             let model = asked
                 .map(|ask| ask.model.clone())
-                .or_else(|| models.names().next().map(str::to_owned))
-                .ok_or("no model is set up to ask: set one up in your models file first")?;
+                .or_else(|| generator.catalog().names().into_iter().next())
+                .ok_or("no model is set up to ask: set one up in Settings ▸ Generation first")?;
             let prompt = asked.map_or("", |ask| ask.prompt.as_str());
             // Quoted as a line quotes a value that holds spaces.
             let quoted = prompt.replace('\\', "\\\\").replace('"', "\\\"");

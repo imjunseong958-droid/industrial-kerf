@@ -23,7 +23,6 @@
 
 use kerf_compose::{ComposeOptions, Compositor, Pass};
 use kerf_model::{Catalog, Project};
-use serde::Serialize;
 
 /// The height of the frames a place is read on, in pixels, where the sequence is as tall.
 const HEIGHT: f64 = 216.0;
@@ -32,7 +31,7 @@ const HEIGHT: f64 = 216.0;
 const NEAR: u8 = 6;
 
 /// Where a clip goes, as a model is handed it, and as a request holds it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Moves {
     /// The clip it is, by its id.
     pub name: String,
@@ -120,6 +119,16 @@ impl Moves {
             frame: ids.size(),
             places,
         })
+    }
+
+    /// As a model is handed it, in a request.
+    pub fn handed(&self) -> kerf_generate_api::Moves {
+        kerf_generate_api::Moves {
+            name: self.name.clone(),
+            rate: self.rate,
+            frame: self.frame,
+            places: self.places.clone(),
+        }
     }
 
     /// Whether it is nowhere on any frame, or in one place on all of them: such a clip says

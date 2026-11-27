@@ -31,7 +31,7 @@ makes one with `make`, and changes a word for the next with an edit:
 `step depth set 2 seed=8`.
 
 Two more read a picture back, with the
-models `depth` and `cameras` set up in `~/.kerf/models.json`:
+models `depth` and `cameras` set up in `~/.kerf/generation.json`:
 
 - `readback`: the depth guide of the car driving across, the take `shot`
   makes of it (`out={take.mp4}`), and that take's depth as a model reads it,
