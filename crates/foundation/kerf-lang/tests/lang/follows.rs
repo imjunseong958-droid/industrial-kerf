@@ -641,6 +641,18 @@ fn hold(
         .map_err(|errors| TestCaseError::fail(format!("`{line}`: {errors:?}\n{document}")))?;
     prop_assert_eq!(&read.project, after, "`{}`\n{}", line, document);
 
+    // The clip an insert or an overwrite put in, where it put it: a shot of its own, and part
+    // of none that was there, even where it plays the same moment of the same source.
+    let put_in = match edit {
+        Edit::Insert(_, at, _) | Edit::Overwrite(_, at, _) => before.clip(of).and_then(|shot| {
+            let start = shot.start + Rate::FPS_24.time_of(*at);
+            clips(after)
+                .find(|clip| clip.start == start && before.clip(clip.id.as_str()).is_none())
+                .map(|clip| clip.id.clone())
+        }),
+        _ => None,
+    };
+
     for follower in clips(before).filter(|clip| clip.follows.is_some()) {
         let id = follower.id.as_str();
         let followed = before
@@ -710,9 +722,12 @@ fn hold(
             .collect();
         // Shots trimmed and slipped far enough play the same moment twice: then none is it.
         // Nor is another clip that was there already and has come to play it, as the part
-        // before a cut does when the cut is rolled later: the moment is its own now.
-        let its_own =
-            |clip: &Clip| clip.id == followed.id || before.clip(clip.id.as_str()).is_none();
+        // before a cut does when the cut is rolled later: the moment is its own now. Nor is the
+        // clip the edit put in.
+        let its_own = |clip: &Clip| {
+            clip.id == followed.id
+                || (before.clip(clip.id.as_str()).is_none() && put_in.as_ref() != Some(&clip.id))
+        };
         if let [plays_it] = plays_it[..]
             && its_own(plays_it)
         {
