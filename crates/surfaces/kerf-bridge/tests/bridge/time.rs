@@ -164,6 +164,36 @@ fn model(project: &Project, top: &Clip, at: Time) -> (Time, i64) {
     )
 }
 
+/// The frame of its media a clip at one speed shows at `at`, from the document's numbers in
+/// whole fractions. Forward, it is the frame its source position is in, the position counted
+/// on from the source in by what has played. Backwards, it is the frame showing just before
+/// its source position, the position counted on from the source in by what is left to play:
+/// a reversed clip is a forward one run from its other end.
+fn written(clip: &Clip, media: Rate, at: Time) -> Option<i64> {
+    let ratio = clip.speed().constant()?;
+    let (source_in, _) = clip.source_range()?;
+    let (num, den) = (
+        i128::from(ratio.num().unsigned_abs()),
+        i128::from(ratio.den()),
+    );
+    let flicks = |time: Time| i128::from(time.flicks());
+    let into = flicks(at) - flicks(clip.start);
+    let playing = if ratio.is_reverse() {
+        flicks(clip.duration) - into
+    } else {
+        into
+    };
+    // The source position in frames of the media, as a fraction.
+    let above = (flicks(source_in) * den + playing * num) * i128::from(media.num());
+    let below = den * i128::from(kerf_model::time::FLICKS_PER_SECOND) * i128::from(media.den());
+    let frame = if ratio.is_reverse() {
+        -(-above).div_euclid(below) - 1
+    } else {
+        above.div_euclid(below)
+    };
+    Some(frame as i64)
+}
+
 /// The document of `case` read, or the case set aside: a ramp may ask for more of a source
 /// than there is.
 fn read(case: &Case) -> Result<(String, Project), TestCaseError> {
@@ -240,6 +270,23 @@ proptest! {
                     frame, document, seconds, played
                 );
             }
+        }
+    }
+
+    /// The frame the compositor draws of a clip at one speed is the one the document's
+    /// numbers give, whichever way the clip runs.
+    #[test]
+    fn at_one_speed_the_compositor_draws_the_frame_the_document_gives(case in case()) {
+        prop_assume!(case.holder.is_none() && !case.speed.contains('{'));
+        let (document, project) = read(&case)?;
+        let top = &project.sequences[0].tracks[0].clips[0];
+        let media = project.media("m").expect("the media").rate;
+        let compositor = Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default())
+            .expect("composes");
+        for (frame, at) in frames(&case, &project) {
+            let given = written(top, media, at).expect("one speed");
+            let landing = compositor.lands("c1", at).expect("it lands");
+            prop_assert_eq!(landing.frame, given.max(0), "frame {} of\n{}", frame, document);
         }
     }
 
