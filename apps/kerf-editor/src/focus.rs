@@ -198,13 +198,10 @@ pub fn focus_ops(
 /// Where in the program second `source` of `clip`'s media plays; None
 /// when the clip plays none of its media.
 fn program_time(clip: &Clip, source: f64) -> Option<f64> {
-    let first = clip.source_at(0.0)?;
-    let last = clip.source_at(clip.duration)?;
-    let span = last - first;
-    if span.abs() < 1e-9 || clip.duration <= 0.0 {
+    if clip.duration <= 0.0 {
         return None;
     }
-    Some(clip.timeline_start + (source - first) / span * clip.duration)
+    clip.played_at(source)
 }
 
 /// The first scene cut of `clip`'s media (`cuts`, seconds of the media as
@@ -356,7 +353,8 @@ pub struct Target {
 }
 
 /// The frame of `clip` at program second `at` that a box is drawn on: its
-/// media's file and the second in it. [`NO_FRAME`] for a clip with no
+/// media's file and a second in it FFmpeg gives that frame for, which is the
+/// frame the viewer shows there. [`NO_FRAME`] for a clip with no
 /// media to read (a title, a solid) or whose file is not there, refused
 /// before the dialog opens, which would have no frame to draw the box on.
 pub fn readable_frame(
@@ -366,10 +364,9 @@ pub fn readable_frame(
 ) -> Result<(PathBuf, f64), &'static str> {
     let file = file.filter(|file| file.is_file()).ok_or(NO_FRAME)?;
     let seconds = clip
-        .source_at(at - clip.timeline_start)
-        .filter(|seconds| seconds.is_finite())
+        .source_frame_second_at(at - clip.timeline_start)
         .ok_or(NO_FRAME)?;
-    Ok((file, seconds.max(0.0)))
+    Ok((file, seconds))
 }
 
 /// The clip Focus Region would work on in `session` now: the chosen clip,
@@ -471,10 +468,14 @@ fn decode_frame(file: &Path, seconds: f64) -> Option<Arc<RenderImage>> {
 }
 
 /// The grey frames a subject is followed in: `clip`'s media from program
-/// second `start` to `end`, [`TRACK_RATE`] a second, [`TRACK_SIZE`].
+/// second `start` to `end`, [`TRACK_RATE`] a second, [`TRACK_SIZE`]. They are
+/// read evenly over the media the clip plays between the two, at the speed
+/// it plays that at overall, and in the order it plays them.
 fn track_frames(file: &Path, clip: &Clip, start: f64, end: f64) -> Option<Vec<u8>> {
-    let speed = clip.speed.unwrap_or(1.0).abs().max(1e-6);
-    let from = clip.source_at(start - clip.timeline_start)?;
+    let first = clip.source_at(start - clip.timeline_start)?;
+    let last = clip.source_at(end - clip.timeline_start)?;
+    let (from, to) = (first.min(last), first.max(last));
+    let speed = ((to - from) / (end - start)).max(1e-6);
     let (width, height) = TRACK_SIZE;
     let args: Vec<String> = [
         "-nostdin".to_owned(),
@@ -483,7 +484,7 @@ fn track_frames(file: &Path, clip: &Clip, start: f64, end: f64) -> Option<Vec<u8
         "-ss".to_owned(),
         format!("{:.6}", from.max(0.0)),
         "-t".to_owned(),
-        format!("{:.6}", (end - start) * speed),
+        format!("{:.6}", to - from),
         "-i".to_owned(),
         file.to_string_lossy().into_owned(),
         "-vf".to_owned(),
@@ -498,7 +499,19 @@ fn track_frames(file: &Path, clip: &Clip, start: f64, end: f64) -> Option<Vec<u8
         "pipe:1".to_owned(),
     ]
     .to_vec();
-    run_ffmpeg(&args)
+    let frames = run_ffmpeg(&args)?;
+    if last >= first {
+        return Some(frames);
+    }
+    // Played backwards, the last frame read is the first one shown.
+    Some(
+        frames
+            .chunks_exact(width * height)
+            .rev()
+            .flatten()
+            .copied()
+            .collect(),
+    )
 }
 
 /// Where the dialog stands.

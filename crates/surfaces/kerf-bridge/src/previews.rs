@@ -366,7 +366,8 @@ fn compose_generator(
     compose(drawers, &project, &sequence, Time::ZERO, width)
 }
 
-/// The clip's picture at `at`, decoded from its media, `width` pixels wide.
+/// The clip's picture on the frame of its sequence showing at `at`, decoded from its media,
+/// `width` pixels wide: the frame of the media the program shows there.
 struct Picture {
     width: u32,
     height: u32,
@@ -377,8 +378,14 @@ struct Picture {
     source: (u32, u32),
 }
 
-fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<Picture>, String> {
-    let Content::Media { media, .. } = &clip.content else {
+fn decode(
+    project: &Project,
+    sequence: &Sequence,
+    clip: &Clip,
+    at: f64,
+    width: u32,
+) -> Result<Option<Picture>, String> {
+    let (Content::Media { media, .. }, Some(map)) = (&clip.content, clip.time_map()) else {
         return Ok(None);
     };
     let Some(media) = project.media(media.as_str()) else {
@@ -387,10 +394,14 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
     let Some(video) = media.video else {
         return Ok(None);
     };
-    let at = Time::from_seconds(at)
-        .unwrap_or(Time::ZERO)
-        .clamp(clip.start, clip.end() - media.rate.frame_duration());
-    let source = clip.source_at(at).unwrap_or(Time::ZERO);
+    let rate = sequence.rate;
+    let at = rate
+        .time_of(rate.frames_floor(Time::from_seconds(at).unwrap_or(Time::ZERO)))
+        .clamp(clip.start, clip.end() - rate.frame_duration());
+    // FFmpeg gives the first frame at or after the time it is asked for, so it is asked for
+    // the frame by where it starts and not by the moment the clip plays, which may fall
+    // inside it.
+    let source = media.rate.seek_time(map.frame(at, media.rate).max(0));
     let width = width.clamp(16, MAX_WIDTH) & !1;
     let height = ((u64::from(width) * u64::from(video.height) / u64::from(video.width.max(1)))
         as u32)
@@ -422,7 +433,7 @@ fn decode(project: &Project, clip: &Clip, at: f64, width: u32) -> Result<Option<
         width,
         height,
         rgba,
-        clip_time: at - clip.start,
+        clip_time: clip.time_at(at),
         source: (video.width, video.height),
     }))
 }
@@ -503,7 +514,7 @@ pub(crate) fn run(
                 let (sequence, clip) =
                     found.ok_or_else(|| format!("no clip `{}`", request.clip))?;
                 if picture.is_none() {
-                    picture = Some(decode(&project, clip, request.at, width)?);
+                    picture = Some(decode(&project, sequence, clip, request.at, width)?);
                 }
                 let effect = previewed(def, entry);
                 match picture.as_ref().and_then(Option::as_ref) {

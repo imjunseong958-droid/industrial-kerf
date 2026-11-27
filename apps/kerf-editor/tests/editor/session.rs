@@ -159,12 +159,14 @@ fn a_clip_shows_its_source_forwards_or_backwards() {
         source_out: Some(14.0),
         duration: 2.0,
         speed: Some(2.0),
+        speed_ratio: Some("2".to_owned()),
         ..Clip::default()
     };
     assert_eq!(clip.source_at(0.0), Some(10.0));
     assert_eq!(clip.source_at(1.0), Some(12.0));
     let reversed = Clip {
         reverse: true,
+        speed_ratio: Some("-2".to_owned()),
         ..clip.clone()
     };
     assert_eq!(reversed.source_at(0.0), Some(14.0));

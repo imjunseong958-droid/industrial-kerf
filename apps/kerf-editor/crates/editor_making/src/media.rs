@@ -555,17 +555,11 @@ pub fn program_time_of(timeline: &model::Timeline, media: &str, at: f64) -> Opti
         .flat_map(|track| &track.clips)
         .filter(|clip| clip.source_id.as_deref() == Some(media) && clip.duration > 0.0)
         .find_map(|clip| {
-            let first = clip.source_at(0.0)?;
-            let last = clip.source_at(clip.duration)?;
-            let (low, high) = if first <= last {
-                (first, last)
-            } else {
-                (last, first)
-            };
-            if at < low || at > high || (last - first).abs() < 1e-9 {
+            let (low, high) = (clip.source_in?, clip.source_out?);
+            if at < low || at > high || high - low < 1e-9 {
                 return None;
             }
-            Some(clip.timeline_start + (at - first) / (last - first) * clip.duration)
+            clip.played_at(at)
         })
 }
 

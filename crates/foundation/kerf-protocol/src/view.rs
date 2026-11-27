@@ -19,7 +19,7 @@
 //! says. An expression shows as what it gives at the clip's first frame.
 //! Anything absent is at its default.
 
-use kerf_model::{Interp, Rgba};
+use kerf_model::{Interp, RampKey, Rate, Ratio, Rgba, Speed, Time, TimeMap};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -290,6 +290,9 @@ pub struct ViewClip {
     /// Its speed as documents write it (`1`, `1/2`, `-2`), or `ramp`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed_ratio: Option<String>,
+    /// The speeds of a ramp, in time order; absent for one speed throughout.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub speed_keys: Vec<ViewSpeedKey>,
     /// It plays its source backwards. Absent otherwise.
     #[serde(skip_serializing_if = "is_false")]
     pub reverse: bool,
@@ -346,27 +349,85 @@ impl ViewClip {
         self.start_frame + self.duration_frames
     }
 
-    /// The second of its source shown `offset` seconds into the clip: from
-    /// its in point towards its out (which allow for its speed), or back
-    /// from its out point when it plays in reverse. None for a clip with no
-    /// source range (a title, a generator).
-    pub fn source_at(&self, offset: f64) -> Option<f64> {
-        let source_in = self.source_in?;
-        let speed = self.speed.unwrap_or(1.0);
-        let out = self
-            .source_out
-            .unwrap_or(source_in + self.duration * speed.abs());
-        let rate = if self.duration > 0.0 {
-            (out - source_in) / self.duration
-        } else {
-            speed.abs()
+    /// How it maps the sequence's time onto its source, as kerf-model's `Clip::time_map`
+    /// has it: every answer about what it plays comes from this. It is made of the clip's
+    /// span, its in point, and its speed as documents write it (`speedRatio`, 1 when absent,
+    /// and `speedKeys` for a ramp), not of `speed`, which is an average. None for a clip
+    /// with no source range (a title, a generator), or one whose speed does not read.
+    pub fn time_map(&self) -> Option<TimeMap<'static>> {
+        let source_in = Time::from_seconds(self.source_in?)?;
+        let speed = match self.speed_ratio.as_deref() {
+            None => Speed::ONE,
+            Some(_) if !self.speed_keys.is_empty() => Speed::ramp(
+                self.speed_keys
+                    .iter()
+                    .map(|key| {
+                        Some(RampKey {
+                            at: Time::from_seconds(key.at)?,
+                            speed: Ratio::parse(&key.speed).ok()?,
+                            interp: key.interp,
+                        })
+                    })
+                    .collect::<Option<_>>()?,
+            )
+            .ok()?,
+            Some(ratio) => Ratio::parse(ratio).ok()?.into(),
         };
-        Some(if self.reverse || speed < 0.0 {
-            out - offset * rate
-        } else {
-            source_in + offset * rate
-        })
+        let start = Time::from_seconds(self.timeline_start)?;
+        let duration = Time::from_seconds(self.duration)?;
+        Some(TimeMap::new(start, duration, source_in, &speed).into_owned())
     }
+
+    /// The second of its source shown `offset` seconds into the clip, and past either end
+    /// what it would show there: from its in point at its speed, or back from its out point
+    /// when it plays in reverse. None for a clip with no source range (a title, a
+    /// generator).
+    pub fn source_at(&self, offset: f64) -> Option<f64> {
+        let map = self.time_map()?;
+        let at = map.start() + Time::from_seconds(offset)?;
+        Some(map.source(at).seconds())
+    }
+
+    /// Where on the sequence, in seconds, it plays second `source` of its source: past either
+    /// end, where it would play it. The way back from [`Self::source_at`], which takes
+    /// seconds into the clip.
+    pub fn played_at(&self, source: f64) -> Option<f64> {
+        let map = self.time_map()?;
+        Some(map.played_at(Time::from_seconds(source)?).seconds())
+    }
+
+    /// The frame of its media shown `offset` seconds into the clip, counted from the media's
+    /// start at the media's rate: the one a render draws there. None for a clip of no media,
+    /// or of media the project does not have.
+    pub fn source_frame_at(&self, offset: f64) -> Option<i64> {
+        let rate = Rate::parse(self.source_rate.as_deref()?).ok()?;
+        let map = self.time_map()?;
+        let at = map.start() + Time::from_seconds(offset)?;
+        Some(map.frame(at, rate).max(0))
+    }
+
+    /// A second of its media to ask a decoder for, to be given the frame shown `offset`
+    /// seconds into the clip ([`Self::source_frame_at`]): a decoder gives the first frame at
+    /// or after the second it is asked for, which for the very second a clip plays is the
+    /// frame after the one showing whenever that second falls between two frames.
+    pub fn source_frame_second_at(&self, offset: f64) -> Option<f64> {
+        let rate = Rate::parse(self.source_rate.as_deref()?).ok()?;
+        Some(rate.seek_time(self.source_frame_at(offset)?).seconds())
+    }
+}
+
+/// A speed of a ramp at a time of its clip, and how it moves toward the next.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ViewSpeedKey {
+    /// Seconds from its clip's first frame; a ramp's first key may come before it.
+    pub at: f64,
+    /// The speed as documents write it (`2`, `1/2`, `-1`).
+    pub speed: String,
+    /// How the speed moves toward the next key's: a name, or a curve's handles
+    /// `x1,y1,x2,y2`.
+    #[serde(with = "interp_name")]
+    pub interp: Interp,
 }
 
 /// An effect on a clip.

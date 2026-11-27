@@ -53,8 +53,8 @@ pub use kerf_runtime::{
     Author, AuthorKind, ErrorCode, Interp, PendingProposal, ProjectionStatus, ProposalEntry,
     ProposalFreshness, ProposalStatus, ProposalVersion, RenderCodec, RenderQuality, RenderStatus,
     TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewKey, ViewMarker, ViewMask, ViewOutline,
-    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack,
-    ViewTrackKind, ViewTransition,
+    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewSpeedKey, ViewTake,
+    ViewTrack, ViewTrackKind, ViewTransition,
 };
 
 /// An event from the bridge. Each [`Command`](crate::Command) says which events answer it.

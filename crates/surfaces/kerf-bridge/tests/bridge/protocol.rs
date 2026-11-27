@@ -876,3 +876,80 @@ fn titles_go_in_as_generators_on_a_sequence_whose_rate_was_set_while_empty() {
         .count();
     assert!(lit > 0 && lit < text.len() / 16, "{lit}");
 }
+
+/// Half a second of 320x180 at 24 frames a second whose brightness says which frame it is:
+/// frame `n` is `16 + 18 n` light.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
+fn counting_media(path: &Path) -> bool {
+    Command::new(ffmpeg())
+        .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+        .args([
+            "-i",
+            "color=c=black:s=320x180:r=24:d=0.5,format=gray,geq=lum='16+N*18'",
+        ])
+        .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv420p"])
+        .arg(path)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// An effect's preview is drawn on the frame of the clip's media the program shows at the
+/// playhead. Footage of 24 frames a second in a sequence of 30 is, on most of the sequence's
+/// frames, part of the way through one of its own, and FFmpeg asked for that very moment
+/// gives the frame after.
+#[test]
+fn an_effects_preview_is_of_the_frame_of_the_media_the_program_shows() {
+    use base64::Engine as _;
+    let project = Project::new("previewframe");
+    fs::create_dir_all(project.0.join("media")).unwrap();
+    if !counting_media(&project.0.join("media/count.mp4")) {
+        eprintln!("skipping: FFmpeg could not make the test media");
+        return;
+    }
+    fs::write(
+        project.0.join("project.kerf"),
+        "kerf 1\nproject name=\"Count\"\n\
+         media m1 path=\"media/count.mp4\" rate=24 dur=12f video=320x180\n\
+         sequence s1 rate=30 size=320x180 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m1 src=0f at=0f dur=15f\n",
+    )
+    .unwrap();
+    let mut editor = Editor::open(&project.0);
+    ready(&mut editor);
+    editor.state("the project", |snapshot| {
+        snapshot["document"].as_str().unwrap_or("").contains("c1")
+    });
+    // The sequence's frame, and the media's frame showing on it: 24 thirtieths of it.
+    for (frame, shows) in [(1, 0), (6, 4), (11, 8), (5, 4)] {
+        let key = frame.to_string();
+        editor.send(json!({
+            "type": "effect_previews",
+            "clip": "c1",
+            "at": f64::from(frame) / 30.0,
+            "width": 320,
+            "effects": ["channel.invert"],
+            "key": key,
+        }));
+        let preview = editor.expect("the preview", |event| {
+            event["type"] == "effect_preview" && event["key"] == key.as_str()
+        });
+        let rgba = base64::engine::general_purpose::STANDARD
+            .decode(preview["rgba"].as_str().expect("a picture"))
+            .expect("base64");
+        let (width, height) = (
+            preview["width"].as_u64().unwrap() as usize,
+            preview["height"].as_u64().unwrap() as usize,
+        );
+        // Inverted, so frame `n` is `16 + 18 n` under white.
+        let light = f64::from(rgba[(height / 2 * width + width / 2) * 4 + 1]);
+        let shown = ((239.0 - light) / 18.0).round() as i64;
+        assert_eq!(
+            shown, shows,
+            "on frame {frame} of the sequence, {light} light"
+        );
+    }
+}

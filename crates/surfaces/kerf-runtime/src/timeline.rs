@@ -4,12 +4,12 @@
 
 use crate::{
     TimelineView, ViewClip, ViewEffect, ViewFxDef, ViewKey, ViewMarker, ViewMask, ViewOutline,
-    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewTake, ViewTrack,
-    ViewTrackKind, ViewTransition,
+    ViewOutlineKey, ViewParam, ViewParamDef, ViewSequence, ViewSource, ViewSpeedKey, ViewTake,
+    ViewTrack, ViewTrackKind, ViewTransition,
 };
 use kerf_model::{
     Catalog, Clip, Content, Domain, FxKind, Mask, MaskMode, MaskShape, Media, Param, ParamDef,
-    ParamType, Params, Project, Rate, Sequence, Time, Track, TrackKind, Value,
+    ParamType, Params, Project, Rate, Sequence, Speed, Time, Track, TrackKind, Value,
 };
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
@@ -219,6 +219,17 @@ fn clip_view(project: &Project, rate: Rate, clip: &Clip) -> ViewClip {
         view.source_out = Some(source_out.seconds());
         view.speed = Some(speed.average(clip.duration));
         view.speed_ratio = Some(speed.to_string());
+        if let Speed::Ramp(ramp) = speed {
+            view.speed_keys = ramp
+                .keys()
+                .iter()
+                .map(|key| ViewSpeedKey {
+                    at: key.at.seconds(),
+                    speed: key.speed.to_string(),
+                    interp: key.interp,
+                })
+                .collect();
+        }
         view.reverse = speed.is_reverse();
     }
     let mut params = None;
