@@ -33,6 +33,7 @@ use kerf_draw::text::{self, Justify, Text};
 use kerf_draw::{mask, wipe, Affine, Affine3, Blend, Image, Rect, Vec2};
 use kerf_fx::transitions::{apply_filmed, apply_scaled, split_filmed, Fx, Side};
 use kerf_fx::video::{self, catalog::Headroom};
+use kerf_geom::place::{fitted, Camera, Geometry, Lens, Parent, Taken};
 use kerf_model::time::format_timecode;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, FxDef, Id, Media, MotionPath, Param, ParamType, Params,
@@ -392,7 +393,7 @@ impl Drawing {
                 // drawn on whole pixels of its sequence, under a pixel from here, and what is
                 // read here is to be the same at any size.
                 let numbers = geometry_numbers(&plan.clip, plan.path.as_ref(), time);
-                let own = placed(plan.size, plan.fit, false, canvas, numbers).0;
+                let own = numbers.placed(pixels(plan.size), plan.fit, false, canvas).0;
                 let moved = sequence.moved_by_parents(&plan.clip, at);
                 // One more of its own `y` is a frame's height down, before its parents move it
                 // across the frame and then in depth.
@@ -625,7 +626,7 @@ mod tests {
                 in_depth: true,
                 digest: None,
             };
-            let (_, moved) = parent_motion(&rig, canvas, Time::ZERO);
+            let moved = Taken::by([rig.at(Time::ZERO)], canvas).moved;
             let at = moved.apply(Vec2::new(from.0, from.1));
             assert!(
                 (at.x - to.0).abs() < 1e-6 && (at.y - to.1).abs() < 1e-6,

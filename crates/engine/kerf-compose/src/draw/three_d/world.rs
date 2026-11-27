@@ -110,7 +110,7 @@ pub(in crate::draw) fn of(
 ) -> InDepth {
     let clip = plan.clip.id.clone();
     // Frame heights, where the scene is in pixels.
-    let by = 1.0 / scene.height.max(1.0);
+    let by = 1.0 / scene.camera.height.max(1.0);
     let Some((rect, filled)) = held else {
         let mesh::InWorld {
             points,
@@ -134,7 +134,7 @@ pub(in crate::draw) fn of(
     };
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
     let front = Plane::of(scene, plan, size, to_output, time);
-    let deep = depth_of(plan, time, scene.height);
+    let deep = depth_of(plan, time, scene.camera.height);
     let mut corners: Vec<Vector> = front.corners(rect).to_vec();
     let (mut sides, mut triangles) = (
         vec![[0, 1], [1, 2], [2, 3], [3, 0]],
@@ -158,7 +158,7 @@ pub(in crate::draw) fn of(
         form: if deep > 0.0 { Form::Solid } else { Form::Flat },
         corners,
         // A bevel takes a solid's edges in.
-        filled: filled && bevel_of(plan, time, scene.height) <= 0.0,
+        filled: filled && bevel_of(plan, time, scene.camera.height) <= 0.0,
         closed: deep > 0.0,
         convex: true,
         fall,

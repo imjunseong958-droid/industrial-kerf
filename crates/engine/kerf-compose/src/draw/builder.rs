@@ -309,7 +309,9 @@ impl<'a> Builder<'a> {
         };
         let animated = clip.parent.is_some()
             || !matches!(param(clip, "path"), Param::Static(Value::Text(text)) if text.is_empty())
-            || GEOMETRY.iter().any(|name| param(clip, name).varies());
+            || Geometry::NAMES
+                .iter()
+                .any(|name| param(clip, name).varies());
         // A mesh is in depth whether it says so or not.
         let three_d = matches!(param(clip, "three_d"), Param::Static(Value::Bool(true)))
             || matches!(source, Source::Mesh);

@@ -3,7 +3,7 @@
 //! canvas, so an even `along` is an even speed however unevenly the points are spaced.
 
 /// Samples of each span between two points, to measure distance along it.
-const SAMPLES: usize = 32;
+const SAMPLES: usize = MotionPath::SAMPLES;
 
 /// The curve through a clip's `path=` points.
 #[derive(Clone, Debug, PartialEq)]
@@ -68,14 +68,20 @@ pub fn parse_path_points(text: &str) -> Result<Vec<[f64; 2]>, String> {
 }
 
 impl MotionPath {
-    /// The curve through `points` on a canvas `aspect` times as wide as it is high.
+    /// How many samples each span between two points has, in [`Self::samples`] and to measure
+    /// distance along it.
+    pub const SAMPLES: usize = 32;
+
+    /// The curve through `points` on a canvas `aspect` times as wide as it is high. A path has
+    /// two points or more ([`parse_path_points`]); of fewer it is a curve that stays at the
+    /// first, or at 0, 0, so that what draws a path as it is edited need not count them first.
     pub fn new(points: Vec<[f64; 2]>, aspect: f64) -> Self {
         let mut path = Self {
             points,
             aspect,
             distances: Vec::new(),
         };
-        let total = (path.points.len() - 1) * SAMPLES;
+        let total = path.points.len().saturating_sub(1) * SAMPLES;
         let mut distances = Vec::with_capacity(total + 1);
         distances.push(0.0);
         let mut last = path.curve(0.0);
@@ -92,7 +98,10 @@ impl MotionPath {
 
     /// The centripetal Catmull-Rom curve through the points, at `u` points along. Centripetal
     /// because the plain curve overshoots and doubles back where points are unevenly spaced.
-    fn curve(&self, u: f64) -> [f64; 2] {
+    pub fn curve(&self, u: f64) -> [f64; 2] {
+        if self.points.len() < 2 {
+            return self.points.first().copied().unwrap_or([0.0, 0.0]);
+        }
         let last = self.points.len() - 1;
         let span = (u.floor() as usize).min(last - 1);
         let t = (u - span as f64).clamp(0.0, 1.0);
@@ -133,10 +142,33 @@ impl MotionPath {
         lerp(b1, b2, t1, t2)
     }
 
+    /// The whole distance along it, in canvas heights.
+    fn total(&self) -> f64 {
+        self.distances.last().copied().unwrap_or(0.0)
+    }
+
+    /// How far along it is at its point `index`, as [`Self::at`] takes it.
+    pub fn along_of(&self, index: usize) -> f64 {
+        let total = self.total();
+        if total <= 0.0 {
+            return 0.0;
+        }
+        let index = index.min(self.points.len().saturating_sub(1)) * SAMPLES;
+        self.distances.get(index).copied().unwrap_or(total) / total
+    }
+
+    /// The curve as a line, [`Self::SAMPLES`] samples to each span.
+    pub fn samples(&self) -> Vec<[f64; 2]> {
+        let total = self.points.len().saturating_sub(1) * SAMPLES;
+        (0..=total)
+            .map(|sample| self.curve(sample as f64 / SAMPLES as f64))
+            .collect()
+    }
+
     /// `u` for a share of the whole distance.
     fn at_distance(&self, along: f64) -> f64 {
-        let total = self.distances[self.distances.len() - 1];
-        if total <= 0.0 {
+        let total = self.total();
+        if total <= 0.0 || self.distances.len() < 2 {
             return 0.0;
         }
         let wanted = along.clamp(0.0, 1.0) * total;
@@ -157,7 +189,7 @@ impl MotionPath {
     pub fn at(&self, along: f64) -> PathPoint {
         let u = self.at_distance(along);
         let [x, y] = self.curve(u);
-        let last = (self.points.len() - 1) as f64;
+        let last = self.points.len().saturating_sub(1) as f64;
         const STEP: f64 = 1e-3;
         let (before, after) = (
             self.curve((u - STEP).max(0.0)),
@@ -180,6 +212,21 @@ mod tests {
 
     fn close(a: f64, b: f64, tolerance: f64) {
         assert!((a - b).abs() <= tolerance, "{a} against {b}");
+    }
+
+    /// Fewer points than a path has are no curve, and are asked of without a panic: where the
+    /// one is, or at 0, 0.
+    #[test]
+    fn fewer_than_two_points_stay_where_they_are() {
+        for (points, [x, y]) in [(vec![], [0.0, 0.0]), (vec![[0.3, -0.2]], [0.3, -0.2])] {
+            let path = MotionPath::new(points, 16.0 / 9.0);
+            for along in [0.0, 0.5, 1.0] {
+                let on = path.at(along);
+                assert_eq!((on.x, on.y, on.heading), (x, y, 0.0));
+            }
+            assert_eq!(path.samples(), [[x, y]]);
+            assert_eq!(path.along_of(3), 0.0);
+        }
     }
 
     /// A path reads the table the curve the picture draws is held to.

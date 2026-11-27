@@ -1936,6 +1936,8 @@ dependencies = [
  "editor_ui",
  "gpui",
  "kerf-bridge",
+ "kerf-geom",
+ "kerf-model",
  "log",
  "serde_json",
 ]
@@ -3745,6 +3747,7 @@ dependencies = [
  "kerf-core",
  "kerf-draw",
  "kerf-fx",
+ "kerf-geom",
  "kerf-gpu",
  "kerf-image",
  "kerf-model",
