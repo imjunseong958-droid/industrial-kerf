@@ -23,11 +23,15 @@
 //! that for each clip, so that every plane made of a clip ([`Plane::of`]) is where the clip is
 //! drawn, whoever asks. A camera and a light move with their parents the same way.
 //!
-//! Where a clip is in the world is one [`Affine3`] of its picture's pixels ([`Plane::of`]): flat on
-//! the frame at its `z`, turned about its middle, and then as its parents in depth take it, which is
-//! one more, each parent's after the one before. A mesh's own space in the world is another
-//! ([`mesh`]), and so is each node of a file ([`gltf`]). The camera is in none of them: it sees
-//! what they place.
+//! Where a clip is in the world is one [`Affine3`] of its picture's pixels ([`Plane::of`]): its
+//! placing on the frame as that is in depth ([`Affine3::from`]), its numbers as they are and not
+//! worked out again, then held in depth by the clip about its own middle and by each of its
+//! parents in depth about theirs, one rule for them all ([`held`]). So a clip in depth that is
+//! nowhere in depth is where the flat clip is, to the bit. How its parents take a clip is asked of
+//! its sequence once, in one pass over them ([`SequencePlan::taken_by_parents`]): across the
+//! frame, which is in the placing it comes with, and where each of them in depth then holds it.
+//! A mesh's own space in the world is another [`Affine3`] ([`mesh`]), and so is each node of a
+//! file ([`gltf`]). The camera is in none of them: it sees what they place.
 
 use super::*;
 
@@ -108,14 +112,24 @@ fn rolled(a: Vector, roll: f64) -> Vector {
     [a[0] * c - a[1] * s, a[0] * s + a[1] * c, a[2]]
 }
 
-/// `place`, and then turned about `about` by `pitch` about x and then by `yaw` about y, in degrees:
-/// as a clip in depth turns about its middle, and as a parent in depth turns what it carries.
-fn turned_about(place: Affine3, about: Vector, pitch: f64, yaw: f64) -> Affine3 {
-    place
-        .moved(times(about, -1.0))
-        .turned_x_deg(pitch)
-        .turned_y_deg(yaw)
-        .moved(about)
+/// `place`, and then as what is at `about` on the frame holds it in depth: turned about there by
+/// its `rotate_x` and then by its `rotate_y`, in degrees, and moved back by its `z`, here in pixels.
+/// A clip in depth holds its own picture so, about its middle, and each of its parents in depth
+/// then holds it so, about its own.
+///
+/// What is not turned is not taken to `about` and back, which would cost its numbers their last
+/// place: a clip in depth that is nowhere in depth is where it is on the frame, to the bit.
+fn held(place: Affine3, about: Vector, [back, pitch, yaw]: [f64; 3]) -> Affine3 {
+    let turned = if pitch == 0.0 && yaw == 0.0 {
+        place
+    } else {
+        place
+            .moved(times(about, -1.0))
+            .turned_x_deg(pitch)
+            .turned_y_deg(yaw)
+            .moved(about)
+    };
+    turned.moved([0.0, 0.0, back])
 }
 
 /// How the parents of a camera or a light have moved it: across the frame, as they move any clip,
@@ -366,35 +380,32 @@ impl Scene {
         let canvas = (f64::from(sequence.width), f64::from(sequence.height));
         // The canvas may be drawn smaller than it is.
         let per = (width / canvas.0.max(1.0), height / canvas.1.max(1.0));
-        // How the parents of `clip` have moved it in depth, the one it names first: each turns
-        // it about its own middle, where that is on the frame, and moves it back. `None` where
-        // none of them is anywhere in depth but where a flat clip is.
-        let carried_by = |clip: &Clip| {
-            let mut carried = None;
-            for rig in sequence.parents_of(clip).filter(|rig| rig.in_depth) {
-                let own =
-                    |name: &str| number(&param(&rig.clip, name).value_at(rig.clip.time_at(at)));
-                let (back, pitch, yaw) = (own("z") * height, own("rotate_x"), own("rotate_y"));
-                if back == 0.0 && pitch == 0.0 && yaw == 0.0 {
-                    continue;
-                }
-                let middle = sequence.middle_of(rig, at);
-                let about = [
-                    (middle.x - canvas.0 / 2.0) * per.0,
-                    (middle.y - canvas.1 / 2.0) * per.1,
-                    0.0,
-                ];
-                let before = carried.unwrap_or(Affine3::IDENTITY);
-                carried = Some(turned_about(before, about, pitch, yaw).moved([0.0, 0.0, back]));
-            }
-            carried
+        // How its parents in depth hold a clip in depth, the one it names first, each about
+        // where its middle is on the frame. `None` where none of them is anywhere in depth but
+        // where a flat clip is.
+        let carried_by = |taken: &Taken| {
+            taken.held.iter().fold(
+                None,
+                |carried: Option<Affine3>, (middle, [z, pitch, yaw])| {
+                    let about = [
+                        (middle.x - canvas.0 / 2.0) * per.0,
+                        (middle.y - canvas.1 / 2.0) * per.1,
+                        0.0,
+                    ];
+                    let before = carried.unwrap_or(Affine3::IDENTITY);
+                    Some(held(before, about, [z * height, *pitch, *yaw]))
+                },
+            )
         };
         let rigged = |clip: &Clip| {
-            clip.parent.as_ref().map(|_| Rigged {
-                moved: sequence.moved_by_parents(clip, at),
-                carried: carried_by(clip).unwrap_or(Affine3::IDENTITY),
-                canvas,
-                per,
+            clip.parent.as_ref().map(|_| {
+                let taken = sequence.taken_by_parents(clip, at);
+                Rigged {
+                    moved: taken.moved,
+                    carried: carried_by(&taken).unwrap_or(Affine3::IDENTITY),
+                    canvas,
+                    per,
+                }
             })
         };
         let mut camera = None;
@@ -505,7 +516,10 @@ impl Scene {
             if !shown.plan.three_d || !shown.shows(showing) {
                 continue;
             }
-            if let Some(by) = *taken.entry(parent).or_insert_with(|| carried_by(clip)) {
+            let by = *taken
+                .entry(parent)
+                .or_insert_with(|| carried_by(&sequence.taken_by_parents(clip, at)));
+            if let Some(by) = by {
                 carried.insert(clip.id.clone(), by);
             }
         }
@@ -779,16 +793,11 @@ impl Scene {
         [x - self.center.0, y - self.center.1, z]
     }
 
-    /// How far away a clip is, along the camera's way, for drawing far to near.
+    /// How far away a clip is, along the camera's way, for drawing far to near: its middle, where
+    /// its plane has it.
     pub fn depth(&self, plan: &ClipPlan, to_output: &Affine, time: Time) -> f64 {
-        let (w, h) = (f64::from(plan.size.0), f64::from(plan.size.1));
-        let center = to_output.apply(Vec2::new(w / 2.0, h / 2.0));
-        let z = number(&param(&plan.clip, "z").value_at(time)) * self.height;
-        let middle = self.world(center.x, center.y, z);
-        let middle = match self.carried.get(&plan.clip.id) {
-            Some(carried) => carried.apply(middle),
-            None => middle,
-        };
+        let size = (f64::from(plan.size.0), f64::from(plan.size.1));
+        let middle = Plane::of(self, plan, size, to_output, time).middle;
         dot(minus(middle, self.eye), self.forward)
     }
 
@@ -1042,8 +1051,9 @@ pub(super) struct Plane {
 
 impl Plane {
     /// The plane of a clip of `size` pixels at clip time `time`, which `to_output` takes to where its
-    /// 2D geometry puts them, its parents' with its own: lifted to its `z` and turned about its
-    /// middle, and then taken where `scene` has its parents in depth take it.
+    /// 2D geometry puts them, its parents' with its own: that as it is in depth, about the world's
+    /// middle, then held in depth by the clip about its own middle, and then by its parents in
+    /// depth as `scene` has them.
     pub fn of(
         scene: &Scene,
         plan: &ClipPlan,
@@ -1053,23 +1063,14 @@ impl Plane {
     ) -> Self {
         let clip = &plan.clip;
         let read = |name: &str| number(&param(clip, name).value_at(time));
-        let z = read("z") * scene.height;
-        let corner = |x: f64, y: f64| {
-            let at = to_output.apply(Vec2::new(x, y));
-            scene.world(at.x, at.y, z)
-        };
-        let (origin, middle) = (corner(0.0, 0.0), corner(size.0 / 2.0, size.1 / 2.0));
-        // Flat on the frame at its `z`, by where three of its corners land there. `to_output` as
-        // it is in depth (`Affine3::from`), moved to the world's middle and to `z`, is the same
-        // place to within the last bits of its numbers, and not to the last bit: a clip drawn by
-        // that is not the same picture to the last bit.
-        let flat = Affine3 {
-            x: minus(corner(1.0, 0.0), origin),
-            y: minus(corner(0.0, 1.0), origin),
-            z: [0.0, 0.0, 1.0],
-            t: origin,
-        };
-        let own = turned_about(flat, middle, read("rotate_x"), read("rotate_y"));
+        let numbers = [read("z") * scene.height, read("rotate_x"), read("rotate_y")];
+        // Flat on the frame, whose middle is the world's: the same numbers as on the frame.
+        let flat = Affine3::from(*to_output).moved(scene.world(0.0, 0.0, 0.0));
+        let on = to_output.apply(Vec2::new(size.0 / 2.0, size.1 / 2.0));
+        let about = scene.world(on.x, on.y, 0.0);
+        let own = held(flat, about, numbers);
+        // Turned about its middle, which is moved back with it.
+        let middle = [about[0], about[1], numbers[0]];
         let (place, middle) = match scene.carried.get(&clip.id) {
             Some(carried) => (carried.then_apply(&own), carried.apply(middle)),
             None => (own, middle),
