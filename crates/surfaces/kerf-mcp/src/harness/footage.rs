@@ -10,8 +10,9 @@ use crate::{engine_error, KerfMcpRouter, McpCode, McpError};
 use kerf_engine::media::derivatives::{DerivativeCache, SourceIdentity};
 use kerf_engine::render::{render_program, RenderOptions};
 use kerf_lang::{print_document, Clock, PrintOptions};
-use kerf_model::{Content, Media, Project, Time};
+use kerf_model::{Content, Media, Project, Time, TrackKind};
 use serde_json::{json, Value};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -26,6 +27,21 @@ const KEPT_PROGRAM_SOUNDS: usize = 4;
 /// How many captures of a program's frames the cache keeps besides the one
 /// in use.
 const KEPT_PROGRAM_FRAMES: usize = 32;
+/// The categories of the catalog whose effects draw a picture where it is and at its size: a
+/// grade, a blur, grain, a key, a burn-in. Any other may make it larger, as a stabilizer, a
+/// reframe or a lens does.
+const AT_ITS_SIZE: [&str; 10] = [
+    "Color Correction",
+    "Blur & Sharpen",
+    "Channel",
+    "Noise & Grain",
+    "Stylize",
+    "Text",
+    "Keying",
+    "Matte",
+    "Time",
+    "Utility",
+];
 
 /// The cues of `transcript`, `offset` seconds later, on `clock`; with
 /// `words`, each word's time too.
@@ -378,6 +394,108 @@ impl KerfMcpRouter {
             return path;
         }
         kerf_engine::cached_proxy(&path, &DerivativeCache::new(&self.dir)).unwrap_or(path)
+    }
+
+    /// `project`, whose media paths are resolved, with each media read from its proxy for
+    /// `sequence`'s frames at `times`, at most `width` wide, where the proxy shows them as the
+    /// media does: at each of `times`, every clip of it drawn then is no larger on such a
+    /// frame than the proxy, and nothing makes it larger. Its effects draw it at its size
+    /// ([`AT_ITS_SIZE`]), no transition is over it, and it is neither in depth nor in a
+    /// sequence nested in this one. A frame of the original is mostly the keyframe before it
+    /// decoded on to it, which for 4K HEVC can be seconds; a proxy's keyframes are close.
+    pub(super) fn with_proxies(
+        &self,
+        project: &Project,
+        sequence: &str,
+        times: &[Time],
+        width: u32,
+    ) -> Project {
+        let cache = DerivativeCache::new(&self.dir);
+        let mut proxies: HashMap<&str, (PathBuf, &Media)> = project
+            .media
+            .iter()
+            .filter(|media| media.video.is_some())
+            .filter_map(|media| {
+                let proxy = kerf_engine::cached_proxy(Path::new(&media.path), &cache)?;
+                Some((media.id.as_str(), (proxy, media)))
+            })
+            .collect();
+        let mut proxied = project.clone();
+        let Some(drawn) = project.sequence(sequence).filter(|_| !proxies.is_empty()) else {
+            return proxied;
+        };
+        let Ok(compositor) = kerf_compose::Compositor::new(
+            project,
+            catalog(),
+            &kerf_compose::ComposeOptions {
+                sequence: Some(sequence.to_owned()),
+                accel: kerf_compose::Accel::Never,
+                ..kerf_compose::ComposeOptions::default()
+            },
+        ) else {
+            return proxied;
+        };
+        // The frame as it is taken: the canvas, brought down to `width` when wider.
+        let canvas = compositor.size();
+        let across = f64::from(width.min(canvas.0));
+        let frame = (
+            across,
+            across * f64::from(canvas.1) / f64::from(canvas.0.max(1)),
+        );
+        let rate = drawn.rate;
+        let mut original = HashSet::new();
+        for &at in times {
+            for track in &drawn.tracks {
+                for clip in track
+                    .clips
+                    .iter()
+                    .filter(|clip| clip.start <= at && at < clip.end())
+                {
+                    match &clip.content {
+                        Content::Media { media, .. } => {
+                            let Some((_, of)) = proxies.get(media.as_str()) else {
+                                continue;
+                            };
+                            // What is not drawn shows nothing of it.
+                            if track.kind != TrackKind::Video || !track.enabled || !clip.enabled {
+                                continue;
+                            }
+                            let shown = compositor.lands(clip.id.as_str(), at);
+                            if !shown.is_ok_and(|landing| within_proxy(&landing, of, frame)) {
+                                original.insert(media.to_string());
+                            }
+                        }
+                        Content::Sequence { sequence, .. } => {
+                            nested_media(project, sequence.as_str(), &mut original);
+                        }
+                        Content::Generator { .. } | Content::Caption { .. } => {}
+                    }
+                }
+                for transition in &track.transitions {
+                    let Some(from) = track.clip(transition.from.as_str()) else {
+                        continue;
+                    };
+                    let (before, after) = transition.split_at_cut(rate);
+                    let cut = from.end();
+                    if cut - before <= at && at < cut + after {
+                        for clip in [&transition.from, &transition.to] {
+                            if let Some(Content::Media { media, .. }) =
+                                track.clip(clip.as_str()).map(|clip| &clip.content)
+                            {
+                                original.insert(media.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        proxies.retain(|id, _| !original.contains(*id));
+        for media in &mut proxied.media {
+            if let Some((proxy, _)) = proxies.get(media.id.as_str()) {
+                media.path = proxy.to_string_lossy().into_owned();
+            }
+        }
+        proxied
     }
 
     fn transcript(
@@ -748,6 +866,51 @@ impl KerfMcpRouter {
 pub(super) struct Capture {
     pub(super) frames: Vec<String>,
     pub(super) sheet: Option<String>,
+}
+
+/// Whether the picture of `media`, put down as `landing` says on a frame of `frame` pixels,
+/// is no larger across or down than its proxy, which is [`kerf_engine::PROXY_WIDTH`] wide in
+/// the media's shape, and has only effects that draw it at its size.
+fn within_proxy(landing: &kerf_compose::Landing, media: &Media, frame: (f64, f64)) -> bool {
+    let at_its_size = landing.effects.iter().all(|id| {
+        catalog()
+            .fx(id)
+            .is_some_and(|fx| AT_ITS_SIZE.contains(&fx.category.as_str()))
+    });
+    let Some(video) = media.video.filter(|_| at_its_size) else {
+        return false;
+    };
+    // An edge of the picture on the frame, in its pixels.
+    let corner = landing.on_frame([0.0, 0.0]);
+    let edge = |to: [f64; 2]| {
+        let to = landing.on_frame(to);
+        ((to[0] - corner[0]) * frame.0).hypot((to[1] - corner[1]) * frame.1)
+    };
+    let proxy = f64::from(kerf_engine::PROXY_WIDTH);
+    let tall = proxy * f64::from(video.height) / f64::from(video.width.max(1));
+    // A proxy's height is made even: as much as a pixel either way.
+    edge([1.0, 0.0]) <= proxy + 1.0 && edge([0.0, 1.0]) <= tall + 1.0
+}
+
+/// Add the media of every clip in `sequence` of `project`, and in the sequences it nests, to
+/// `media`.
+fn nested_media(project: &Project, sequence: &str, media: &mut HashSet<String>) {
+    let mut seen = HashSet::new();
+    let mut open = vec![sequence.to_owned()];
+    while let Some(id) = open.pop() {
+        let Some(nested) = project.sequence(&id).filter(|_| seen.insert(id.clone())) else {
+            continue;
+        };
+        for clip in nested.tracks.iter().flat_map(|track| &track.clips) {
+            match &clip.content {
+                Content::Media { media: of, .. } => {
+                    media.insert(of.to_string());
+                }
+                Content::Sequence { sequence, .. } => open.push(sequence.to_string()),
+                Content::Generator { .. } | Content::Caption { .. } => {}
+            }
+        }
+    }
 }
 
 /// The font file a sheet's times are drawn in: Kerf's own Inter, written out once where

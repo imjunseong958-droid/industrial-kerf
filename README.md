@@ -270,7 +270,11 @@ which is kept, so that a cut can be placed and checked by the sound itself —
 and makes a proxy at most 960 pixels
 wide for pictures wider than that. Draft renders and frames up to that width
 use the proxy when it is ready; full renders and program frames use the
-original. Indexes and proxies are cached in `.kerf/cache/derived`.
+original. An edit's before-and-after preview uses a media's proxy where none
+of its clips is shown there larger than the proxy or under an effect or
+transition that may grow it, and the original elsewhere, so that an edit to
+4K footage comes back about as quickly as one to HD. Indexes and proxies are
+cached in `.kerf/cache/derived`.
 
 Transcripts come from local `whisper.cpp` (`KERF_WHISPER_BIN` and
 `KERF_WHISPER_MODEL`, described below); media is never uploaded. Scene cuts
