@@ -218,7 +218,12 @@ impl<'a> ClipPaint<'a> {
         let (x0, x1, top, tall) = (self.x0, self.x1, self.top, self.tall);
         let mut art = Art::None;
         if let (false, false, Some(source)) = (self.absent, clip.card(), clip.source.as_deref()) {
-            let source_at = |offset: f64| clip.clip.source_at(offset + head_shift).unwrap_or(0.0);
+            // Read once: every tile of a filmstrip asks.
+            let map = clip.clip.time_map();
+            let source_at = |offset: f64| {
+                map.as_ref()
+                    .map_or(0.0, |map| map.source_seconds(offset + head_shift))
+            };
             let inside = pen.rect(x0, top + CLIP_EDGE, x1 - x0, tall - CLIP_EDGE);
             if row.audio() {
                 let peaks = self.frame.session.read(cx).artwork.peaks(source);

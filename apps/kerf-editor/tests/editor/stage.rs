@@ -1981,7 +1981,7 @@ fn a_scene_cut_inside_the_range_is_where_the_box_ends() {
 
 fn clip_twice() -> Clip {
     clip(
-        json!({"id": "fast", "timelineStart": 0.0, "duration": 4.0, "in": 0.0, "out": 8.0, "speed": 2.0}),
+        json!({"id": "fast", "timelineStart": 0.0, "duration": 4.0, "in": 0.0, "out": 8.0, "speed": 2.0, "speedRatio": "2"}),
     )
 }
 
@@ -2160,15 +2160,21 @@ proptest! {
 
 #[test]
 fn focus_region_needs_a_frame_of_the_clips_media() {
-    let footage =
-        clip(json!({"id": "a", "timelineStart": 10.0, "duration": 4.0, "in": 2.0, "out": 6.0}));
+    let footage = clip(
+        json!({"id": "a", "timelineStart": 10.0, "duration": 4.0, "in": 2.0, "out": 6.0, "sourceRate": "24"}),
+    );
     let folder = tempfile::tempdir().unwrap();
     let file = folder.path().join("a.mov");
     std::fs::write(&file, b"not much").unwrap();
-    // The frame at program second 11 is the media's second 3.
+    // The frame at program second 11 is the media's at its second 3, its 72nd, which FFmpeg
+    // gives when asked for half a frame before it.
     let (read, seconds) = readable_frame(Some(file.clone()), &footage, 11.0).unwrap();
     assert_eq!(read, file);
-    assert!((seconds - 3.0).abs() < 1e-9);
+    assert!((seconds - 71.5 / 24.0).abs() < 1e-9);
+    // A thirtieth of a second on, part of the way through that frame of the media, it is
+    // still that frame: FFmpeg asked for the very moment would give the frame after.
+    let (_, later) = readable_frame(Some(file.clone()), &footage, 11.0 + 1.0 / 30.0).unwrap();
+    assert!((later - 71.5 / 24.0).abs() < 1e-9);
     // A title or a solid has no media; a file gone cannot be read.
     assert_eq!(readable_frame(None, &footage, 11.0), Err(NO_FRAME));
     assert_eq!(

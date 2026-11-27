@@ -259,7 +259,7 @@ pub struct Portion {
 impl Portion {
     /// Clip-relative offset of the first decoded frame.
     pub fn offset(&self, clip: &Clip) -> Time {
-        self.decode - clip.start
+        clip.time_at(self.decode)
     }
 }
 
@@ -425,15 +425,7 @@ impl<'a> Graph<'a> {
 
     /// The source interval a portion reads, in source order.
     fn source_window(clip: &Clip, start: Time, end: Time) -> Option<(Time, Time)> {
-        let (source_in, _) = clip.source_range()?;
-        let speed = clip.speed();
-        let (a, b) = (start - clip.start, end - clip.start);
-        Some(if speed.is_reverse() {
-            let out = source_in + speed.played(clip.duration);
-            (out - speed.played(b), out - speed.played(a))
-        } else {
-            (source_in + speed.played(a), source_in + speed.played(b))
-        })
+        Some(clip.time_map()?.window(start, end))
     }
 
     // ---- picture ---------------------------------------------------------------

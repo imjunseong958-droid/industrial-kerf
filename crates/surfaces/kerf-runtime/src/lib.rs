@@ -41,8 +41,8 @@ pub use kerf_protocol::{
     RenderStatus, RequestEnvelope, RuntimeError, RuntimeRequest, RuntimeResponse,
     StartRenderOptions, StateSnapshot, TimelineView, TrimSide, ViewClip, ViewEffect, ViewFxDef,
     ViewKey, ViewMarker, ViewMask, ViewOutline, ViewOutlineKey, ViewParam, ViewParamDef,
-    ViewSequence, ViewSource, ViewTake, ViewTrack, ViewTrackKind, ViewTransition, MAX_PROPOSALS,
-    MAX_RENDER_RANGE_SECONDS,
+    ViewSequence, ViewSource, ViewSpeedKey, ViewTake, ViewTrack, ViewTrackKind, ViewTransition,
+    MAX_PROPOSALS, MAX_RENDER_RANGE_SECONDS,
 };
 pub use kernel::{resolve_media_paths, use_proxies, CachedFacts, RATE_NEEDS_EMPTY};
 pub use render::{render_cancel_path, run_render_job};

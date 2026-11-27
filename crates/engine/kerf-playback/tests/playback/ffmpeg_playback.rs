@@ -637,3 +637,132 @@ fn masked_clips_play_live_as_the_compositor_draws_them() {
         }
     }
 }
+
+/// Footage of `frames` frames at `rate` a second whose grey says which frame it is:
+/// frame `n` is `16 + 8 n` light.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
+fn numbered_source(
+    binary: &str,
+    directory: &std::path::Path,
+    rate: u32,
+    frames: u32,
+) -> std::path::PathBuf {
+    let source = directory.join(format!("numbered-{rate}.mp4"));
+    let status = Command::new(binary)
+        .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg(format!(
+            "color=c=black:s=64x36:r={rate},format=gray,geq=lum='16+N*8',trim=end_frame={frames}"
+        ))
+        .args(["-c:v", "libx264", "-qp", "0", "-pix_fmt", "yuv420p", "-y"])
+        .arg(&source)
+        .status()
+        .expect("run ffmpeg fixture");
+    assert!(status.success(), "fixture ffmpeg process failed");
+    source
+}
+
+/// The frame of [`numbered_source`] a picture is.
+fn numbered(frame: &kerf_playback::PlaybackFrame) -> i64 {
+    ((f64::from(gray(frame, 32, 18)) - 16.0) / 8.0).round() as i64
+}
+
+/// A program the native decoders play shows, at each of its frames, the frame of the media
+/// the document says: the one whose display has started, as a render draws it, not the next
+/// one. Footage at another rate, at another speed, and in a nested sequence at a rate of
+/// its own all put the source position between two frames.
+#[test]
+fn native_playback_shows_the_frame_of_the_media_a_render_shows() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let film = numbered_source(&binary, directory.path(), 24, 28);
+    let video = numbered_source(&binary, directory.path(), 30, 28);
+    let head = |source: &std::path::Path, rate: u32| {
+        format!(
+            "kerf 1\nproject name=\"Frames\"\n\
+             media m path=\"{}\" rate={rate} dur=28f video=64x36\n\
+             sequence s1 rate=30 size=64x36 audio=48000\n\
+             \x20 track V1 video\n",
+            source.display()
+        )
+    };
+    type Shows = fn(i64) -> i64;
+    let cases: [(&str, String, Shows); 3] = [
+        (
+            "24 frames a second in a sequence of 30",
+            format!(
+                "{}    clip c1 media=m src=0f at=0f dur=30f\n",
+                head(&film, 24)
+            ),
+            |frame| frame * 24 / 30,
+        ),
+        (
+            "one and a half times the speed",
+            format!(
+                "{}    clip c1 media=m src=2f at=0f dur=16f speed=1.5\n",
+                head(&video, 30)
+            ),
+            |frame| 2 + frame * 3 / 2,
+        ),
+        (
+            "a nested sequence of 24 frames a second holding footage of 30",
+            format!(
+                "{}    clip n1 seq=s2 src=0f at=0f dur=27f\n\
+                 sequence s2 rate=24 size=64x36 audio=48000\n\
+                 \x20 track V1 video\n\
+                 \x20   clip c1 media=m src=0f at=0f dur=22f\n",
+                head(&video, 30)
+            ),
+            // The nested sequence's frame, then the footage's at that frame's start.
+            |frame| (frame * 24 / 30) * 30 / 24,
+        ),
+    ];
+    for (what, text, shows) in cases {
+        let project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
+            .unwrap_or_else(|errors| panic!("{errors:?}"))
+            .project;
+        assert_eq!(
+            kerf_playback::preview_plan(&project).mode,
+            kerf_core::preview::PreviewMode::NativeExact,
+            "{what}"
+        );
+        let session = PlaybackSession::open(
+            project,
+            PlaybackConfig::default()
+                .with_audio_enabled(false)
+                .with_frame_size(64, 36),
+        )
+        .expect("open playback session");
+        // Paused on a frame, far from the last one and just after it.
+        for frame in [1, 7, 11, 13, 3] {
+            let at = frame as f64 / 30.0;
+            session.seek(at).expect("seek");
+            let shown = next_frame(&session, |time| (time - at).abs() < 1e-6);
+            assert_eq!(
+                numbered(&shown),
+                shows(frame),
+                "{what}, paused on frame {frame}"
+            );
+        }
+        // And playing through.
+        session.seek(0.0).expect("seek");
+        session.play().expect("play");
+        let mut played = 0;
+        while played < 12 {
+            let shown = next_frame(&session, |_| true);
+            let frame = (shown.timeline_time * 30.0).round() as i64;
+            assert_eq!(
+                numbered(&shown),
+                shows(frame),
+                "{what}, playing frame {frame}"
+            );
+            played += 1;
+        }
+    }
+}

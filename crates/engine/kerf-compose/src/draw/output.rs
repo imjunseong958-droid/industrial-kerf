@@ -290,7 +290,7 @@ impl Drawing {
         at: Time,
     ) -> Option<()> {
         let clip = &shown.plan;
-        let time = at - clip.clip.start;
+        let time = clip.clip.time_at(at);
         clip.digest?.hash(hash);
         time.flicks().hash(hash);
         clip.shown.to_bits().hash(hash);
@@ -298,7 +298,7 @@ impl Drawing {
         // All of a parent, its place in depth with the rest, and when in it this is.
         for rig in plan.parents_of(&clip.clip) {
             rig.digest?.hash(hash);
-            (at - rig.clip.start).flicks().hash(hash);
+            rig.clip.time_at(at).flicks().hash(hash);
         }
         if clip.reads_sequence_time {
             at.flicks().hash(hash);
@@ -309,14 +309,12 @@ impl Drawing {
         }
         if let Source::Nested {
             sequence: nested,
-            source_in,
-            speed,
-            duration,
+            map,
             angle,
         } = &clip.source
         {
             let inner = &self.sequences[*nested];
-            let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+            let shown = map.nested(time, inner.rate);
             self.hash_sequence_of(hash, *nested, shown, angle.as_ref())?;
         }
         Some(())
@@ -345,7 +343,7 @@ impl Drawing {
         let Source::Media { picture } = shown.plan.source else {
             return None;
         };
-        let rgba = self.pictures.rgba(picture, at - shown.plan.clip.start)?;
+        let rgba = self.pictures.rgba(picture, shown.plan.clip.time_at(at))?;
         Some(Frame {
             width: plan.width,
             height: plan.height,

@@ -32,7 +32,7 @@ impl Drawing {
     pub(super) fn geometry(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time) -> Affine {
         let canvas = (f64::from(sequence.width), f64::from(sequence.height));
         sequence
-            .moved_by_parents(&plan.clip, plan.clip.start + time)
+            .moved_by_parents(&plan.clip, plan.clip.sequence_time(time))
             .then_apply(&place(plan, canvas, time).0)
     }
 }

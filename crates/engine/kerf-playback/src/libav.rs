@@ -29,13 +29,14 @@ pub(crate) fn is_eof(error: &ffmpeg::Error) -> bool {
     matches!(error, ffmpeg::Error::Eof)
 }
 
-pub(crate) fn seek_to(input: &mut ffmpeg::format::context::Input, seconds: f64) {
-    if !seconds.is_finite() || seconds < 0.0 {
-        return;
-    }
-    let ts = (seconds * 1_000_000.0).round() as i64;
-    if let Err(error) = input.seek(ts, ..ts) {
-        log::warn!("a seek to {seconds} s failed, so reading goes on from where it was: {error}");
+/// Seek `input` to the last place it can start decoding from at or before `micros`
+/// microseconds, the timestamp of a frame.
+pub(crate) fn seek_to(input: &mut ffmpeg::format::context::Input, micros: i64) {
+    if let Err(error) = input.seek(micros, ..micros) {
+        log::warn!(
+            "a seek to {} s failed, so reading goes on from where it was: {error}",
+            micros as f64 / 1e6
+        );
     }
 }
 
@@ -45,14 +46,6 @@ pub(crate) fn seconds(ts: i64, time_base: ffmpeg::Rational) -> f64 {
         return 0.0;
     }
     ts as f64 * f64::from(time_base.0) / f64::from(den)
-}
-
-pub(crate) fn format_number(value: f64) -> String {
-    let value = if value.is_finite() { value } else { 0.0 };
-    format!("{value:.6}")
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_owned()
 }
 
 pub(crate) fn escape_filter_path(path: &Path) -> String {

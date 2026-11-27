@@ -410,7 +410,7 @@ pub(in crate::draw) fn camera(
     let clip = &plan.clip;
     let read = loaded(&file_of(clip)?).ok()?;
     let def = Catalog::builtin().fx("mesh");
-    let at = clip.start + time;
+    let at = clip.sequence_time(time);
     let pose = animation_of(clip, &read)
         .and_then(|which| which.ok())
         .map(|which| (which, seconds_into(clip, def, &read, which, at)));
@@ -452,7 +452,7 @@ fn placed(
 ) -> crate::CameraPlace {
     let clip = &plan.clip;
     let def = Catalog::builtin().fx("mesh");
-    let at = clip.start + time;
+    let at = clip.sequence_time(time);
     let height = generated(def, clip, "height", at)
         .and_then(|value| value.as_number())
         .unwrap_or(0.0)
@@ -550,8 +550,8 @@ fn seconds_into(
         _ => None,
     };
     let seconds = match told {
-        Some(told) => told.value_at(at - clip.start).as_number().unwrap_or(0.0),
-        None => (at - clip.start).seconds(),
+        Some(told) => told.value_at(clip.time_at(at)).as_number().unwrap_or(0.0),
+        None => clip.time_at(at).seconds(),
     };
     let length = read.animations[which].length;
     let loops = !matches!(generated(def, clip, "loop", at), Some(Value::Bool(false)));
@@ -750,7 +750,7 @@ pub(in crate::draw) fn in_the_world(
     to_output: &Affine,
     time: Time,
 ) -> InWorld {
-    let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
+    let mesh = Mesh::of(&plan.clip, plan.clip.sequence_time(time));
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
     let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
     let points = in_world(&mesh, &space);
@@ -1247,7 +1247,7 @@ pub(in crate::draw) fn draw(
     (w, h): (usize, usize),
     shade: Shade,
 ) -> (Image, Vec<f32>) {
-    let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
+    let mesh = Mesh::of(&plan.clip, plan.clip.sequence_time(time));
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
     let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
     let points = in_world(&mesh, &space);
@@ -1343,7 +1343,7 @@ pub(in crate::draw) fn draw(
     // gives it other points then tells nothing of where each went, and it is said to hold still.
     let then: Option<(&Scene, Vec<Vector>)> = match &shade {
         Shade::Moving(next, to_output, step, _) => {
-            let later = Mesh::of(&plan.clip, plan.clip.start + time + *step);
+            let later = Mesh::of(&plan.clip, plan.clip.sequence_time(time + *step));
             let space = space_of(&Plane::of(next, plan, size, to_output, time + *step), size);
             let later = in_world(&later, &space);
             (later.len() == points.len()).then_some((*next, later))

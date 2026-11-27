@@ -160,7 +160,7 @@ fn generated(catalog_def: Option<&FxDef>, clip: &Clip, name: &str, at: Time) -> 
         return None;
     };
     match params.get(name) {
-        Some(param) => Some(param.value_at(at - clip.start)),
+        Some(param) => Some(param.value_at(clip.time_at(at))),
         None => catalog_def
             .and_then(|def| def.find(name))
             .map(|def| def.default.clone()),
@@ -373,7 +373,7 @@ impl Scene {
             let mut carried = None;
             for rig in sequence.parents_of(clip).filter(|rig| rig.in_depth) {
                 let own =
-                    |name: &str| number(&param(&rig.clip, name).value_at(at - rig.clip.start));
+                    |name: &str| number(&param(&rig.clip, name).value_at(rig.clip.time_at(at)));
                 let (back, pitch, yaw) = (own("z") * height, own("rotate_x"), own("rotate_y"));
                 if back == 0.0 && pitch == 0.0 && yaw == 0.0 {
                     continue;
@@ -420,7 +420,7 @@ impl Scene {
                         linear[1] * intensity,
                         linear[2] * intensity,
                     ];
-                    let own = |name: &str| number(&param(clip, name).value_at(at - clip.start));
+                    let own = |name: &str| number(&param(clip, name).value_at(clip.time_at(at)));
                     let place = [own("x") * width, own("y") * height, own("z") * height];
                     // Where it is goes with its parents, and so does the way it shines.
                     let rigged = rigged(clip);
@@ -466,7 +466,7 @@ impl Scene {
         let distance = |fov: f64| height / 2.0 / (fov.clamp(1.0, 170.0).to_radians() / 2.0).tan();
         let own = |name: &str| {
             camera.map_or(0.0, |clip| {
-                number(&param(clip, name).value_at(at - clip.start))
+                number(&param(clip, name).value_at(clip.time_at(at)))
             })
         };
         let eye = [

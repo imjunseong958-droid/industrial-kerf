@@ -267,6 +267,15 @@ impl Rate {
         self.time_of(self.frames_round(time))
     }
 
+    /// A time to ask a decoder for, to be given frame `frame`: half a frame before the frame
+    /// starts, and no earlier than the first frame. A decoder gives the first frame at or
+    /// after the time it is asked for, and a frame's own start, written to a few decimals,
+    /// may round to just after it.
+    pub const fn seek_time(self, frame: i64) -> Time {
+        let before = self.time_of(frame).0 - self.frame_duration().0 / 2;
+        Time(if before > 0 { before } else { 0 })
+    }
+
     /// Frames counted per timecode second: 24 for 23.976, 30 for 29.97.
     pub const fn timecode_base(self) -> u32 {
         self.num.div_ceil(self.den)

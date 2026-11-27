@@ -1,3 +1,7 @@
+//! The picture of a clip of media, decoded in this process for playback that needs no
+//! compositor: at each frame of the program, the frame of the media the clip's time map names
+//! (`kerf_model::TimeMap::frame`), which is the one the compositor draws there.
+
 use crate::libav;
 use crate::timeline::{PlaybackClip, PlaybackSource, PlaybackTimeline};
 use crate::PlaybackError;
@@ -6,7 +10,7 @@ use ffmpeg_next::format::context::Input;
 use ffmpeg_next::util::format::Pixel;
 use ffmpeg_next::{decoder, filter, media};
 use kerf_fx::RasterStack;
-use kerf_model::Time;
+use kerf_model::{Rate, Time};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,10 +20,6 @@ use std::sync::Arc;
 /// layer, and the effects run as a render's bake runs them.
 struct Live {
     stack: RasterStack,
-    /// The clip time at the clip's source in, its source in, and speed.
-    offset: f64,
-    source_in: f64,
-    speed: f64,
     fps: f64,
 }
 
@@ -35,23 +35,7 @@ impl Live {
         if stack.is_empty() {
             return Ok(None);
         }
-        Ok(Some(Self {
-            stack,
-            offset: clip.clip_offset,
-            source_in: clip.source_in,
-            speed: if clip.speed > 0.0 { clip.speed } else { 1.0 },
-            fps,
-        }))
-    }
-
-    /// The clip time `frames` frames after the picture at `source_time`.
-    fn clip_time(&self, source_time: f64, frames: u32) -> Time {
-        Time::from_seconds(
-            self.offset
-                + (source_time - self.source_in) / self.speed
-                + f64::from(frames) / self.fps,
-        )
-        .unwrap_or(Time::ZERO)
+        Ok(Some(Self { stack, fps }))
     }
 }
 
@@ -67,8 +51,21 @@ pub(crate) struct DecodedVideoFrame {
     pub source_time: Option<f64>,
 }
 
-/// One libav decoder plus filter graph. Small forward seeks on the same clip
-/// drop frames instead of reopening; clip changes and large/backward seeks
+/// A frame of the media as the filters leave it.
+enum Picture {
+    /// Letterboxed into the frame, as it is shown.
+    Framed(Arc<[u8]>),
+    /// At its own shape, for the clip's masks and effects to run on before it is letterboxed.
+    Loose {
+        rgba: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+}
+
+/// One libav decoder plus filter graph. It gives a picture for each frame of the program in
+/// turn from the one it opened on, reading on through the file. Small forward seeks on the
+/// same clip pass frames by instead of reopening; clip changes and large or backward seeks
 /// open a new context.
 pub(crate) struct VideoDecoder {
     input: Input,
@@ -76,24 +73,33 @@ pub(crate) struct VideoDecoder {
     filter: Option<filter::Graph>,
     stream_index: usize,
     time_base: ffmpeg::Rational,
-    source_time: f64,
+    /// The timestamp of the media's first frame, and the rate its frames are counted at.
+    first_pts: i64,
+    rate: Rate,
     source_path: PathBuf,
-    clip_id: String,
+    clip: PlaybackClip,
     width: u32,
     height: u32,
+    /// The file has been read to its end and the decoder told.
     eof: bool,
-    flushed: bool,
-    /// Accept the first decoded picture even when it is the keyframe before
-    /// the target. Cleared after that picture is pushed.
+    /// The frame of the media showing, by its timestamp, and the one read after it, which
+    /// shows where the first ends. A frame the filters have taken is left empty.
+    current: Option<(i64, ffmpeg::frame::Video)>,
+    ahead: Option<(i64, ffmpeg::frame::Video)>,
+    /// The frame showing as the filters left it, by its timestamp: a frame that shows over
+    /// several of the program's frames is filtered once.
+    filtered: Option<(i64, Picture)>,
+    /// Give the first decoded picture even when it is the keyframe before
+    /// the target. Cleared after that picture is given.
     release_early: bool,
-    /// The current filter graph is the scale-only scrub preview.
+    /// The decoder was opened for the scrub preview.
     preview_graph: bool,
     cancelled: bool,
-    last_source_time: Option<f64>,
-    /// Pictures the graph has given out since the seek to `source_time`.
-    /// The graph holds pictures back to pace them, so the one it gives out
-    /// is not the last one decoded; playback shows it this many frames
-    /// after the seek.
+    /// The frame of the program the decoder opened on and the rate the program's frames are
+    /// counted at, and how many pictures it has given since: the next is of frame
+    /// `first + served`.
+    first: i64,
+    program_rate: Rate,
     served: u32,
     epoch: Arc<AtomicU64>,
     serve_epoch: u64,
@@ -118,14 +124,6 @@ impl VideoDecoder {
         serve_epoch: u64,
     ) -> Result<Self, PlaybackError> {
         libav::ensure_init()?;
-        let source_time = clip.source_time_at(timeline_time);
-        let remaining_source = (clip.source_out - source_time).max(0.0);
-        if remaining_source <= 0.0 {
-            return Err(PlaybackError::Ffmpeg(format!(
-                "clip {} has no source time remaining",
-                clip.id
-            )));
-        }
         let width = match requested_width {
             Some(width) => width.min(timeline.width).max(2),
             None => timeline.width.max(2),
@@ -135,24 +133,29 @@ impl VideoDecoder {
             None => timeline.height.max(2),
         };
 
-        let mut input = ffmpeg::format::input(&source.path).map_err(libav::map_error)?;
-        let (stream_index, time_base) = {
+        let input = ffmpeg::format::input(&source.path).map_err(libav::map_error)?;
+        let (stream_index, time_base, first_pts, parameters) = {
             let stream = input
                 .streams()
                 .best(media::Type::Video)
                 .ok_or_else(|| PlaybackError::Ffmpeg("no video stream".into()))?;
-            (stream.index(), stream.time_base())
+            let start = stream.start_time();
+            (
+                stream.index(),
+                stream.time_base(),
+                if start == ffmpeg::ffi::AV_NOPTS_VALUE {
+                    0
+                } else {
+                    start
+                },
+                stream.parameters(),
+            )
         };
-        let decoder = {
-            let stream = input
-                .streams()
-                .best(media::Type::Video)
-                .ok_or_else(|| PlaybackError::Ffmpeg("no video stream".into()))?;
-            let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
-                .map_err(libav::map_error)?;
-            context.decoder().video().map_err(libav::map_error)?
-        };
-        libav::seek_to(&mut input, source_time);
+        let decoder = ffmpeg::codec::context::Context::from_parameters(parameters)
+            .map_err(libav::map_error)?
+            .decoder()
+            .video()
+            .map_err(libav::map_error)?;
 
         let mut decoder = Self {
             input,
@@ -160,29 +163,34 @@ impl VideoDecoder {
             filter: None,
             stream_index,
             time_base,
-            source_time,
+            first_pts,
+            rate: source.rate,
             source_path: source.path.clone(),
-            clip_id: clip.id.clone(),
+            clip: clip.clone(),
             width,
             height,
             eof: false,
-            flushed: false,
+            current: None,
+            ahead: None,
+            filtered: None,
             release_early,
             preview_graph: release_early,
             cancelled: false,
-            last_source_time: None,
+            first: 0,
+            program_rate: timeline.rate(),
             served: 0,
             epoch,
             serve_epoch,
             live: Live::for_clip(clip, timeline.fps)?,
         };
-        let graph = match decoder.build_filter(timeline, clip, source, remaining_source) {
+        decoder.aim(timeline, timeline_time);
+        let graph = match decoder.build_filter(timeline, source) {
             Ok(graph) => graph,
             Err(error) => {
                 if timeline.subtitles.is_empty() && source.subtitles.is_empty() {
                     return Err(error);
                 }
-                decoder.build_filter_without_subtitles(timeline, clip, source, remaining_source)?
+                decoder.build_filter_without_subtitles(timeline, source)?
             }
         };
         decoder.filter = Some(graph);
@@ -190,7 +198,7 @@ impl VideoDecoder {
     }
 
     pub fn clip_id(&self) -> &str {
-        &self.clip_id
+        &self.clip.id
     }
 
     pub fn same_source(&self, path: &Path) -> bool {
@@ -226,121 +234,292 @@ impl VideoDecoder {
                 "cannot retarget a decoder onto a different file".into(),
             ));
         }
-        let source_time = clip.source_time_at(timeline_time);
-        let remaining_source = (clip.source_out - source_time).max(0.0);
-        if remaining_source <= 0.0 {
-            return Err(PlaybackError::Ffmpeg(format!(
-                "clip {} has no source time remaining",
-                clip.id
-            )));
-        }
-        self.decoder.flush();
-        libav::seek_to(&mut self.input, source_time);
-        self.decoder.flush();
-        self.source_time = source_time;
-        self.clip_id = clip.id.clone();
-        self.eof = false;
-        self.flushed = false;
+        self.clip = clip.clone();
+        self.rate = source.rate;
+        self.program_rate = timeline.rate();
         self.cancelled = false;
         self.release_early = release_early;
         self.preview_graph = release_early;
-        self.last_source_time = None;
-        self.served = 0;
         self.serve_epoch = serve_epoch;
         self.live = Live::for_clip(clip, timeline.fps)?;
+        self.aim(timeline, timeline_time);
         self.filter = None;
-        let graph = match self.build_filter(timeline, clip, source, remaining_source) {
+        let graph = match self.build_filter(timeline, source) {
             Ok(graph) => graph,
             Err(error) => {
                 if release_early || (timeline.subtitles.is_empty() && source.subtitles.is_empty()) {
                     return Err(error);
                 }
-                self.build_filter_without_subtitles(timeline, clip, source, remaining_source)?
+                self.build_filter_without_subtitles(timeline, source)?
             }
         };
         self.filter = Some(graph);
         Ok(())
     }
 
-    pub fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>, PlaybackError> {
-        loop {
-            if self.note_cancel() {
-                return Ok(None);
-            }
-            if let Some(frame) = self.pull_filtered()? {
-                return Ok(Some(frame));
-            }
-            if self.eof && self.flushed {
-                return Ok(None);
-            }
-            self.pump()?;
-        }
+    /// Start over at the frame of the program showing at `timeline_time`: forget what was
+    /// read, and seek the file to the frame of the media the clip shows there.
+    fn aim(&mut self, timeline: &PlaybackTimeline, timeline_time: f64) {
+        self.first = timeline.frame_at(timeline_time);
+        self.served = 0;
+        self.current = None;
+        self.ahead = None;
+        self.filtered = None;
+        self.eof = false;
+        let (num, den) = self.time_base_parts();
+        let pts = i128::from(self.pts_of(self.wanted(0)));
+        let micros = (pts * i128::from(num) * 1_000_000).div_euclid(i128::from(den)) as i64;
+        self.decoder.flush();
+        libav::seek_to(&mut self.input, micros);
+        self.decoder.flush();
     }
 
-    /// Advance one filtered frame without converting it to RGBA. Seek
-    /// coalescing uses this path to discard frames before the target without
-    /// allocating a pixel buffer that will never reach the UI.
-    pub fn skip_frame(&mut self) -> Result<bool, PlaybackError> {
-        loop {
-            if self.note_cancel() {
-                return Ok(false);
-            }
-            if let Some(filter) = self.filter.as_mut() {
-                let mut filtered = ffmpeg::frame::Video::empty();
-                let result = {
-                    let mut sink = filter
-                        .get("out")
-                        .ok_or_else(|| PlaybackError::Ffmpeg("missing buffersink".into()))?;
-                    sink.sink().frame(&mut filtered)
-                };
-                match result {
-                    Ok(()) => {
-                        self.served += 1;
-                        return Ok(true);
-                    }
-                    Err(error) if libav::is_again(&error) || libav::is_eof(&error) => {}
-                    Err(error) => return Err(libav::map_error(error)),
-                }
-            }
-            if self.eof && self.flushed {
-                return Ok(false);
-            }
-            self.pump()?;
+    /// The frame of the media the clip shows at the `ahead`th frame of the program from the
+    /// one the decoder opened on.
+    fn wanted(&self, ahead: u32) -> i64 {
+        let at = self.program_rate.time_of(self.first + i64::from(ahead));
+        self.clip.source_frame_at(at, self.rate)
+    }
+
+    fn time_base_parts(&self) -> (i64, i64) {
+        (
+            i64::from(self.time_base.numerator()),
+            i64::from(self.time_base.denominator()).max(1),
+        )
+    }
+
+    /// Where frame `index` of the media starts, in the stream's time base, as the compositor
+    /// finds it.
+    fn pts_of(&self, index: i64) -> i64 {
+        let (num, den) = self.time_base_parts();
+        let ticks = i128::from(index) * i128::from(self.rate.den()) * i128::from(den);
+        let per = i128::from(self.rate.num()) * i128::from(num.max(1));
+        self.first_pts + (ticks + per / 2).div_euclid(per) as i64
+    }
+
+    /// The picture of the next frame of the program, or nothing when the decoder was
+    /// cancelled or the file gave no frame.
+    pub fn next_frame(&mut self) -> Result<Option<DecodedVideoFrame>, PlaybackError> {
+        if self.note_cancel() {
+            return Ok(None);
         }
+        if self.release_early {
+            // The first picture after the seek, usually the keyframe before the frame asked
+            // for, is shown as it is, where the clip plays it.
+            let Some((pts, mut frame)) = self.read()? else {
+                return Ok(None);
+            };
+            self.release_early = false;
+            let picture = self.filter_frame(&mut frame)?;
+            let source_time = libav::seconds(pts, self.time_base);
+            let at = self.clip.clip_time_of_source(source_time);
+            return Ok(Some(self.give(&picture, at, source_time)));
+        }
+        let index = self.wanted(self.served);
+        self.read_to(index)?;
+        if self.cancelled {
+            return Ok(None);
+        }
+        // Before the media's first frame, its first frame shows.
+        if self.current.is_none() {
+            self.current = self.ahead.take();
+        }
+        let Some((pts, frame)) = self.current.as_mut() else {
+            return Ok(None);
+        };
+        let pts = *pts;
+        if self.filtered.as_ref().is_none_or(|(of, _)| *of != pts) {
+            let mut frame = std::mem::replace(frame, ffmpeg::frame::Video::empty());
+            let picture = self.filter_frame(&mut frame)?;
+            self.filtered = Some((pts, picture));
+        }
+        let at = self.clip.clip_time_at(
+            self.program_rate
+                .time_of(self.first + i64::from(self.served)),
+        );
+        self.served += 1;
+        let (_, picture) = self
+            .filtered
+            .take()
+            .expect("the frame showing was filtered just above, or on an earlier call");
+        let given = self.give(&picture, at, libav::seconds(pts, self.time_base));
+        self.filtered = Some((pts, picture));
+        Ok(Some(given))
+    }
+
+    /// Pass the next frame of the program by without making its picture. A seek a little
+    /// way on does this for the frames before its target; the frames of the media they would
+    /// have shown are read past when the next picture is asked for.
+    pub fn skip_frame(&mut self) -> Result<bool, PlaybackError> {
+        if self.note_cancel() {
+            return Ok(false);
+        }
+        self.served += 1;
+        Ok(true)
     }
 
     pub fn stop(&mut self) {
         self.eof = true;
-        self.flushed = true;
+        self.current = None;
+        self.ahead = None;
+        self.filtered = None;
         self.filter = None;
+    }
+
+    /// Read on until the frame showing is frame `index` of the media: the last frame
+    /// starting by its start, give or take half a frame for timestamps that round, as the
+    /// compositor takes it. A file that ends before then shows its last frame.
+    fn read_to(&mut self, index: i64) -> Result<(), PlaybackError> {
+        let limit = (self.pts_of(index) + self.pts_of(index + 1)) / 2;
+        loop {
+            if self.ahead.is_none() {
+                self.ahead = self.read()?;
+            }
+            match &self.ahead {
+                Some((pts, _)) if *pts <= limit => self.current = self.ahead.take(),
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// The next frame of the file in the order it shows, with its timestamp; nothing at the
+    /// file's end, or once the decoder is cancelled.
+    fn read(&mut self) -> Result<Option<(i64, ffmpeg::frame::Video)>, PlaybackError> {
+        loop {
+            if self.note_cancel() {
+                return Ok(None);
+            }
+            let mut decoded = ffmpeg::frame::Video::empty();
+            match self.decoder.receive_frame(&mut decoded) {
+                Ok(()) => {
+                    // A frame with no timestamp follows the one before it.
+                    let pts = decoded.timestamp().unwrap_or_else(|| {
+                        self.ahead
+                            .as_ref()
+                            .or(self.current.as_ref())
+                            .map_or(self.first_pts, |(pts, _)| {
+                                pts + self.pts_of(1) - self.first_pts
+                            })
+                    });
+                    return Ok(Some((pts, decoded)));
+                }
+                Err(error) if libav::is_eof(&error) => return Ok(None),
+                Err(error) if libav::is_again(&error) => {}
+                Err(error) => return Err(libav::map_error(error)),
+            }
+            if self.eof {
+                return Ok(None);
+            }
+            let packet = self
+                .input
+                .packets()
+                .next()
+                .map(|(stream, packet)| (stream.index(), packet));
+            match packet {
+                Some((index, packet)) if index == self.stream_index => {
+                    match self.decoder.send_packet(&packet) {
+                        Ok(()) => {}
+                        Err(error) if libav::is_again(&error) => {}
+                        Err(error) if libav::is_eof(&error) => self.eof = true,
+                        Err(error) => return Err(libav::map_error(error)),
+                    }
+                }
+                Some(_) => {}
+                None => {
+                    self.eof = true;
+                    if let Err(error) = self.decoder.send_eof() {
+                        log::warn!(
+                            "the decoder was not told its input ended, so it may hold back its last frames: {error}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// `frame` through the filters, which take it and leave it empty: scaled to the frame,
+    /// and letterboxed into it unless the clip's masks and effects are still to run.
+    fn filter_frame(&mut self, frame: &mut ffmpeg::frame::Video) -> Result<Picture, PlaybackError> {
+        let filter = self
+            .filter
+            .as_mut()
+            .ok_or_else(|| PlaybackError::Ffmpeg("video filter graph is missing".into()))?;
+        filter
+            .get("in")
+            .ok_or_else(|| PlaybackError::Ffmpeg("missing buffer source".into()))?
+            .source()
+            .add(frame)
+            .map_err(libav::map_error)?;
+        let mut filtered = ffmpeg::frame::Video::empty();
+        filter
+            .get("out")
+            .ok_or_else(|| PlaybackError::Ffmpeg("missing buffersink".into()))?
+            .sink()
+            .frame(&mut filtered)
+            .map_err(libav::map_error)?;
+        if self.live.is_none() {
+            return Ok(Picture::Framed(libav::packed_rgba(
+                &filtered,
+                self.width,
+                self.height,
+            )?));
+        }
+        let (width, height) = (filtered.width(), filtered.height());
+        Ok(Picture::Loose {
+            rgba: libav::packed_rgba(&filtered, width, height)?.to_vec(),
+            width,
+            height,
+        })
+    }
+
+    /// `picture` as it is shown at the clip's own time `at`: with the clip's masks and
+    /// effects run on it as they are then, and letterboxed into the frame.
+    fn give(&self, picture: &Picture, at: Time, source_time: f64) -> DecodedVideoFrame {
+        let pixels = match (picture, &self.live) {
+            (Picture::Framed(pixels), _) => Arc::clone(pixels),
+            (
+                Picture::Loose {
+                    rgba,
+                    width,
+                    height,
+                },
+                live,
+            ) => {
+                let mut rgba = rgba.clone();
+                if let Some(live) = live {
+                    live.stack.apply(&mut rgba, *width, *height, at, live.fps);
+                }
+                letterbox(&rgba, *width, *height, self.width, self.height).into()
+            }
+        };
+        DecodedVideoFrame {
+            width: self.width,
+            height: self.height,
+            pixels,
+            source_time: Some(source_time),
+        }
     }
 
     fn build_filter(
         &self,
         timeline: &PlaybackTimeline,
-        clip: &PlaybackClip,
         source: &PlaybackSource,
-        remaining_source: f64,
     ) -> Result<filter::Graph, PlaybackError> {
-        self.build_filter_graph(timeline, clip, source, remaining_source, true)
+        self.build_filter_graph(timeline, source, true)
     }
 
     fn build_filter_without_subtitles(
         &self,
         timeline: &PlaybackTimeline,
-        clip: &PlaybackClip,
         source: &PlaybackSource,
-        remaining_source: f64,
     ) -> Result<filter::Graph, PlaybackError> {
-        self.build_filter_graph(timeline, clip, source, remaining_source, false)
+        self.build_filter_graph(timeline, source, false)
     }
 
     fn build_filter_graph(
         &self,
         timeline: &PlaybackTimeline,
-        clip: &PlaybackClip,
         source: &PlaybackSource,
-        remaining_source: f64,
         include_subtitles: bool,
     ) -> Result<filter::Graph, PlaybackError> {
         let pix_fmt = pixel_name(self.decoder.format());
@@ -362,35 +541,16 @@ impl VideoDecoder {
         );
         // A clip with masks or raster effects leaves the graph
         // unletterboxed, and without burned-in subtitles, for them to run
-        // first.
+        // first. The scrub preview burns none in either.
         let letterbox = self.live.is_none();
-        let spec = if self.release_early {
-            // No fps/trim hold. The first picture after the seek — usually the
-            // keyframe — leaves the graph immediately.
-            let pad = if letterbox {
-                format!(
-                    ",pad={}:{}:(ow-iw)/2:(oh-ih)/2:color=black",
-                    self.width, self.height
-                )
-            } else {
-                String::new()
-            };
-            format!(
-                "scale=w={}:h={}:force_original_aspect_ratio=decrease{pad},setsar=1,format=rgba",
-                self.width, self.height
-            )
-        } else {
-            video_filter(
-                timeline,
-                clip,
-                self.width,
-                self.height,
-                remaining_source,
-                include_subtitles && letterbox,
-                letterbox,
-                source,
-            )
-        };
+        let spec = video_filter(
+            timeline,
+            self.width,
+            self.height,
+            include_subtitles && letterbox && !self.release_early,
+            letterbox,
+            source,
+        );
         let mut graph = filter::Graph::new();
         let buffer = filter::find("buffer").ok_or_else(|| {
             PlaybackError::Ffmpeg("libavfilter buffer source is unavailable".into())
@@ -410,49 +570,6 @@ impl VideoDecoder {
         Ok(graph)
     }
 
-    fn pull_filtered(&mut self) -> Result<Option<DecodedVideoFrame>, PlaybackError> {
-        if let Some(filter) = self.filter.as_mut() {
-            let mut filtered = ffmpeg::frame::Video::empty();
-            let result = {
-                let mut sink = filter
-                    .get("out")
-                    .ok_or_else(|| PlaybackError::Ffmpeg("missing buffersink".into()))?;
-                sink.sink().frame(&mut filtered)
-            };
-            return match result {
-                Ok(()) => {
-                    let served = self.served;
-                    self.served += 1;
-                    let pixels = match &self.live {
-                        None => libav::packed_rgba(&filtered, self.width, self.height)?,
-                        Some(live) => {
-                            let (width, height) = (filtered.width(), filtered.height());
-                            let mut picture =
-                                libav::packed_rgba(&filtered, width, height)?.to_vec();
-                            // The scrub preview holds nothing back.
-                            let at = if self.preview_graph {
-                                live.clip_time(self.last_source_time.unwrap_or(self.source_time), 0)
-                            } else {
-                                live.clip_time(self.source_time, served)
-                            };
-                            live.stack.apply(&mut picture, width, height, at, live.fps);
-                            letterbox(&picture, width, height, self.width, self.height).into()
-                        }
-                    };
-                    Ok(Some(DecodedVideoFrame {
-                        width: self.width,
-                        height: self.height,
-                        pixels,
-                        source_time: self.last_source_time,
-                    }))
-                }
-                Err(error) if libav::is_again(&error) || libav::is_eof(&error) => Ok(None),
-                Err(error) => Err(libav::map_error(error)),
-            };
-        }
-        Ok(None)
-    }
-
     fn note_cancel(&mut self) -> bool {
         if self.cancelled {
             return true;
@@ -463,98 +580,6 @@ impl VideoDecoder {
         }
         false
     }
-
-    fn pump(&mut self) -> Result<(), PlaybackError> {
-        if self.note_cancel() {
-            return Ok(());
-        }
-        if !self.eof {
-            let packet = self
-                .input
-                .packets()
-                .next()
-                .map(|(stream, packet)| (stream.index(), packet));
-            match packet {
-                Some((index, packet)) if index == self.stream_index => {
-                    self.send_packet(&packet)?;
-                    self.drain_decoder()?;
-                    return Ok(());
-                }
-                Some(_) => return Ok(()),
-                None => {
-                    self.eof = true;
-                    if let Err(error) = self.decoder.send_eof() {
-                        log::warn!(
-                            "the decoder was not told its input ended, so it may hold back its last frames: {error}"
-                        );
-                    }
-                    self.drain_decoder()?;
-                    return Ok(());
-                }
-            }
-        }
-        if !self.flushed {
-            self.flushed = true;
-            if let Some(filter) = self.filter.as_mut()
-                && let Some(mut src) = filter.get("in")
-                && let Err(error) = src.source().flush()
-            {
-                log::warn!(
-                            "the filters were not told the frames ended, so they may hold back their last: {error}"
-                        );
-            }
-        }
-        Ok(())
-    }
-
-    fn send_packet(&mut self, packet: &ffmpeg::Packet) -> Result<(), PlaybackError> {
-        loop {
-            match self.decoder.send_packet(packet) {
-                Ok(()) => return Ok(()),
-                Err(error) if libav::is_again(&error) => self.drain_decoder()?,
-                Err(error) if libav::is_eof(&error) => {
-                    self.eof = true;
-                    return Ok(());
-                }
-                Err(error) => return Err(libav::map_error(error)),
-            }
-        }
-    }
-
-    fn drain_decoder(&mut self) -> Result<(), PlaybackError> {
-        let mut decoded = ffmpeg::frame::Video::empty();
-        loop {
-            match self.decoder.receive_frame(&mut decoded) {
-                Ok(()) => self.push_decoded(&decoded)?,
-                Err(error) if libav::is_again(&error) || libav::is_eof(&error) => return Ok(()),
-                Err(error) => return Err(libav::map_error(error)),
-            }
-        }
-    }
-
-    fn push_decoded(&mut self, decoded: &ffmpeg::frame::Video) -> Result<(), PlaybackError> {
-        let accept_early = self.release_early;
-        if let Some(ts) = decoded.timestamp() {
-            let seconds = libav::seconds(ts, self.time_base);
-            if !accept_early && seconds + 1e-4 < self.source_time {
-                return Ok(());
-            }
-            self.last_source_time = Some(seconds);
-        } else {
-            self.last_source_time = None;
-        }
-        if accept_early {
-            self.release_early = false;
-        }
-        let filter = self
-            .filter
-            .as_mut()
-            .ok_or_else(|| PlaybackError::Ffmpeg("video filter graph is missing".into()))?;
-        let mut src = filter
-            .get("in")
-            .ok_or_else(|| PlaybackError::Ffmpeg("missing buffer source".into()))?;
-        src.source().add(decoded).map_err(libav::map_error)
-    }
 }
 
 impl Drop for VideoDecoder {
@@ -563,29 +588,20 @@ impl Drop for VideoDecoder {
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each argument is a separate input to the clip's filter graph"
-)]
+/// The filters between a frame as it decoded and the picture shown: it is fitted to the frame,
+/// letterboxed into it, and its subtitles burned in. Which frame shows when is not theirs to
+/// say: the decoder hands them the frame the clip's time map names.
 fn video_filter(
     timeline: &PlaybackTimeline,
-    clip: &PlaybackClip,
     width: u32,
     height: u32,
-    remaining_source: f64,
     include_subtitles: bool,
     letterbox: bool,
     source: &PlaybackSource,
 ) -> String {
-    let speed = libav::format_number(clip.speed);
-    let fps = libav::format_number(timeline.fps);
-    let mut filters = vec![
-        "setpts=PTS-STARTPTS".to_string(),
-        format!("trim=duration={}", libav::format_number(remaining_source)),
-        format!("setpts=PTS/{speed}"),
-        format!("fps={fps}"),
-        format!("scale=w={width}:h={height}:force_original_aspect_ratio=decrease"),
-    ];
+    let mut filters = vec![format!(
+        "scale=w={width}:h={height}:force_original_aspect_ratio=decrease"
+    )];
     if letterbox {
         filters.push(format!(
             "pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black"

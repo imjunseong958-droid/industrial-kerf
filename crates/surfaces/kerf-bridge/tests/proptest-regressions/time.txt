@@ -1,0 +1,13 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0c203d09ab7da40de8f69399eec1ce121170962ea57744f6bbb9d7b16a7d4254 # shrinks to case = Case { sequence: "24", media: "30", start: 0, duration: 23, source: "183132600000fl", speed: " speed=-7/11", holder: None }
+cc 0fa8ca3657c826cafc3cabebb8bc5f01098ea47d9d5e8471462036d3edb6498d # shrinks to case = Case { sequence: "24", media: "24", start: 0, duration: 1, source: "141120000000fl", speed: " speed=5/4", holder: Some(Holder { rate: "24", source: "8302560000fl", speed: "" }) }
+cc 1fb539e0a3bc2198c7d4c751f38fbcdb173e3fdd4ba98ca9351eea5c16167621 # shrinks to case = Case { sequence: "24", media: "24", start: 0, duration: 11, source: "141120000000fl", speed: " speed={0f:1 1f:1/3}", holder: None }
+cc 3230905edcda0efb88456ed6725c0390a074f49c162497b5c0287b9b3b35e2e3 # shrinks to case = Case { sequence: "60", media: "25", start: 0, duration: 24, source: "148940400000fl", speed: " speed=-7/11", holder: None }
+cc c948decb9ecd2de27894217a7428234e39f7eb33ce0298b5261c0d580e6e944d # shrinks to case = Case { sequence: "30", media: "25", start: 0, duration: 26, source: "193452000000fl", speed: " speed=-7/11", holder: None }
+cc cb4e54476a83439c01950db2545aea8163852be1849f9804b60de181fa5882cb # shrinks to case = Case { sequence: "24", media: "24", start: 0, duration: 35, source: "147617399971fl", speed: "", holder: None }
+cc e72df2493d00b9ab8e629649e62987410a4447b4456a4a4ef472287cc5b0fe73 # shrinks to case = Case { sequence: "24", media: "24", start: 0, duration: 15, source: "141120000000fl", speed: " speed={0f:100/3 1f:1}", holder: None }

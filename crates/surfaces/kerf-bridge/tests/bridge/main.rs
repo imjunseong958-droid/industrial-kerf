@@ -3,6 +3,7 @@
 mod api;
 mod delivery;
 mod protocol;
+mod time;
 mod wire;
 
 use kerf_bridge::{Bridge, Command};

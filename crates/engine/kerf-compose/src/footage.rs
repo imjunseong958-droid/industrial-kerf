@@ -2,9 +2,9 @@
 //! libav.
 //!
 //! Every media clip is a footage item of its own, and its layer's time is
-//! clip time, so the frame a clip shows is worked out here, exactly, from
-//! the clip's source in and speed. A frame is the one whose display starts
-//! at or before that source time, as a cut shows it. Decoders keep their
+//! clip time, so the frame a clip shows is the one its time map names
+//! (`kerf_model::TimeMap::frame`): the one whose display starts at or
+//! before that source time, as a cut shows it. Decoders keep their
 //! place in a file and read on to the next frame; they seek only to go
 //! back further than the frames they keep, or far ahead. A frame just after
 //! or just before one being read waits for that decoder rather than opening
@@ -23,7 +23,7 @@ use ffmpeg_next::{decoder, filter, frame, media};
 use kerf_color::{ColorPipeline, ColorSpace, InputTransform, Range};
 use kerf_draw::Image as Picture;
 use kerf_model::time::FLICKS_PER_SECOND;
-use kerf_model::{Rate, Retime, Speed, Time};
+use kerf_model::{Rate, Retime, Time, TimeMap};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -79,8 +79,7 @@ fn raster(picture: &Picture) -> kerf_raster::Image {
     }
 }
 
-/// What a media clip shows: its media's frames, from `source_in` at
-/// `speed`.
+/// What a media clip shows: its media's frames, where its time map says.
 #[derive(Clone, Debug)]
 pub(crate) struct ClipSource {
     pub path: String,
@@ -94,56 +93,29 @@ pub(crate) struct ClipSource {
     /// How its 16-bit code values become light, for footage worth more than 8 bits.
     pub deep: Option<&'static InputTransform>,
     pub retime: Retime,
-    pub source_in: Time,
-    pub speed: Speed,
-    pub duration: Time,
+    /// How the clip's own time maps onto the media's.
+    pub map: TimeMap<'static>,
 }
 
 impl ClipSource {
-    /// The media frame shown at clip time `at`: the one showing at its
-    /// source time, which a reversed clip runs back from its source out.
+    /// The media frame shown at clip time `at`: the one the clip's map names, kept within the
+    /// media's frames.
     pub fn frame_at_time(&self, at: Time) -> i64 {
-        let units = |time: Time| i128::from(time.flicks());
-        // Source flicks, as a fraction over the clip speed's denominator: one ratio stays exact,
-        // and a ramp is exact to the flick.
-        let (forward, reverse, den) = match self.speed.constant() {
-            Some(ratio) => {
-                let (num, den) = (
-                    i128::from(ratio.num().unsigned_abs()),
-                    i128::from(ratio.den()),
-                );
-                (units(at) * num, units(at) * num, den)
-            }
-            None => {
-                let played = units(self.speed.played(at));
-                (played, played, 1)
-            }
-        };
-        // Frames per unit.
-        let per = i128::from(FLICKS_PER_SECOND) * i128::from(self.rate.den()) * den;
-        let frame = if self.speed.is_reverse() {
-            // The frame showing just before the source position.
-            let out = units(self.source_in + self.speed.played(self.duration));
-            let position = (out * den - reverse) * i128::from(self.rate.num());
-            -(-position).div_euclid(per) - 1
-        } else {
-            let position = (units(self.source_in) * den + forward) * i128::from(self.rate.num());
-            position.div_euclid(per)
-        };
-        frame.clamp(0, i128::from(self.frames.max(1) - 1)) as i64
+        self.map
+            .frame(at, self.rate)
+            .clamp(0, self.frames.max(1) - 1)
     }
 
     /// The media frame clip time `at` lies after and how far on toward the next, in 64ths, when
     /// it lies between two frames.
     fn between_at(&self, at: Time) -> Option<(i64, u16)> {
-        let seconds = |time: Time| time.flicks() as f64 / FLICKS_PER_SECOND as f64;
         let per_second = f64::from(self.rate.num()) / f64::from(self.rate.den());
-        let played = self.speed.played_seconds(seconds(at));
-        let position = if self.speed.is_reverse() {
-            let out = self.source_in + self.speed.played(self.duration);
-            (seconds(out) - played) * per_second - 1.0
+        let source = self.map.source_seconds(at.seconds()) * per_second;
+        // Played backwards, it lies after the frame showing just before the source position.
+        let position = if self.map.is_reverse() {
+            source - 1.0
         } else {
-            (seconds(self.source_in) + played) * per_second
+            source
         };
         let first = position.floor();
         let between = ((position - first) * 64.0).round() as u16;
@@ -962,9 +934,13 @@ mod tests {
             alpha: false,
             deep: None,
             retime: Retime::Frames,
-            source_in: Rate::FPS_24.time_of(source_in),
-            speed: kerf_model::Ratio::parse(speed).unwrap().into(),
-            duration: Rate::FPS_24.time_of(duration),
+            map: TimeMap::new(
+                Time::ZERO,
+                Rate::FPS_24.time_of(duration),
+                Rate::FPS_24.time_of(source_in),
+                &kerf_model::Ratio::parse(speed).unwrap().into(),
+            )
+            .into_owned(),
         }
     }
 
