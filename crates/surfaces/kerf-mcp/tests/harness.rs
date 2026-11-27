@@ -1142,6 +1142,132 @@ fn imported_media_is_indexed_and_proxied_in_the_background() {
     assert!(indexed, "the index is made before the proxy");
 }
 
+/// An edit's preview reads a media's proxy, a quick read, where the proxy shows the frame as
+/// the media does, and the media itself where a clip of it is grown past what its proxy has,
+/// or may be. The proxy here is red and the media blue, so a frame says which was read.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
+)]
+fn an_edits_preview_reads_a_proxy_where_it_shows_as_much() {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg is not installed");
+        return;
+    }
+    let directory = TempDir::new().unwrap();
+    let color = |color: &str, size: &str, file: &Path| {
+        let status = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"])
+            .args([
+                "-i",
+                &format!("color=c={color}:size={size}:rate=30:duration=2"),
+            ])
+            .args([
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(file)
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    let wide = directory.path().join("wide.mp4");
+    color("blue", "1280x720", &wide);
+    let cache = kerf_engine::media::derivatives::DerivativeCache::new(directory.path());
+    let proxy = kerf_engine::make_proxy(&wide, &cache, &kerf_engine::CancellationToken::new())
+        .unwrap()
+        .expect("a picture wider than a proxy has one");
+    let red = directory.path().join("red.mp4");
+    color("red", "960x540", &red);
+    std::fs::rename(&red, &proxy).unwrap();
+    std::fs::write(
+        directory.path().join("project.kerf"),
+        "kerf 1
+project name=\"Proxied\"
+media m1 path=\"wide.mp4\" rate=30 dur=00:00:02:00 video=1280x720
+sequence s1 rate=30 size=1280x720
+  track V1 video
+    clip c1 media=m1 at=00:00:00:00 dur=00:00:02:00
+sequence s2 rate=30 size=1280x720
+  track V1 video
+    clip n1 seq=s1 src=0f at=0f dur=00:00:02:00
+sequence s3 rate=30 size=1280x720
+  track V1 video
+    clip d1 media=m1 at=00:00:00:00 dur=00:00:01:00
+      set scale=3
+    clip d2 media=m1 src=00:00:01:00 at=00:00:01:00 dur=00:00:01:00
+",
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = router_on(directory.path(), Some(&kerfd));
+    // Red or blue, in the middle of a sheet's first frame; nothing where no frame shows what
+    // the edit changed.
+    let read = |side: &Value| {
+        if side["empty"] == true {
+            return "nothing";
+        }
+        let pixel = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(side["path"].as_str().unwrap())
+            .args(["-vf", "crop=40:40:300:150,scale=1:1"])
+            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+            .output()
+            .unwrap();
+        match pixel.stdout[..] {
+            [r, _, b] if r > 200 && b < 60 => "proxy",
+            [r, _, b] if b > 200 && r < 60 => "media",
+            _ => panic!(
+                "neither red nor blue: {:?} in {}",
+                pixel.stdout, side["path"]
+            ),
+        }
+    };
+    for (script, was, is) in [
+        // Grown three times, the picture is 1440 pixels across a frame of 480, and the proxy
+        // has 960.
+        ("set c1 scale=3", "proxy", "media"),
+        // And a lens may grow it, and a transition of FilmCraft's.
+        ("fx c1 add distort.lens", "proxy", "media"),
+        (
+            "split c1 at=1s as=c2\ntransition add from=c1 to=c2 fx=cross-zoom dur=10f",
+            "proxy",
+            "media",
+        ),
+        // A dissolve draws each picture where it lands, past its clip's ends too.
+        (
+            "split c1 at=1s as=c2\ntransition add from=c1 to=c2 fx=dissolve dur=10f",
+            "proxy",
+            "proxy",
+        ),
+        // Where it is drawn only past its end, after the cut, `d1` is as grown as ever.
+        (
+            "transition add from=d1 to=d2 fx=dissolve dur=10f align=start",
+            "nothing",
+            "media",
+        ),
+        // How large a sequence nested in another draws it is not told.
+        ("set n1 opacity=0.9", "media", "media"),
+    ] {
+        let proposal = ok(&router, "edit", json!({"script": script}));
+        let (before, after) = (
+            &proposal["preview"]["before"],
+            &proposal["preview"]["after"],
+        );
+        assert_eq!(read(before), was, "{script}: {}", before["path"]);
+        assert_eq!(read(after), is, "{script}: {}", after["path"]);
+        router
+            .runtime()
+            .reject_proposal(proposal["proposal"].as_str().unwrap())
+            .unwrap();
+    }
+}
+
 #[test]
 fn scripts_anchor_to_clips_and_caption_only_what_was_heard() {
     let Some((_directory, router)) = router() else {

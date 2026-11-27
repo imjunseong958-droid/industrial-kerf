@@ -27,8 +27,11 @@ use super::*;
 
 mod gltf;
 pub(super) mod mesh;
+mod seen;
 mod texture;
 pub(super) mod world;
+
+pub(super) use seen::Seen;
 
 /// The field of view at which a clip at z = 0 is its 2D self, in degrees.
 const DEFAULT_FOV: f64 = 40.0;
@@ -551,6 +554,30 @@ impl Scene {
             aperture: read("aperture", 0.0) * height,
             carried,
         }
+    }
+
+    /// Where its camera is and how it sees, as bits: what says where a ray through each pixel goes.
+    pub(super) fn camera_bits(&self) -> [u64; 16] {
+        let [e, r, d, f] = [self.eye, self.right, self.down, self.forward];
+        [
+            e[0],
+            e[1],
+            e[2],
+            r[0],
+            r[1],
+            r[2],
+            d[0],
+            d[1],
+            d[2],
+            f[0],
+            f[1],
+            f[2],
+            self.focal,
+            self.center.0,
+            self.center.1,
+            self.height,
+        ]
+        .map(f64::to_bits)
     }
 
     /// The scene as a pass draws it: seen as it is, with nothing lit and nothing out of focus.
@@ -1081,6 +1108,22 @@ impl Plane {
             normal: unit(perpendicular),
             middle,
         }
+    }
+
+    /// Where it is, as bits.
+    pub(super) fn bits(&self) -> [u64; 15] {
+        let [o, a, d, n, m] = [
+            self.origin,
+            self.across,
+            self.down,
+            self.normal,
+            self.middle,
+        ];
+        [
+            o[0], o[1], o[2], a[0], a[1], a[2], d[0], d[1], d[2], n[0], n[1], n[2], m[0], m[1],
+            m[2],
+        ]
+        .map(f64::to_bits)
     }
 
     /// How many pixels of the world a pixel of its picture is, however its sides differ.
@@ -1663,7 +1706,8 @@ impl Caster {
 }
 
 /// `picture` as a clip in depth on an output picture of `(w, h)`, transparent around it. `to_output`
-/// takes its pixels to where its 2D geometry puts them.
+/// takes its pixels to where its 2D geometry puts them. With a `share`, what the camera sees of the
+/// picture is found once for every pass that shares it ([`Seen`]), and `picture` read by it.
 pub(super) fn project(
     scene: &Scene,
     plan: &ClipPlan,
@@ -1671,8 +1715,9 @@ pub(super) fn project(
     placed: (&Affine, Option<Rect>),
     time: Time,
     size: (usize, usize),
+    share: Option<Share<'_>>,
 ) -> Image {
-    projected(scene, plan, picture, placed, time, size, false).0
+    projected(scene, plan, picture, placed, time, size, false, share).0
 }
 
 /// [`project`], with how far along the camera's way its plane is at each pixel, inside the picture
@@ -1684,10 +1729,15 @@ pub(super) fn project_with_depth(
     placed: (&Affine, Option<Rect>),
     time: Time,
     size: (usize, usize),
+    share: Option<Share<'_>>,
 ) -> (Image, Vec<f32>) {
-    projected(scene, plan, picture, placed, time, size, true)
+    projected(scene, plan, picture, placed, time, size, true, share)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "project and project_with_depth, which say what each is, call it alone"
+)]
 fn projected(
     scene: &Scene,
     plan: &ClipPlan,
@@ -1696,6 +1746,7 @@ fn projected(
     time: Time,
     (w, h): (usize, usize),
     with_depth: bool,
+    share: Option<Share<'_>>,
 ) -> (Image, Vec<f32>) {
     let (pw, ph) = (picture.w as f64, picture.h as f64);
     let plane = Plane::of(scene, plan, (pw, ph), to_output, time);
@@ -1707,111 +1758,225 @@ fn projected(
         }
         None => (std::borrow::Cow::Borrowed(picture), 1.0),
     };
-    let mut out = Image::new(w, h);
     let crop = crop.unwrap_or_else(|| Rect::new(0.0, 0.0, pw, ph));
+    let looked = Looked {
+        scene,
+        plane,
+        source: &source,
+        by,
+        crop,
+    };
     let solid = depth_of(plan, time, scene.height);
-    if solid > 0.0 {
-        let held = Held::of(&source);
-        let bevel = bevel_of(plan, time, scene.height);
+    let deep = with_depth || scene.aperture > 0.0;
+    let (mut out, depth) = match share {
+        Some(share) => {
+            let key = SeenKey {
+                ready: share.ready,
+                size: (w, h),
+                camera: scene.camera_bits(),
+                plane: plane.bits(),
+                by: by.to_bits(),
+            };
+            let seen = share.seen(key, || Seen::of(&looked, plan, time, solid, (w, h)));
+            let out = seen.shade(&looked, &plan.clip.id);
+            (out, if deep { seen.depth.clone() } else { Vec::new() })
+        }
+        None => looked.draw(plan, time, solid, (w, h), deep),
+    };
+    if scene.aperture > 0.0 {
+        out = super::focus::blurred(&out, &scene.blur_radii(&depth));
+    }
+    (out, depth)
+}
+
+/// A clip's picture as the camera of `scene` looks at it: on `plane`, read at `by` of its size as
+/// `source`, within `crop` of its own pixels.
+struct Looked<'a> {
+    scene: &'a Scene,
+    plane: Plane,
+    source: &'a Image,
+    by: f64,
+    crop: Rect,
+}
+
+impl Looked<'_> {
+    /// The picture on an output picture of `(w, h)`, and, `deep`, how far along the camera's way it
+    /// is at each pixel: of a solid `solid` deep at clip time `time`, or flat.
+    fn draw(
+        &self,
+        plan: &ClipPlan,
+        time: Time,
+        solid: f64,
+        (w, h): (usize, usize),
+        deep: bool,
+    ) -> (Image, Vec<f32>) {
+        let mut out = Image::new(w, h);
+        let mut depth = vec![f32::INFINITY; if deep { w * h } else { 0 }];
+        let rows = out.px.par_chunks_mut(w.max(1) * 4).enumerate();
+        let id = &plan.clip.id;
+        if solid > 0.0 {
+            let solid = self.solid(plan, time, solid);
+            let draw = |y: usize, row: &mut [f32], depth: Option<&mut [f32]>| {
+                let mut laid = Laid {
+                    scene: self.scene,
+                    id,
+                    row,
+                    sum: [0.0; 3],
+                };
+                solid.walk_row(self.scene, y, w, depth, &mut laid);
+            };
+            if deep {
+                rows.zip(depth.par_chunks_mut(w.max(1)))
+                    .for_each(|((y, row), depth)| draw(y, row, Some(depth)));
+            } else {
+                rows.for_each(|(y, row)| draw(y, row, None));
+            }
+            return (out, depth);
+        }
+        let draw = |y: usize, row: &mut [f32], depth: Option<&mut [f32]>| {
+            self.walk_flat_row(y, w, depth, |x, (u, v), hit| {
+                let pixel = self.source.sample_bilinear(u, v);
+                lay_flat(row, x, pixel, || self.scene.lit(id, hit, self.plane.normal));
+            });
+        };
+        if deep {
+            rows.zip(depth.par_chunks_mut(w.max(1)))
+                .for_each(|((y, row), depth)| draw(y, row, Some(depth)));
+        } else {
+            rows.for_each(|(y, row)| draw(y, row, None));
+        }
+        (out, depth)
+    }
+
+    /// The solid a clip `deep` deep at clip time `time` is, in the outline of the picture.
+    fn solid(&self, plan: &ClipPlan, time: Time, deep: f64) -> Solid<'_> {
+        let (plane, source, by, crop) = (self.plane, self.source, self.by, self.crop);
+        let held = Held::of(source);
+        let bevel = bevel_of(plan, time, self.scene.height);
         let bevel = (bevel > 0.0).then(|| {
             let per = plane.pixel_size() / by;
             let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
             let stretch = plane.stretch();
             SolidBevel {
-                field: super::bevel::kept_distance_field(&source, read_crop, bevel / per, stretch),
+                field: super::bevel::kept_distance_field(source, read_crop, bevel / per, stretch),
                 width: bevel / per,
-                depth: solid / per,
+                depth: deep / per,
                 round: bevel_is_round(plan),
                 stretch,
             }
         });
-        let solid = Solid {
+        Solid {
             front: plane,
-            back: plane.pushed(solid),
-            source: &source,
+            back: plane.pushed(deep),
+            source,
             by,
             crop,
             held,
             bevel,
-        };
-        let row_size = w.max(1) * 4;
-        let mut depth = vec![
-            f32::INFINITY;
-            if with_depth || scene.aperture > 0.0 {
-                w * h
-            } else {
-                0
-            }
-        ];
-        if depth.is_empty() {
-            out.px
-                .par_chunks_mut(row_size)
-                .enumerate()
-                .for_each(|(y, row)| solid.draw_row(scene, &plan.clip.id, y, row, None));
-        } else {
-            out.px
-                .par_chunks_mut(row_size)
-                .zip(depth.par_chunks_mut(w.max(1)))
-                .enumerate()
-                .for_each(|(y, (row, depth))| {
-                    solid.draw_row(scene, &plan.clip.id, y, row, Some(depth));
-                });
         }
-        if scene.aperture > 0.0 {
-            out = super::focus::blurred(&out, &scene.blur_radii(&depth));
-        }
-        return (out, depth);
     }
-    let draw_row = |y: usize, row: &mut [f32], mut depth: Option<&mut [f32]>| {
+
+    /// Row `y` of an output picture `w` wide, of a flat picture: how far along the camera's way the
+    /// plane is at each pixel, into `depth`, and where in `source` to read each pixel the picture
+    /// is at, which `each` is told with the pixel and where the ray meets the plane.
+    fn walk_flat_row(
+        &self,
+        y: usize,
+        w: usize,
+        mut depth: Option<&mut [f32]>,
+        mut each: impl FnMut(usize, (f32, f32), Vector),
+    ) {
+        let (plane, crop, by) = (&self.plane, self.crop, self.by);
         for x in 0..w {
-            let Some((hit, ahead)) = scene.meets(&plane, (x as f64 + 0.5, y as f64 + 0.5)) else {
+            let Some((hit, ahead)) = self.scene.meets(plane, (x as f64 + 0.5, y as f64 + 0.5))
+            else {
                 continue;
             };
             if let Some(depth) = depth.as_deref_mut() {
                 depth[x] = ahead as f32;
             }
             let (u, v) = plane.at(hit);
-            if u < crop.x - 1.0
-                || v < crop.y - 1.0
-                || u > crop.right() + 1.0
-                || v > crop.bottom() + 1.0
-            {
-                continue;
-            }
+            // Just past the crop it is clear, as is all beyond.
             let inside_crop = u >= crop.x && v >= crop.y && u <= crop.right() && v <= crop.bottom();
-            let mut pixel = source.sample_bilinear((u * by) as f32, (v * by) as f32);
-            if !inside_crop {
-                pixel = [0.0; 4];
+            if inside_crop {
+                each(x, ((u * by) as f32, (v * by) as f32), hit);
             }
-            if pixel[3] <= 0.0 {
-                continue;
-            }
-            if let Some(light) = scene.lit(&plan.clip.id, hit, plane.normal) {
-                for (value, light) in pixel.iter_mut().zip(light) {
-                    *value *= light;
-                }
-            }
-            row[x * 4..x * 4 + 4].copy_from_slice(&pixel);
         }
-    };
-    let row_size = w.max(1) * 4;
-    if with_depth || scene.aperture > 0.0 {
-        let mut depth = vec![f32::INFINITY; w * h];
-        out.px
-            .par_chunks_mut(row_size)
-            .zip(depth.par_chunks_mut(w.max(1)))
-            .enumerate()
-            .for_each(|(y, (row, depth))| draw_row(y, row, Some(depth)));
-        if scene.aperture > 0.0 {
-            out = super::focus::blurred(&out, &scene.blur_radii(&depth));
+    }
+}
+
+/// Lay `pixel`, read from a flat clip's picture, at `x` of `row`, lit as `light` says: nothing where
+/// it is clear.
+#[inline]
+fn lay_flat(
+    row: &mut [f32],
+    x: usize,
+    mut pixel: [f32; 4],
+    light: impl FnOnce() -> Option<[f32; 3]>,
+) {
+    if pixel[3] <= 0.0 {
+        return;
+    }
+    if let Some(light) = light() {
+        for (value, light) in pixel.iter_mut().zip(light) {
+            *value *= light;
         }
-        (out, depth)
-    } else {
-        out.px
-            .par_chunks_mut(row_size)
-            .enumerate()
-            .for_each(|(y, row)| draw_row(y, row, None));
-        (out, Vec::new())
+    }
+    row[x * 4..x * 4 + 4].copy_from_slice(&pixel);
+}
+
+/// Add to `sum` the color of `pixel`, read from a solid's picture, as much as `more` of a pixel,
+/// lit as `light` says.
+#[inline]
+fn add_color(sum: &mut [f32; 3], pixel: &[f32; 4], light: [f32; 3], more: f32) {
+    for ((sum, color), light) in sum.iter_mut().zip(&pixel[..3]).zip(light) {
+        *sum += color / pixel[3] * light * more;
+    }
+}
+
+/// What a ray through a solid takes of its picture at a step: where in the picture it reads, as
+/// much of a pixel as it takes there, and where that is and which way the solid faces there, for
+/// the lights.
+#[derive(Clone, Copy)]
+struct Step {
+    at: (f32, f32),
+    more: f32,
+    hit: Vector,
+    facing: Vector,
+}
+
+/// What is told of a row of a solid as its rays go through it and read its picture
+/// ([`Solid::walk_row`]).
+trait Reading {
+    /// Pixel `x` takes `pixel`, read from the picture, at `step`.
+    fn step(&mut self, x: usize, step: &Step, pixel: &[f32; 4]);
+    /// Pixel `x` is done, and covered as much as `covered`, after a step or more.
+    fn done(&mut self, x: usize, covered: f32);
+}
+
+/// A row of an output picture a solid is laid in as its rays go through it.
+struct Laid<'a> {
+    scene: &'a Scene,
+    id: &'a Id,
+    row: &'a mut [f32],
+    sum: [f32; 3],
+}
+
+impl Reading for Laid<'_> {
+    #[inline]
+    fn step(&mut self, _: usize, step: &Step, pixel: &[f32; 4]) {
+        let light = self
+            .scene
+            .lit_outside(self.id, step.hit, step.facing)
+            .unwrap_or([1.0; 3]);
+        add_color(&mut self.sum, pixel, light, step.more);
+    }
+
+    #[inline]
+    fn done(&mut self, x: usize, covered: f32) {
+        self.row[x * 4..x * 4 + 3].copy_from_slice(&self.sum);
+        self.row[x * 4 + 3] = covered;
+        self.sum = [0.0; 3];
     }
 }
 
@@ -2025,19 +2190,20 @@ impl Solid<'_> {
         unit(add(times(out, toward_side), times(face, toward_face)))
     }
 
-    /// A row of the output picture. Each pixel's ray goes through the solid half a picture's pixel at a time,
-    /// taking the color of whatever more of the picture's alpha it reaches, so that the edges where it
-    /// comes to the front, to a side, and to nothing behind are all as soft as a pixel.
-    fn draw_row(
+    /// Row `y` of an output picture `w` wide. Each pixel's ray goes through the solid half a picture's
+    /// pixel at a time, taking the color of whatever more of the picture's alpha it reaches, so that the
+    /// edges where it comes to the front, to a side, and to nothing behind are all as soft as a pixel:
+    /// `reading` is told what each pixel takes, and how far along the camera's way it is goes into
+    /// `depth`.
+    fn walk_row(
         &self,
         scene: &Scene,
-        id: &Id,
         y: usize,
-        row: &mut [f32],
+        w: usize,
         mut depth: Option<&mut [f32]>,
+        reading: &mut impl Reading,
     ) {
         let size = (self.source.w, self.source.h);
-        let w = row.len() / 4;
         for x in 0..w {
             let place = (x as f64 + 0.5, y as f64 + 0.5);
             let (front, back) = (
@@ -2093,7 +2259,7 @@ impl Solid<'_> {
             } else {
                 self.front.normal
             };
-            let (mut sum, mut covered, mut first) = ([0.0f32; 3], 0.0f32, None);
+            let (mut covered, mut first) = (0.0f32, None);
             for step in 0..=steps {
                 let along = step as f64 / steps as f64;
                 let (u, v) = (
@@ -2103,9 +2269,8 @@ impl Solid<'_> {
                 if u < crop.x || v < crop.y || u > crop.right() || v > crop.bottom() {
                     continue;
                 }
-                let pixel = self
-                    .source
-                    .sample_bilinear((u * self.by) as f32, (v * self.by) as f32);
+                let at = ((u * self.by) as f32, (v * self.by) as f32);
+                let pixel = self.source.sample_bilinear(at.0, at.1);
                 // What a bevel leaves of it this far in, and whether the ray is on the bevel.
                 let (mut reached, mut on_bevel) = (pixel[3], None);
                 if let Some(bevel) = &self.bevel {
@@ -2129,10 +2294,13 @@ impl Solid<'_> {
                     _ if step == 0 => flat,
                     _ => self.side_facing((u, v)).unwrap_or(flat),
                 };
-                let light = scene.lit_outside(id, hit, facing).unwrap_or([1.0; 3]);
-                for ((sum, color), light) in sum.iter_mut().zip(&pixel[..3]).zip(light) {
-                    *sum += color / pixel[3] * light * more;
-                }
+                let taken = Step {
+                    at,
+                    more,
+                    hit,
+                    facing,
+                };
+                reading.step(x, &taken, &pixel);
                 covered = reached;
                 if first.is_none() && covered >= 0.5 {
                     first = Some(near.1 + (far.1 - near.1) * along);
@@ -2144,8 +2312,7 @@ impl Solid<'_> {
             if covered <= 0.0 {
                 continue;
             }
-            row[x * 4..x * 4 + 3].copy_from_slice(&sum);
-            row[x * 4 + 3] = covered;
+            reading.done(x, covered);
             if let (Some(depth), Some(first)) = (depth.as_deref_mut(), first) {
                 depth[x] = first as f32;
             }

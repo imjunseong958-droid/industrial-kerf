@@ -23,10 +23,21 @@ fn whole_or_nothing(image: &mut Image) {
     });
 }
 
+/// A frame being drawn, which the drawings that share their work are told the drawing is done
+/// with once it is, whichever way it was drawn ([`Drawing::done_with`]).
+struct DoneWith<'a>(&'a Drawing, Time);
+
+impl Drop for DoneWith<'_> {
+    fn drop(&mut self) {
+        self.0.done_with(self.1);
+    }
+}
+
 impl Drawing {
     /// The picture at sequence time `at` over black, at `scale` of the
     /// canvas (1 is full size).
     pub fn frame(&self, at: Time, scale: f64) -> Frame {
+        let _done = DoneWith(self, at);
         let key = (self.keep_frames || self.disk.is_some())
             .then(|| self.frame_key(at, scale))
             .flatten();
@@ -74,6 +85,7 @@ impl Drawing {
 
     /// See [`Compositor::frame16`](crate::Compositor::frame16).
     pub fn frame16(&self, at: Time, scale: f64) -> Frame {
+        let _done = DoneWith(self, at);
         let key = self
             .disk
             .is_some()

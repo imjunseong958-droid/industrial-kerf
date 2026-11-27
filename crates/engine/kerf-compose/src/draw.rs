@@ -55,6 +55,7 @@ mod ids;
 mod output;
 mod plan;
 mod ready;
+mod share;
 mod stack;
 mod three_d;
 mod titles;
@@ -68,10 +69,12 @@ use heard::*;
 use ids::*;
 use plan::*;
 use ready::*;
+use share::*;
 use stack::*;
 use titles::*;
 
 pub use ids::ID_COLORS;
+pub(crate) use share::{Shared, MOST_SHARING};
 pub use three_d::world::{Form, InDepth, World};
 
 type Result<T> = std::result::Result<T, ComposeError>;
@@ -111,6 +114,8 @@ pub(crate) struct Drawing {
     /// Clear pictures the size of a frame, to draw a clip alone on and lay it down hard, kept to
     /// be drawn on again: a picture that size made anew for each clip took more than drawing it.
     clear: std::sync::Mutex<Vec<Image>>,
+    /// The work it shares with drawings of other passes of the sequence ([`crate::Compositor::passes`]).
+    sharing: Option<Sharing>,
 }
 
 impl Drawing {
@@ -182,7 +187,14 @@ impl Drawing {
                 (frame * f64::from(tall.max(1)) / f64::from(wide.max(1))).min(1.0)
             }),
             clear: std::sync::Mutex::default(),
+            sharing: None,
         })
+    }
+
+    /// Share the work that is the same in every pass with the other drawings of `shared`, as
+    /// drawing `me` of them.
+    pub fn share_with(&mut self, shared: Arc<Shared>, me: usize) {
+        self.sharing = Some(Sharing { shared, me });
     }
 
     /// A clear picture of `w` by `h`: one kept, or a new one.
@@ -396,18 +408,34 @@ impl Drawing {
         world
     }
 
+    /// See [`Compositor::showing`](crate::Compositor::showing).
+    pub fn showing(&self, at: Time) -> Vec<String> {
+        self.sequences.first().map_or_else(Vec::new, |sequence| {
+            sequence
+                .tracks
+                .iter()
+                .filter(|track| track.shows)
+                .flat_map(|track| &track.shown)
+                .filter(|shown| shown.shows(at))
+                .map(|shown| shown.plan.clip.id.to_string())
+                .collect()
+        })
+    }
+
     /// See [`Compositor::lands`](crate::Compositor::lands).
     pub fn lands(&self, id: &str, at: Time) -> std::result::Result<crate::Landing, String> {
         let sequence = self.sequences.first().ok_or("there is no sequence")?;
-        let plan = sequence
+        let shown = sequence
             .tracks
             .iter()
             .flat_map(|track| &track.shown)
-            .map(|shown| &shown.plan)
-            .find(|plan| plan.clip.id.as_str() == id)
+            .find(|shown| shown.plan.clip.id.as_str() == id)
             .ok_or("it is no clip of this sequence that draws")?;
+        let plan = &shown.plan;
         let time = at - plan.clip.start;
-        if time.is_negative() || time >= plan.clip.duration {
+        // Past its ends, where a transition draws it, it is placed as it is drawn then.
+        let within = !time.is_negative() && time < plan.clip.duration;
+        if !within && !shown.shows(at) {
             return Err("it does not show then".to_owned());
         }
         let Source::Media { picture } = plan.source else {

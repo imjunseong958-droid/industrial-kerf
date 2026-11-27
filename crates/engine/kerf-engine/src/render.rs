@@ -863,6 +863,29 @@ where
     render_composited(project, sequence, range, opts, cancellation, on_progress)
 }
 
+/// Render several passes of one sequence side by side, each to the file its options name and as
+/// [`render_program_with_cancellation`] renders it alone, drawing what is the same in every pass once
+/// a frame for all of them ([`Compositor::passes`]). They are of the same sequence, at one size and
+/// rate, of all its clips or of only what a model films. `on_progress` is told how far they have
+/// come together. The first to fail stops the others, and is what is said.
+pub fn render_passes_with_cancellation<F>(
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(kerf_model::Time, kerf_model::Time)>,
+    opts: &[RenderOptions],
+    cancellation: &CancellationToken,
+    on_progress: Option<F>,
+) -> Result<()>
+where
+    F: FnMut(f64),
+{
+    match opts {
+        [] => Ok(()),
+        [opts] => render_composited(project, sequence, range, opts, cancellation, on_progress),
+        _ => render_composited_passes(project, sequence, range, opts, cancellation, on_progress),
+    }
+}
+
 pub fn render_program<F>(
     project: &kerf_model::Project,
     sequence: Option<&str>,
@@ -964,6 +987,8 @@ struct CompositedRender {
     sections: Option<SectionArgs>,
     /// How many frames a second it draws.
     rate: Rate,
+    /// How many frames it draws at once.
+    drawers: usize,
 }
 
 /// FFmpeg's arguments for a render whose picture is encoded a stretch at a time
@@ -1224,7 +1249,131 @@ fn composited_render(
         frames,
         sections,
         rate,
+        drawers: RENDER_DRAWERS,
     })
+}
+
+/// What the compositor of a render is asked to draw.
+fn compose_options(sequence: Option<&str>, opts: &RenderOptions) -> ComposeOptions {
+    ComposeOptions {
+        sequence: sequence.map(str::to_owned),
+        captions: true,
+        // Rendering again after a small edit draws only what it changed.
+        frame_folder: opts.frame_cache.folder(kerf_compose::default_frame_folder),
+        pass: opts.pass,
+        matte: opts.matte.clone(),
+        only_filmed: opts.only_filmed,
+        // A motion pass says how far things go from one frame of the file to the next.
+        rate: opts.rate,
+        // And is true of the file, whose shape may not be the sequence's.
+        shape: opts.size,
+        // A file of the pass is read a pixel at a time, each taken for one clip's.
+        hard_edges: true,
+        ..Default::default()
+    }
+}
+
+/// [`render_passes_with_cancellation`] of two passes or more: each rendered on a thread of its own
+/// by a compositor that shares with the others ([`Compositor::passes`]), so that they draw the same
+/// frames at about the same time. Each draws its share of the frames one render draws at once, and
+/// one at the least.
+fn render_composited_passes<F>(
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(Time, Time)>,
+    opts: &[RenderOptions],
+    cancellation: &CancellationToken,
+    mut on_progress: Option<F>,
+) -> Result<()>
+where
+    F: FnMut(f64),
+{
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
+    let options: Vec<ComposeOptions> = opts
+        .iter()
+        .map(|opts| compose_options(sequence, opts))
+        .collect();
+    let compositors = Compositor::passes(project, kerf_model::Catalog::builtin(), &options)?;
+    let drawers = RENDER_DRAWERS.div_ceil(opts.len());
+    // Stopped when the render is, or when one of the passes fails.
+    let together = CancellationToken::new();
+    let ended: Vec<Result<()>> = thread::scope(|scope| {
+        let (told, telling) = mpsc::channel::<(usize, f64)>();
+        let renders: Vec<_> = compositors
+            .iter()
+            .zip(opts)
+            .enumerate()
+            .map(|(index, (compositor, opts))| {
+                let (told, together) = (told.clone(), &together);
+                scope.spawn(move || {
+                    // A pass that fails, or panics, stops the others.
+                    let mut stops = Stops(together, true);
+                    let rendered = render_drawn(
+                        compositor,
+                        project,
+                        sequence,
+                        range,
+                        opts,
+                        drawers,
+                        together,
+                        Some(|done: f64| {
+                            // The one listening is gone only once every render has ended.
+                            let _ = told.send((index, done));
+                        }),
+                    );
+                    stops.1 = rendered.is_err();
+                    rendered
+                })
+            })
+            .collect();
+        drop(told);
+        let mut done = vec![0.0; opts.len()];
+        loop {
+            match telling.recv_timeout(CANCEL_FILE_POLL_INTERVAL) {
+                Ok((index, so_far)) => {
+                    done[index] = so_far;
+                    if let Some(callback) = on_progress.as_mut() {
+                        callback(done.iter().sum::<f64>() / done.len() as f64);
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if cancellation.is_cancelled() {
+                together.cancel();
+            }
+        }
+        let joined: Vec<_> = renders.into_iter().map(|render| render.join()).collect();
+        joined
+            .into_iter()
+            .map(|render| render.unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+            .collect()
+    });
+    if cancellation.is_cancelled() {
+        return Err(EngineError::Cancelled);
+    }
+    // What failed first stopped the others, which then say they were stopped.
+    let mut failed = ended.into_iter().filter_map(Result::err);
+    let first = failed.next();
+    match first {
+        Some(EngineError::Cancelled) => Err(failed.next().unwrap_or(EngineError::Cancelled)),
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// Cancels its token when dropped while it says to: a render of a pass that ended badly, or did
+/// not end, stopping those beside it.
+struct Stops<'a>(&'a CancellationToken, bool);
+
+impl Drop for Stops<'_> {
+    fn drop(&mut self) {
+        if self.1 {
+            self.0.cancel();
+        }
+    }
 }
 
 /// Render with the compositor drawing the picture.
@@ -1234,7 +1383,7 @@ fn render_composited<F>(
     range: Option<(Time, Time)>,
     opts: &RenderOptions,
     cancellation: &CancellationToken,
-    mut on_progress: Option<F>,
+    on_progress: Option<F>,
 ) -> Result<()>
 where
     F: FnMut(f64),
@@ -1245,28 +1394,43 @@ where
     let compositor = Compositor::new(
         project,
         kerf_model::Catalog::builtin(),
-        &ComposeOptions {
-            sequence: sequence.map(str::to_owned),
-            captions: true,
-            // Rendering again after a small edit draws only what it changed.
-            frame_folder: opts.frame_cache.folder(kerf_compose::default_frame_folder),
-            pass: opts.pass,
-            matte: opts.matte.clone(),
-            only_filmed: opts.only_filmed,
-            // A motion pass says how far things go from one frame of the file to the next.
-            rate: opts.rate,
-            // And is true of the file, whose shape may not be the sequence's.
-            shape: opts.size,
-            // A file of the pass is read a pixel at a time, each taken for one clip's.
-            hard_edges: true,
-            ..Default::default()
-        },
+        &compose_options(sequence, opts),
     )?;
+    render_drawn(
+        &compositor,
+        project,
+        sequence,
+        range,
+        opts,
+        RENDER_DRAWERS,
+        cancellation,
+        on_progress,
+    )
+}
+
+/// Render what `compositor` draws, `drawers` frames at once.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a render's own arguments, and what draws it and how many at once"
+)]
+fn render_drawn<F>(
+    compositor: &Compositor,
+    project: &kerf_model::Project,
+    sequence: Option<&str>,
+    range: Option<(Time, Time)>,
+    opts: &RenderOptions,
+    drawers: usize,
+    cancellation: &CancellationToken,
+    mut on_progress: Option<F>,
+) -> Result<()>
+where
+    F: FnMut(f64),
+{
     // HDR10 says how bright the picture is before its first frame, so the frames are measured first;
     // kept on disk, they are not drawn twice.
     let measured;
     let opts = if needs_measuring(project, sequence, opts) {
-        let light = measure_light(&compositor, project, sequence, range, opts, cancellation)?;
+        let light = measure_light(compositor, project, sequence, range, opts, cancellation)?;
         measured = RenderOptions {
             content_light: Some(light),
             ..opts.clone()
@@ -1275,14 +1439,17 @@ where
     } else {
         opts
     };
-    let render = composited_render(
-        project,
-        sequence,
-        range,
-        opts,
-        compositor.size(),
-        cancellation,
-    )?;
+    let render = CompositedRender {
+        drawers,
+        ..composited_render(
+            project,
+            sequence,
+            range,
+            opts,
+            compositor.size(),
+            cancellation,
+        )?
+    };
     let total = render.times.len();
     if let Some((sections, kept)) = render
         .sections
@@ -1295,7 +1462,7 @@ where
             }
         };
         match render_in_sections(
-            &compositor,
+            compositor,
             &render,
             sections,
             &kept,
@@ -1312,7 +1479,7 @@ where
     }
     let mut written = 0;
     let drawn = encode_frames(
-        &compositor,
+        compositor,
         &render,
         0..total,
         &render.args,
@@ -1359,7 +1526,7 @@ fn encode_frames(
     let first = frames.start;
     let result = draw_in_order(
         frames.len(),
-        RENDER_DRAWERS,
+        render.drawers,
         |index| {
             if render.frames.deep() {
                 compositor.frame16(render.times[first + index], render.scale)

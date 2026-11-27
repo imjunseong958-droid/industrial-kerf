@@ -127,6 +127,9 @@ impl Renames {
                     if let Some(followed) = &mut clip.follows {
                         rename(followed);
                     }
+                    if let Some(parent) = &mut clip.parent {
+                        rename(parent);
+                    }
                     match &mut clip.content {
                         Content::Media { media, .. } => rename(media),
                         Content::Sequence { sequence, .. } => rename(sequence),

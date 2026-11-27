@@ -940,3 +940,81 @@ fn what_a_motion_pass_says_of_a_pixel_is_where_its_clip_is_a_frame_on() {
         );
     }
 }
+
+/// Passes drawn together share what is the same in each: each clip's picture before a pass is made
+/// of it, and what the camera sees of it. Each is still what it is drawn alone, byte for byte, in a
+/// scene with what is shared and what is not: planes in depth that cross, a solid with a bevel that
+/// a light shades by the way it faces, a shape that reaches past its frame, a light with a shadow
+/// and a camera with an aperture, a clip with an effect, a masked clip dissolving into another, and
+/// a nested sequence.
+#[test]
+fn passes_drawn_together_are_each_as_drawn_alone() {
+    let body = concat!(
+        "  track V1 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set color=#88aaff\n",
+        "  track V2 video\n    clip floor gen=solid@1 at=0f dur=24f\n",
+        "      set color=#404040 three_d=true rotate_x=-80 y=0.4 z=1 scale=3\n",
+        "  track V3 video\n    clip box gen=shape@1 at=0f dur=24f\n",
+        "      set kind=rect width=0.3 height=0.3 fill=#c02020 three_d=true depth=0.2 bevel=0.03 x={0f:-0.3 23f:0.3} y=0.1 z=0.5 rotate_y={0f:0 23f:60}\n",
+        "  track V4 video\n    clip disc gen=shape@1 at=0f dur=24f\n",
+        "      set kind=ellipse width=0.5 height=0.3 fill=#20c020 three_d=true rotate_y=50 x=0.2\n",
+        "  track V5 video\n    clip graded gen=solid@1 at=0f dur=24f\n",
+        "      set scale=0.2 x=0.35 y=-0.3 three_d=true rotate_y=20\n      fx color.basic@1 exposure=1\n",
+        "  track V6 video\n    clip glow gen=solid@1 at=0f dur=12f\n",
+        "      set scale=0.3 x=-0.3 three_d=true z=0.2\n      mask k1 ellipse=0.5,0.5,0.4,0.4 feather=12\n",
+        "    clip spark gen=solid@1 at=12f dur=12f\n      set scale=0.2 x=-0.3 three_d=true\n",
+        "    transition t1 from=glow to=spark fx=dissolve@1 dur=8f\n",
+        "  track V7 video\n    clip shot seq=s2 src=0f at=0f dur=24f\n      set scale=0.4 x=-0.3 y=-0.3\n",
+        "  track V8 video\n    clip sun gen=light@1 at=0f dur=24f\n",
+        "      set kind=point x=0.2 y=-0.6 z=0.2 shadow=0.8 size=0.1\n",
+        "  track V9 video\n    clip cam gen=camera@1 at=0f dur=24f\n",
+        "      set pan={0f:0 23f:8} focus=0.5 aperture=0.02\n",
+        "sequence s2 rate=24 size=320x180 audio=48000\n",
+        "  track V1 video\n    clip inner gen=solid@1 at=0f dur=24f\n",
+        "      set color=#40c040 three_d=true scale=0.5 rotate_x=30\n",
+    );
+    let project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{body}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let options: Vec<ComposeOptions> = [
+        (Pass::Picture, false, None),
+        (Pass::Ids, false, None),
+        (Pass::Ids, true, None),
+        (Pass::Ids, true, Some("box")),
+        (Pass::Depth, false, None),
+        (Pass::Relative, false, None),
+        (Pass::Normals, false, None),
+        (Pass::Motion, false, None),
+    ]
+    .into_iter()
+    .map(|(pass, hard_edges, matte)| ComposeOptions {
+        pass,
+        hard_edges,
+        matte: matte.into_iter().map(str::to_owned).collect(),
+        rate: Some(Rate::new(12, 1).expect("a rate")),
+        ..ComposeOptions::default()
+    })
+    .collect();
+    let together =
+        Compositor::passes(&project, Catalog::builtin(), &options).expect("composes together");
+    let alone: Vec<Compositor> = options
+        .iter()
+        .map(|options| Compositor::new(&project, Catalog::builtin(), options).expect("composes"))
+        .collect();
+    // Before the dissolve, in it, and after.
+    for frame in [2, 10, 13, 20] {
+        let at = Rate::FPS_24.time_of(frame);
+        for ((together, alone), options) in together.iter().zip(&alone).zip(&options) {
+            let what = format!("{:?} {:?} at frame {frame}", options.pass, options.matte);
+            assert!(together.frame(at, 0.75) == alone.frame(at, 0.75), "{what}");
+            assert!(
+                together.frame16(at, 0.75) == alone.frame16(at, 0.75),
+                "{what}, deep"
+            );
+        }
+    }
+}

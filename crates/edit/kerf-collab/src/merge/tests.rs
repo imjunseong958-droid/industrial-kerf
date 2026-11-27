@@ -874,13 +874,14 @@ fn clips_each_side_had_follow_the_other_do_not_follow_each_other() {
 }
 
 #[test]
-fn a_title_following_a_clip_renamed_for_a_collision_follows_it_by_its_new_id() {
+fn a_title_on_a_clip_renamed_for_a_collision_names_it_by_its_new_id() {
     let shot = |media: &str, at: &str| {
         format!("dur=00:00:03:00\n    clip c3 media={media} src=00:02:00:00 at=01:00:{at}:00 dur=00:00:02:00\n")
     };
     let ours = edit(BASE, &[(C2_END, &shot("m1", "07"))]);
+    // It follows the shot, and moves with it.
     let title = |shot: &str| {
-        format!("  track V2 video\n    clip t1 media=m2 src=00:05:00:00 at={shot}.start dur=00:00:01:00\n  track A1 audio\n")
+        format!("  track V2 video\n    clip t1 media=m2 src=00:05:00:00 at={shot}.start dur=00:00:01:00 parent={shot}\n  track A1 audio\n")
     };
     let theirs = edit(
         BASE,

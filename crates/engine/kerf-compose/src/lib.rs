@@ -211,6 +211,47 @@ impl Compositor {
         })
     }
 
+    /// A compositor for each of `options`, each a pass of one sequence, that draw together what is
+    /// the same in every pass: each clip's picture before a pass is made of it, and what of it the
+    /// camera sees at each pixel, are drawn once a frame for all of them, and each makes its pass of
+    /// that. Each draws what [`Self::new`] with its options would, byte for byte.
+    ///
+    /// They are for drawing the same frames at about the same time, as renders of the passes side
+    /// by side do: one that asks for what another is drawing waits for it, and what is drawn is
+    /// kept until each has taken it, or a few hundred megabytes of it are. A clip with effects, or
+    /// that nests a sequence, is drawn by each, as its picture may be another in each pass.
+    ///
+    /// All of them are of the same sequence, and each draws only the clips a model films or each
+    /// draws them all.
+    pub fn passes(
+        project: &Project,
+        catalog: &Catalog,
+        options: &[ComposeOptions],
+    ) -> Result<Vec<Self>, ComposeError> {
+        let drawn = |options: &ComposeOptions| (options.sequence.clone(), options.only_filmed);
+        if let Some(first) = options.first()
+            && options.iter().any(|other| drawn(other) != drawn(first))
+        {
+            return Err(ComposeError::Invalid(
+                "the passes drawn together are of one sequence, drawn whole or of what a model films"
+                    .to_owned(),
+            ));
+        }
+        let mut compositors = Vec::with_capacity(options.len());
+        for together in options.chunks(draw::MOST_SHARING) {
+            let shared = (together.len() > 1)
+                .then(|| std::sync::Arc::new(draw::Shared::new(together.len())));
+            for (me, options) in together.iter().enumerate() {
+                let mut drawing = draw::Drawing::new(project, catalog, options)?;
+                if let Some(shared) = &shared {
+                    drawing.share_with(shared.clone(), me);
+                }
+                compositors.push(Self { drawing });
+            }
+        }
+        Ok(compositors)
+    }
+
     /// The color each clip that draws has in [`Pass::Ids`], as the bytes of a frame: the program's
     /// clips from its lowest track up, then those of the sequences it nests. Along an edge two
     /// clips share a pixel, which is then between their colors, unless the pass is drawn with
@@ -251,11 +292,18 @@ impl Compositor {
 
     /// Where the program's clip `clip` has its media's picture on the frame at sequence time
     /// `at`: the placing a frame is drawn by, its crop, fit, scale, turn, and move, its motion
-    /// path, and its parents', as [`Self::frame`] puts it down. It is refused, with why,
+    /// path, and its parents', as [`Self::frame`] puts it down. It is answered from the clip's
+    /// start to its end, and past them where a transition draws it. It is refused, with why,
     /// for a clip that does not show then, one that plays no footage, and one in depth, which
     /// a camera puts on the frame.
     pub fn lands(&self, clip: &str, at: Time) -> Result<Landing, String> {
         self.drawing.lands(clip, at)
+    }
+
+    /// The program's clips drawn at sequence time `at`, by their ids: on tracks that show,
+    /// and past their own ends where a transition draws them, as [`Self::frame`] draws them.
+    pub fn showing(&self, at: Time) -> Vec<String> {
+        self.drawing.showing(at)
     }
 
     /// The canvas, made even as a render makes it.
