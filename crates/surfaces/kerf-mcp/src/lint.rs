@@ -617,7 +617,7 @@ fn slivers(
             for (edge, frames, from, to) in [
                 (
                     "starts",
-                    rate.frames_round(played - clip.start),
+                    rate.frames_round(clip.time_at(played)),
                     clip.start,
                     played,
                 ),

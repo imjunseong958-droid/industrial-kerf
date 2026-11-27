@@ -513,7 +513,7 @@ pub fn showing(project: &Project, sequence: Option<&str>, at: Time) -> Result<Sh
         let opacity = clip
             .props
             .get("opacity")
-            .and_then(|opacity| opacity.value_at(at - clip.start).as_number())
+            .and_then(|opacity| opacity.value_at(clip.time_at(at)).as_number())
             .filter(|opacity| *opacity < 0.999);
         let mut edges = Vec::new();
         if let Some([left, top, right, bottom]) = alone.reach {

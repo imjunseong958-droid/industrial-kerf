@@ -137,7 +137,7 @@ impl Drawing {
         // FilmCraft's effects see no clip of their own here.
         let placed = Placed {
             sequence,
-            at: plan.clip.start + time,
+            at: plan.clip.sequence_time(time),
             scale,
             to_output: Affine::IDENTITY,
             per_source: scale,
@@ -252,7 +252,7 @@ impl ClipEnv<'_> {
     /// The clip's picture at sequence time `at`, as the effect gets it.
     pub(super) fn picture_at(&self, at: Time) -> Option<Image> {
         let placed = self.placed;
-        let time = at - self.plan.clip.start;
+        let time = self.plan.clip.time_at(at);
         let (cw, ch) = output_size(placed.sequence.width, placed.sequence.height, placed.scale);
         let input = self.drawing.input(
             placed.sequence,
@@ -284,7 +284,7 @@ impl EffectHost for ClipEnv<'_> {
             upto: before.min(self.upto),
             ..*self
         };
-        let mut picture = env.picture_at(self.plan.clip.start + at)?;
+        let mut picture = env.picture_at(self.plan.clip.sequence_time(at))?;
         if let Some((lift, by)) = self.lift {
             picture.lift_rgb(lift, by);
         }
@@ -335,17 +335,14 @@ impl EffectHost for ClipEnv<'_> {
     }
 
     fn source_timecode(&self) -> String {
-        let time = self.placed.at - self.plan.clip.start;
-        let source = match &self.plan.clip.content {
-            Content::Media {
-                source_in, speed, ..
-            }
-            | Content::Sequence {
-                source_in, speed, ..
-            } => *source_in + speed.played(time),
-            _ => time,
-        };
+        let (clip, at) = (&self.plan.clip, self.placed.at);
         let sequence = self.placed.sequence;
+        // Of the frame showing, counted at the sequence's rate as the timecode is: a reversed
+        // clip shows the one just before its source position.
+        let source = match clip.time_map() {
+            Some(map) => sequence.rate.time_of(map.frame(at, sequence.rate)),
+            None => clip.time_at(at),
+        };
         format_timecode(source, sequence.rate, sequence.drop_frame)
     }
 

@@ -182,3 +182,38 @@ fn a_sound_clip_draws_the_track_it_names() {
     let along = |x: u32| (f64::from(x) - 160.0 + 153.0) / 306.0;
     assert!(along(first) > 0.2 && along(last) < 0.4, "{columns:?}");
 }
+
+/// A media timecode burned into a clip is the timecode of the frame showing: on a clip played
+/// backwards it runs back with the picture.
+#[test]
+fn a_media_timecode_burned_into_a_reversed_clip_is_of_the_frame_showing() {
+    let dir = tempfile::tempdir().unwrap();
+    let burned = |clip: &str| {
+        compositor(
+            dir.path(),
+            &format!(
+                "  track V1 video\n    clip c1 media=m {clip}\n      \
+                 fx text.burnin source=media-timecode size=30\n"
+            ),
+        )
+    };
+    let forward = burned("src=0f at=0f dur=24f");
+    let reversed = burned("src=0f at=0f dur=24f speed=-1");
+    let at =
+        |compositor: &Compositor, frame: i64| compositor.frame(Rate::FPS_24.time_of(frame), 1.0);
+    // The pixels two frames differ in by more than the bars do from frame to frame.
+    let apart = |a: &Frame, b: &Frame| {
+        a.rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.rgba.as_chunks::<4>().0)
+            .filter(|(a, b)| (0..3).any(|channel| a[channel].abs_diff(b[channel]) > 48))
+            .count()
+    };
+    // Frame 18 of the reversed clip shows the media's frame 5, as frame 5 of the forward one
+    // does, and the bars are the same on every frame: only the digits tell them apart.
+    let shown = at(&reversed, 18);
+    assert_eq!(apart(&shown, &at(&forward, 5)), 0);
+    assert!(apart(&shown, &at(&forward, 18)) > 0);
+}

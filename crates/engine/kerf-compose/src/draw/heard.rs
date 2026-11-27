@@ -67,19 +67,13 @@ impl Drawing {
                 continue;
             };
             let length = sound.len() / 2;
-            let (from, duration) = (clip.start.seconds(), clip.duration.seconds());
+            let (from, duration) = (clip.map.start().seconds(), clip.map.duration().seconds());
             for (index, out) in mixed.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let offset = start + index as f64 / f64::from(rate.max(1)) - from;
                 if !(0.0..duration).contains(&offset) {
                     continue;
                 }
-                let played = clip.speed.played_seconds(offset);
-                let played = if clip.speed.is_reverse() {
-                    clip.speed.played_seconds(duration) - played
-                } else {
-                    played
-                };
-                let at = (clip.source_in.seconds() + played) * kept;
+                let at = clip.map.source_seconds(offset) * kept;
                 match at as usize {
                     _ if at < 0.0 => {}
                     sample if sample < length => {
@@ -106,7 +100,7 @@ impl Drawing {
         let mut image = Image::new(w, h);
         let rate = crate::sound::RATE;
         let frames = ((show.window * f64::from(rate)) as usize).clamp(16, 1 << 16);
-        let at = (plan.clip.start + run.at).seconds() - show.window / 2.0;
+        let at = plan.clip.sequence_time(run.at).seconds() - show.window / 2.0;
         let Some(stereo) = self.heard(sequence, &show.track, at, frames, rate) else {
             return image;
         };

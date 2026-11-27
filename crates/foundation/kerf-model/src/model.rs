@@ -9,6 +9,7 @@ use crate::catalog::{Catalog, Domain, ParamType};
 use crate::id::{Id, IdGen};
 use crate::speed::Speed;
 use crate::time::{Rate, Time};
+use crate::time_map::TimeMap;
 use crate::value::{Interp, Param, Value};
 use kerf_color::ColorSpace;
 use std::borrow::Cow;
@@ -554,45 +555,49 @@ impl Clip {
         }
     }
 
-    /// The source interval `[in, out)` for media and nested-sequence clips.
-    pub fn source_range(&self) -> Option<(Time, Time)> {
+    /// The clip's own time at `at` of its sequence, which its keyframes, masks and effects are
+    /// read at: how long after its first frame, and negative before it.
+    pub fn time_at(&self, at: Time) -> Time {
+        at - self.start
+    }
+
+    /// The time of its sequence at the clip's own time `time`: the inverse of
+    /// [`Clip::time_at`].
+    pub fn sequence_time(&self, time: Time) -> Time {
+        self.start + time
+    }
+
+    /// How the clip maps the time of its sequence onto its media or nested sequence. `None` for
+    /// generators and captions, which play no source.
+    pub fn time_map(&self) -> Option<TimeMap<'_>> {
         match &self.content {
             Content::Media {
                 source_in, speed, ..
             }
             | Content::Sequence {
                 source_in, speed, ..
-            } => Some((*source_in, *source_in + speed.played(self.duration))),
+            } => Some(TimeMap::new(self.start, self.duration, *source_in, speed)),
             Content::Generator { .. } | Content::Caption { .. } => None,
         }
+    }
+
+    /// The source interval `[in, out)` for media and nested-sequence clips.
+    pub fn source_range(&self) -> Option<(Time, Time)> {
+        Some(self.time_map()?.range())
     }
 
     /// Where on its sequence this clip plays `source`, a time on its media or
     /// nested sequence: past either edge, where it would play it. `None` for
     /// generators and captions.
     pub fn played_at(&self, source: Time) -> Option<Time> {
-        let (low, high) = self.source_range()?;
-        let speed = self.speed();
-        let offset = if speed.is_reverse() {
-            high - source
-        } else {
-            source - low
-        };
-        Some(self.start + speed.time_for(offset))
+        Some(self.time_map()?.played_at(source))
     }
 
     /// What this clip plays at `time` on its sequence, a time on its media
     /// or nested sequence: past either edge, what it would play. The
     /// inverse of [`Clip::played_at`].
     pub fn source_at(&self, time: Time) -> Option<Time> {
-        let (low, high) = self.source_range()?;
-        let speed = self.speed();
-        let span = speed.played(time - self.start);
-        Some(if speed.is_reverse() {
-            high - span
-        } else {
-            low + span
-        })
+        Some(self.time_map()?.source(time))
     }
 
     /// How long `handle` of unused source lasts before the clip's first frame, at the speed it

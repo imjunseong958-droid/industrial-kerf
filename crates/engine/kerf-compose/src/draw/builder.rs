@@ -98,22 +98,14 @@ impl<'a> Builder<'a> {
                 .iter()
                 .filter(|clip| clip.enabled)
                 .filter_map(|clip| {
-                    let Content::Media {
-                        media,
-                        source_in,
-                        speed,
-                    } = &clip.content
-                    else {
+                    let Content::Media { media, .. } = &clip.content else {
                         return None;
                     };
                     let media = self.project.media(media.as_str())?;
                     media.audio.as_ref()?;
                     Some(SoundClip {
                         path: media.path.clone(),
-                        start: clip.start,
-                        duration: clip.duration,
-                        source_in: *source_in,
-                        speed: speed.clone(),
+                        map: clip.time_map()?.into_owned(),
                     })
                 })
                 .collect(),
@@ -301,22 +293,15 @@ impl<'a> Builder<'a> {
         let canvas = canvas(sequence);
         let mut name = clip.name.clone().unwrap_or_else(|| clip.id.to_string());
         let (source, size, fit, alpha) = match &clip.content {
-            Content::Media {
-                media,
-                source_in,
-                speed,
-            } => {
-                let Some(sourced) = self.media_source(clip, media, *source_in, speed, &mut name)?
-                else {
+            Content::Media { media, .. } => {
+                let Some(sourced) = self.media_source(clip, media, &mut name)? else {
                     return Ok(None);
                 };
                 sourced
             }
             Content::Sequence {
-                sequence: nested,
-                source_in,
-                speed,
-            } => self.nested_source(clip, nested, *source_in, speed, &mut name)?,
+                sequence: nested, ..
+            } => self.nested_source(clip, nested, &mut name)?,
             Content::Generator { fx, params, .. } => {
                 self.generator_source(clip, fx.as_str(), params, canvas)?
             }
@@ -391,8 +376,6 @@ impl<'a> Builder<'a> {
         &mut self,
         clip: &Clip,
         media: &Id,
-        source_in: Time,
-        speed: &Speed,
         name: &mut String,
     ) -> Result<Option<Sourced>> {
         let media = self.project.media(media.as_str()).ok_or_else(|| {
@@ -417,9 +400,7 @@ impl<'a> Builder<'a> {
                 .is_deep()
                 .then(|| crate::footage::input_transform(video.color, self.hdr)),
             retime: clip.retime,
-            source_in,
-            speed: speed.clone(),
-            duration: clip.duration,
+            map: own_time_map(clip),
         });
         Ok(Some((
             Source::Media {
@@ -434,14 +415,7 @@ impl<'a> Builder<'a> {
     /// What a clip holding sequence `nested` draws from: that sequence, planned once however many
     /// clips hold it, and refused nested too deep or in itself. `name` becomes the sequence's, for
     /// a clip without a name of its own.
-    fn nested_source(
-        &mut self,
-        clip: &Clip,
-        nested: &Id,
-        source_in: Time,
-        speed: &Speed,
-        name: &mut String,
-    ) -> Result<Sourced> {
+    fn nested_source(&mut self, clip: &Clip, nested: &Id, name: &mut String) -> Result<Sourced> {
         if self.nesting.len() >= MAX_NESTING || self.nesting.contains(nested) {
             return Err(unsupported(&clip.id, "sequences nested this deep"));
         }
@@ -470,9 +444,7 @@ impl<'a> Builder<'a> {
         Ok((
             Source::Nested {
                 sequence: index,
-                source_in,
-                speed: speed.clone(),
-                duration: clip.duration,
+                map: own_time_map(clip),
                 angle: clip.angle.clone(),
             },
             kerf_core::program::canvas(inner),
@@ -653,6 +625,15 @@ impl<'a> Builder<'a> {
 }
 
 /// The captions of subtitle track `track` that say something, onto `captions`.
+/// How the own time of `clip`, one of media or of a nested sequence, maps onto its source: its
+/// time map as of a clip starting at zero.
+fn own_time_map(clip: &Clip) -> TimeMap<'static> {
+    clip.time_map()
+        .expect("a clip of media or of a nested sequence plays a source")
+        .starting(Time::ZERO)
+        .into_owned()
+}
+
 fn push_captions(track: &Track, captions: &mut Vec<CaptionPlan>) {
     for clip in track.clips.iter().filter(|clip| clip.enabled) {
         if let Content::Caption { text } = &clip.content

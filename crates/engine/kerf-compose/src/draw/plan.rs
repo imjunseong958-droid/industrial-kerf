@@ -34,10 +34,8 @@ pub(super) struct SoundPlan {
 /// A media clip's sound on a sound track.
 pub(super) struct SoundClip {
     pub(super) path: String,
-    pub(super) start: Time,
-    pub(super) duration: Time,
-    pub(super) source_in: Time,
-    pub(super) speed: Speed,
+    /// How its sequence's time maps onto the media's.
+    pub(super) map: TimeMap<'static>,
 }
 
 pub(super) struct CaptionPlan {
@@ -130,7 +128,7 @@ impl SequencePlan {
     pub(super) fn moved_by_parents(&self, clip: &Clip, at: Time) -> Affine {
         let canvas = (f64::from(self.width), f64::from(self.height));
         self.parents_of(clip).fold(Affine::IDENTITY, |moved, rig| {
-            parent_motion(rig, canvas, at - rig.clip.start).then_apply(&moved)
+            parent_motion(rig, canvas, rig.clip.time_at(at)).then_apply(&moved)
         })
     }
 
@@ -139,7 +137,7 @@ impl SequencePlan {
     /// the document says it, and not on the whole pixels a clip that holds still is drawn on.
     pub(super) fn middle_of(&self, rig: &Rig, at: Time) -> Vec2 {
         let canvas = (f64::from(self.width), f64::from(self.height));
-        let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), at - rig.clip.start);
+        let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), rig.clip.time_at(at));
         let own = placed(rig.size, rig.fit, false, canvas, numbers).0;
         let middle = Vec2::new(f64::from(rig.size.0) / 2.0, f64::from(rig.size.1) / 2.0);
         self.moved_by_parents(&rig.clip, at)
@@ -190,9 +188,8 @@ pub(super) enum Source {
     },
     Nested {
         sequence: usize,
-        source_in: Time,
-        speed: Speed,
-        duration: Time,
+        /// How the clip's own time maps onto the nested sequence's.
+        map: TimeMap<'static>,
         /// The one track of it to show.
         angle: Option<Id>,
     },

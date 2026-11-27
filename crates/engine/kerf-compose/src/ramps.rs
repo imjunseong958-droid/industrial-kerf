@@ -100,7 +100,8 @@ fn sound_of(
     nested: &mut impl FnMut(&Id, Time, Time) -> Option<Read>,
 ) -> Option<(String, Time)> {
     let speed = clip.speed();
-    let (source_in, _) = clip.source_range()?;
+    let map = clip.time_map()?;
+    let (source_in, _) = map.range();
     let span = pre + clip.duration + post;
     let frames = usize::try_from(span.flicks() / (FLICKS_PER_SECOND / i64::from(RATE))).ok()?;
     let length = Time::from_flicks(frames as i64 * (FLICKS_PER_SECOND / i64::from(RATE)));
@@ -123,13 +124,7 @@ fn sound_of(
     std::fs::create_dir_all(&folder).ok()?;
     let path = folder.join(format!("{:016x}.wav", hash.finish()));
     if !path.is_file() {
-        let (from, to) = (speed.played(-pre), speed.played(clip.duration + post));
-        let (low, high) = if speed.is_reverse() {
-            let out = source_in + speed.played(clip.duration);
-            (out - to, out - from)
-        } else {
-            (source_in + from, source_in + to)
-        };
+        let (low, high) = map.window(clip.start - pre, clip.end() + post);
         let (read, first) = match &clip.content {
             Content::Media { media, .. } => (sounds.of(&project.media(media.as_str())?.path)?, 0),
             Content::Sequence { sequence, .. } => nested(sequence, low, high)?,

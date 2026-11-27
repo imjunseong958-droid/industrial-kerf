@@ -150,7 +150,7 @@ impl Drawing {
         scene: Option<&three_d::Scene>,
     ) -> Option<Ready> {
         let plan = &shown.plan;
-        let reach = self.reach(sequence, plan, at - plan.clip.start, scale, scene);
+        let reach = self.reach(sequence, plan, plan.clip.time_at(at), scale, scene);
         let before = || self.before_pass(sequence, shown, (at, scale), size, reach);
         let mut ready = match self.share_of(sequence, shown, (at, scale), size, reach) {
             Some(share) => self.shared_ready(share, || {
@@ -179,7 +179,7 @@ impl Drawing {
     ) -> Option<Ready> {
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = at - clip.start;
+        let time = clip.time_at(at);
         let Input {
             mut picture,
             mut to_output,
@@ -337,13 +337,11 @@ impl Drawing {
             }
             Source::Nested {
                 sequence: nested,
-                source_in,
-                speed,
-                duration,
+                map,
                 angle,
             } => {
                 let inner = &self.sequences[*nested];
-                let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+                let shown = map.nested(time, inner.rate);
                 let image = self.draw_of(*nested, shown, scale, angle.as_ref());
                 let per_source = image.w as f64 / f64::from(inner.width);
                 (Arc::new(image), per_source)

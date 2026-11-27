@@ -67,7 +67,7 @@ impl Signal {
                 if !on || time < clip.start || time >= clip.end() {
                     return 0.0;
                 }
-                let read = match value.map(|value| value.value_at(time - clip.start)) {
+                let read = match value.map(|value| value.value_at(clip.time_at(time))) {
                     Some(Value::Number(number)) if number.is_finite() => number,
                     _ => 0.0,
                 };

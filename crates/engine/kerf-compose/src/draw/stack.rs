@@ -99,9 +99,9 @@ impl Drawing {
                 let place = Affine::scale(scale, scale).then_apply(&self.geometry(
                     plan,
                     clip,
-                    at - clip.clip.start,
+                    clip.clip.time_at(at),
                 ));
-                scene.depth(clip, &place, at - clip.clip.start)
+                scene.depth(clip, &place, clip.clip.time_at(at))
             })
         };
         let mut start = 0;
@@ -183,7 +183,7 @@ impl Drawing {
             })
             .filter_map(|shown| {
                 let ready = self.ready(plan, shown, at, scale, size, Some(scene))?;
-                let time = at - shown.plan.clip.start;
+                let time = shown.plan.clip.time_at(at);
                 let caster = three_d::Caster::new(
                     scene,
                     &shown.plan,
@@ -216,7 +216,7 @@ impl Drawing {
             .flat_map(|track| &track.shown)
             .filter(|shown| shown.shows(at) && matches!(shown.plan.source, Source::Mesh))
             .filter_map(|shown| {
-                let time = at - shown.plan.clip.start;
+                let time = shown.plan.clip.time_at(at);
                 let opacity = number(&param(&shown.plan.clip, "opacity").value_at(time)) as f32;
                 (opacity > 0.0).then(|| {
                     let to_output = Affine::scale(scale, scale).then_apply(&self.geometry(
@@ -288,7 +288,7 @@ impl Drawing {
         scale: f64,
         scene: &three_d::Scene,
     ) -> (three_d::Plane, Rect) {
-        let time = at - clip.clip.start;
+        let time = clip.clip.time_at(at);
         let place = Affine::scale(scale, scale).then_apply(&self.geometry(plan, clip, time));
         let (w, h) = (f64::from(clip.size.0), f64::from(clip.size.1));
         let frame = Rect::new(0.0, 0.0, w, h);
@@ -359,7 +359,7 @@ impl Drawing {
             &shown.plan,
             &ready.picture,
             (&ready.to_output, ready.crop),
-            at - shown.plan.clip.start,
+            shown.plan.clip.time_at(at),
             size,
             self.shared_by(ready.share),
         );
@@ -545,7 +545,7 @@ impl Drawing {
         } = *moment;
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = at - clip.start;
+        let time = clip.time_at(at);
         if matches!(plan.source, Source::Nothing) {
             return;
         }
@@ -623,7 +623,7 @@ impl Drawing {
         let scene = scene?;
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = at - clip.start;
+        let time = clip.time_at(at);
         // Its picture is the one the camera sees of it, on the canvas: that is what a wipe
         // crosses, a mask cuts, and an effect is done to.
         let reveal = shown

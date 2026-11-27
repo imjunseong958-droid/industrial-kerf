@@ -293,7 +293,7 @@ impl Drawing {
             ));
             return;
         }
-        let time = at - plan.clip.start;
+        let time = plan.clip.time_at(at);
         let reach = self.gpu_reach(sequence, plan, at, scale);
         let shape = self.gpu_shape(sequence, plan, time, scale, reach);
         if !gpu.fits(shape.source.0, shape.source.1) {
@@ -419,16 +419,14 @@ impl Drawing {
     fn nests_filmed(&self, plan: &ClipPlan, time: Time) -> bool {
         let Source::Nested {
             sequence,
-            source_in,
-            speed,
-            duration,
+            map,
             angle,
         } = &plan.source
         else {
             return false;
         };
         let inner = &self.sequences[*sequence];
-        let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+        let shown = map.nested(time, inner.rate);
         inner
             .tracks
             .iter()
@@ -437,7 +435,7 @@ impl Drawing {
             .any(|clip| {
                 clip.shows(shown)
                     && (clip.plan.filmed
-                        || self.nests_filmed(&clip.plan, shown - clip.plan.clip.start))
+                        || self.nests_filmed(&clip.plan, clip.plan.clip.time_at(shown)))
             })
     }
 
@@ -462,17 +460,15 @@ impl Drawing {
             let scene = three_d::Scene::at(sequence, at, size);
             return !scene.casts_shadows() && scene.environments().is_empty();
         }
-        let time = at - plan.clip.start;
+        let time = plan.clip.time_at(at);
         if let Source::Nested {
             sequence: nested,
-            source_in,
-            speed,
-            duration,
+            map,
             angle,
         } = &plan.source
         {
             let inner = &self.sequences[*nested];
-            let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+            let shown = map.nested(time, inner.rate);
             if self.nests_filmed(plan, time)
                 || !self.gpu_can_draw_of(gpu, *nested, shown, scale, angle.as_ref())
             {
@@ -505,7 +501,7 @@ impl Drawing {
         }
         let size = output_size(sequence.width, sequence.height, scale);
         let scene = three_d::Scene::at(sequence, at, size);
-        self.reach(sequence, plan, at - plan.clip.start, scale, Some(&scene))
+        self.reach(sequence, plan, plan.clip.time_at(at), scale, Some(&scene))
     }
 
     /// The numbers [`Drawing::input`] works out for a clip's picture, a generator's reaching as far
@@ -836,7 +832,7 @@ impl Drawing {
     ) -> Option<GpuPicture> {
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = at - clip.start;
+        let time = clip.time_at(at);
         if matches!(plan.source, Source::Nothing) {
             return Some(canvas);
         }
@@ -962,7 +958,7 @@ impl Drawing {
                 else {
                     continue;
                 };
-                let time = at - shown.plan.clip.start;
+                let time = shown.plan.clip.time_at(at);
                 let (pw, ph) = (f64::from(one.picture.w), f64::from(one.picture.h));
                 let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &one.to_output, time);
                 let height = size.1 as f64;
@@ -1193,7 +1189,7 @@ impl Drawing {
                 continue;
             };
             let depths = layers.next_depths();
-            let time = at - shown.plan.clip.start;
+            let time = shown.plan.clip.time_at(at);
             let drawn = self.gpu_project(
                 frame,
                 depth,
@@ -1223,7 +1219,7 @@ impl Drawing {
     ) -> Option<Option<GpuReady>> {
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = at - clip.start;
+        let time = clip.time_at(at);
         let reach = self.reach(sequence, plan, time, scale, scene);
         let shape = self.gpu_shape(sequence, plan, time, scale, reach);
         let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
@@ -1440,13 +1436,11 @@ impl Drawing {
             }
             Source::Nested {
                 sequence: nested,
-                source_in,
-                speed,
-                duration,
+                map,
                 angle,
             } => {
                 let inner = &self.sequences[*nested];
-                let shown = nested_time(time, *source_in, speed, *duration, inner.rate);
+                let shown = map.nested(time, inner.rate);
                 self.gpu_draw(frame, *nested, shown, scale, angle.as_ref())?
             }
             Source::Solid(color) => frame.filled(cw as u32, ch as u32, premultiplied(*color)),

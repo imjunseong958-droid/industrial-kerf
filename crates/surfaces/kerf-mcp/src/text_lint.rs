@@ -115,7 +115,7 @@ impl Shown<'_> {
     fn bounds(&self, sequence: &Sequence, at: Time) -> Option<[f64; 4]> {
         match self.kind {
             Kind::Caption => caption_box(sequence, self.text),
-            Kind::Title => title_box(sequence, self.clip, at - self.clip.start),
+            Kind::Title => title_box(sequence, self.clip, self.clip.time_at(at)),
         }
     }
 }
@@ -549,12 +549,12 @@ fn steady_moments(clip: &Clip) -> Vec<Time> {
         let opacity = clip
             .props
             .get("opacity")
-            .and_then(|param| param.value_at(moment - clip.start).as_number())
+            .and_then(|param| param.value_at(clip.time_at(moment)).as_number())
             .unwrap_or(1.0);
         let reveal = match &clip.content {
             Content::Generator { params, .. } => params
                 .get("reveal")
-                .and_then(|param| param.value_at(moment - clip.start).as_number())
+                .and_then(|param| param.value_at(clip.time_at(moment)).as_number())
                 .unwrap_or(1.0),
             _ => 1.0,
         };
@@ -716,7 +716,7 @@ fn furthest_past(
     };
     // On the frames the clip has, which what keys it goes by.
     let frame = sequence.rate.frame_duration().flicks().max(1);
-    let into = (from - item.clip.start).flicks() / frame + 1;
+    let into = item.clip.time_at(from).flicks() / frame + 1;
     let first = item.clip.start + Time::from_flicks(frame * into);
     samples(sequence, &[item], first, to)
         .into_iter()

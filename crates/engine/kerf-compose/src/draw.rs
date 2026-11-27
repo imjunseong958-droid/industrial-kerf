@@ -3,7 +3,7 @@
 //!
 //! - Picture tracks stack in sequence order, and captions play over them
 //!   all. A nested sequence is drawn at its own canvas and frame rate, at
-//!   the time its clip maps to.
+//!   the time its clip maps to (`kerf_model::TimeMap::nested`).
 //! - A clip's picture is fitted to the canvas as the graph fits it, its
 //!   masks and crop cut it, its effects run on it, and it is scaled,
 //!   flipped, rotated about its anchor, and moved onto the canvas with its
@@ -36,7 +36,7 @@ use kerf_fx::video::{self, catalog::Headroom};
 use kerf_model::time::format_timecode;
 use kerf_model::{
     Catalog, Clip, Content, Domain, Effect, FxDef, Id, Media, MotionPath, Param, ParamType, Params,
-    Project, Rate, Rgba, Sequence, Speed, Time, Track, TrackKind, Value,
+    Project, Rate, Rgba, Sequence, Time, TimeMap, Track, TrackKind, Value,
 };
 use rayon::prelude::*;
 use std::collections::hash_map::DefaultHasher;
@@ -246,7 +246,7 @@ impl Drawing {
         match self.pass {
             Pass::Picture => {}
             Pass::Motion => {
-                let time = at - plan.clip.start;
+                let time = plan.clip.time_at(at);
                 let placed = |time: Time| {
                     Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time))
                 };
@@ -282,12 +282,12 @@ impl Drawing {
             }
             Pass::Depth | Pass::Relative if plan.three_d => {
                 let scene = three_d::Scene::at(sequence, at, size);
-                three_d::shade_by_depth(&scene, plan, picture, to_output, at - plan.clip.start);
+                three_d::shade_by_depth(&scene, plan, picture, to_output, plan.clip.time_at(at));
             }
             Pass::Depth | Pass::Relative => flat(picture, [0.0; 3]),
             Pass::Normals if plan.three_d => {
                 let scene = three_d::Scene::at(sequence, at, size);
-                three_d::shade_by_facing(&scene, plan, picture, to_output, at - plan.clip.start);
+                three_d::shade_by_facing(&scene, plan, picture, to_output, plan.clip.time_at(at));
             }
             Pass::Normals => flat(picture, [0.0; 3]),
         }
@@ -334,7 +334,7 @@ impl Drawing {
     /// See [`Compositor::mesh_camera`](crate::Compositor::mesh_camera).
     pub fn mesh_camera(&self, id: &str, camera: usize, at: Time) -> Option<crate::CameraPlace> {
         let (sequence, plan) = self.mesh_plan(id)?;
-        let time = at - plan.clip.start;
+        let time = plan.clip.time_at(at);
         if time.is_negative() || time >= plan.clip.duration {
             return None;
         }
@@ -352,7 +352,7 @@ impl Drawing {
         at: Time,
     ) -> Option<crate::CameraPlace> {
         let (sequence, plan) = self.mesh_plan(id)?;
-        let time = at - plan.clip.start;
+        let time = plan.clip.time_at(at);
         if time.is_negative() || time >= plan.clip.duration {
             return None;
         }
@@ -374,7 +374,7 @@ impl Drawing {
         for track in sequence.tracks.iter().filter(|track| track.shows) {
             for shown in track.shown.iter().filter(|shown| shown.shows(at)) {
                 let plan = &shown.plan;
-                let time = at - plan.clip.start;
+                let time = plan.clip.time_at(at);
                 let opacity = number(&param(&plan.clip, "opacity").value_at(time));
                 if matches!(plan.source, Source::Nothing | Source::Adjustment) || opacity <= 0.0 {
                     continue;
@@ -432,7 +432,7 @@ impl Drawing {
             .find(|shown| shown.plan.clip.id.as_str() == id)
             .ok_or("it is no clip of this sequence that draws")?;
         let plan = &shown.plan;
-        let time = at - plan.clip.start;
+        let time = plan.clip.time_at(at);
         // Past its ends, where a transition draws it, it is placed as it is drawn then.
         let within = !time.is_negative() && time < plan.clip.duration;
         if !within && !shown.shows(at) {
@@ -507,22 +507,6 @@ fn held_in_depth(plan: &ClipPlan, time: Time) -> Option<Option<(Rect, bool)>> {
         }
         _ => None,
     }
-}
-
-/// The time a nested sequence shows at its clip's time `time`: on its own
-/// frames, the frame showing at the source position, which a reversed clip
-/// runs back from its source out.
-fn nested_time(time: Time, source_in: Time, speed: &Speed, duration: Time, rate: Rate) -> Time {
-    let span = speed.played(time.max(Time::ZERO)).flicks();
-    let frame = rate.frame_duration().flicks().max(1);
-    let index = if speed.is_reverse() {
-        // The frame showing just before the source position.
-        let position = (source_in + speed.played(duration)).flicks() - span;
-        -(-position).div_euclid(frame) - 1
-    } else {
-        (source_in.flicks() + span).div_euclid(frame)
-    };
-    rate.time_of(index.max(0))
 }
 
 /// A clip property, or its catalog default.

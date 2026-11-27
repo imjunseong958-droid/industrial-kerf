@@ -872,7 +872,7 @@ fn set_down(
     }
     let own = clip.props.get("y");
     let now = |frame: i64| {
-        own.and_then(|own| own.value_at(rate.time_of(frame) - clip.start).as_number())
+        own.and_then(|own| own.value_at(clip.time_at(rate.time_of(frame))).as_number())
             .unwrap_or(0.0)
     };
     // Where its own `y` would be for it to rest, on each frame something is under it

@@ -227,7 +227,7 @@ fn shown_most(clip: &Clip, rate: kerf_model::Rate) -> Time {
     let read: Vec<(i64, f64)> = (first..last)
         .step_by(step)
         .chain([middle])
-        .map(|frame| (frame, shows(clip, rate.time_of(frame) - clip.start)))
+        .map(|frame| (frame, shows(clip, clip.time_at(rate.time_of(frame)))))
         .collect();
     let most = read.iter().map(|(_, shows)| *shows).fold(0.0, f64::max);
     let frame = read
