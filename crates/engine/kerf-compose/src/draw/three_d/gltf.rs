@@ -15,14 +15,13 @@
 
 use std::path::Path;
 
+use kerf_draw::Affine3;
 use serde::Deserialize;
 use serde_json::Value as Json;
 
 use super::texture::{Texture, Wrap};
 
 type Vector = [f64; 3];
-/// A node's place: rows of three across and what it is moved by.
-type Matrix = [[f64; 4]; 3];
 
 /// A file's triangles, in Kerf's axes and the file's own units.
 pub(super) struct Read {
@@ -124,8 +123,7 @@ impl Read {
             animation.and_then(|(which, seconds)| Some((self.animations.get(which)?, seconds)));
         let place = *self.rig.places(animation).get(camera.node)?;
         // A node's size is not its camera's: only where its axes point.
-        let axis = |column: usize, sign: f64| {
-            let way = [0, 1, 2].map(|row| place[row][column]);
+        let axis = |way: Vector, sign: f64| {
             let length = (way[0] * way[0] + way[1] * way[1] + way[2] * way[2])
                 .sqrt()
                 .max(1e-300);
@@ -136,9 +134,9 @@ impl Read {
             ]
         };
         Some(Seen {
-            eye: [place[0][3], -place[1][3], -place[2][3]],
-            right: axis(0, 1.0),
-            forward: axis(2, -1.0),
+            eye: [place.t[0], -place.t[1], -place.t[2]],
+            right: axis(place.x, 1.0),
+            forward: axis(place.z, -1.0),
         })
     }
 
@@ -154,14 +152,14 @@ impl Read {
         for run in &rig.runs {
             let whole = Placed::by(places[run.node]);
             // A bone moves a corner from where the bone was when the mesh was bound to it.
-            let bones: Option<Vec<Matrix>> = run.skin.map(|skin| {
+            let bones: Option<Vec<Affine3>> = run.skin.map(|skin| {
                 let skin = &rig.skins[skin];
                 skin.joints
                     .iter()
                     .zip(&skin.inverse)
                     .map(|(joint, inverse)| match places.get(*joint) {
                         Some(place) => then(place, inverse),
-                        None => IDENTITY,
+                        None => Affine3::IDENTITY,
                     })
                     .collect()
             });
@@ -176,7 +174,7 @@ impl Read {
                 let placed = match &bones {
                     Some(bones) => {
                         let (joints, weights) = rig.bones[corner];
-                        let mut sum = [[0.0; 4]; 3];
+                        let mut sum = [[0.0; 3]; 4];
                         let mut all = 0.0;
                         for (joint, weight) in joints.iter().zip(weights) {
                             let Some(bone) = bones.get(*joint as usize) else {
@@ -184,10 +182,13 @@ impl Read {
                             };
                             let weight = f64::from(weight);
                             all += weight;
+                            let bone = [bone.x, bone.y, bone.z, bone.t];
                             for (sum, bone) in sum.iter_mut().flatten().zip(bone.iter().flatten()) {
                                 *sum += bone * weight;
                             }
                         }
+                        let [x, y, z, t] = sum;
+                        let sum = Affine3 { x, y, z, t };
                         if all > 1e-9 {
                             Placed::by(sum)
                         } else {
@@ -399,7 +400,7 @@ impl Told {
         }
     }
 
-    fn place(&self) -> Matrix {
+    fn place(&self) -> Affine3 {
         let (t, s) = (self.moved, self.sized);
         let length = self
             .turned
@@ -426,14 +427,13 @@ impl Told {
                 1.0 - 2.0 * (x * x + y * y),
             ],
         ];
-        [0, 1, 2].map(|row| {
-            [
-                turn[row][0] * s[0],
-                turn[row][1] * s[1],
-                turn[row][2] * s[2],
-                t[row],
-            ]
-        })
+        let axis = |column: usize| [0, 1, 2].map(|row| turn[row][column] * s[column]);
+        Affine3 {
+            x: axis(0),
+            y: axis(1),
+            z: axis(2),
+            t,
+        }
     }
 }
 
@@ -441,7 +441,7 @@ struct Node {
     /// The node it is under.
     parent: Option<usize>,
     /// Its place where the file gives it whole, which no animation moves.
-    matrix: Option<Matrix>,
+    matrix: Option<Affine3>,
     told: Told,
 }
 
@@ -469,7 +469,7 @@ struct Skin {
     /// The nodes that are its bones.
     joints: Vec<usize>,
     /// For each bone, the way back from where the mesh was bound to it.
-    inverse: Vec<Matrix>,
+    inverse: Vec<Affine3>,
 }
 
 /// What places a file's corners: its nodes, and the corners as their meshes have them.
@@ -487,7 +487,7 @@ struct Rig {
 
 impl Rig {
     /// Where each node is in the file's world: at rest, or with an animation some seconds in.
-    fn places(&self, animation: Option<(&Animation, f64)>) -> Vec<Matrix> {
+    fn places(&self, animation: Option<(&Animation, f64)>) -> Vec<Affine3> {
         let mut told: Vec<Told> = self.nodes.iter().map(|node| node.told).collect();
         let mut moved = vec![false; told.len()];
         if let Some((animation, seconds)) = animation {
@@ -502,7 +502,7 @@ impl Rig {
                 }
             }
         }
-        let mut places = vec![IDENTITY; told.len()];
+        let mut places = vec![Affine3::IDENTITY; told.len()];
         for index in &self.order {
             let node = &self.nodes[*index];
             let own = match node.matrix {
@@ -521,18 +521,19 @@ impl Rig {
 /// What moves a corner into the file's world, and from there into Kerf's axes: y down, z away.
 #[derive(Clone, Copy)]
 struct Placed {
-    place: Matrix,
+    place: Affine3,
     /// What turns the way a side faces: the cofactors of what moved it, which is its inverse
     /// turned over, but for its size.
     turn: [[f64; 3]; 3],
 }
 
 impl Placed {
-    fn by(place: Matrix) -> Self {
+    fn by(place: Affine3) -> Self {
+        let axes = [place.x, place.y, place.z];
         let cofactor = |row: usize, column: usize| {
             let (r1, r2) = ((row + 1) % 3, (row + 2) % 3);
             let (c1, c2) = ((column + 1) % 3, (column + 2) % 3);
-            place[r1][c1] * place[r2][c2] - place[r1][c2] * place[r2][c1]
+            axes[c1][r1] * axes[c2][r2] - axes[c2][r1] * axes[c1][r2]
         };
         Self {
             place,
@@ -541,12 +542,7 @@ impl Placed {
     }
 
     fn point(&self, point: Vector) -> Vector {
-        let at = [0, 1, 2].map(|row| {
-            self.place[row][0] * point[0]
-                + self.place[row][1] * point[1]
-                + self.place[row][2] * point[2]
-                + self.place[row][3]
-        });
+        let at = self.place.apply(point);
         [at[0], -at[1], -at[2]]
     }
 
@@ -575,30 +571,30 @@ pub(super) struct Part {
     pub colored: bool,
 }
 
-const IDENTITY: Matrix = [
-    [1.0, 0.0, 0.0, 0.0],
-    [0.0, 1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0, 0.0],
-];
-
-fn then(outer: &Matrix, inner: &Matrix) -> Matrix {
-    let mut out = [[0.0; 4]; 3];
-    for (row, out) in out.iter_mut().enumerate() {
-        for (column, out) in out.iter_mut().enumerate() {
-            *out = (0..3)
-                .map(|k| outer[row][k] * inner[k][column])
-                .sum::<f64>()
-                + if column == 3 { outer[row][3] } else { 0.0 };
-        }
+/// `inner`, and then `outer`.
+fn then(outer: &Affine3, inner: &Affine3) -> Affine3 {
+    let both = outer.then_apply(inner);
+    // Where an axis comes to nothing it is 0.0 and never -0.0, as it has been since it was
+    // summed here. The sign of such a zero is read where a file's camera is placed, as a pan of
+    // 180 degrees one way or the other.
+    let plain = |axis: Vector| axis.map(|along| along + 0.0);
+    Affine3 {
+        x: plain(both.x),
+        y: plain(both.y),
+        z: plain(both.z),
+        t: both.t,
     }
-    out
 }
 
-/// A node's place where the file gives it whole.
-fn matrix_of(node: &json::Node) -> Option<Matrix> {
-    let m = node.matrix?;
-    // Written a column at a time.
-    Some([0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row])))
+/// A place written whole, a column at a time: sixteen numbers, the last of each column left out.
+fn whole(m: &[f64; 16]) -> Affine3 {
+    let column = |column: usize| [0, 1, 2].map(|row| m[column * 4 + row]);
+    Affine3 {
+        x: column(0),
+        y: column(1),
+        z: column(2),
+        t: column(3),
+    }
 }
 
 fn decoded(base64: &str) -> Option<Vec<u8>> {
@@ -1107,13 +1103,13 @@ impl File<'_> {
         for skin in &self.json.skins {
             let joints: Vec<usize> = skin.joints.iter().flatten().copied().collect();
             let inverse = match skin.inverse_bind_matrices {
-                None => vec![IDENTITY; joints.len()],
+                None => vec![Affine3::IDENTITY; joints.len()],
                 Some(told) => self
                     .numbers(told, 16)?
                     .as_chunks::<16>()
                     .0
                     .iter()
-                    .map(|m| [0, 1, 2].map(|row| [0, 1, 2, 3].map(|column| m[column * 4 + row])))
+                    .map(whole)
                     .collect(),
             };
             if inverse.len() != joints.len() {
@@ -1225,7 +1221,7 @@ pub(super) fn read(path: &Path) -> Result<Read, String> {
         .iter()
         .map(|node| Node {
             parent: None,
-            matrix: matrix_of(node),
+            matrix: node.matrix.as_ref().map(whole),
             told: Told::of(node),
         })
         .collect();

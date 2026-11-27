@@ -1,6 +1,7 @@
 //! 2D geometry for Kerf's renderer and effects: vectors, rectangles, affine
 //! transforms (FilmCraft's Motion math), and 3×3 projective matrices with
-//! the bounds they map (EffectCraft's warps).
+//! the bounds they map (EffectCraft's warps). And the affine transform of
+//! space that places what is in depth, of which the 2D one is the flat case.
 //!
 //! y grows downwards and angles are degrees clockwise on screen.
 
@@ -215,6 +216,113 @@ impl Affine {
             .then_apply(&Affine::rotate_deg(rotation_deg))
             .then_apply(&Affine::scale(scale.x, scale.y))
             .then_apply(&Affine::translate(-anchor.x, -anchor.y))
+    }
+}
+
+/// Affine transform of space: where the x, y, and z axes go and where the origin goes, so that
+/// `(px, py, pz)` → `x·px + y·py + z·pz + t`. x runs right, y down, and z away from the viewer.
+///
+/// What an [`Affine`] is on the frame this is in depth, and an [`Affine`] is the one of these
+/// that leaves z alone ([`Affine3::from`], [`Affine3::flat`]). A point and a way are `[f64; 3]`,
+/// as the compositor's clips in depth have them.
+///
+/// The order of the sums in each of these is part of what it is, and is written by it: frames
+/// are drawn from them, and a sum taken in another order draws another picture in its last bits.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Affine3 {
+    pub x: [f64; 3],
+    pub y: [f64; 3],
+    pub z: [f64; 3],
+    pub t: [f64; 3],
+}
+
+impl Default for Affine3 {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+/// On the frame, at z = 0 and keeping z.
+impl From<Affine> for Affine3 {
+    fn from(m: Affine) -> Self {
+        Affine3 {
+            x: [m.a, m.b, 0.0],
+            y: [m.c, m.d, 0.0],
+            z: [0.0, 0.0, 1.0],
+            t: [m.e, m.f, 0.0],
+        }
+    }
+}
+
+impl Affine3 {
+    pub const IDENTITY: Affine3 = Affine3 {
+        x: [1.0, 0.0, 0.0],
+        y: [0.0, 1.0, 0.0],
+        z: [0.0, 0.0, 1.0],
+        t: [0.0; 3],
+    };
+    /// What it is on the frame, when it leaves z alone: none for one that tips the frame or
+    /// moves it back.
+    pub fn flat(&self) -> Option<Affine> {
+        let keeps_z = self.x[2] == 0.0 && self.y[2] == 0.0 && self.t[2] == 0.0;
+        (keeps_z && self.z == [0.0, 0.0, 1.0]).then_some(Affine {
+            a: self.x[0],
+            b: self.x[1],
+            c: self.y[0],
+            d: self.y[1],
+            e: self.t[0],
+            f: self.t[1],
+        })
+    }
+    /// Where a way goes, which has no place: `(x·v.x + y·v.y) + z·v.z`.
+    pub fn apply_vec(&self, v: [f64; 3]) -> [f64; 3] {
+        [0, 1, 2].map(|k| (self.x[k] * v[0] + self.y[k] * v[1]) + self.z[k] * v[2])
+    }
+    /// Where a point goes: [`Self::apply_vec`] of it, and then `+ t`.
+    pub fn apply(&self, p: [f64; 3]) -> [f64; 3] {
+        let v = self.apply_vec(p);
+        [v[0] + self.t[0], v[1] + self.t[1], v[2] + self.t[2]]
+    }
+    /// `self * o`: apply `o` first, then `self`. Each axis of `o` as [`Self::apply_vec`] takes
+    /// it, and its origin as [`Self::apply`] does.
+    pub fn then_apply(&self, o: &Affine3) -> Affine3 {
+        Affine3 {
+            x: self.apply_vec(o.x),
+            y: self.apply_vec(o.y),
+            z: self.apply_vec(o.z),
+            t: self.apply(o.t),
+        }
+    }
+    /// This, and then moved by `by`: `t + by`.
+    pub fn moved(self, by: [f64; 3]) -> Affine3 {
+        Affine3 {
+            t: [self.t[0] + by[0], self.t[1] + by[1], self.t[2] + by[2]],
+            ..self
+        }
+    }
+    /// This, and then turned about the x axis by `deg` degrees, from y toward z: what is below
+    /// the axis goes away from the viewer. `(y, z)` → `(y·cos − z·sin, y·sin + z·cos)`.
+    pub fn turned_x_deg(self, deg: f64) -> Affine3 {
+        let (s, c) = deg.to_radians().sin_cos();
+        let turn = |[x, y, z]: [f64; 3]| [x, y * c - z * s, y * s + z * c];
+        Affine3 {
+            x: turn(self.x),
+            y: turn(self.y),
+            z: turn(self.z),
+            t: turn(self.t),
+        }
+    }
+    /// This, and then turned about the y axis by `deg` degrees, from z toward x: what is to the
+    /// right of the axis comes toward the viewer. `(x, z)` → `(x·cos + z·sin, −x·sin + z·cos)`.
+    pub fn turned_y_deg(self, deg: f64) -> Affine3 {
+        let (s, c) = deg.to_radians().sin_cos();
+        let turn = |[x, y, z]: [f64; 3]| [x * c + z * s, y, -x * s + z * c];
+        Affine3 {
+            x: turn(self.x),
+            y: turn(self.y),
+            z: turn(self.z),
+            t: turn(self.t),
+        }
     }
 }
 
@@ -461,6 +569,120 @@ mod tests {
             let i = m.inverse().unwrap();
             let p = vec2(17.0, 23.0);
             proptest::prop_assert!((i.apply(m.apply(p)) - p).length() < 1e-6);
+        }
+    }
+
+    fn close3(a: [f64; 3], b: [f64; 3]) -> bool {
+        (0..3).all(|k| (a[k] - b[k]).abs() < 1e-9 * (1.0 + a[k].abs()))
+    }
+
+    #[test]
+    fn turns_in_depth_go_from_y_to_z_and_from_z_to_x() {
+        let about_x = Affine3::IDENTITY.turned_x_deg(90.0);
+        assert!(close3(about_x.apply_vec([0.0, 1.0, 0.0]), [0.0, 0.0, 1.0]));
+        let about_y = Affine3::IDENTITY.turned_y_deg(90.0);
+        assert!(close3(about_y.apply_vec([0.0, 0.0, 1.0]), [1.0, 0.0, 0.0]));
+    }
+
+    /// A placing on the frame, as a clip's geometry makes one.
+    fn on_frame() -> impl proptest::strategy::Strategy<Value = Affine> {
+        use proptest::strategy::Strategy;
+        (
+            (-2000.0f64..2000.0, -2000.0f64..2000.0),
+            (-4.0f64..4.0, -4.0f64..4.0),
+            -720.0f64..720.0,
+            (-500.0f64..500.0, -500.0f64..500.0),
+        )
+            .prop_map(|(position, scale, rotation, anchor)| {
+                Affine::motion(
+                    vec2(position.0, position.1),
+                    vec2(scale.0, scale.1),
+                    rotation,
+                    vec2(anchor.0, anchor.1),
+                )
+            })
+    }
+
+    /// A placing in depth: one on the frame, turned about x and y and moved.
+    fn in_depth() -> impl proptest::strategy::Strategy<Value = Affine3> {
+        use proptest::strategy::Strategy;
+        (
+            on_frame(),
+            -360.0f64..360.0,
+            -360.0f64..360.0,
+            proptest::array::uniform3(-1000.0f64..1000.0),
+        )
+            .prop_map(|(flat, pitch, yaw, by)| {
+                Affine3::from(flat)
+                    .turned_x_deg(pitch)
+                    .turned_y_deg(yaw)
+                    .moved(by)
+            })
+    }
+
+    proptest::proptest! {
+        /// What is on the frame is in depth the case that keeps z: it goes there and back as
+        /// it was, and there it places a point, and follows another, to the same numbers.
+        #[test]
+        fn a_flat_placing_is_the_one_in_depth_that_keeps_z(
+            a in on_frame(),
+            b in on_frame(),
+            p in proptest::array::uniform3(-3000.0f64..3000.0),
+        ) {
+            proptest::prop_assert_eq!(Affine3::from(a).flat(), Some(a));
+            let on = a.apply(vec2(p[0], p[1]));
+            proptest::prop_assert_eq!(Affine3::from(a).apply(p), [on.x, on.y, p[2]]);
+            let both = Affine3::from(a).then_apply(&Affine3::from(b));
+            proptest::prop_assert_eq!(both.flat(), Some(a.then_apply(&b)));
+        }
+
+        /// And one that does not keep z is none on the frame.
+        #[test]
+        fn a_placing_off_the_frame_is_not_flat(
+            a in on_frame(),
+            back in 0.001f64..1000.0,
+            turn in 0.1f64..179.9,
+        ) {
+            proptest::prop_assert_eq!(Affine3::from(a).moved([0.0, 0.0, back]).flat(), None);
+            proptest::prop_assert_eq!(Affine3::from(a).turned_x_deg(turn).flat(), None);
+            proptest::prop_assert_eq!(Affine3::from(a).turned_y_deg(turn).flat(), None);
+        }
+
+        #[test]
+        fn one_placing_after_another_is_their_product(
+            a in in_depth(),
+            b in in_depth(),
+            p in proptest::array::uniform3(-100.0f64..100.0),
+        ) {
+            let both = a.then_apply(&b);
+            let (one, other) = (both.apply(p), a.apply(b.apply(p)));
+            proptest::prop_assert!((0..3).all(|k| (one[k] - other[k]).abs() < 1e-6), "{one:?} {other:?}");
+            let (one, other) = (both.apply_vec(p), a.apply_vec(b.apply_vec(p)));
+            proptest::prop_assert!((0..3).all(|k| (one[k] - other[k]).abs() < 1e-6), "{one:?} {other:?}");
+        }
+
+        /// A turn keeps its axis and every length, a point it is made about stays where it
+        /// was, and turning back undoes it.
+        #[test]
+        fn a_turn_about_a_point_is_rigid_and_leaves_the_point(
+            about in proptest::array::uniform3(-1000.0f64..1000.0),
+            p in proptest::array::uniform3(-1000.0f64..1000.0),
+            pitch in -360.0f64..360.0,
+            yaw in -360.0f64..360.0,
+        ) {
+            let away = [-about[0], -about[1], -about[2]];
+            let turn = Affine3::IDENTITY.moved(away).turned_x_deg(pitch).turned_y_deg(yaw).moved(about);
+            proptest::prop_assert!(close3(turn.apply(about), about));
+            let length = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let from = [p[0] - about[0], p[1] - about[1], p[2] - about[2]];
+            let to = turn.apply(p);
+            let to = [to[0] - about[0], to[1] - about[1], to[2] - about[2]];
+            proptest::prop_assert!((length(from) - length(to)).abs() < 1e-6);
+            proptest::prop_assert_eq!(Affine3::IDENTITY.turned_x_deg(pitch).apply(p)[0], p[0]);
+            proptest::prop_assert_eq!(Affine3::IDENTITY.turned_y_deg(yaw).apply(p)[1], p[1]);
+            let back = turn.moved(away).turned_y_deg(-yaw).turned_x_deg(-pitch).moved(about);
+            let home = back.apply(p);
+            proptest::prop_assert!((0..3).all(|k| (home[k] - p[k]).abs() < 1e-6), "{home:?} {p:?}");
         }
     }
 }

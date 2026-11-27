@@ -19,9 +19,15 @@
 //!
 //! A clip in depth with a `parent=` is where its own numbers put it, and then where its parents take
 //! it, the one it names first: turned by the parent's `rotate_x` and `rotate_y` about the middle of
-//! the parent's picture, and moved back by the parent's `z`, as one thing with it ([`Carried`]). The
-//! scene holds that for each clip, so that every plane made of a clip ([`Plane::of`]) is where the clip
-//! is drawn, whoever asks. A camera and a light move with their parents the same way.
+//! the parent's picture, and moved back by the parent's `z`, as one thing with it. The scene holds
+//! that for each clip, so that every plane made of a clip ([`Plane::of`]) is where the clip is
+//! drawn, whoever asks. A camera and a light move with their parents the same way.
+//!
+//! Where a clip is in the world is one [`Affine3`] of its picture's pixels ([`Plane::of`]): flat on
+//! the frame at its `z`, turned about its middle, and then as its parents in depth take it, which is
+//! one more, each parent's after the one before. A mesh's own space in the world is another
+//! ([`mesh`]), and so is each node of a file ([`gltf`]). The camera is in none of them: it sees
+//! what they place.
 
 use super::*;
 
@@ -102,45 +108,14 @@ fn rolled(a: Vector, roll: f64) -> Vector {
     [a[0] * c - a[1] * s, a[0] * s + a[1] * c, a[2]]
 }
 
-/// How its parents have moved a clip in depth, as one thing with them: turned about places in the
-/// world and moved back, which keeps every length and every angle of it.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Carried {
-    /// Where the world's own x, y, and z go.
-    ways: [Vector; 3],
-    /// Where the world's middle goes.
-    shift: Vector,
-}
-
-impl Carried {
-    /// By no parent in depth: left where it is.
-    const STILL: Self = Self {
-        ways: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        shift: [0.0; 3],
-    };
-
-    /// This, and then as a parent takes it: turned about `about` by the parent's `pitch` and `yaw`,
-    /// in radians, and moved `back`.
-    fn then(self, about: Vector, (pitch, yaw): (f64, f64), back: f64) -> Self {
-        let swung = add(about, turned(minus(self.shift, about), pitch, yaw));
-        Self {
-            ways: self.ways.map(|way| turned(way, pitch, yaw)),
-            shift: add(swung, [0.0, 0.0, back]),
-        }
-    }
-
-    /// Where a way goes, which is as long as it was.
-    fn way(&self, of: Vector) -> Vector {
-        add(
-            add(times(self.ways[0], of[0]), times(self.ways[1], of[1])),
-            times(self.ways[2], of[2]),
-        )
-    }
-
-    /// Where a point of the world goes.
-    fn point(&self, at: Vector) -> Vector {
-        add(self.way(at), self.shift)
-    }
+/// `place`, and then turned about `about` by `pitch` about x and then by `yaw` about y, in degrees:
+/// as a clip in depth turns about its middle, and as a parent in depth turns what it carries.
+fn turned_about(place: Affine3, about: Vector, pitch: f64, yaw: f64) -> Affine3 {
+    place
+        .moved(times(about, -1.0))
+        .turned_x_deg(pitch)
+        .turned_y_deg(yaw)
+        .moved(about)
 }
 
 /// How the parents of a camera or a light have moved it: across the frame, as they move any clip,
@@ -149,7 +124,8 @@ impl Carried {
 struct Rigged {
     /// Across the canvas, in its pixels.
     moved: Affine,
-    carried: Carried,
+    /// And then in depth, in the scene's.
+    carried: Affine3,
     /// The canvas's size, and how many of the scene's pixels one of its own is across and down.
     canvas: (f64, f64),
     per: (f64, f64),
@@ -163,7 +139,7 @@ impl Rigged {
             middle.0 + x / self.per.0,
             middle.1 + y / self.per.1,
         ));
-        self.carried.point([
+        self.carried.apply([
             (on.x - middle.0) * self.per.0,
             (on.y - middle.1) * self.per.1,
             z,
@@ -174,7 +150,7 @@ impl Rigged {
     /// size it, and then as they turn in depth.
     fn way(&self, of: Vector) -> Vector {
         let roll = self.moved.b.atan2(self.moved.a);
-        self.carried.way(rolled(of, roll))
+        self.carried.apply_vec(rolled(of, roll))
     }
 }
 
@@ -357,8 +333,10 @@ pub(super) struct Scene {
     /// spread: 0 for all of it sharp.
     focus: f64,
     aperture: f64,
-    /// How its parents have moved each clip in depth that a parent in depth moves, by the clip.
-    carried: HashMap<Id, Carried>,
+    /// How its parents have moved each clip in depth that a parent in depth moves, by the clip: as
+    /// one thing with them, turned about places in the world and moved back, which keeps every
+    /// length and every angle of it.
+    carried: HashMap<Id, Affine3>,
 }
 
 impl Scene {
@@ -406,15 +384,15 @@ impl Scene {
                     (middle.y - canvas.1 / 2.0) * per.1,
                     0.0,
                 ];
-                let turns = (pitch.to_radians(), yaw.to_radians());
-                carried = Some(carried.unwrap_or(Carried::STILL).then(about, turns, back));
+                let before = carried.unwrap_or(Affine3::IDENTITY);
+                carried = Some(turned_about(before, about, pitch, yaw).moved([0.0, 0.0, back]));
             }
             carried
         };
         let rigged = |clip: &Clip| {
             clip.parent.as_ref().map(|_| Rigged {
                 moved: sequence.moved_by_parents(clip, at),
-                carried: carried_by(clip).unwrap_or(Carried::STILL),
+                carried: carried_by(clip).unwrap_or(Affine3::IDENTITY),
                 canvas,
                 per,
             })
@@ -517,7 +495,7 @@ impl Scene {
         };
         // Every clip in depth that shows, on a track that shows or not: an effect may read a
         // hidden one. What is on one parent goes where it takes all of it, worked out once.
-        let mut taken: HashMap<&Id, Option<Carried>> = HashMap::new();
+        let mut taken: HashMap<&Id, Option<Affine3>> = HashMap::new();
         let mut carried = HashMap::new();
         for shown in sequence.tracks.iter().flat_map(|track| &track.shown) {
             let clip = &shown.plan.clip;
@@ -808,7 +786,7 @@ impl Scene {
         let z = number(&param(&plan.clip, "z").value_at(time)) * self.height;
         let middle = self.world(center.x, center.y, z);
         let middle = match self.carried.get(&plan.clip.id) {
-            Some(carried) => carried.point(middle),
+            Some(carried) => carried.apply(middle),
             None => middle,
         };
         dot(minus(middle, self.eye), self.forward)
@@ -821,7 +799,7 @@ impl Scene {
         let Some(carried) = self.carried.get(&plan.clip.id) else {
             return Some(fall);
         };
-        let [across, down, back] = carried.way([0.0, fall, 0.0]);
+        let [across, down, back] = carried.apply_vec([0.0, fall, 0.0]);
         (across.abs() <= 1e-9 * down.abs() && back.abs() <= 1e-9 * down.abs()).then_some(down)
     }
 
@@ -1076,31 +1054,30 @@ impl Plane {
         let clip = &plan.clip;
         let read = |name: &str| number(&param(clip, name).value_at(time));
         let z = read("z") * scene.height;
-        let (pitch, yaw) = (read("rotate_x").to_radians(), read("rotate_y").to_radians());
         let corner = |x: f64, y: f64| {
             let at = to_output.apply(Vec2::new(x, y));
             scene.world(at.x, at.y, z)
         };
-        let (origin, across, down) = (
-            corner(0.0, 0.0),
-            minus(corner(1.0, 0.0), corner(0.0, 0.0)),
-            minus(corner(0.0, 1.0), corner(0.0, 0.0)),
-        );
-        let middle = corner(size.0 / 2.0, size.1 / 2.0);
-        let origin = add(middle, turned(minus(origin, middle), pitch, yaw));
-        let (across, down) = (turned(across, pitch, yaw), turned(down, pitch, yaw));
-        let (origin, middle, across, down) = match scene.carried.get(&clip.id) {
-            Some(carried) => (
-                carried.point(origin),
-                carried.point(middle),
-                carried.way(across),
-                carried.way(down),
-            ),
-            None => (origin, middle, across, down),
+        let (origin, middle) = (corner(0.0, 0.0), corner(size.0 / 2.0, size.1 / 2.0));
+        // Flat on the frame at its `z`, by where three of its corners land there. `to_output` as
+        // it is in depth (`Affine3::from`), moved to the world's middle and to `z`, is the same
+        // place to within the last bits of its numbers, and not to the last bit: a clip drawn by
+        // that is not the same picture to the last bit.
+        let flat = Affine3 {
+            x: minus(corner(1.0, 0.0), origin),
+            y: minus(corner(0.0, 1.0), origin),
+            z: [0.0, 0.0, 1.0],
+            t: origin,
         };
+        let own = turned_about(flat, middle, read("rotate_x"), read("rotate_y"));
+        let (place, middle) = match scene.carried.get(&clip.id) {
+            Some(carried) => (carried.then_apply(&own), carried.apply(middle)),
+            None => (own, middle),
+        };
+        let (across, down) = (place.x, place.y);
         let perpendicular = cross(across, down);
         Self {
-            origin,
+            origin: place.t,
             across,
             down,
             perpendicular,

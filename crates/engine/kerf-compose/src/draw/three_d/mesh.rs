@@ -459,23 +459,12 @@ fn placed(
         .max(0.0);
     let (middle, _, tall) = fit(read);
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let plane = Plane::of(scene, plan, size, to_output, time);
-    let ways = [
-        times(plane.across, size.1),
-        times(plane.down, size.1),
-        times(plane.normal, plane.pixel_size() * size.1),
-    ];
-    let along = |of: Vector| {
-        add(
-            add(times(ways[0], of[0]), times(ways[1], of[1])),
-            times(ways[2], of[2]),
-        )
-    };
-    let eye = add(
-        plane.middle,
-        along(times(minus(seen.eye, middle), height / tall)),
+    let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
+    let eye = space.apply(times(minus(seen.eye, middle), height / tall));
+    let (right, forward) = (
+        unit(space.apply_vec(seen.right)),
+        unit(space.apply_vec(seen.forward)),
     );
-    let (right, forward) = (unit(along(seen.right)), unit(along(seen.forward)));
     // As `Scene::at` turns a camera: tilted, then panned, then rolled about its own line.
     let tilt = (-forward[1]).clamp(-1.0, 1.0).asin();
     let pan = forward[0].atan2(forward[2]);
@@ -720,27 +709,24 @@ impl Nearest {
     }
 }
 
-/// The corners of `mesh` in the world, its clip being where `plane` is.
-fn in_world(mesh: &Mesh, plane: &Plane, size: (f64, f64)) -> (Vec<Vector>, [Vector; 3]) {
-    // The mesh's own space in the world: a frame height of it is the picture's height along each
-    // of the plane's ways, and as much back as a pixel of it is wide.
-    let ways = [
-        times(plane.across, size.1),
-        times(plane.down, size.1),
-        times(plane.normal, plane.pixel_size() * size.1),
-    ];
-    let points = mesh
-        .points
+/// A mesh's own space in the world, its clip of `size` pixels being where `plane` is: from the
+/// middle of the plane, a frame height of it is the picture's height along each of the plane's
+/// ways, and as much back as a pixel of it is wide.
+fn space_of(plane: &Plane, size: (f64, f64)) -> Affine3 {
+    Affine3 {
+        x: times(plane.across, size.1),
+        y: times(plane.down, size.1),
+        z: times(plane.normal, plane.pixel_size() * size.1),
+        t: plane.middle,
+    }
+}
+
+/// The corners of `mesh` in the world, its own space being `space` there.
+fn in_world(mesh: &Mesh, space: &Affine3) -> Vec<Vector> {
+    mesh.points
         .iter()
-        .map(|point| {
-            let off = add(
-                add(times(ways[0], point[0]), times(ways[1], point[1])),
-                times(ways[2], point[2]),
-            );
-            add(plane.middle, off)
-        })
-        .collect();
-    (points, ways)
+        .map(|point| space.apply(*point))
+        .collect()
 }
 
 /// A mesh in the world at a moment.
@@ -766,8 +752,8 @@ pub(in crate::draw) fn in_the_world(
 ) -> InWorld {
     let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let plane = Plane::of(scene, plan, size, to_output, time);
-    let (points, _) = in_world(&mesh, &plane, size);
+    let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
+    let points = in_world(&mesh, &space);
     InWorld {
         points,
         closed: mesh.closed(),
@@ -1263,9 +1249,10 @@ pub(in crate::draw) fn draw(
 ) -> (Image, Vec<f32>) {
     let mesh = Mesh::of(&plan.clip, plan.clip.start + time);
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let plane = Plane::of(scene, plan, size, to_output, time);
-    let (points, ways) = in_world(&mesh, &plane, size);
+    let space = space_of(&Plane::of(scene, plan, size, to_output, time), size);
+    let points = in_world(&mesh, &space);
     // The ways are square to each other, so a side faces along each by its length less.
+    let ways = [space.x, space.y, space.z];
     let normals: Vec<Vector> = mesh
         .normals
         .iter()
@@ -1357,8 +1344,8 @@ pub(in crate::draw) fn draw(
     let then: Option<(&Scene, Vec<Vector>)> = match &shade {
         Shade::Moving(next, to_output, step, _) => {
             let later = Mesh::of(&plan.clip, plan.clip.start + time + *step);
-            let plane = Plane::of(next, plan, size, to_output, time + *step);
-            let (later, _) = in_world(&later, &plane, size);
+            let space = space_of(&Plane::of(next, plan, size, to_output, time + *step), size);
+            let later = in_world(&later, &space);
             (later.len() == points.len()).then_some((*next, later))
         }
         _ => None,
