@@ -207,6 +207,10 @@ fn clip_view(project: &Project, rate: Rate, clip: &Clip) -> ViewClip {
             .parent
             .as_ref()
             .map(|parent| parent.as_str().to_owned()),
+        follows: clip
+            .follows
+            .as_ref()
+            .map(|followed| followed.as_str().to_owned()),
         ..ViewClip::default()
     };
     if let Some((source_in, source_out)) = clip.source_range() {

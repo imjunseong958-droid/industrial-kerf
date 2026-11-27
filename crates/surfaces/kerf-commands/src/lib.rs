@@ -153,6 +153,12 @@ pub struct Selection {
     pub track: String,
     pub start_frame: i64,
     pub duration_frames: i64,
+    /// The clip it follows in time, when it follows one.
+    pub follows: Option<String>,
+    /// Its shot, which Attach to Its Shot has it follow: the clip of the first
+    /// video track that plays where it starts, or failing one the next there,
+    /// or the last. None for a clip that is on that track itself.
+    pub shot: Option<String>,
 }
 
 /// A request for the bridge, in the bridge's command format.
@@ -363,6 +369,23 @@ fn can_split(context: &Context) -> Result<(), &'static str> {
         Ok(())
     } else {
         Err("Move the playhead inside the selected clip")
+    }
+}
+
+fn can_attach(context: &Context) -> Result<(), &'static str> {
+    let selection = selected(context)?;
+    match (&selection.shot, &selection.follows) {
+        (None, _) => Err("It is on the first video track, where the shots are"),
+        (Some(shot), Some(follows)) if shot == follows => Err("It follows its shot already"),
+        _ => Ok(()),
+    }
+}
+
+fn can_detach(context: &Context) -> Result<(), &'static str> {
+    if selected(context)?.follows.is_some() {
+        Ok(())
+    } else {
+        Err("It follows no clip")
     }
 }
 
@@ -827,6 +850,21 @@ pub static COMMANDS: &[Command] = &[
         r#"{"proposal"?: string}"#,
     ),
     menu(command("ai.stop", "Stop Kerf", agent_busy), Menu::Clip, 1),
+    // A clip that follows its shot moves when the shot does, and a ripple edit
+    // passes under it: a title over the shot, music under a scene from its
+    // first shot on. `to` names another clip to follow than the shot.
+    timeline(params(
+        menu(
+            command("clip.attach", "Attach to Its Shot", can_attach),
+            Menu::Clip,
+            2,
+        ),
+        r#"{"clip": string, "to": string}"#,
+    )),
+    timeline(params(
+        menu(command("clip.detach", "Detach", can_detach), Menu::Clip, 2),
+        r#"{"clip": string}"#,
+    )),
     keys(
         params(
             menu(
@@ -1415,6 +1453,19 @@ pub fn run(id: &str, context: &Context, params: &Value) -> Result<Request, Strin
         "clip.extract" => edit(EditOp::Extract {
             clips: vec![clip()?],
         }),
+        "clip.attach" => edit(EditOp::Attach {
+            clips: vec![clip()?],
+            to: match params.string("to") {
+                Some(to) => to,
+                None => selected(context)?
+                    .shot
+                    .clone()
+                    .ok_or("there is no shot for it to follow")?,
+            },
+        }),
+        "clip.detach" => edit(EditOp::Detach {
+            clips: vec![clip()?],
+        }),
         "clip.split" => edit(EditOp::Split {
             clip: clip()?,
             at: params.int("at")?.unwrap_or(context.playhead_frame),
@@ -1736,6 +1787,64 @@ mod tests {
                 assert!(find(id).is_some(), "{} binds unknown {id}", keymap.id);
             }
         }
+    }
+
+    #[test]
+    fn a_clip_attaches_to_its_shot_and_detaches_from_what_it_follows() {
+        let with = |follows: Option<&str>, shot: Option<&str>| Context {
+            connected: true,
+            selection: Some(Selection {
+                clip: "t1".into(),
+                track: "video".into(),
+                follows: follows.map(str::to_owned),
+                shot: shot.map(str::to_owned),
+                ..Selection::default()
+            }),
+            ..Context::default()
+        };
+        let state = |context: &Context, id: &str| find(id).unwrap().enabled(context);
+        let edit = |context: &Context, id: &str, params: Value| match run(id, context, &params) {
+            Ok(Request::Edit { ops, .. }) => ops,
+            other => panic!("{other:?}"),
+        };
+        // Over a shot and following nothing: it can follow the shot, and has nothing to let go.
+        let loose = with(None, Some("c1"));
+        assert_eq!(state(&loose, "clip.attach"), Ok(()));
+        assert_eq!(state(&loose, "clip.detach"), Err("It follows no clip"));
+        assert_eq!(
+            edit(&loose, "clip.attach", json!({})),
+            [EditOp::Attach {
+                clips: vec!["t1".into()],
+                to: "c1".into()
+            }]
+        );
+        // Another clip than its shot, where one is named.
+        assert_eq!(
+            edit(&loose, "clip.attach", json!({"to": "c7"})),
+            [EditOp::Attach {
+                clips: vec!["t1".into()],
+                to: "c7".into()
+            }]
+        );
+        // Following its shot: it can only let go.
+        let following = with(Some("c1"), Some("c1"));
+        assert_eq!(
+            state(&following, "clip.attach"),
+            Err("It follows its shot already")
+        );
+        assert_eq!(
+            edit(&following, "clip.detach", json!({})),
+            [EditOp::Detach {
+                clips: vec!["t1".into()]
+            }]
+        );
+        // Following another clip than the one under it now: it can follow that one instead.
+        assert_eq!(state(&with(Some("c1"), Some("c2")), "clip.attach"), Ok(()));
+        // On the shots' own track there is no shot for it.
+        assert_eq!(
+            state(&with(None, None), "clip.attach"),
+            Err("It is on the first video track, where the shots are")
+        );
     }
 
     #[test]

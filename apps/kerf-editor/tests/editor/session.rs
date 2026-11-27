@@ -16,8 +16,8 @@ use kerf_editor::names;
 use kerf_editor::names::{source_names, without_content_hash};
 use kerf_editor::session::{
     activity_of, activity_of_command, cutting_status, nearer_frame, newest_change, preview_request,
-    preview_span, scrubs_from, sent_unconnected, source_range, stands_in, ActivityLog, LoopSpan,
-    ACTIVITY_KEPT, LOOP_SLACK, REEL_MOST_RENDERED, SCRUB_AHEAD, SCRUB_SETTLE,
+    preview_span, scrubs_from, sent_unconnected, shot_of, source_range, stands_in, ActivityLog,
+    LoopSpan, ACTIVITY_KEPT, LOOP_SLACK, REEL_MOST_RENDERED, SCRUB_AHEAD, SCRUB_SETTLE,
 };
 use kerf_editor::store::{
     making_status, next_steps, Badge, Change, Connection, EditorState, Making, MediaActivity,
@@ -1513,6 +1513,31 @@ fn a_preset_exported_or_saved_is_kept_in_activity_by_its_path() {
     assert!(state.take_logged().is_empty());
     let last = state.notices.last().unwrap();
     assert!(last.error && last.text.starts_with("Could not export preset"));
+}
+
+#[test]
+fn a_clip_s_shot_is_the_clip_of_the_first_video_track_where_it_starts() {
+    let clip = |id: &str, start: i64| {
+        json!({"id": id, "timelineStart": start as f64 / 24.0, "duration": 2.0,
+               "startFrame": start, "durationFrames": 48, "enabled": true})
+    };
+    let track = |id: &str, kind: &str, clips: Vec<Value>| json!({"id": id, "type": kind, "name": id, "enabled": true, "clips": clips});
+    let timeline = Timeline::from_value(&json!({"name": "Cut", "fps": 24.0, "duration": 8.0,
+    "tracks": [
+        track("V1", "video", vec![clip("c1", 0), clip("c2", 96)]),
+        track("V2", "video", vec![clip("t1", 12)]),
+        track("A1", "audio", vec![clip("m1", 60)]),
+    ]}));
+    // Over the first shot, and in the gap after it, where the next is its shot.
+    assert_eq!(shot_of(&timeline, "V2", 12).as_deref(), Some("c1"));
+    assert_eq!(shot_of(&timeline, "A1", 60).as_deref(), Some("c2"));
+    // After the last shot, the last; and a shot has none of its own.
+    assert_eq!(shot_of(&timeline, "V2", 400).as_deref(), Some("c2"));
+    assert_eq!(shot_of(&timeline, "V1", 12), None);
+    // A sequence of sound alone has no shots.
+    let sound = Timeline::from_value(&json!({"name": "Cut", "fps": 24.0, "duration": 8.0,
+        "tracks": [track("A1", "audio", vec![clip("m1", 0)])]}));
+    assert_eq!(shot_of(&sound, "A1", 0), None);
 }
 
 /// The registry's say on Render Preview and Play with the state as it is,

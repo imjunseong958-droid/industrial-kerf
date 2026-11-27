@@ -1162,6 +1162,13 @@ fn lower(project: &Project, op: &EditOp) -> Result<Vec<Op>, RuntimeError> {
         EditOp::Unlink { clips } => Op::Unlink {
             clips: edit_ids(clips)?,
         },
+        EditOp::Attach { clips, to } => Op::Attach {
+            clips: edit_ids(clips)?,
+            to: edit_id(to)?,
+        },
+        EditOp::Detach { clips } => Op::Detach {
+            clips: edit_ids(clips)?,
+        },
         EditOp::SetTrack {
             track,
             sequence: id,

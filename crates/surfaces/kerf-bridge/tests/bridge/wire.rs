@@ -1072,6 +1072,8 @@ fn edit_op() -> impl Strategy<Value = EditOp> {
         }),
         vec(text(), 0..4).prop_map(|clips| EditOp::Delete { clips }),
         vec(text(), 0..4).prop_map(|clips| EditOp::RippleDelete { clips }),
+        (vec(text(), 0..4), text()).prop_map(|(clips, to)| EditOp::Attach { clips, to }),
+        vec(text(), 0..4).prop_map(|clips| EditOp::Detach { clips }),
         (text(), edit_params(), some_text()).prop_map(|(clip, props, name)| EditOp::Set {
             clip,
             props,

@@ -920,6 +920,51 @@ fn typed_ops_apply_atomically_and_replay_by_key() {
 }
 
 #[test]
+fn a_typed_attach_has_a_clip_follow_another_as_the_timeline_then_says() {
+    let (mut runtime, directory) = kernel_runtime("attach");
+    edit(
+        &mut runtime,
+        "track add V2 video\noverwrite gen=title@1 at=24f dur=24f on=V2 as=t1 text=\"One\"",
+        0,
+    )
+    .unwrap();
+    let followed = |runtime: &Runtime| {
+        let timeline = runtime.snapshot().timeline;
+        let title = timeline["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|track| track["clips"].as_array().unwrap())
+            .find(|clip| clip["id"] == "t1")
+            .unwrap()
+            .clone();
+        (title["follows"].clone(), title["startFrame"].clone())
+    };
+    assert_eq!(followed(&runtime), (Value::Null, json!(24)));
+    // Attached, it is where it was, and then goes where the shot goes.
+    let ops: Vec<EditOp> = serde_json::from_value(json!([
+        {"op": "attach", "clips": ["t1"], "to": "c1"},
+        {"op": "move", "clip": "c1", "frames": 12}
+    ]))
+    .unwrap();
+    runtime.apply_ops_request("ui", "attach-1", ops, 1).unwrap();
+    assert_eq!(followed(&runtime), (json!("c1"), json!(36)));
+    assert!(runtime
+        .document(false)
+        .contains("clip t1 gen=title@1 at=c1.start+24f"));
+    assert_eq!(
+        runtime.state.past[1].script,
+        "attach t1 to=c1\nmove c1 by=+12f\n"
+    );
+    let ops: Vec<EditOp> =
+        serde_json::from_value(json!([{"op": "detach", "clips": ["t1"]}])).unwrap();
+    runtime.apply_ops_request("ui", "attach-2", ops, 2).unwrap();
+    assert_eq!(followed(&runtime), (Value::Null, json!(36)));
+    drop(runtime);
+    let _ = fs::remove_dir_all(directory);
+}
+
+#[test]
 fn history_snapshots_survive_checkpoints() {
     let (mut runtime, directory) = kernel_runtime("history-checkpoint");
     for index in 0..(CHECKPOINT_INTERVAL + 2) {

@@ -1961,6 +1961,8 @@ impl Session {
                 "track": kind,
                 "startFrame": clip.start_frame,
                 "durationFrames": clip.duration_frames,
+                "follows": clip.follows,
+                "shot": shot_of(timeline, &track.id, clip.start_frame),
             });
         }
         if let Some(Ok(mut collab)) = self.state.collab.as_ref().map(serde_json::to_value) {
@@ -2905,4 +2907,23 @@ fn truncate(text: &str, most: usize) -> &str {
         end -= 1;
     }
     &text[..end]
+}
+
+/// The shot of a clip on `track` that starts at `start_frame`, which Attach to Its Shot has
+/// it follow: the clip of the first video track that plays there, or failing one the next
+/// after, or the last. None for a clip on that track itself, and with no clip on it.
+pub fn shot_of(timeline: &Timeline, track: &str, start_frame: i64) -> Option<String> {
+    let shots = timeline
+        .tracks
+        .iter()
+        .find(|track| track.kind == editor_state::model::TrackKind::Video)?;
+    if shots.id == track {
+        return None;
+    }
+    shots
+        .clips
+        .iter()
+        .find(|clip| clip.start_frame + clip.duration_frames > start_frame)
+        .or_else(|| shots.clips.last())
+        .map(|clip| clip.id.clone())
 }

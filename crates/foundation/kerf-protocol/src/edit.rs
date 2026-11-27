@@ -232,6 +232,17 @@ pub enum EditOp {
     Unlink {
         clips: Vec<String>,
     },
+    /// `attach`: have clips, and what is linked to them, follow `to`: they
+    /// stay where they are and from then on move when it does, and ripple
+    /// edits pass under them.
+    Attach {
+        clips: Vec<String>,
+        to: String,
+    },
+    /// `detach`: have clips follow nothing.
+    Detach {
+        clips: Vec<String>,
+    },
     /// `set-track`: a track's switches, its role, and its sync lock. `role`
     /// is one of `video`, `titles`, `dialogue`, `music`, `effects` (any
     /// case) or other one-line text, and an empty one gives back the
