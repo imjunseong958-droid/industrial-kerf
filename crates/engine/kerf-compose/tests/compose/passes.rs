@@ -212,7 +212,7 @@ fn a_matte_is_one_clip_in_white_with_what_stands_before_it_cut_out() {
             &project,
             Catalog::builtin(),
             &ComposeOptions {
-                matte: Some(clip.to_owned()),
+                matte: vec![clip.to_owned()],
                 ..ComposeOptions::default()
             },
         )
@@ -266,7 +266,7 @@ fn a_matte_has_none_of_a_clip_told_long_after_its_own() {
             Catalog::builtin(),
             &ComposeOptions {
                 pass,
-                matte: matte.map(str::to_owned),
+                matte: matte.map(str::to_owned).into_iter().collect(),
                 ..ComposeOptions::default()
             },
         )

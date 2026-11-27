@@ -5,6 +5,7 @@
   "frames": { "most": 81, "step": 4 },
   "size": [832, 480],
   "multiple": 16,
+  "regions": { "joins": "4", "every": 4 },
   "set": {
     "negative": "blurry, low quality, static, text, watermark",
     "steps": 20,

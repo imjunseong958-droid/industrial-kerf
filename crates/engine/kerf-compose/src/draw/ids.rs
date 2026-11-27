@@ -249,12 +249,12 @@ pub(super) fn told_ids(sequences: &[SequencePlan]) -> Vec<(Id, Rgba)> {
     ids
 }
 
-/// The color of the clip `matte` names among `ids`, as an ids pass writes it, when a matte is
-/// asked for: refused where no clip that draws has that name.
-pub(super) fn matte_color(matte: Option<&str>, ids: &[(Id, Rgba)]) -> Result<Option<[u8; 3]>> {
-    let matte = match matte {
-        None => None,
-        Some(name) => Some(
+/// The colors of the clips `matte` names among `ids`, as an ids pass writes them, when a matte
+/// is asked for: refused where no clip that draws has one of those names.
+pub(super) fn matte_colors(matte: &[String], ids: &[(Id, Rgba)]) -> Result<Vec<[u8; 3]>> {
+    matte
+        .iter()
+        .map(|name| {
             ids.iter()
                 .find(|(id, _)| id.as_str() == name)
                 .map(|(_, color)| [color.r, color.g, color.b])
@@ -262,10 +262,9 @@ pub(super) fn matte_color(matte: Option<&str>, ids: &[(Id, Rgba)]) -> Result<Opt
                     ComposeError::Invalid(format!(
                         "a matte is of a clip that draws, and the sequence has no such clip `{name}`"
                     ))
-                })?,
-        ),
-    };
-    Ok(matte)
+                })
+        })
+        .collect()
 }
 
 impl Drawing {

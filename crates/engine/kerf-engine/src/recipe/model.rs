@@ -33,6 +33,11 @@
 //! `signals` holds each signal the line names ([`super::signal`]): a number
 //! for each frame of the clip's sequence, at that sequence's rate.
 //!
+//! For a model whose `reads` has `regions`, `regions` holds what the clips of
+//! the guide Kerf draws say they are ([`super::regions`]): each prompt once,
+//! with a grey video drawn as the guide is, white where the guide shows the
+//! clips that say it: `[{"prompt": "a red car", "mask": "…/region1.mp4"}]`.
+//!
 //! The program runs as a recipe's `run` does, supervised and never through
 //! a shell, writes what it has to say to stderr, and ends well once the
 //! file at `out` is written. A project cannot name a model's program: that
@@ -126,7 +131,7 @@ pub const REQUEST_FILE: &str = "request.json";
 /// The version a request says it is.
 const REQUEST_VERSION: u32 = 1;
 
-pub use kerf_model::making::{names_a_guide, Ask, Source, FILES, MOVES, SIGNAL, WORKFLOW};
+pub use kerf_model::making::{names_a_guide, Ask, Source, FILES, MOVES, REGIONS, SIGNAL, WORKFLOW};
 
 /// The request a model's program reads, as [`REQUEST_FILE`] holds it: what a `generate` step
 /// asks, with every file it names where that file is.
@@ -150,6 +155,10 @@ pub(crate) struct Request<'a> {
     seed: Option<u64>,
     signals: &'a [Signal],
     moves: &'a [Moves],
+    /// What clips of the guide say they are, each with where the guide shows them: said only
+    /// where some do, so a request of none reads as it did.
+    #[serde(skip_serializing_if = "<[Region]>::is_empty")]
+    regions: &'a [Region],
     /// Under [`WORKFLOW`], the name a step hands a model a graph of its own by.
     workflow: Option<String>,
     more: &'a BTreeMap<String, String>,
@@ -161,6 +170,16 @@ pub(crate) struct Request<'a> {
 
 // serde names a field by a literal: `workflow` is held to the name kerf-model gives it.
 const _: () = assert!(matches!(WORKFLOW.as_bytes(), b"workflow"));
+// And so is `regions`.
+const _: () = assert!(matches!(REGIONS.as_bytes(), b"regions"));
+
+/// Words clips of a guide say they are (`prompt=`), and a grey video of where the guide shows
+/// those clips, frame by frame: white where they are.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Region {
+    pub prompt: String,
+    pub mask: String,
+}
 
 /// Names and their files as an object's entries, in the order they are said. As
 /// [`Request::file`] writes them, into a JSON object, a name said twice is there once, with
@@ -193,13 +212,14 @@ impl Request<'_> {
 /// The request a model's program reads of what `ask` asks, with every file where it is:
 /// `file` says where one of the project is, and `made` where one a step
 /// made is, the one this writes among them. `signals` and `moves` are the ones it
-/// names, read from the project.
+/// names, read from the project, and `regions` what clips of its guide say they are.
 pub(crate) fn request<'a>(
     ask: &'a Ask,
     file: &dyn Fn(&str) -> Result<PathBuf>,
     made: &dyn Fn(&str) -> PathBuf,
     signals: &'a [Signal],
     moves: &'a [Moves],
+    regions: &'a [Region],
 ) -> Result<Request<'a>> {
     let place = |source: &Source| -> Result<String> {
         Ok(match source {
@@ -228,6 +248,7 @@ pub(crate) fn request<'a>(
         seed: ask.seed,
         signals,
         moves,
+        regions,
         workflow: optional(&ask.workflow)?,
         more: &ask.more,
         out: made(&ask.out).to_string_lossy().into_owned(),
@@ -430,12 +451,13 @@ impl Takes {
                                     FILES.contains(&read.as_str())
                                         || read == SIGNAL
                                         || read == MOVES
+                                        || read == REGIONS
                                         || read.strip_prefix("guide_").is_some_and(names_a_guide)
                                 })
                         })
                         .ok_or_else(|| {
                             format!(
-                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}, {MOVES}, and a guide by what it is of, as `guide_depth`",
+                                "`reads` in `takes` is not a list of what a `generate` line hands a model: {}, {SIGNAL}, {MOVES}, {REGIONS}, and a guide by what it is of, as `guide_depth`",
                                 FILES.join(", ")
                             )
                         })?;

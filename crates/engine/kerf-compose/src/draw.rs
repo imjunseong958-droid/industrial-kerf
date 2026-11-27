@@ -93,8 +93,9 @@ pub(crate) struct Drawing {
     files: Files,
     /// What is drawn of the program.
     pass: Pass,
-    /// The color of the one clip a matte is of, as an ids pass writes it.
-    matte: Option<[u8; 3]>,
+    /// The colors of the clips a matte is of, as an ids pass writes them: none where no matte
+    /// is drawn.
+    matte: Vec<[u8; 3]>,
     /// An ids pass, or a matte, with each clip laid down whole or not at all at each pixel
     /// ([`ComposeOptions::hard_edges`]).
     hard: bool,
@@ -117,9 +118,9 @@ impl Drawing {
         // A matte is the ids pass with one clip's color made white.
         let (sequence, pass) = (
             options.sequence.as_deref(),
-            match options.matte {
-                Some(_) => Pass::Ids,
-                None => options.pass,
+            match options.matte.is_empty() {
+                false => Pass::Ids,
+                true => options.pass,
             },
         );
         // Looks draw as the built-ins they stand for.
@@ -151,7 +152,7 @@ impl Drawing {
             .collect();
         // Each clip keeps the color it has with all of them drawn, whichever are left out.
         let ids = told_ids(&sequences);
-        let matte = matte_color(options.matte.as_deref(), &ids)?;
+        let matte = matte_colors(&options.matte, &ids)?;
         if options.only_filmed {
             only_filmed(&mut sequences[0], &top.id)?;
         }

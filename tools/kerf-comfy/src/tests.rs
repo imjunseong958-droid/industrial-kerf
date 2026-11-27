@@ -526,3 +526,143 @@ fn a_job_is_taken_back_when_the_program_is_asked_to_end() {
         .iter()
         .any(|asked| asked.line == "POST /prompt"));
 }
+
+/// The first frame of `file`, a grey byte a pixel, row by row.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test reads the file it checks with FFmpeg, and waits on it"
+)]
+fn first_frame_greys(file: &Path) -> Vec<u8> {
+    let output = std::process::Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(file)
+        .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+#[test]
+fn what_clips_of_a_guide_say_they_are_is_read_over_where_each_is() {
+    let folder = tempfile::tempdir().unwrap();
+    let tools = Tools::find();
+    // Two masks of a guide of 64 frames at 16 a second: the left half, and the right.
+    let half = |left: bool| -> Vec<u8> {
+        (0..90 * 160)
+            .map(|at| if (at % 160 < 80) == left { u8::MAX } else { 0 })
+            .collect()
+    };
+    for (name, left) in [("car.mp4", true), ("van.mp4", false)] {
+        let frames = vec![half(left); 64];
+        tools
+            .greys(&frames, (160, 90), 16.0, &folder.path().join(name))
+            .unwrap();
+    }
+    let request = Request::parse(
+        &json!({
+            "kerf-request": 1,
+            "prompt": "a car and a van, at dusk",
+            "regions": [
+                {"prompt": "a red sports car", "mask": folder.path().join("car.mp4")},
+                {"prompt": "a white delivery van", "mask": folder.path().join("van.mp4")},
+            ],
+            "seconds": 4.0,
+            "seed": 7,
+            "out": folder.path().join(".making-001.mp4"),
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let (server, kept) = serve(comfy);
+    let mut said = Vec::new();
+    make(
+        &request,
+        folder.path(),
+        &Workflow::named("shot").unwrap(),
+        &server,
+        &tools,
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |line| said.push(line.to_owned()),
+    )
+    .unwrap();
+    // Each mask went up as the model reads it: at the size it makes, a frame for each four
+    // of the 65 it makes, from the first.
+    for (number, left) in [(1, true), (2, false)] {
+        let sent = folder.path().join(format!("region{number}.comfy.mp4"));
+        let picture = tools.picture(&sent).unwrap();
+        assert_eq!((picture.size, picture.frames), ((832, 480), 17), "{sent:?}");
+        let grey = first_frame_greys(&sent);
+        let at = |x: usize| grey[240 * 832 + x];
+        assert_eq!((at(100) > 200, at(700) > 200), (left, !left), "{sent:?}");
+    }
+    let kept = kept.lock().unwrap();
+    let queued = kept
+        .iter()
+        .find(|asked| asked.line == "POST /prompt")
+        .unwrap();
+    let queued: serde_json::Value = serde_json::from_slice(&queued.body).unwrap();
+    let graph = &queued["prompt"];
+    let node = |link: &serde_json::Value| graph[link[0].as_str().unwrap()].clone();
+    // The model reads the line's words joined with each region's, in turn.
+    let mut joined = node(&graph["9"]["inputs"]["positive"]);
+    let mut heard = Vec::new();
+    while joined["class_type"] == "ConditioningCombine" {
+        let held = node(&joined["inputs"]["conditioning_2"]);
+        assert_eq!(held["class_type"], "ConditioningSetMask");
+        let words = node(&held["inputs"]["conditioning"]);
+        assert_eq!(words["inputs"]["clip"], graph["4"]["inputs"]["clip"]);
+        let matte = node(&held["inputs"]["mask"]);
+        let load = node(&node(&matte["inputs"]["image"])["inputs"]["video"]);
+        heard.push((
+            words["inputs"]["text"].as_str().unwrap().to_owned(),
+            load["inputs"]["file"].as_str().unwrap().to_owned(),
+        ));
+        joined = node(&joined["inputs"]["conditioning_1"]);
+    }
+    heard.reverse();
+    assert_eq!(joined, graph["4"]);
+    assert_eq!(joined["inputs"]["text"], "a car and a van, at dusk");
+    let sent = |number: u32| {
+        let bytes = std::fs::read(folder.path().join(format!("region{number}.comfy.mp4"))).unwrap();
+        format!("kerf-{}.mp4", hash(&bytes))
+    };
+    assert_eq!(
+        heard,
+        [
+            ("a red sports car".to_owned(), sent(1)),
+            ("a white delivery van".to_owned(), sent(2)),
+        ]
+    );
+    let said = said.join("\n");
+    assert!(
+        said.contains("\"a red sports car\", \"a white delivery van\""),
+        "{said}"
+    );
+    drop(kept);
+
+    // A workflow whose model is told nothing of regions says it leaves them out.
+    let (server, _) = serve(comfy);
+    let mut said = Vec::new();
+    make(
+        &request,
+        folder.path(),
+        &Workflow::named("still").unwrap(),
+        &server,
+        &tools,
+        &patience(),
+        &AtomicBool::new(false),
+        &mut |line| said.push(line.to_owned()),
+    )
+    .ok();
+    assert!(
+        said.iter()
+            .any(|line| line.contains("`regions`") && line.contains("left out")),
+        "{said:?}"
+    );
+}
