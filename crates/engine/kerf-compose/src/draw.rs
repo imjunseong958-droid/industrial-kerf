@@ -625,12 +625,53 @@ mod tests {
                 in_depth: true,
                 digest: None,
             };
-            let moved = parent_motion(&rig, canvas, Time::ZERO);
+            let (_, moved) = parent_motion(&rig, canvas, Time::ZERO);
             let at = moved.apply(Vec2::new(from.0, from.1));
             assert!(
                 (at.x - to.0).abs() < 1e-6 && (at.y - to.1).abs() < 1e-6,
                 "{set}: {at:?} against {to:?}"
             );
+        }
+    }
+
+    /// A clip in depth that is nowhere in depth, moved back by nothing and turned by nothing, is
+    /// where its placing on the frame has it, to the bit: that placing as it is in depth
+    /// ([`Affine3::from`]), about the world's middle. Its plane is not worked out again from
+    /// where its corners land, which costs its numbers their last places, so that a clip at
+    /// half its size is a hair off half.
+    #[test]
+    fn a_clip_in_depth_that_is_nowhere_in_depth_is_where_it_is_on_the_frame() {
+        for (rig, set) in [
+            ("", "scale=0.5"),
+            ("", "x=0.3 y=-0.2 scale=0.25"),
+            ("", "x=-0.137 y=0.291 scale=0.61 rotation=33 anchor_x=0.25"),
+            ("", "scale_x=1.5 scale_y=-0.5 skew=20 skew_axis=30 x=0.05"),
+            // Taken to its middle and back, this one is off in its last place.
+            ("", "x=-0.39 y=-0.23 scale=1.3 rotation=300 anchor_x=-0.25"),
+            ("x=0.1 y=-0.3 rotation=20 scale=0.7", "x=0.21 scale=0.5"),
+        ] {
+            let parent = if rig.is_empty() { "" } else { " parent=n1" };
+            let document = format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=1920x1080 audio=48000\n  track V1 video\n    clip n1 gen=null@1 at=0f dur=48f\n      set opacity=1 {rig}\n  track V2 video\n    clip c1 gen=solid@1 at=0f dur=48f{parent}\n      set three_d=true {set}\n"
+            );
+            let project = kerf_lang::parse_document(&document, Catalog::builtin())
+                .unwrap_or_else(|errors| panic!("{set}: {errors:?}"))
+                .project;
+            let drawing = Drawing::new(&project, Catalog::builtin(), &ComposeOptions::default())
+                .unwrap_or_else(|error| panic!("{set}: {error}"));
+            let sequence = &drawing.sequences[0];
+            let plan = &sequence.tracks[1].shown[0].plan;
+            let scene = three_d::Scene::at(sequence, Time::ZERO, (1920, 1080));
+            let place = drawing.geometry(sequence, plan, Time::ZERO);
+            let plane = three_d::Plane::of(&scene, plan, (1920.0, 1080.0), &place, Time::ZERO);
+            // Its top left corner, and where one pixel across it and one down it go.
+            let on_frame = [
+                (place.e - 960.0, place.f - 540.0),
+                (place.a, place.b),
+                (place.c, place.d),
+            ]
+            .map(|(x, y)| [x, y, 0.0].map(f64::to_bits));
+            assert_eq!(plane.bits()[..9], on_frame.concat(), "{rig} {set}");
         }
     }
 

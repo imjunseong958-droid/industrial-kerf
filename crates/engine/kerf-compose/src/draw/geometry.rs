@@ -190,19 +190,21 @@ pub(super) fn placed(
     (slanted, scale)
 }
 
-/// How a parent has moved its children at its clip time `time`: from where it would sit with no
-/// position, scale, or rotation of its own, to where it is. Across the frame, which is all of it
-/// for a flat child; one in depth is then turned and moved back with it
-/// ([`three_d::Scene::at`]).
-pub(super) fn parent_motion(rig: &Rig, canvas: (f64, f64), time: Time) -> Affine {
+/// Where a parent's own picture is on the canvas at its clip time `time`, as the document says
+/// it and not on the whole pixels a clip that holds still is drawn on; and how it has moved its
+/// children: from where it would sit with no position, scale, or rotation of its own, to there.
+/// Across the frame, which is all of it for a flat child; one in depth is then held in depth
+/// with it, about the middle of that picture ([`SequencePlan::taken_by_parents`]).
+pub(super) fn parent_motion(rig: &Rig, canvas: (f64, f64), time: Time) -> (Affine, Affine) {
     let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), time);
     let [l, r, t, b, _, _, _, _, ax, ay, _, _, _, _] = numbers;
     let rest = [l, r, t, b, 1.0, 1.0, 1.0, 0.0, ax, ay, 0.0, 0.0, 0.0, 0.0];
     let (now, _) = placed(rig.size, rig.fit, false, canvas, numbers);
     let (before, _) = placed(rig.size, rig.fit, false, canvas, rest);
-    before
+    let moved = before
         .inverse()
-        .map_or(Affine::IDENTITY, |inverse| now.then_apply(&inverse))
+        .map_or(Affine::IDENTITY, |inverse| now.then_apply(&inverse));
+    (now, moved)
 }
 
 /// What a clip's crop at clip time `time` leaves of its `picture`, in the

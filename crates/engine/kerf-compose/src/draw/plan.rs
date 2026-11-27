@@ -123,27 +123,54 @@ impl SequencePlan {
         })
     }
 
-    /// How the parents of `clip` have moved it across the canvas at sequence time `at`, in
-    /// canvas pixels: each one's [`parent_motion`], the one it names first.
-    pub(super) fn moved_by_parents(&self, clip: &Clip, at: Time) -> Affine {
+    /// How the parents of `clip` take it at sequence time `at`, the one it names first, in one
+    /// pass over them: each moves it across the canvas ([`parent_motion`]), and with it where
+    /// the parents in depth before it hold what they hold.
+    pub(super) fn taken_by_parents(&self, clip: &Clip, at: Time) -> Taken {
         let canvas = (f64::from(self.width), f64::from(self.height));
-        self.parents_of(clip).fold(Affine::IDENTITY, |moved, rig| {
-            parent_motion(rig, canvas, rig.clip.time_at(at)).then_apply(&moved)
-        })
+        let mut taken = Taken {
+            moved: Affine::IDENTITY,
+            held: Vec::new(),
+        };
+        for rig in self.parents_of(clip) {
+            let time = rig.clip.time_at(at);
+            let (placed, moved) = parent_motion(rig, canvas, time);
+            taken.moved = moved.then_apply(&taken.moved);
+            for (about, _) in &mut taken.held {
+                *about = moved.apply(*about);
+            }
+            if !rig.in_depth {
+                continue;
+            }
+            let numbers = ["z", "rotate_x", "rotate_y"]
+                .map(|name| number(&param(&rig.clip, name).value_at(time)));
+            if numbers != [0.0; 3] {
+                let middle = Vec2::new(f64::from(rig.size.0) / 2.0, f64::from(rig.size.1) / 2.0);
+                taken.held.push((placed.apply(middle), numbers));
+            }
+        }
+        taken
     }
 
-    /// Where the middle of a parent's picture is on the canvas at sequence time `at`, its own
-    /// parents having moved it: what it turns about in depth, and its children with it. As
-    /// the document says it, and not on the whole pixels a clip that holds still is drawn on.
-    pub(super) fn middle_of(&self, rig: &Rig, at: Time) -> Vec2 {
-        let canvas = (f64::from(self.width), f64::from(self.height));
-        let numbers = geometry_numbers(&rig.clip, rig.path.as_ref(), rig.clip.time_at(at));
-        let own = placed(rig.size, rig.fit, false, canvas, numbers).0;
-        let middle = Vec2::new(f64::from(rig.size.0) / 2.0, f64::from(rig.size.1) / 2.0);
-        self.moved_by_parents(&rig.clip, at)
-            .then_apply(&own)
-            .apply(middle)
+    /// How the parents of `clip` have moved it across the canvas at sequence time `at`, in
+    /// canvas pixels: all that a flat clip takes of them.
+    pub(super) fn moved_by_parents(&self, clip: &Clip, at: Time) -> Affine {
+        self.taken_by_parents(clip, at).moved
     }
+}
+
+/// How its parents take a clip at a moment ([`SequencePlan::taken_by_parents`]): across the
+/// canvas, as they take any clip, and then those of them in depth take a clip in depth with
+/// them ([`three_d::Scene::at`]).
+pub(super) struct Taken {
+    /// Across the canvas, in its pixels: each parent's motion after the one before, the one
+    /// the clip names first.
+    pub(super) moved: Affine,
+    /// Each parent in depth that is anywhere in depth but where a flat clip is, the one the
+    /// clip names first: the middle of its picture on the canvas, its own parents having moved
+    /// it, which it holds what it holds about; and its `z`, in frame heights, its `rotate_x`
+    /// and its `rotate_y`.
+    pub(super) held: Vec<(Vec2, [f64; 3])>,
 }
 
 pub(super) struct ClipPlan {
