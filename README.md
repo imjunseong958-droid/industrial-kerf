@@ -261,7 +261,8 @@ come and go. The document writes such a clip by the one it follows,
 start, and with `c3` removed the clip in its place, though a ripple delete of
 `c3` takes `t1` out with it when it was wholly over it. In the editor a clip's
 menu has Attach to Its Shot, its shot being the clip of the first video track
-where it starts, and Detach; a line joins a follower to the clip it follows.
+where it starts, and Detach; a line joins a follower to the clip it follows,
+and while a clip is dragged what it would take along moves with it.
 
 When media is imported, `kerfd` indexes it in the background — one FFmpeg
 pass for scene cuts and a loudness envelope, a hundredth of a second at a

@@ -340,6 +340,53 @@ impl Lanes {
         })
     }
 
+    /// What a move of clip `id` takes along, as kerfd moves it (`carry` in kerf-model): the
+    /// clips linked to it, each clip that follows one that moves, and each that follows
+    /// those, each once. None on a locked track, which nothing moves, nor on a lane showing
+    /// a previewed proposal's clips, which are not the program's.
+    pub(super) fn along(&self, id: &str) -> Vec<String> {
+        let Some((row, index)) = self.find(id) else {
+            return Vec::new();
+        };
+        let movable = || {
+            self.rows
+                .iter()
+                .filter(|row| !row.locked && !row.previewed)
+                .flat_map(|row| &row.clips)
+        };
+        let mut moved: HashSet<&str> = HashSet::from([id]);
+        let mut along = Vec::new();
+        if let Some(link) = self.rows[row].clips[index].clip.link.as_deref() {
+            for clip in movable().filter(|clip| clip.clip.link.as_deref() == Some(link)) {
+                if moved.insert(&clip.id) {
+                    along.push(clip.id.clone());
+                }
+            }
+        }
+        // Of what has moved, the clips whose followers have yet to.
+        let mut ahead = moved.clone();
+        while !ahead.is_empty() {
+            let carried: HashSet<&str> = movable()
+                .filter(|clip| {
+                    clip.clip
+                        .follows
+                        .as_deref()
+                        .is_some_and(|followed| ahead.contains(followed))
+                })
+                .map(|clip| clip.id.as_str())
+                .filter(|id| !moved.contains(id))
+                .collect();
+            moved.extend(&carried);
+            along.extend(
+                movable()
+                    .filter(|clip| carried.contains(clip.id.as_str()))
+                    .map(|clip| clip.id.clone()),
+            );
+            ahead = carried;
+        }
+        along
+    }
+
     /// The row at `lane_y` points from the lanes' top.
     pub(super) fn row_at(&self, lane_y: f32) -> Option<usize> {
         self.rows

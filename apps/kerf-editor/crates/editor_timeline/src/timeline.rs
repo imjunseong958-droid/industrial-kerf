@@ -29,8 +29,11 @@
 //! A clip that follows another (a title its shot, music a scene's first
 //! shot) is joined to it by a line from where it starts, with a dot on the
 //! clip it follows: it moves when that one moves, and ripple edits pass
-//! under it. A clip's menu has it follow its shot, the clip of the first
-//! video track where it starts, or lets it go.
+//! under it. While a clip is moved or slid, what moves with it (the clips
+//! linked to it, what follows them, but nothing on a locked track) is drawn
+//! as far along, its line with it. A chosen clip's lines are in the accent.
+//! A clip's menu has it follow its shot, the clip of the first video track
+//! where it starts, or lets it go.
 //!
 //! The program stays editable while proposals are open: each open proposal
 //! has a band on the ruler ("Proposal · author"), a veil over the lanes it
@@ -73,6 +76,7 @@ mod viewport;
 mod watch;
 
 pub use activity::activity_label;
+pub use drag::drawn_along;
 pub use editor_state::track_heights::{
     default_height, stepped_height, TRACK_LEAST, TRACK_MOST, TRACK_STEPS,
 };

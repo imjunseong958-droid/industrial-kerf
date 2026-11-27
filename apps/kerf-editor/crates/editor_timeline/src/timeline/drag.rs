@@ -2,19 +2,22 @@
 //! ([`Gesture`]): a clip moved, slipped or slid by its body, or trimmed,
 //! rippled or rolled by an edge ([`ClipDrag`]), snapping as it goes, and
 //! the edit it makes; where the clip is drawn while it is dragged and once
-//! dropped until kerfd answers ([`Ghost`], [`Pending`]); and the pointer a
-//! drag holds.
+//! dropped until kerfd answers, with what it takes along ([`Ghost`],
+//! [`Pending`]); and the pointer a drag holds.
 
 use super::gain::BandDrag;
 use super::heights::ResizeDrag;
-use super::lanes::{Lanes, CLIP_INSET};
+use super::lanes::{Build, ClipBox, Lanes, CLIP_INSET};
 use super::signal::SignalDraw;
 use super::tools::Tool;
 use super::viewport::Viewport;
 use super::TimelineView;
+use editor_state::model::Timeline;
+use editor_state::prefs::TrackHeights;
 use editor_ui::theme::layout;
 use gpui::CursorStyle;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 /// Points inside a clip's edge that take a trim.
@@ -230,6 +233,43 @@ impl ClipDrag {
         (start as f64 / fps, length.max(1) as f64 / fps)
     }
 
+    /// Where it is drawn while it is dragged, and what it takes along.
+    pub(super) fn ghost(&self, lanes: &Lanes) -> Ghost {
+        let fps = lanes.fps;
+        let (start, duration) = self.span(fps);
+        // A move or a slide takes along what moves with the clip; a slip
+        // and a trim leave it where it is.
+        let carry = match (self.edit, self.tool) {
+            (Edit::Move, Tool::Slip) | (Edit::TrimIn | Edit::TrimOut, _) => 0,
+            (Edit::Move, _) => self.frames,
+        };
+        Ghost {
+            id: self.id.clone(),
+            row: self.target,
+            start,
+            duration,
+            edge: match self.edit {
+                Edit::Move => None,
+                Edit::TrimIn => Some(Zone::In),
+                Edit::TrimOut => Some(Zone::Out),
+            },
+            dragging: true,
+            head_shift: if self.edit == Edit::TrimIn {
+                self.frames as f64 / fps
+            } else if self.tool == Tool::Slip {
+                -(self.frames as f64) / fps
+            } else {
+                0.0
+            },
+            along: if carry == 0 {
+                Vec::new()
+            } else {
+                lanes.along(&self.id)
+            },
+            shift: carry as f64 / fps,
+        }
+    }
+
     /// The time of the edge it moves, and how far it has moved, in seconds:
     /// what the readout by it says.
     pub(super) fn readout(&self, fps: f64) -> (f64, f64) {
@@ -315,6 +355,90 @@ pub(super) struct Ghost {
     pub(super) dragging: bool,
     /// Its media's head moves with a leading trim: seconds of it.
     pub(super) head_shift: f64,
+    /// What its edit moves with it, each on its own row, `shift` seconds
+    /// along: the clips linked to it, and what follows them ([`Lanes::along`]).
+    pub(super) along: Vec<String>,
+    pub(super) shift: f64,
+}
+
+/// A clip as a ghost draws it: on which row, from when, for how long.
+pub(super) struct Placed<'a> {
+    pub(super) clip: &'a ClipBox,
+    pub(super) row: usize,
+    pub(super) start: f64,
+    pub(super) duration: f64,
+}
+
+impl Placed<'_> {
+    pub(super) fn end(&self) -> f64 {
+        self.start + self.duration
+    }
+}
+
+impl Ghost {
+    /// Each clip it draws other than where the snapshot has it: what it
+    /// takes along, then its own clip, on the row it would land on.
+    pub(super) fn placed<'a>(&self, lanes: &'a Lanes) -> Vec<Placed<'a>> {
+        let mut placed: Vec<Placed> = self
+            .along
+            .iter()
+            .filter_map(|id| {
+                let (row, index) = lanes.find(id)?;
+                let clip = &lanes.rows[row].clips[index];
+                Some(Placed {
+                    clip,
+                    row,
+                    start: clip.start + self.shift,
+                    duration: clip.duration,
+                })
+            })
+            .collect();
+        if let Some((row, index)) = lanes.find(&self.id)
+            && self.row < lanes.rows.len()
+        {
+            placed.push(Placed {
+                clip: &lanes.rows[row].clips[index],
+                row: self.row,
+                start: self.start,
+                duration: self.duration,
+            });
+        }
+        placed
+    }
+
+    /// Whether it draws clip `id` elsewhere.
+    pub(super) fn moves(&self, id: &str) -> bool {
+        self.id == id || self.along.iter().any(|along| along == id)
+    }
+}
+
+/// Where the timeline draws each clip a drag of clip `clip`'s body by
+/// `frames` with `tool` moves besides it, as kerfd would move them: the
+/// clips linked to it and what follows them, each the same distance along
+/// on its own track, but none on a locked track. Each clip's id, and the
+/// start it is drawn at in seconds.
+pub fn drawn_along(timeline: &Timeline, clip: &str, tool: Tool, frames: i64) -> Vec<(String, f64)> {
+    let lanes = Lanes::build(Build {
+        current: timeline,
+        first_cut: None,
+        bands: Vec::new(),
+        preview: None,
+        heights: &TrackHeights::default(),
+        qc: &HashSet::new(),
+    });
+    let Some((row, index)) = lanes.find(clip) else {
+        return Vec::new();
+    };
+    let (start, top) = (lanes.rows[row].clips[index].start, lanes.rows[row].top);
+    let mut drag = ClipDrag::new(&lanes, row, index, Zone::Body, tool, start, top, 0.0);
+    drag.moved = true;
+    drag.frames = frames.clamp(drag.least, drag.most);
+    drag.ghost(&lanes)
+        .placed(&lanes)
+        .into_iter()
+        .filter(|placed| placed.clip.id != clip)
+        .map(|placed| (placed.clip.id.clone(), placed.start))
+        .collect()
 }
 
 /// A dropped clip, until kerfd answers.
@@ -379,33 +503,12 @@ impl TimelineView {
         Some(self.clip_rect(row, index))
     }
 
-    /// The clip drawn other than where the snapshot has it: the one being
-    /// dragged, else one dropped and not yet answered for.
+    /// The clip drawn other than where the snapshot has it, with what it
+    /// takes along: the one being dragged, else one dropped and not yet
+    /// answered for.
     pub(super) fn ghost(&self) -> Option<Ghost> {
-        let fps = self.lanes.fps;
         match &self.gesture {
-            Some(Gesture::Clip(drag)) if drag.moved => {
-                let (start, duration) = drag.span(fps);
-                Some(Ghost {
-                    id: drag.id.clone(),
-                    row: drag.target,
-                    start,
-                    duration,
-                    edge: match drag.edit {
-                        Edit::Move => None,
-                        Edit::TrimIn => Some(Zone::In),
-                        Edit::TrimOut => Some(Zone::Out),
-                    },
-                    dragging: true,
-                    head_shift: if drag.edit == Edit::TrimIn {
-                        drag.frames as f64 / fps
-                    } else if drag.tool == Tool::Slip {
-                        -(drag.frames as f64) / fps
-                    } else {
-                        0.0
-                    },
-                })
-            }
+            Some(Gesture::Clip(drag)) if drag.moved => Some(drag.ghost(&self.lanes)),
             _ => self
                 .pending
                 .as_ref()
