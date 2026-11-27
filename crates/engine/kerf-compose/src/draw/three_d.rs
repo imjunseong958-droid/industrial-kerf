@@ -26,14 +26,21 @@
 //! Where a clip is in the world is one [`Affine3`] of its picture's pixels ([`Plane::of`]): its
 //! placing on the frame as that is in depth ([`Affine3::from`]), its numbers as they are and not
 //! worked out again, then held in depth by the clip about its own middle and by each of its
-//! parents in depth about theirs, one rule for them all ([`held`]). So a clip in depth that is
-//! nowhere in depth is where the flat clip is, to the bit. How its parents take a clip is asked of
-//! its sequence once, in one pass over them ([`SequencePlan::taken_by_parents`]): across the
-//! frame, which is in the placing it comes with, and where each of them in depth then holds it.
-//! A mesh's own space in the world is another [`Affine3`] ([`mesh`]), and so is each node of a
-//! file ([`gltf`]). The camera is in none of them: it sees what they place.
+//! parents in depth about theirs, one rule for them all ([`kerf_geom::place::held`]). So a clip
+//! in depth that is nowhere in depth is where the flat clip is, to the bit. How its parents take
+//! a clip is asked of its sequence once, in one pass over them
+//! ([`SequencePlan::taken_by_parents`]): across the frame, which is in the placing it comes
+//! with, and where each of them in depth then holds it. A mesh's own space in the world is
+//! another [`Affine3`] ([`mesh`]), and so is each node of a file ([`gltf`]). The camera is in
+//! none of them: it sees what they place.
+//!
+//! The sums of all that are kerf-geom's ([`kerf_geom::place`]), where whatever draws over the
+//! picture asks them too: the lift into depth ([`lifted`]), how parents take what they hold
+//! ([`Taken`]), and the camera, from its numbers to its rays ([`Camera`]). Here a clip's
+//! numbers are read, and what those sums place is drawn.
 
 use super::*;
+use kerf_geom::place::{lifted, turned};
 
 mod gltf;
 pub(super) mod mesh;
@@ -44,9 +51,9 @@ pub(super) mod world;
 pub(super) use seen::Seen;
 
 /// The field of view at which a clip at z = 0 is its 2D self, in degrees.
-const DEFAULT_FOV: f64 = 40.0;
+const DEFAULT_FOV: f64 = Camera::RESTING_FOV;
 /// How near a camera sees, in frame heights.
-const NEAR: f64 = 0.001;
+const NEAR: f64 = Camera::NEAR;
 /// The widest a clip is blurred, in frame heights: as near the camera as can be, a blur has no end.
 const MOST_BLUR: f64 = 0.1;
 /// How much nearer one plane must be than another, in pixels, to go in front of it: less than this
@@ -94,77 +101,6 @@ fn unit(a: Vector) -> Vector {
         times(a, 1.0 / length)
     } else {
         a
-    }
-}
-
-/// Turn about x by `pitch` and then about y by `yaw`, in radians.
-fn turned(a: Vector, pitch: f64, yaw: f64) -> Vector {
-    let (s, c) = pitch.sin_cos();
-    let [x, y, z] = a;
-    let (y, z) = (y * c - z * s, y * s + z * c);
-    let (s, c) = yaw.sin_cos();
-    [x * c + z * s, y, -x * s + z * c]
-}
-
-/// Turn about z by `roll`, in radians: from x toward y, as a clip's `rotation` turns it on the frame.
-fn rolled(a: Vector, roll: f64) -> Vector {
-    let (s, c) = roll.sin_cos();
-    [a[0] * c - a[1] * s, a[0] * s + a[1] * c, a[2]]
-}
-
-/// `place`, and then as what is at `about` on the frame holds it in depth: turned about there by
-/// its `rotate_x` and then by its `rotate_y`, in degrees, and moved back by its `z`, here in pixels.
-/// A clip in depth holds its own picture so, about its middle, and each of its parents in depth
-/// then holds it so, about its own.
-///
-/// What is not turned is not taken to `about` and back, which would cost its numbers their last
-/// place: a clip in depth that is nowhere in depth is where it is on the frame, to the bit.
-fn held(place: Affine3, about: Vector, [back, pitch, yaw]: [f64; 3]) -> Affine3 {
-    let turned = if pitch == 0.0 && yaw == 0.0 {
-        place
-    } else {
-        place
-            .moved(times(about, -1.0))
-            .turned_x_deg(pitch)
-            .turned_y_deg(yaw)
-            .moved(about)
-    };
-    turned.moved([0.0, 0.0, back])
-}
-
-/// How the parents of a camera or a light have moved it: across the frame, as they move any clip,
-/// and then in depth. A camera and a light have no picture for a parent to move, so it is where
-/// they are and which way they are turned that go with it.
-struct Rigged {
-    /// Across the canvas, in its pixels.
-    moved: Affine,
-    /// And then in depth, in the scene's.
-    carried: Affine3,
-    /// The canvas's size, and how many of the scene's pixels one of its own is across and down.
-    canvas: (f64, f64),
-    per: (f64, f64),
-}
-
-impl Rigged {
-    /// Where a point of the world is, its parents having moved it.
-    fn point(&self, [x, y, z]: Vector) -> Vector {
-        let middle = (self.canvas.0 / 2.0, self.canvas.1 / 2.0);
-        let on = self.moved.apply(Vec2::new(
-            middle.0 + x / self.per.0,
-            middle.1 + y / self.per.1,
-        ));
-        self.carried.apply([
-            (on.x - middle.0) * self.per.0,
-            (on.y - middle.1) * self.per.1,
-            z,
-        ])
-    }
-
-    /// Where a way is turned to: by as much as its parents turn a clip on the frame, however they
-    /// size it, and then as they turn in depth.
-    fn way(&self, of: Vector) -> Vector {
-        let roll = self.moved.b.atan2(self.moved.a);
-        self.carried.apply_vec(rolled(of, roll))
     }
 }
 
@@ -331,13 +267,8 @@ fn square_to(way: Vector) -> (Vector, Vector) {
 
 /// How a scene is seen and lit at a moment, in output pixels.
 pub(super) struct Scene {
-    eye: Vector,
-    right: Vector,
-    down: Vector,
-    forward: Vector,
-    focal: f64,
-    center: (f64, f64),
-    height: f64,
+    /// What it is seen by, onto the output picture.
+    camera: Camera,
     lights: Vec<Light>,
     /// What may be in a light's way, when one says it casts shadows ([`Scene::casts_shadows`]).
     pub casters: Vec<Caster>,
@@ -383,30 +314,13 @@ impl Scene {
         // How its parents in depth hold a clip in depth, the one it names first, each about
         // where its middle is on the frame. `None` where none of them is anywhere in depth but
         // where a flat clip is.
-        let carried_by = |taken: &Taken| {
-            taken.held.iter().fold(
-                None,
-                |carried: Option<Affine3>, (middle, [z, pitch, yaw])| {
-                    let about = [
-                        (middle.x - canvas.0 / 2.0) * per.0,
-                        (middle.y - canvas.1 / 2.0) * per.1,
-                        0.0,
-                    ];
-                    let before = carried.unwrap_or(Affine3::IDENTITY);
-                    Some(held(before, about, [z * height, *pitch, *yaw]))
-                },
-            )
-        };
+        let carried_by = |taken: &Taken| taken.carried(canvas, per, height);
         let rigged = |clip: &Clip| {
-            clip.parent.as_ref().map(|_| {
-                let taken = sequence.taken_by_parents(clip, at);
-                Rigged {
-                    moved: taken.moved,
-                    carried: carried_by(&taken).unwrap_or(Affine3::IDENTITY),
-                    canvas,
-                    per,
-                }
-            })
+            let taken = clip
+                .parent
+                .as_ref()
+                .map(|_| sequence.taken_by_parents(clip, at));
+            taken.map(|taken| taken.rigged(canvas, per, height))
         };
         let mut camera = None;
         let mut lights = Vec::new();
@@ -474,36 +388,21 @@ impl Scene {
                 .and_then(|value| value.as_number())
                 .unwrap_or(otherwise)
         };
-        let distance = |fov: f64| height / 2.0 / (fov.clamp(1.0, 170.0).to_radians() / 2.0).tan();
         let own = |name: &str| {
             camera.map_or(0.0, |clip| {
                 number(&param(clip, name).value_at(clip.time_at(at)))
             })
         };
-        let eye = [
-            own("x") * width,
-            own("y") * height,
-            own("z") * height - distance(DEFAULT_FOV),
-        ];
-        let (pitch, yaw, roll) = (
-            read("tilt", 0.0).to_radians(),
-            read("pan", 0.0).to_radians(),
-            read("roll", 0.0).to_radians(),
-        );
-        let forward = turned([0.0, 0.0, 1.0], pitch, yaw);
-        let level_right = turned([1.0, 0.0, 0.0], pitch, yaw);
-        let level_down = cross(forward, level_right);
-        let (s, c) = roll.sin_cos();
-        let right = add(times(level_right, c), times(level_down, s));
-        let down = add(times(level_down, c), times(level_right, -s));
-        // A camera with a parent is where the parent takes it, looking as the parent turns it.
-        let (eye, [right, down, forward]) = match camera.and_then(rigged) {
-            Some(rigged) => (
-                rigged.point(eye),
-                [right, down, forward].map(|way| rigged.way(way)),
-            ),
-            None => (eye, [right, down, forward]),
+        let lens = Lens {
+            at: [own("x"), own("y"), own("z")],
+            tilt: read("tilt", 0.0),
+            pan: read("pan", 0.0),
+            roll: read("roll", 0.0),
+            fov: read("fov", DEFAULT_FOV),
         };
+        // A camera with a parent is where the parent takes it, looking as the parent turns it.
+        let seen_by = Camera::of(&lens, (width, height), camera.and_then(rigged).as_ref());
+        let (eye, forward) = (seen_by.eye, seen_by.forward);
         // Every clip in depth that shows, on a track that shows or not: an effect may read a
         // hidden one. What is on one parent goes where it takes all of it, worked out once.
         let mut taken: HashMap<&Id, Option<Affine3>> = HashMap::new();
@@ -532,13 +431,7 @@ impl Scene {
             dot(minus([0.0, 0.0, sharp], eye), forward)
         };
         Self {
-            eye,
-            right,
-            down,
-            forward,
-            focal: distance(read("fov", DEFAULT_FOV)),
-            center: (width / 2.0, height / 2.0),
-            height,
+            camera: seen_by,
             lights,
             casters: Vec::new(),
             standing: mesh::InTheWay::default(),
@@ -550,7 +443,12 @@ impl Scene {
 
     /// Where its camera is and how it sees, as bits: what says where a ray through each pixel goes.
     pub(super) fn camera_bits(&self) -> [u64; 16] {
-        let [e, r, d, f] = [self.eye, self.right, self.down, self.forward];
+        let [e, r, d, f] = [
+            self.camera.eye,
+            self.camera.right,
+            self.camera.down,
+            self.camera.forward,
+        ];
         [
             e[0],
             e[1],
@@ -564,10 +462,10 @@ impl Scene {
             f[0],
             f[1],
             f[2],
-            self.focal,
-            self.center.0,
-            self.center.1,
-            self.height,
+            self.camera.focal,
+            self.camera.center.0,
+            self.camera.center.1,
+            self.camera.height,
         ]
         .map(f64::to_bits)
     }
@@ -586,7 +484,7 @@ impl Scene {
     /// is. It goes by one over the distance, as a model that reads depth is given it, and by no
     /// more than the scene's own numbers, so that it holds still from frame to frame.
     fn nearness(&self, ahead: f64) -> f32 {
-        let unit = self.height / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
+        let unit = self.camera.height / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
         (unit / (unit + ahead.max(0.0))) as f32
     }
 
@@ -594,30 +492,14 @@ impl Scene {
     /// the camera's way that is: nowhere if it runs along the plane, or meets it no nearer than the
     /// camera sees or behind it.
     #[inline]
-    pub(super) fn meets(&self, plane: &Plane, (x, y): (f64, f64)) -> Option<(Vector, f64)> {
-        let ray = add(
-            add(
-                times(self.right, x - self.center.0),
-                times(self.down, y - self.center.1),
-            ),
-            times(self.forward, self.focal),
-        );
-        let toward = dot(ray, plane.normal);
-        if toward.abs() < 1e-12 {
-            return None;
-        }
-        let along = dot(minus(plane.origin, self.eye), plane.normal) / toward;
-        let ahead = along * dot(ray, self.forward);
-        if ahead < NEAR * self.height {
-            return None;
-        }
-        Some((add(self.eye, times(ray, along)), ahead))
+    pub(super) fn meets(&self, plane: &Plane, at: (f64, f64)) -> Option<(Vector, f64)> {
+        self.camera.meets(plane.origin, plane.normal, at)
     }
 
     /// How far each pixel of a plane spreads, from its depths along the camera's way.
     fn blur_radii(&self, depth: &[f32]) -> Vec<f32> {
         let (focus, aperture) = (self.focus as f32, self.aperture as f32);
-        let most = (self.height * MOST_BLUR) as f32;
+        let most = (self.camera.height * MOST_BLUR) as f32;
         depth
             .iter()
             .map(|depth| super::focus::radius_at(*depth, focus, aperture, most))
@@ -764,33 +646,21 @@ impl Scene {
     /// Where a point of the world is seen on the output picture, in its pixels: nowhere for one
     /// at the eye or behind it.
     pub(super) fn on_screen(&self, at: Vector) -> Option<(f64, f64)> {
-        let from = minus(at, self.eye);
-        let ahead = dot(from, self.forward);
-        (ahead > 1e-9).then(|| {
-            (
-                self.center.0 + self.focal * dot(from, self.right) / ahead,
-                self.center.1 + self.focal * dot(from, self.down) / ahead,
-            )
-        })
+        self.camera.on_screen(at)
     }
 
     pub(super) fn facing(&self, at: Vector, normal: Vector) -> [f32; 3] {
-        let seen = if dot(minus(self.eye, at), normal) < 0.0 {
+        let seen = if dot(minus(self.camera.eye, at), normal) < 0.0 {
             times(normal, -1.0)
         } else {
             normal
         };
         [
-            dot(seen, self.right),
-            -dot(seen, self.down),
-            -dot(seen, self.forward),
+            dot(seen, self.camera.right),
+            -dot(seen, self.camera.down),
+            -dot(seen, self.camera.forward),
         ]
         .map(|side| kerf_draw::color::to_linear((0.5 + 0.5 * side.clamp(-1.0, 1.0)) as f32))
-    }
-
-    /// A point of the output picture on the plane z = 0, in the world.
-    fn world(&self, x: f64, y: f64, z: f64) -> Vector {
-        [x - self.center.0, y - self.center.1, z]
     }
 
     /// How far away a clip is, along the camera's way, for drawing far to near: its middle, where
@@ -798,7 +668,7 @@ impl Scene {
     pub fn depth(&self, plan: &ClipPlan, to_output: &Affine, time: Time) -> f64 {
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
         let middle = Plane::of(self, plan, size, to_output, time).middle;
-        dot(minus(middle, self.eye), self.forward)
+        dot(minus(middle, self.camera.eye), self.camera.forward)
     }
 
     /// How far down the world a clip goes for what takes it `fall` down the frame before its
@@ -842,7 +712,7 @@ impl Scene {
                         continue;
                     };
                     // A flat clip faces whichever way it is seen from.
-                    let seen = outside || dot(minus(self.eye, at), normal) >= 0.0;
+                    let seen = outside || dot(minus(self.camera.eye, at), normal) >= 0.0;
                     let light = table.toward(if seen { normal } else { times(normal, -1.0) });
                     for ((sum, light), color) in sum.iter_mut().zip(light).zip(color) {
                         *sum += light * color;
@@ -916,7 +786,7 @@ pub(super) fn shade_by_depth(
         .for_each(|(y, row)| {
             for (x, pixel) in row.chunks_mut(4).enumerate() {
                 let at = plane.point(x as f64 + 0.5, y as f64 + 0.5);
-                let ahead = dot(minus(at, scene.eye), scene.forward);
+                let ahead = dot(minus(at, scene.camera.eye), scene.camera.forward);
                 // The grey is a display's, as a model reads a file, and the picture is light.
                 let grey = kerf_draw::color::to_linear(scene.nearness(ahead)) * pixel[3];
                 pixel[..3].fill(grey);
@@ -1063,18 +933,13 @@ impl Plane {
     ) -> Self {
         let clip = &plan.clip;
         let read = |name: &str| number(&param(clip, name).value_at(time));
-        let numbers = [read("z") * scene.height, read("rotate_x"), read("rotate_y")];
-        // Flat on the frame, whose middle is the world's: the same numbers as on the frame.
-        let flat = Affine3::from(*to_output).moved(scene.world(0.0, 0.0, 0.0));
-        let on = to_output.apply(Vec2::new(size.0 / 2.0, size.1 / 2.0));
-        let about = scene.world(on.x, on.y, 0.0);
-        let own = held(flat, about, numbers);
-        // Turned about its middle, which is moved back with it.
-        let middle = [about[0], about[1], numbers[0]];
-        let (place, middle) = match scene.carried.get(&clip.id) {
-            Some(carried) => (carried.then_apply(&own), carried.apply(middle)),
-            None => (own, middle),
-        };
+        let numbers = [
+            read("z") * scene.camera.height,
+            read("rotate_x"),
+            read("rotate_y"),
+        ];
+        let carried = scene.carried.get(&clip.id);
+        let (place, middle) = lifted(to_output, size, scene.camera.center, numbers, carried);
         let (across, down) = (place.x, place.y);
         let perpendicular = cross(across, down);
         Self {
@@ -1200,7 +1065,7 @@ impl Plane {
     ) -> bool {
         let slack = f64::from(SAME_DEPTH);
         // Past a plane is the side of it the eye is not on. An eye in a plane sees it edge on.
-        let eye = other.off(scene.eye);
+        let eye = other.off(scene.camera.eye);
         let past = self
             .corners(crop)
             .iter()
@@ -1208,7 +1073,7 @@ impl Plane {
         if past {
             return true;
         }
-        let eye = self.off(scene.eye);
+        let eye = self.off(scene.camera.eye);
         other
             .corners(other_crop)
             .iter()
@@ -1231,7 +1096,7 @@ impl Scene {
         kerf_gpu::focus::Focus {
             focus: self.focus as f32,
             aperture: self.aperture as f32,
-            most: (self.height * MOST_BLUR) as f32,
+            most: (self.camera.height * MOST_BLUR) as f32,
             margin: super::focus::MARGIN,
         }
     }
@@ -1264,7 +1129,7 @@ impl Scene {
                 },
                 Light::Point(place, color, shadow, radius) => GpuLight {
                     kind: LightKind::Point,
-                    place: narrow(minus(*place, self.eye)),
+                    place: narrow(minus(*place, self.camera.eye)),
                     color: *color,
                     shadow: *shadow,
                     wide: *radius as f32,
@@ -1286,12 +1151,12 @@ impl Scene {
             })
             .collect();
         kerf_gpu::depth::Seen {
-            right: narrow(self.right),
-            down: narrow(self.down),
-            forward: narrow(self.forward),
-            focal: self.focal as f32,
-            center: [self.center.0 as f32, self.center.1 as f32],
-            near: (NEAR * self.height) as f32,
+            right: narrow(self.camera.right),
+            down: narrow(self.camera.down),
+            forward: narrow(self.camera.forward),
+            focal: self.camera.focal as f32,
+            center: [self.camera.center.0 as f32, self.camera.center.1 as f32],
+            near: (NEAR * self.camera.height) as f32,
             lights,
             spiral: spiral()
                 .iter()
@@ -1305,7 +1170,7 @@ impl Scene {
     pub(super) fn plane_for_gpu(&self, plane: &Plane) -> kerf_gpu::depth::Plane {
         let per = |way: Vector| 1.0 / dot(way, way).sqrt().max(1e-12);
         kerf_gpu::depth::Plane {
-            origin: narrow(minus(plane.origin, self.eye)),
+            origin: narrow(minus(plane.origin, self.camera.eye)),
             normal: narrow(plane.normal),
             to_u: narrow(times(
                 cross(plane.down, plane.perpendicular),
@@ -1346,7 +1211,7 @@ impl Scene {
 
     /// Where the back of a solid `depth` deep lies, from the eye.
     pub(super) fn back_for_gpu(&self, plane: &Plane, depth: f64) -> [f32; 3] {
-        narrow(minus(plane.pushed(depth).origin, self.eye))
+        narrow(minus(plane.pushed(depth).origin, self.camera.eye))
     }
 }
 
@@ -1744,7 +1609,7 @@ fn projected(
         by,
         crop,
     };
-    let solid = depth_of(plan, time, scene.height);
+    let solid = depth_of(plan, time, scene.camera.height);
     let deep = with_depth || scene.aperture > 0.0;
     let (mut out, depth) = match share {
         Some(share) => {
@@ -1830,7 +1695,7 @@ impl Looked<'_> {
     fn solid(&self, plan: &ClipPlan, time: Time, deep: f64) -> Solid<'_> {
         let (plane, source, by, crop) = (self.plane, self.source, self.by, self.crop);
         let held = Held::of(source);
-        let bevel = bevel_of(plan, time, self.scene.height);
+        let bevel = bevel_of(plan, time, self.scene.camera.height);
         let bevel = (bevel > 0.0).then(|| {
             let per = plane.pixel_size() / by;
             let read_crop = Rect::new(crop.x * by, crop.y * by, crop.w * by, crop.h * by);
@@ -1973,30 +1838,42 @@ pub(super) fn seen_of(
     within: Rect,
     margin: f64,
 ) -> Option<Rect> {
-    let (cx, cy) = scene.center;
+    let (cx, cy) = scene.camera.center;
     let (left, top, right, bottom) = (-margin, -margin, 2.0 * cx + margin, 2.0 * cy + margin);
-    let focal = scene.focal;
+    let focal = scene.camera.focal;
     // Each as the way that goes in from it, and how far in a point must at least be.
     let sides = [
         (
-            minus(times(scene.right, focal), times(scene.forward, left - cx)),
+            minus(
+                times(scene.camera.right, focal),
+                times(scene.camera.forward, left - cx),
+            ),
             0.0,
         ),
         (
-            minus(times(scene.forward, right - cx), times(scene.right, focal)),
+            minus(
+                times(scene.camera.forward, right - cx),
+                times(scene.camera.right, focal),
+            ),
             0.0,
         ),
         (
-            minus(times(scene.down, focal), times(scene.forward, top - cy)),
+            minus(
+                times(scene.camera.down, focal),
+                times(scene.camera.forward, top - cy),
+            ),
             0.0,
         ),
         (
-            minus(times(scene.forward, bottom - cy), times(scene.down, focal)),
+            minus(
+                times(scene.camera.forward, bottom - cy),
+                times(scene.camera.down, focal),
+            ),
             0.0,
         ),
-        (scene.forward, NEAR * scene.height),
+        (scene.camera.forward, NEAR * scene.camera.height),
     ];
-    let from_eye = minus(plane.origin, scene.eye);
+    let from_eye = minus(plane.origin, scene.camera.eye);
     let mut corners = vec![
         (within.x, within.y),
         (within.right(), within.y),
@@ -2044,8 +1921,8 @@ pub(super) fn seen_of(
 /// How much of its size to read a picture at when it lands far smaller than it was drawn, or it would
 /// sparkle; `None` for all of it.
 pub(super) fn read_smaller(scene: &Scene, plane: &Plane, _size: (f64, f64)) -> Option<f64> {
-    let to_eye = dot(minus(plane.middle, scene.eye), scene.forward).max(1.0);
-    let shrink = (to_eye / scene.focal)
+    let to_eye = dot(minus(plane.middle, scene.camera.eye), scene.camera.forward).max(1.0);
+    let shrink = (to_eye / scene.camera.focal)
         / (dot(plane.across, plane.across) * dot(plane.down, plane.down))
             .powf(0.25)
             .max(1e-6);

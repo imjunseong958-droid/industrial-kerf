@@ -1817,6 +1817,7 @@ dependencies = [
  "kerf-core",
  "kerf-draw",
  "kerf-fx",
+ "kerf-geom",
  "kerf-gpu",
  "kerf-image",
  "kerf-lang",

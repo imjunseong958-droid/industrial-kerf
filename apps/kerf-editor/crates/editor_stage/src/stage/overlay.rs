@@ -1,15 +1,22 @@
 //! What the picture's overlays are drawn from: where a clip's picture lands on
-//! the canvas (kerf-compose's `placed`), its masks' outlines, and the curve of
-//! its motion path (kerf_model's `MotionPath`). Pure functions of the
-//! snapshot's timeline as the bridge sends it, so that they can be held to
-//! the compositor's own numbers.
+//! the canvas, its masks' outlines, and the curve of its motion path. Where it
+//! lands is the compositor's own answer: a clip's numbers are read here, from
+//! the snapshot's timeline as the bridge sends it, and placed by the sums the
+//! compositor draws by (kerf-geom's `place`), on the curve it follows
+//! (kerf-model's `MotionPath`). Pure functions of that timeline, so that they
+//! can be held to the compositor's own numbers.
 
 use editor_state::model::{
     Clip, EditKey, EditParam, Interp, Timeline, TimelineShow, TrackKind, ViewParam,
 };
 use kerf_bridge::event::{Finding, ViewMask};
+use kerf_geom::place::{lifted, Camera, Geometry, Lens, Parent, Taken};
+use kerf_geom::{Affine3, Mat3, Vec2};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
+
+/// A map of the plane that keeps lines straight, as the compositor has one.
+pub use kerf_geom::Affine;
 
 /// A clip's properties by name, as the timeline says them: each a value, or its
 /// keyframes.
@@ -35,151 +42,53 @@ fn is_on(props: &Props, name: &str) -> bool {
 /// A point: across, then down.
 pub type Pt = (f64, f64);
 
-/// A map of the plane that keeps lines straight: `(x, y)` goes to
-/// `(a x + c y + e, b x + d y + f)`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Affine {
-    pub a: f64,
-    pub b: f64,
-    pub c: f64,
-    pub d: f64,
-    pub e: f64,
-    pub f: f64,
+fn vec2((x, y): Pt) -> Vec2 {
+    Vec2::new(x, y)
 }
 
-impl Affine {
-    pub const IDENTITY: Self = Self {
-        a: 1.0,
-        b: 0.0,
-        c: 0.0,
-        d: 1.0,
-        e: 0.0,
-        f: 0.0,
-    };
-
-    pub fn translate(x: f64, y: f64) -> Self {
-        Self {
-            e: x,
-            f: y,
-            ..Self::IDENTITY
-        }
-    }
-
-    pub fn scale(x: f64, y: f64) -> Self {
-        Self {
-            a: x,
-            d: y,
-            ..Self::IDENTITY
-        }
-    }
-
-    /// Turned `degrees` clockwise, y running down.
-    pub fn rotate(degrees: f64) -> Self {
-        let (sin, cos) = degrees.to_radians().sin_cos();
-        Self {
-            a: cos,
-            b: sin,
-            c: -sin,
-            d: cos,
-            e: 0.0,
-            f: 0.0,
-        }
-    }
-
-    /// This map, and then `next`.
-    pub fn then(self, next: Self) -> Self {
-        Self {
-            a: next.a * self.a + next.c * self.b,
-            b: next.b * self.a + next.d * self.b,
-            c: next.a * self.c + next.c * self.d,
-            d: next.b * self.c + next.d * self.d,
-            e: next.a * self.e + next.c * self.f + next.e,
-            f: next.b * self.e + next.d * self.f + next.f,
-        }
-    }
-
-    pub fn apply(self, (x, y): Pt) -> Pt {
-        (
-            self.a * x + self.c * y + self.e,
-            self.b * x + self.d * y + self.f,
-        )
-    }
-
-    /// The map back; none when it folds the plane onto a line.
-    pub fn inverse(self) -> Option<Self> {
-        let det = self.a * self.d - self.b * self.c;
-        if !det.is_finite() || det.abs() < 1e-12 {
-            return None;
-        }
-        let (a, b, c, d) = (self.d / det, -self.b / det, -self.c / det, self.a / det);
-        Some(Self {
-            a,
-            b,
-            c,
-            d,
-            e: -(a * self.e + c * self.f),
-            f: -(b * self.e + d * self.f),
-        })
-    }
+fn pt(at: Vec2) -> Pt {
+    (at.x, at.y)
 }
 
-/// The nearest a camera sees, in frame heights (kerf-compose's `NEAR`):
-/// what is nearer than this along its way, or behind it, is out of sight.
-pub const NEAREST: f64 = 0.001;
+/// The nearest a camera sees, in frame heights: what is nearer than this
+/// along its way, or behind it, is out of sight.
+pub const NEAREST: f64 = Camera::NEAR;
 
 /// What `w` is held to at least as a point is mapped: a point on or behind
 /// the camera still maps somewhere.
 const NEAR_CLIP: f64 = 1e-6;
 
-/// A map of the plane as a camera may see it, in perspective, a row vector
-/// times the matrix: `(x, y)` goes to `(m11 x + m21 y + m31,
-/// m12 x + m22 y + m32)` over `w = m13 x + m23 y + m33`, `m[r][c]` being
-/// `m(r+1)(c+1)`. For a placement in depth `w` is how far along the
-/// camera's way the point is, in frame heights; for a flat one it is 1.
+/// A map of the plane as a camera may see it, in perspective (kerf-geom's
+/// `Mat3`), with what of the plane is in sight: `(x, y)` goes across and
+/// down over `w`. For a placement in depth `w` is how far along the camera's
+/// way the point is, in frame heights; for a flat one it is 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Projective {
-    pub m: [[f64; 3]; 3],
-}
+pub struct Projective(pub Mat3);
 
 impl From<Affine> for Projective {
     fn from(map: Affine) -> Self {
-        Self {
-            m: [
-                [map.a, map.b, 0.0],
-                [map.c, map.d, 0.0],
-                [map.e, map.f, 1.0],
-            ],
-        }
+        Self(map.into())
     }
 }
 
 impl Projective {
     /// What a placement is when there is nothing to place on: no map back.
-    pub const UNSEEN: Self = Self { m: [[0.0; 3]; 3] };
+    pub const UNSEEN: Self = Self(Mat3([[0.0; 3]; 3]));
 
     /// This map, and then `next`.
     pub fn then(self, next: impl Into<Self>) -> Self {
-        let next = next.into();
-        let mut m = [[0.0; 3]; 3];
-        for (row, out) in m.iter_mut().enumerate() {
-            for (column, cell) in out.iter_mut().enumerate() {
-                *cell = (0..3).map(|k| self.m[row][k] * next.m[k][column]).sum();
-            }
-        }
-        Self { m }
+        Self(next.into().0 * self.0)
     }
 
-    /// How far along the camera's way `(x, y)` is: its `w`.
-    fn depth(self, (x, y): Pt) -> f64 {
-        self.m[0][2] * x + self.m[1][2] * y + self.m[2][2]
+    /// How far along the camera's way `at` is: its `w`.
+    fn depth(self, at: Pt) -> f64 {
+        self.0.undivided(vec2(at))[2]
     }
 
-    /// Where `(x, y)` goes. One on or behind the camera goes somewhere
+    /// Where `at` goes. One on or behind the camera goes somewhere
     /// far off; [`Self::in_sight`] says which are seen.
-    pub fn apply(self, (x, y): Pt) -> Pt {
-        let across = self.m[0][0] * x + self.m[1][0] * y + self.m[2][0];
-        let down = self.m[0][1] * x + self.m[1][1] * y + self.m[2][1];
-        let w = self.depth((x, y));
+    pub fn apply(self, at: Pt) -> Pt {
+        let [across, down, w] = self.0.undivided(vec2(at));
         if w == 1.0 {
             return (across, down);
         }
@@ -195,34 +104,11 @@ impl Projective {
     /// The map back; none when it folds the plane onto a line, or
     /// there is nothing to place on ([`Self::UNSEEN`]).
     pub fn inverse(self) -> Option<Self> {
-        let m = self.m;
-        let cofactor = |r0: usize, r1: usize, c0: usize, c1: usize| {
-            m[r0][c0] * m[r1][c1] - m[r0][c1] * m[r1][c0]
-        };
-        let adjugate = [
-            [
-                cofactor(1, 2, 1, 2),
-                -cofactor(0, 2, 1, 2),
-                cofactor(0, 1, 1, 2),
-            ],
-            [
-                -cofactor(1, 2, 0, 2),
-                cofactor(0, 2, 0, 2),
-                -cofactor(0, 1, 0, 2),
-            ],
-            [
-                cofactor(1, 2, 0, 1),
-                -cofactor(0, 2, 0, 1),
-                cofactor(0, 1, 0, 1),
-            ],
-        ];
-        let det = m[0][0] * adjugate[0][0] + m[0][1] * adjugate[1][0] + m[0][2] * adjugate[2][0];
+        let det = self.0.determinant();
         if !det.is_finite() || det.abs() < 1e-12 {
             return None;
         }
-        Some(Self {
-            m: adjugate.map(|row| row.map(|cell| cell / det)),
-        })
+        self.0.inverse().map(Self)
     }
 
     /// Whether it places anything: it has a map back.
@@ -251,127 +137,48 @@ pub fn property_at(props: &Props, name: &str, clip_time: f64, fallback: f64) -> 
         .unwrap_or(fallback)
 }
 
-/// A clip's geometry at a moment: the compositor's `GEOMETRY`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Geometry {
-    pub crop: [f64; 4],
-    pub scale: f64,
-    pub scale_x: f64,
-    pub scale_y: f64,
-    pub rotation: f64,
-    /// Its slant and which way, in degrees.
-    pub skew: (f64, f64),
-    pub anchor: Pt,
-    pub at: Pt,
-}
+/// The least of a picture a crop is taken to leave, as a share of it. The
+/// compositor draws no program with a clip cropped away entirely, and what
+/// is drawn over that clip's picture still has to be somewhere.
+const LEAST_KEPT: f64 = 1e-6;
 
-pub fn geometry_at(props: &Props, clip_time: f64) -> Geometry {
-    let prop = |name: &str, fallback: f64| property_at(props, name, clip_time, fallback);
-    Geometry {
-        crop: [
-            prop("crop_l", 0.0),
-            prop("crop_r", 0.0),
-            prop("crop_t", 0.0),
-            prop("crop_b", 0.0),
-        ],
-        scale: prop("scale", 1.0),
-        scale_x: prop("scale_x", 1.0),
-        scale_y: prop("scale_y", 1.0),
-        rotation: prop("rotation", 0.0),
-        skew: (prop("skew", 0.0), prop("skew_axis", 0.0)),
-        anchor: (prop("anchor_x", 0.0), prop("anchor_y", 0.0)),
-        at: (prop("x", 0.0), prop("y", 0.0)),
-    }
+/// A clip's geometry at `clip_time` seconds into it, as its `props` say it
+/// (kerf-geom's `Geometry`): a number it does not say is the one it rests at.
+fn geometry_at(props: &Props, clip_time: f64) -> Geometry {
+    let mut geometry = Geometry::of(Geometry::NAMES.map(|name| {
+        let unsaid = match name {
+            "scale" | "scale_x" | "scale_y" => 1.0,
+            _ => 0.0,
+        };
+        property_at(props, name, clip_time, unsaid)
+    }));
+    let [l, r, t, b] = geometry.crop;
+    geometry.crop = [
+        l,
+        r.min(1.0 - l - LEAST_KEPT),
+        t,
+        b.min(1.0 - t - LEAST_KEPT),
+    ];
+    geometry
 }
 
 /// The same with the clip's motion path added in: the path adds to
 /// where it would be, and `orient` to how it is turned.
-pub fn moved_geometry_at(props: &Props, canvas: Pt, clip_time: f64) -> Geometry {
-    let mut geometry = geometry_at(props, clip_time);
-    if let Some(points) = text_of(props, "path").and_then(parse_path) {
-        let on =
-            MotionPath::new(points, aspect(canvas)).at(property_at(props, "along", clip_time, 0.0));
-        geometry.at.0 += on.x;
-        geometry.at.1 += on.y;
-        if is_on(props, "orient") {
-            geometry.rotation += on.heading;
-        }
-    }
-    geometry
+fn moved_geometry_at(props: &Props, canvas: Pt, clip_time: f64) -> Geometry {
+    let geometry = geometry_at(props, clip_time);
+    let Some(points) = text_of(props, "path").and_then(parse_path) else {
+        return geometry;
+    };
+    let on =
+        MotionPath::new(points, aspect(canvas)).at(property_at(props, "along", clip_time, 0.0));
+    geometry.along(
+        Vec2::new(on.x, on.y),
+        is_on(props, "orient").then_some(on.heading),
+    )
 }
 
 fn aspect((width, height): Pt) -> f64 {
     width.max(1.0) / height.max(1.0)
-}
-
-/// What a picture of the cropped size fills on the canvas, before the
-/// clip's own scale.
-fn filled((width, height): Pt, fit: bool, (cw, ch): Pt) -> Pt {
-    if !fit {
-        return (width, height);
-    }
-    (
-        (ch * width / height).round().min(cw).max(1.0),
-        (cw * height / width).round().min(ch).max(1.0),
-    )
-}
-
-/// Where a source of `picture` pixels lands on the canvas, in canvas
-/// pixels (kerf-compose's `placed`).
-pub fn placed(g: &Geometry, picture: Pt, fit: bool, canvas: Pt) -> Affine {
-    let (sw, sh) = (picture.0.max(1.0), picture.1.max(1.0));
-    let [l, r, t, b] = g.crop;
-    let width = sw * (1.0 - l - r).max(1e-6);
-    let height = sh * (1.0 - t - b).max(1e-6);
-    let (fw, fh) = filled((width, height), fit, canvas);
-    let (ax, ay) = g.anchor;
-    Affine::translate(
-        -(sw * l + width * (0.5 + ax)),
-        -(sh * t + height * (0.5 + ay)),
-    )
-    .then(Affine::scale(
-        fw / width * g.scale * g.scale_x,
-        fh / height * g.scale * g.scale_y,
-    ))
-    .then(slant(g.skew))
-    .then(Affine::rotate(g.rotation))
-    .then(Affine::translate(
-        canvas.0 / 2.0 + g.at.0 * canvas.0 + ax * fw,
-        canvas.1 / 2.0 + g.at.1 * canvas.1 + ay * fh,
-    ))
-}
-
-/// A slant of `skew` degrees along its own axes turned by `axis` (kerf-compose's `placed`).
-fn slant((skew, axis): (f64, f64)) -> Affine {
-    if skew == 0.0 {
-        return Affine::IDENTITY;
-    }
-    let lean = Affine {
-        c: skew.to_radians().tan(),
-        ..Affine::IDENTITY
-    };
-    Affine::rotate(-axis).then(lean).then(Affine::rotate(axis))
-}
-
-/// How a parent has moved its children at its clip time: from where it
-/// would sit with no position, scale or rotation of its own, to where it
-/// is (kerf-compose's `parent_motion`).
-pub fn parent_motion(props: &Props, picture: Pt, fit: bool, canvas: Pt, clip_time: f64) -> Affine {
-    let now = moved_geometry_at(props, canvas, clip_time);
-    let rest = Geometry {
-        crop: now.crop,
-        scale: 1.0,
-        scale_x: 1.0,
-        scale_y: 1.0,
-        rotation: 0.0,
-        skew: (0.0, 0.0),
-        anchor: now.anchor,
-        at: (0.0, 0.0),
-    };
-    match placed(&rest, picture, fit, canvas).inverse() {
-        Some(back) => back.then(placed(&now, picture, fit, canvas)),
-        None => Affine::IDENTITY,
-    }
 }
 
 /// The canvas a timeline is drawn on, in pixels ([`TimelineShow::canvas`]).
@@ -406,30 +213,51 @@ pub fn picture_of(
     (width > 0.0 && height > 0.0).then_some(((width, height), true))
 }
 
-/// Where a flat clip's parents have moved it, in canvas pixels, at
-/// `position` seconds into the program.
-pub fn parents_motion(timeline: &Timeline, clip: &Clip, canvas: Pt, position: f64) -> Affine {
-    let mut moved = Affine::IDENTITY;
-    let mut seen: Vec<String> = Vec::new();
-    let mut parent = clip.parent.clone();
-    while let Some(id) = parent.filter(|id| !id.is_empty() && !seen.contains(id)) {
-        let Some((rig, track)) = clip_in(timeline, &id) else {
-            break;
-        };
-        let Some((picture, fit)) = picture_of(timeline, rig, track, canvas) else {
-            break;
-        };
-        moved = moved.then(parent_motion(
-            &rig.props,
-            picture,
+/// Whether a clip is placed in depth (`three_d`).
+fn in_depth(clip: &Clip) -> bool {
+    is_on(&clip.props, "three_d")
+}
+
+/// Whether a parent's place in depth is its children's (kerf-compose's
+/// `Rig::in_depth`): a null's, and that of a clip in depth, which a mesh
+/// is without saying so.
+fn leads_in_depth(clip: &Clip) -> bool {
+    matches!(clip.fx.as_deref(), Some("null" | "mesh")) || in_depth(clip)
+}
+
+/// A clip's own numbers in depth at `clip_time`: its `z`, in frame heights,
+/// and how it is turned about x and about y, in degrees.
+fn depth_at(props: &Props, clip_time: f64) -> [f64; 3] {
+    ["z", "rotate_x", "rotate_y"].map(|name| property_at(props, name, clip_time, 0.0))
+}
+
+/// The world a clip in depth is placed in is the canvas's own pixels: one of
+/// them to each of the canvas's, across and down.
+const PER_PIXEL: Pt = (1.0, 1.0);
+
+/// How the parents of `clip` take it at `position` seconds into the
+/// program, the one it names first (kerf-geom's `Taken`): across the
+/// canvas, and those of them in depth then in depth. Each is read here,
+/// and the walk ends at one that is not there or draws no picture, and
+/// at one met before.
+fn taken_by_parents(timeline: &Timeline, clip: &Clip, canvas: Pt, position: f64) -> Taken {
+    let mut met: Vec<&str> = Vec::new();
+    let mut parent = clip.parent.as_deref();
+    let parents = std::iter::from_fn(|| {
+        let id = parent.filter(|id| !id.is_empty() && !met.contains(id))?;
+        let (rig, track) = clip_in(timeline, id)?;
+        let (size, fit) = picture_of(timeline, rig, track, canvas)?;
+        met.push(id);
+        parent = rig.parent.as_deref();
+        let clip_time = position - rig.timeline_start;
+        Some(Parent {
+            geometry: moved_geometry_at(&rig.props, canvas, clip_time),
+            size,
             fit,
-            canvas,
-            position - rig.timeline_start,
-        ));
-        seen.push(id);
-        parent = rig.parent.clone();
-    }
-    moved
+            depth: leads_in_depth(rig).then(|| depth_at(&rig.props, clip_time)),
+        })
+    });
+    Taken::by(parents, canvas)
 }
 
 /// Where a picture clip is on the canvas at a moment.
@@ -460,9 +288,8 @@ impl Placement {
     /// the map shows, and some of its curve is in front of the camera.
     /// A path no one map shows is seen by [`sampled`] instead.
     pub fn path_seen(&self, points: &[Pt]) -> bool {
-        let (width, height) = self.canvas;
         self.path.shows()
-            && MotionPath::new(points.to_vec(), width.max(1.0) / height.max(1.0))
+            && MotionPath::new(points.to_vec(), aspect(self.canvas))
                 .samples()
                 .iter()
                 .any(|at| self.path.in_sight(*at))
@@ -471,7 +298,8 @@ impl Placement {
 
 /// What a clip is placed with at a moment: its picture's size, whether
 /// it is fitted to the canvas, the canvas, seconds into it, how its
-/// parents have moved it on the canvas, and where it starts.
+/// parents have moved it on the canvas and how those of them in depth
+/// carry it there, and where it starts.
 #[derive(Clone, Copy, Debug)]
 struct Scene {
     picture: Pt,
@@ -479,6 +307,7 @@ struct Scene {
     canvas: Pt,
     clip_time: f64,
     parents: Affine,
+    carried: Option<Affine3>,
     start: f64,
 }
 
@@ -497,7 +326,7 @@ fn scene_of<'a>(timeline: &'a Timeline, id: &str, position: f64) -> Option<(&'a 
     let (picture, fit) = picture_of(timeline, clip, track, canvas)?;
     let start = clip.timeline_start;
     let clip_time = (position - start).clamp(0.0, clip.duration.max(0.0));
-    let parents = parents_motion(timeline, clip, canvas, start + clip_time);
+    let taken = taken_by_parents(timeline, clip, canvas, start + clip_time);
     Some((
         clip,
         Scene {
@@ -505,7 +334,8 @@ fn scene_of<'a>(timeline: &'a Timeline, id: &str, position: f64) -> Option<(&'a 
             fit,
             canvas,
             clip_time,
-            parents,
+            parents: taken.moved,
+            carried: taken.carried(canvas, PER_PIXEL, canvas.1),
             start,
         },
     ))
@@ -531,213 +361,34 @@ pub fn placement(timeline: &Timeline, id: &str, position: f64) -> Option<Placeme
 
 // ------------------------------------------------------------- depth
 
-/// The field of view at which a clip at z = 0 is its flat self, in
-/// degrees (kerf-compose's `DEFAULT_FOV`).
-const RESTING_FOV: f64 = 40.0;
-
-/// A point or a way in the compositor's world: x right, y down and z
-/// away from the viewer, in canvas pixels, 0, 0, 0 the canvas's middle.
-type World = [f64; 3];
-
-fn add(a: World, b: World) -> World {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn minus(a: World, b: World) -> World {
-    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
-}
-
-fn times(a: World, by: f64) -> World {
-    [a[0] * by, a[1] * by, a[2] * by]
-}
-
-fn dot(a: World, b: World) -> f64 {
-    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
-}
-
-fn cross(a: World, b: World) -> World {
-    [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    ]
-}
-
-/// Turned about x by `pitch` and then about y by `yaw`, in degrees.
-fn turned(a: World, pitch: f64, yaw: f64) -> World {
-    let (sp, cp) = pitch.to_radians().sin_cos();
-    let (sy, cy) = yaw.to_radians().sin_cos();
-    let (y, z) = (a[1] * cp - a[2] * sp, a[1] * sp + a[2] * cp);
-    [a[0] * cy + z * sy, y, -a[0] * sy + z * cy]
-}
-
-/// Whether a clip is placed in depth (`three_d`).
-fn in_depth(clip: &Clip) -> bool {
-    is_on(&clip.props, "three_d")
-}
-
-/// Whether a parent's place in depth is its children's (kerf-compose's
-/// `Rig::in_depth`): a null's, and that of a clip in depth, which a mesh
-/// is without saying so.
-fn leads_in_depth(clip: &Clip) -> bool {
-    matches!(clip.fx.as_deref(), Some("null" | "mesh")) || in_depth(clip)
-}
-
-/// A clip's own numbers in depth at `clip_time`: how far back, in canvas
-/// pixels, and how it is turned about x and about y, in degrees.
-struct Depth {
-    z: f64,
-    pitch: f64,
-    yaw: f64,
-}
-
-fn depth_at(props: &Props, canvas: Pt, clip_time: f64) -> Depth {
-    Depth {
-        z: property_at(props, "z", clip_time, 0.0) * canvas.1.max(1.0),
-        pitch: property_at(props, "rotate_x", clip_time, 0.0),
-        yaw: property_at(props, "rotate_y", clip_time, 0.0),
-    }
-}
-
-/// How its parents have taken a clip in depth, as one thing with them
-/// (kerf-compose's `Carried`): where the world's x, y and z go, and
-/// where its middle goes.
-#[derive(Clone, Copy, Debug)]
-struct Carried {
-    ways: [World; 3],
-    shift: World,
-}
-
-impl Carried {
-    const STILL: Self = Self {
-        ways: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
-        shift: [0.0; 3],
-    };
-
-    /// This, and then as a parent takes it: turned about `about` by the
-    /// parent's `pitch` and `yaw` (degrees), and moved `back`.
-    fn then(self, about: World, pitch: f64, yaw: f64, back: f64) -> Self {
-        Self {
-            ways: self.ways.map(|way| turned(way, pitch, yaw)),
-            shift: add(
-                add(about, turned(minus(self.shift, about), pitch, yaw)),
-                [0.0, 0.0, back],
-            ),
-        }
-    }
-
-    fn way(&self, of: World) -> World {
-        add(
-            add(times(self.ways[0], of[0]), times(self.ways[1], of[1])),
-            times(self.ways[2], of[2]),
-        )
-    }
-
-    fn point(&self, at: World) -> World {
-        add(self.way(at), self.shift)
-    }
-}
-
-/// Fractions of a clip's picture to canvas pixels, flat: the
-/// compositor's geometry with its parents'.
+/// Fractions of a clip's picture to canvas pixels, flat: where its numbers
+/// put it and then where its parents move it, as the compositor places it.
+/// As the document says it, and not on the whole pixels the compositor
+/// draws a clip that holds still on, which are under a pixel from here.
 fn flat_placement(clip: &Clip, scene: &Scene) -> Affine {
-    let (picture, canvas) = (scene.picture, scene.canvas);
-    Affine::scale(picture.0.max(1.0), picture.1.max(1.0))
-        .then(placed(
-            &moved_geometry_at(&clip.props, canvas, scene.clip_time),
-            picture,
-            scene.fit,
-            canvas,
-        ))
-        .then(scene.parents)
+    let geometry = moved_geometry_at(&clip.props, scene.canvas, scene.clip_time);
+    let (own, _) = geometry.placed(scene.picture, scene.fit, false, scene.canvas);
+    scene
+        .parents
+        .then_apply(&own)
+        .then_apply(&Affine::scale(scene.picture.0, scene.picture.1))
 }
 
-/// How the parents of `clip` have taken it in depth at `at` seconds of
-/// `timeline`, the one it names first (kerf-compose's `Scene::at`):
-/// each somewhere in depth turns it about its own middle, where that
-/// is on the canvas, and moves it back.
-fn carried_by(timeline: &Timeline, clip: &Clip, canvas: Pt, at: f64) -> Carried {
-    let mut carried = Carried::STILL;
-    let mut seen: Vec<String> = Vec::new();
-    let mut parent = clip.parent.clone();
-    while let Some(id) = parent.filter(|id| !id.is_empty() && !seen.contains(id)) {
-        seen.push(id.clone());
-        let Some((rig, track)) = clip_in(timeline, &id) else {
-            break;
-        };
-        let Some((picture, fit)) = picture_of(timeline, rig, track, canvas) else {
-            break;
-        };
-        parent = rig.parent.clone();
-        if !leads_in_depth(rig) {
-            continue;
-        }
-        let start = rig.timeline_start;
-        let depth = depth_at(&rig.props, canvas, at - start);
-        if depth.z == 0.0 && depth.pitch == 0.0 && depth.yaw == 0.0 {
-            continue;
-        }
-        let scene = Scene {
-            picture,
-            fit,
-            canvas,
-            clip_time: at - start,
-            parents: parents_motion(timeline, rig, canvas, at),
-            start,
-        };
-        let middle = flat_placement(rig, &scene).apply((0.5, 0.5));
-        let about = [middle.0 - canvas.0 / 2.0, middle.1 - canvas.1 / 2.0, 0.0];
-        carried = carried.then(about, depth.pitch, depth.yaw, depth.z);
-    }
-    carried
-}
-
-/// How a sequence is seen at a moment (kerf-compose's `Scene::at`).
-struct Camera {
-    eye: World,
-    right: World,
-    down: World,
-    forward: World,
-    focal: f64,
-    width: f64,
-    height: f64,
-}
-
-impl Camera {
-    /// Where `(a, b)` of the plane `origin + a across + b below` lands,
-    /// in canvas pixels; its `w` is how far along the camera's way that
-    /// is, in frame heights. Edge on, it is a line at most a pixel wide,
-    /// which the compositor's rays miss: unseen.
-    fn sees(&self, origin: World, across: World, below: World) -> Projective {
-        let from = minus(origin, self.eye);
-        let perpendicular = cross(across, below);
-        let area = dot(perpendicular, perpendicular).sqrt();
-        if area <= 0.0 || dot(from, perpendicular).abs() / area < NEAREST * self.height {
-            return Projective::UNSEEN;
-        }
-        let sideways = add(
-            times(self.right, self.focal),
-            times(self.forward, self.width / 2.0),
-        );
-        let downwards = add(
-            times(self.down, self.focal),
-            times(self.forward, self.height / 2.0),
-        );
-        let row = |of: World| {
-            [
-                dot(of, sideways) / self.height,
-                dot(of, downwards) / self.height,
-                dot(of, self.forward) / self.height,
-            ]
-        };
-        Projective {
-            m: [row(across), row(below), row(from)],
-        }
-    }
+/// Where a clip in depth is in the world, by fractions of its picture,
+/// which `flat` places on the canvas: taken into depth as the compositor
+/// takes it (kerf-geom's `lifted`), held there by its own numbers about
+/// its middle, and then as `carried` has its parents in depth take it.
+fn in_the_world(clip: &Clip, scene: &Scene, flat: &Affine, carried: Option<&Affine3>) -> Affine3 {
+    let canvas = scene.canvas;
+    let [z, pitch, yaw] = depth_at(&clip.props, scene.clip_time);
+    let numbers = [z * canvas.1, pitch, yaw];
+    let center = (canvas.0 / 2.0, canvas.1 / 2.0);
+    lifted(flat, (1.0, 1.0), center, numbers, carried).0
 }
 
 /// `timeline`'s topmost camera showing at `at` seconds, or the resting
-/// one, which sees the plane z = 0 as the flat picture.
+/// one, which sees the plane z = 0 as the flat picture: kerf-geom's
+/// `Camera`, of its numbers as they are read here.
 fn camera_at(timeline: &Timeline, canvas: Pt, at: f64) -> Camera {
     // Times come as seconds in doubles, a hair off the frames they name.
     const SAME_MOMENT: f64 = 1e-9;
@@ -753,92 +404,47 @@ fn camera_at(timeline: &Timeline, canvas: Pt, at: f64) -> Camera {
             }
         }
     }
-    // With no camera showing, the resting one: every number at what it is when unsaid.
-    let resting = Props::new();
-    let props = shown.map_or(&resting, |clip| &clip.props);
-    let clip_time = at - shown.map_or(0.0, |clip| clip.timeline_start);
-    let read = |name: &str, otherwise: f64| property_at(props, name, clip_time, otherwise);
-    let (width, height) = (canvas.0.max(1.0), canvas.1.max(1.0));
-    let distance = |fov: f64| height / 2.0 / (fov.clamp(1.0, 170.0).to_radians() / 2.0).tan();
-    let mut camera = Camera {
-        eye: [
-            read("x", 0.0) * width,
-            read("y", 0.0) * height,
-            read("z", 0.0) * height - distance(RESTING_FOV),
-        ],
-        right: [1.0, 0.0, 0.0],
-        down: [0.0, 1.0, 0.0],
-        forward: [0.0, 0.0, 1.0],
-        focal: distance(read("fov", RESTING_FOV)),
-        width,
-        height,
+    let Some(clip) = shown else {
+        return Camera::of(&Lens::RESTING, canvas, None);
     };
-    let (pitch, yaw) = (read("tilt", 0.0), read("pan", 0.0));
-    let roll = read("roll", 0.0).to_radians();
-    camera.forward = turned([0.0, 0.0, 1.0], pitch, yaw);
-    let level_right = turned([1.0, 0.0, 0.0], pitch, yaw);
-    let level_down = cross(camera.forward, level_right);
-    camera.right = add(
-        times(level_right, roll.cos()),
-        times(level_down, roll.sin()),
-    );
-    camera.down = minus(
-        times(level_down, roll.cos()),
-        times(level_right, roll.sin()),
-    );
-    let Some(camera_clip) =
-        shown.filter(|clip| clip.parent.as_deref().is_some_and(|id| !id.is_empty()))
-    else {
-        return camera;
+    let clip_time = at - clip.timeline_start;
+    let read = |name: &str, unsaid: f64| property_at(&clip.props, name, clip_time, unsaid);
+    let lens = Lens {
+        at: [read("x", 0.0), read("y", 0.0), read("z", 0.0)],
+        tilt: read("tilt", 0.0),
+        pan: read("pan", 0.0),
+        roll: read("roll", 0.0),
+        fov: read("fov", Camera::RESTING_FOV),
     };
     // A camera with a parent is where the parent takes it, looking as
-    // the parent turns it (kerf-compose's `Rigged`): across the canvas
-    // as a clip is moved, and then in depth.
-    let moved = parents_motion(timeline, camera_clip, canvas, at);
-    let carried = carried_by(timeline, camera_clip, canvas, at);
-    let on = moved.apply((width / 2.0 + camera.eye[0], height / 2.0 + camera.eye[1]));
-    camera.eye = carried.point([on.0 - width / 2.0, on.1 - height / 2.0, camera.eye[2]]);
-    // By as much as its parents turn a clip on the canvas, however they size it.
-    let (sin, cos) = moved.b.atan2(moved.a).sin_cos();
-    let way =
-        |of: World| carried.way([of[0] * cos - of[1] * sin, of[0] * sin + of[1] * cos, of[2]]);
-    camera.right = way(camera.right);
-    camera.down = way(camera.down);
-    camera.forward = way(camera.forward);
-    camera
+    // the parent turns it.
+    let rigged = clip
+        .parent
+        .as_deref()
+        .is_some_and(|id| !id.is_empty())
+        .then(|| taken_by_parents(timeline, clip, canvas, at).rigged(canvas, PER_PIXEL, canvas.1));
+    Camera::of(&lens, canvas, rigged.as_ref())
+}
+
+/// How `timeline`'s camera sees the plane `place` puts in the world at the
+/// scene's moment, by the plane's own terms; [`Projective::UNSEEN`] for one
+/// seen edge on.
+fn seen(timeline: &Timeline, scene: &Scene, place: &Affine3) -> Projective {
+    camera_at(timeline, scene.canvas, scene.at())
+        .sees(place)
+        .map_or(Projective::UNSEEN, Projective)
 }
 
 /// Fractions of `clip`'s picture to canvas pixels: flat, or in depth
-/// as the camera sees it (kerf-compose's `Plane::of`: lifted to its `z`
-/// and turned about its middle, then where its parents in depth take
-/// it). [`Projective::UNSEEN`] when none of its corners is in sight.
+/// as the camera sees it. [`Projective::UNSEEN`] when none of its corners
+/// is in sight.
 fn picture_placement(timeline: &Timeline, clip: &Clip, scene: &Scene) -> Projective {
     let flat = flat_placement(clip, scene);
     if !in_depth(clip) {
         return flat.into();
     }
-    let canvas = scene.canvas;
-    let depth = depth_at(&clip.props, canvas, scene.clip_time);
-    let middle = flat.apply((0.5, 0.5));
-    let across = turned([flat.a, flat.b, 0.0], depth.pitch, depth.yaw);
-    let below = turned([flat.c, flat.d, 0.0], depth.pitch, depth.yaw);
-    let origin = minus(
-        minus(
-            [
-                middle.0 - canvas.0 / 2.0,
-                middle.1 - canvas.1 / 2.0,
-                depth.z,
-            ],
-            times(across, 0.5),
-        ),
-        times(below, 0.5),
-    );
-    let carried = carried_by(timeline, clip, canvas, scene.at());
-    let seen = camera_at(timeline, canvas, scene.at()).sees(
-        carried.point(origin),
-        carried.way(across),
-        carried.way(below),
-    );
+    let place = in_the_world(clip, scene, &flat, scene.carried.as_ref());
+    let seen = seen(timeline, scene, &place);
     let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
     if corners.iter().any(|corner| seen.in_sight(*corner)) {
         seen
@@ -847,60 +453,63 @@ fn picture_placement(timeline: &Timeline, clip: &Clip, scene: &Scene) -> Project
     }
 }
 
-/// Where the clip's anchor is in its picture, in fractions of it: what
-/// its motion path takes along.
-fn anchor_of(g: &Geometry) -> Pt {
-    let [l, r, t, b] = g.crop;
-    (
-        l + (1.0 - l - r) * (0.5 + g.anchor.0),
-        t + (1.0 - t - b) * (0.5 + g.anchor.1),
-    )
-}
-
 /// A point of `clip`'s motion path to fractions of the canvas. In depth
 /// the path is on the plane at the clip's `z`, where the camera sees it;
 /// [`Projective::UNSEEN`] for a clip that faces along its path
 /// (`orient`) from an anchor off its middle, which no one map shows.
 fn path_placement(timeline: &Timeline, clip: &Clip, scene: &Scene) -> Projective {
     let (canvas, picture) = (scene.canvas, scene.picture);
-    let g = geometry_at(&clip.props, scene.clip_time);
-    let [l, r, t, b] = g.crop;
-    let width = picture.0.max(1.0) * (1.0 - l - r).max(1e-6);
-    let height = picture.1.max(1.0) * (1.0 - t - b).max(1e-6);
-    let (fw, fh) = filled((width, height), scene.fit, canvas);
-    let (cw, ch) = (canvas.0.max(1.0), canvas.1.max(1.0));
-    let origin = (
-        0.5 + g.at.0 + g.anchor.0 * fw / cw,
-        0.5 + g.at.1 + g.anchor.1 * fh / ch,
-    );
-    let on_canvas = Affine::translate(origin.0, origin.1)
-        .then(Affine::scale(cw, ch))
-        .then(scene.parents);
-    let to_shares = Affine::scale(1.0 / cw, 1.0 / ch);
+    // The path says where the clip's anchor goes: from where it lands with
+    // no path, as far as a point of the path says, in canvas widths and
+    // heights, and then as the clip's parents move it.
+    let geometry = geometry_at(&clip.props, scene.clip_time);
+    let (own, _) = geometry.placed(picture, scene.fit, false, canvas);
+    let from = own.apply(geometry.anchor_in(picture));
+    let on_canvas = scene
+        .parents
+        .then_apply(&Affine::translate(from.x, from.y))
+        .then_apply(&Affine::scale(canvas.0, canvas.1));
+    let to_shares = Affine::scale(1.0 / canvas.0, 1.0 / canvas.1);
     if !in_depth(clip) {
-        return on_canvas.then(to_shares).into();
+        return to_shares.then_apply(&on_canvas).into();
     }
-    // The path says where the anchor goes, and the clip turns about its middle.
+    // In depth the clip turns about its middle, and its anchor goes round
+    // with it: as far from where it is on the canvas as being held in
+    // depth takes it.
     let flat = flat_placement(clip, scene);
-    let (middle, anchor) = (flat.apply((0.5, 0.5)), flat.apply(anchor_of(&g)));
-    let to_middle = [middle.0 - anchor.0, middle.1 - anchor.1, 0.0];
-    let depth = depth_at(&clip.props, canvas, scene.clip_time);
-    let swung = add(
-        turned(times(to_middle, -1.0), depth.pitch, depth.yaw),
-        to_middle,
-    );
-    if dot(swung, swung) > 1e-12 && is_on(&clip.props, "orient") {
+    let anchor = geometry.anchor_in((1.0, 1.0));
+    let held = in_the_world(clip, scene, &flat, None).apply([anchor.x, anchor.y, 0.0]);
+    let on = flat.apply(anchor);
+    let center = (canvas.0 / 2.0, canvas.1 / 2.0);
+    let moved = [
+        held[0] - (on.x - center.0),
+        held[1] - (on.y - center.1),
+        held[2],
+    ];
+    // Past being moved back by its `z`, that is another way at each point
+    // of a path the clip faces along.
+    let [z, ..] = depth_at(&clip.props, scene.clip_time);
+    let swung = [moved[0], moved[1], moved[2] - z * canvas.1];
+    let off: f64 = swung.iter().map(|part| part * part).sum();
+    if off > 1e-12 && is_on(&clip.props, "orient") {
         return Projective::UNSEEN;
     }
-    let plane = add([-cw / 2.0, -ch / 2.0, depth.z], swung);
-    // And where the clip's parents in depth take it, the path's plane with it.
-    let carried = carried_by(timeline, clip, canvas, scene.at());
-    let seen = camera_at(timeline, canvas, scene.at()).sees(
-        carried.point(plane),
-        carried.way([1.0, 0.0, 0.0]),
-        carried.way([0.0, 1.0, 0.0]),
-    );
-    Projective::from(on_canvas).then(seen).then(to_shares)
+    // The canvas's plane moved by as much, and where the clip's parents in
+    // depth take it, the path's plane with it.
+    let plane = Affine3::IDENTITY.moved([moved[0] - center.0, moved[1] - center.1, moved[2]]);
+    let plane = match &scene.carried {
+        Some(carried) => carried.then_apply(&plane),
+        None => plane,
+    };
+    Projective::from(on_canvas)
+        .then(seen(timeline, scene, &plane))
+        .then(to_shares)
+}
+
+/// Where a clip's anchor is in its picture, in fractions of it: what
+/// its motion path takes along.
+fn anchor_of(geometry: &Geometry) -> Pt {
+    pt(geometry.anchor_in((1.0, 1.0)))
 }
 
 // ------------------------------------------------------- sampled paths
@@ -1429,25 +1038,16 @@ pub fn inside(points: &[Pt], at: Pt) -> bool {
 
 // ------------------------------------------------------- motion paths
 
-/// How many samples each span between two points of a path has
-/// (kerf_model's `path::SAMPLES`).
-pub const SAMPLES_PER_SPAN: usize = 32;
+/// How many samples each span between two points of a path has.
+pub const SAMPLES_PER_SPAN: usize = kerf_model::MotionPath::SAMPLES;
 /// How far out a path's point can be, either way, in frames.
 const PATH_LIMIT: f64 = 10.0;
 
 /// The points of a clip's `path=`, `x,y x,y`; none when it does not
 /// read as the document requires.
 pub fn parse_path(text: &str) -> Option<Vec<Pt>> {
-    let points = text
-        .split_whitespace()
-        .map(|point| {
-            let (x, y) = point.split_once(',')?;
-            let (x, y): (f64, f64) = (x.parse().ok()?, y.parse().ok()?);
-            (x.is_finite() && y.is_finite() && x.abs() <= PATH_LIMIT && y.abs() <= PATH_LIMIT)
-                .then_some((x, y))
-        })
-        .collect::<Option<Vec<_>>>()?;
-    (points.len() >= 2).then_some(points)
+    let points = kerf_model::parse_path_points(text).ok()?;
+    Some(points.into_iter().map(|[x, y]| (x, y)).collect())
 }
 
 /// `points` as `path=` writes them, each held to what it allows.
@@ -1539,144 +1139,40 @@ pub fn with_point_on(points: &[Pt], aspect: f64, u: f64) -> Vec<Pt> {
     points
 }
 
-/// Where a clip is on its path: a point, and the way it heads, in
-/// degrees clockwise from the right.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct OnPath {
-    pub x: f64,
-    pub y: f64,
-    pub heading: f64,
-}
-
-/// The curve through a clip's path points (centripetal Catmull-Rom), on
-/// a canvas `aspect` times as wide as it is high.
+/// The curve through a clip's path points on a canvas `aspect` times as
+/// wide as it is high, which the compositor moves the clip along
+/// (kerf-model's `MotionPath`), by points as the overlays have them.
 #[derive(Clone, Debug)]
-pub struct MotionPath {
-    points: Vec<Pt>,
-    aspect: f64,
-    distances: Vec<f64>,
-}
+pub struct MotionPath(kerf_model::MotionPath);
 
 impl MotionPath {
     /// From two points up.
     pub fn new(points: Vec<Pt>, aspect: f64) -> Self {
-        let mut path = Self {
-            points,
-            aspect,
-            distances: Vec::new(),
-        };
-        let total = path.points.len().saturating_sub(1) * SAMPLES_PER_SPAN;
-        let mut distances = Vec::with_capacity(total + 1);
-        distances.push(0.0);
-        let mut last = path.curve(0.0);
-        let mut walked = 0.0;
-        for sample in 1..=total {
-            let at = path.curve(sample as f64 / SAMPLES_PER_SPAN as f64);
-            walked += ((at.0 - last.0) * aspect).hypot(at.1 - last.1);
-            distances.push(walked);
-            last = at;
-        }
-        path.distances = distances;
-        path
+        let points = points.into_iter().map(|(x, y)| [x, y]).collect();
+        Self(kerf_model::MotionPath::new(points, aspect))
     }
 
     /// On the curve, `u` spans along.
     pub fn curve(&self, u: f64) -> Pt {
-        if self.points.len() < 2 {
-            return self.points.first().copied().unwrap_or((0.0, 0.0));
-        }
-        let last = self.points.len() - 1;
-        let span = (u.floor().max(0.0) as usize).min(last - 1);
-        let t = (u - span as f64).clamp(0.0, 1.0);
-        let (p1, p2) = (self.points[span], self.points[span + 1]);
-        // Past the ends, a point continuing straight on.
-        let p0 = if span == 0 {
-            (2.0 * p1.0 - p2.0, 2.0 * p1.1 - p2.1)
-        } else {
-            self.points[span - 1]
-        };
-        let p3 = if span + 2 > last {
-            (2.0 * p2.0 - p1.0, 2.0 * p2.1 - p1.1)
-        } else {
-            self.points[span + 2]
-        };
-        // Knots a square root of the distance apart, on the canvas.
-        let gap = |a: Pt, b: Pt| {
-            ((a.0 - b.0) * self.aspect)
-                .hypot(a.1 - b.1)
-                .sqrt()
-                .max(1e-9)
-        };
-        let t0 = 0.0;
-        let t1 = t0 + gap(p0, p1);
-        let t2 = t1 + gap(p1, p2);
-        let t3 = t2 + gap(p2, p3);
-        let at = t1 + (t2 - t1) * t;
-        let lerp = |a: Pt, b: Pt, low: f64, high: f64| {
-            let k = (at - low) / (high - low);
-            (a.0 + (b.0 - a.0) * k, a.1 + (b.1 - a.1) * k)
-        };
-        // Barry and Goldman's pyramid.
-        let a1 = lerp(p0, p1, t0, t1);
-        let a2 = lerp(p1, p2, t1, t2);
-        let a3 = lerp(p2, p3, t2, t3);
-        let b1 = lerp(a1, a2, t0, t2);
-        let b2 = lerp(a2, a3, t1, t3);
-        lerp(b1, b2, t1, t2)
-    }
-
-    fn total(&self) -> f64 {
-        self.distances.last().copied().unwrap_or(0.0)
+        let [x, y] = self.0.curve(u);
+        (x, y)
     }
 
     /// How far along it is at its point `index`, as [`Self::at`] takes it.
     pub fn along_of(&self, index: usize) -> f64 {
-        let total = self.total();
-        if total <= 0.0 {
-            return 0.0;
-        }
-        let index = index.min(self.points.len().saturating_sub(1)) * SAMPLES_PER_SPAN;
-        self.distances.get(index).copied().unwrap_or(total) / total
+        self.0.along_of(index)
     }
 
-    fn at_distance(&self, along: f64) -> f64 {
-        let total = self.total();
-        if total <= 0.0 || self.distances.len() < 2 {
-            return 0.0;
-        }
-        let wanted = along.clamp(0.0, 1.0) * total;
-        let found = self
-            .distances
-            .partition_point(|distance| *distance < wanted);
-        let next = found.clamp(1, self.distances.len() - 1);
-        let (low, high) = (self.distances[next - 1], self.distances[next]);
-        let within = if high > low {
-            (wanted - low) / (high - low)
-        } else {
-            0.0
-        };
-        ((next - 1) as f64 + within) / SAMPLES_PER_SPAN as f64
-    }
-
-    /// Where a clip `along` of the way along is, from 0 to 1 of the distance.
-    pub fn at(&self, along: f64) -> OnPath {
-        let u = self.at_distance(along);
-        let (x, y) = self.curve(u);
-        let last = self.points.len().saturating_sub(1) as f64;
-        const STEP: f64 = 1e-3;
-        let before = self.curve((u - STEP).max(0.0));
-        let after = self.curve((u + STEP).min(last));
-        let heading = (after.1 - before.1)
-            .atan2((after.0 - before.0) * self.aspect)
-            .to_degrees();
-        OnPath { x, y, heading }
+    /// Where a clip `along` of the way along is, from 0 to 1 of the
+    /// distance, and the way it heads there, in degrees clockwise from
+    /// the right.
+    pub fn at(&self, along: f64) -> kerf_model::PathPoint {
+        self.0.at(along)
     }
 
     /// The curve as a line, [`SAMPLES_PER_SPAN`] samples to each span.
     pub fn samples(&self) -> Vec<Pt> {
-        let total = self.points.len().saturating_sub(1) * SAMPLES_PER_SPAN;
-        (0..=total)
-            .map(|sample| self.curve(sample as f64 / SAMPLES_PER_SPAN as f64))
-            .collect()
+        let samples = self.0.samples();
+        samples.into_iter().map(|[x, y]| (x, y)).collect()
     }
 }

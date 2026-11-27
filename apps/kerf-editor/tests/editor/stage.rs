@@ -14,9 +14,9 @@ use kerf_editor::focus::{
 use kerf_editor::model::{Clip, Snapshot, SnapshotShow, Timeline};
 use kerf_editor::stage::overlay::{
     canvas_of, dragged, drawn, follow_point, mask_add, mask_names, mask_set, masks_of,
-    new_mask_name, overlap_at, parent_motion, parse_path, path_holds, path_of, path_text,
-    placement, property_at, sampled, sampled_point_for, start_path, with_point_on, Affine,
-    MotionPath, Outline, Overlap, Projective, Props, Pt, DRAW_LEAST, SAMPLED_STEPS,
+    new_mask_name, overlap_at, parse_path, path_holds, path_of, path_text, placement, property_at,
+    sampled, sampled_point_for, start_path, with_point_on, Affine, MotionPath, Outline, Overlap,
+    Projective, Props, Pt, DRAW_LEAST, SAMPLED_STEPS,
 };
 use kerf_editor::stage::{
     base64_decode, hud, kerf_cutting, placed_clips, poster_source, preview_chip_words,
@@ -119,7 +119,8 @@ fn props_of(props: &Value) -> Props {
 
 /// kerf-compose's `a_parents_motion_is_where_the_table_says`: each row is a
 /// parent's numbers, its picture's size, whether it is fitted, the canvas, and
-/// a point that its motion takes somewhere.
+/// a point that its motion takes somewhere: a point of a clip that fills the
+/// canvas and moves with that parent.
 #[test]
 fn a_parents_motion_is_where_the_compositor_puts_it() {
     let hd = (1920.0, 1080.0);
@@ -182,9 +183,25 @@ fn a_parents_motion_is_where_the_compositor_puts_it() {
         ),
     ];
     for (props, picture, fit, canvas, from, to) in table {
-        let at = parent_motion(&props_of(&props), picture, fit, canvas, 0.0).apply(from);
-        close(at.0, to.0, 1e-6, &props.to_string());
-        close(at.1, to.1, 1e-6, &props.to_string());
+        let name = props.to_string();
+        let parent = if fit {
+            json!({"id": "p", "kind": "media", "sourceId": "m", "timelineStart": 0.0, "duration": 2.0, "props": props})
+        } else {
+            assert_eq!(picture, canvas, "a generator is the canvas's size");
+            json!({"id": "p", "kind": "generator", "fx": "solid", "timelineStart": 0.0, "duration": 2.0, "props": props})
+        };
+        let timeline = program(json!({
+            "width": canvas.0 as u32, "height": canvas.1 as u32,
+            "sources": [{"id": "m", "width": picture.0 as u32, "height": picture.1 as u32}],
+            "tracks": [{"id": "V1", "type": "video", "clips": [
+                parent,
+                {"id": "c", "kind": "generator", "fx": "solid", "timelineStart": 0.0, "duration": 2.0, "parent": "p"}
+            ]}]
+        }));
+        let moved = placement(&timeline, "c", 0.0).expect("placed").picture;
+        let at = moved.apply((from.0 / canvas.0, from.1 / canvas.1));
+        close(at.0, to.0, 1e-6, &name);
+        close(at.1, to.1, 1e-6, &name);
     }
 }
 
@@ -402,24 +419,6 @@ fn masks_read_with_their_outlines_and_edit_by_their_handles() {
 }
 
 proptest! {
-    #[test]
-    fn a_map_and_its_inverse_take_a_point_back(
-        rotation in -360.0f64..360.0,
-        sx in 0.05f64..8.0,
-        sy in 0.05f64..8.0,
-        tx in -4000.0f64..4000.0,
-        ty in -4000.0f64..4000.0,
-        x in -2.0f64..2.0,
-        y in -2.0f64..2.0,
-    ) {
-        let map = Affine::scale(sx, sy)
-            .then(Affine::rotate(rotation))
-            .then(Affine::translate(tx, ty));
-        let back = map.inverse().expect("a map that folds nothing");
-        let (bx, by) = back.apply(map.apply((x, y)));
-        prop_assert!((bx - x).abs() < 1e-6 && (by - y).abs() < 1e-6);
-    }
-
     #[test]
     fn a_path_written_reads_back_to_four_places(
         points in prop::collection::vec((-12.0f64..12.0, -12.0f64..12.0), 2..8)
@@ -1353,8 +1352,7 @@ fn a_plane_that_cannot_be_seen_places_nothing_and_a_flat_clip_stays_flat() {
     assert!(picture_of(json!({"three_d": true, "rotate_y": 180.0})).shows());
     // A flat clip keeps its flat map: everything is in sight of it.
     let flat = picture_of(json!({"x": 0.1, "three_d": false}));
-    assert_eq!(flat.m[0][2], 0.0);
-    assert_eq!(flat.m[1][2], 0.0);
+    assert!(flat.0.is_affine());
     assert!(flat.in_sight((-100.0, 100.0)));
     // Turned edge on, its path is still on the plane at its depth.
     let turned = scene(

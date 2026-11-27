@@ -1,7 +1,8 @@
 //! 2D geometry for Kerf's renderer and effects: vectors, rectangles, affine
 //! transforms (FilmCraft's Motion math), and 3×3 projective matrices with
 //! the bounds they map (EffectCraft's warps). And the affine transform of
-//! space that places what is in depth, of which the 2D one is the flat case.
+//! space that places what is in depth, of which the 2D one is the flat case,
+//! with where a clip's picture lands by its numbers ([`place`]).
 //!
 //! y grows downwards and angles are degrees clockwise on screen.
 
@@ -19,6 +20,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
+
+pub mod place;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Vec2 {
@@ -408,6 +411,13 @@ impl Default for Mat3 {
     }
 }
 
+/// The projective one that keeps lines parallel.
+impl From<Affine> for Mat3 {
+    fn from(m: Affine) -> Self {
+        Mat3([[m.a, m.c, m.e], [m.b, m.d, m.f], [0.0, 0.0, 1.0]])
+    }
+}
+
 impl Mat3 {
     pub const IDENTITY: Mat3 = Mat3([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
     pub fn translate(t: Vec2) -> Mat3 {
@@ -430,11 +440,17 @@ impl Mat3 {
             * Mat3::scale(scale_pct / 100.0)
             * Mat3::translate(-anchor)
     }
-    pub fn apply(&self, p: Vec2) -> Vec2 {
+    /// Where `p` goes before it is divided: across, down, and what the two are divided by.
+    #[inline]
+    pub fn undivided(&self, p: Vec2) -> [f64; 3] {
         let m = &self.0;
         let x = m[0][0] * p.x + m[0][1] * p.y + m[0][2];
         let y = m[1][0] * p.x + m[1][1] * p.y + m[1][2];
         let w = m[2][0] * p.x + m[2][1] * p.y + m[2][2];
+        [x, y, w]
+    }
+    pub fn apply(&self, p: Vec2) -> Vec2 {
+        let [x, y, w] = self.undivided(p);
         if w != 1.0 && w != 0.0 {
             vec2(x / w, y / w)
         } else {

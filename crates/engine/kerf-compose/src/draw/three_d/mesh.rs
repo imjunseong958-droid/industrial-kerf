@@ -471,7 +471,7 @@ fn placed(
     let level_right = turned([1.0, 0.0, 0.0], tilt, pan);
     let level_down = cross(forward, level_right);
     let roll = dot(right, level_down).atan2(dot(right, level_right));
-    let (wide, tall) = (scene.center.0 * 2.0, scene.height);
+    let (wide, tall) = (scene.camera.center.0 * 2.0, scene.camera.height);
     let back = tall / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
     crate::CameraPlace {
         x: eye[0] / wide,
@@ -1269,11 +1269,11 @@ pub(in crate::draw) fn draw(
     let seen: Vec<Vector> = points
         .iter()
         .map(|point| {
-            let from = minus(*point, scene.eye);
+            let from = minus(*point, scene.camera.eye);
             [
-                dot(from, scene.right),
-                dot(from, scene.down),
-                dot(from, scene.forward),
+                dot(from, scene.camera.right),
+                dot(from, scene.camera.down),
+                dot(from, scene.camera.forward),
             ]
         })
         .collect();
@@ -1285,12 +1285,12 @@ pub(in crate::draw) fn draw(
         ahead: vec![f32::INFINITY; across * down],
         of: vec![[0.0; 2]; across * down],
     };
-    let near = NEAR * scene.height;
+    let near = NEAR * scene.camera.height;
     let onto = |cut: Cut| {
-        let by = scene.focal / cut.seen[2] * SAMPLES as f64;
+        let by = scene.camera.focal / cut.seen[2] * SAMPLES as f64;
         (
-            scene.center.0 * SAMPLES as f64 + cut.seen[0] * by,
-            scene.center.1 * SAMPLES as f64 + cut.seen[1] * by,
+            scene.camera.center.0 * SAMPLES as f64 + cut.seen[0] * by,
+            scene.camera.center.1 * SAMPLES as f64 + cut.seen[1] * by,
             cut,
         )
     };
@@ -1416,7 +1416,7 @@ pub(in crate::draw) fn draw(
                 let at = mixed(&points);
                 let mut normal = unit(mixed(&normals));
                 // Seen from behind, a side faces whoever sees it.
-                if dot(minus(scene.eye, at), normal) < 0.0 {
+                if dot(minus(scene.camera.eye, at), normal) < 0.0 {
                     normal = times(normal, -1.0);
                 }
                 let color = part.color;
