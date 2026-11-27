@@ -295,6 +295,7 @@ pub(super) fn merge_clip(
         merged.into_iter().map(|(_, mask)| mask).collect()
     };
     let parent = pick("parent", &b.parent, &o.parent, &t.parent, clashes);
+    let follows = pick("follows", &b.follows, &o.follows, &t.follows, clashes);
     let retime = pick("retime", &b.retime, &o.retime, &t.retime, clashes);
     let angle = pick("angle", &b.angle, &o.angle, &t.angle, clashes);
     let effects = pick("effects", &b.effects, &o.effects, &t.effects, clashes);
@@ -309,6 +310,7 @@ pub(super) fn merge_clip(
             enabled,
             name,
             parent,
+            follows,
             retime,
             angle,
             link,

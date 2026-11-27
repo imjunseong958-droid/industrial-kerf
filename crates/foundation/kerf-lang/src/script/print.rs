@@ -257,6 +257,8 @@ fn op_line(project: &Project, catalog: &Catalog, op: &Op) -> String {
         Op::RemoveMarker { id } => format!("marker remove {id}"),
         Op::Link { clips, group } => link_line(clips, group),
         Op::Unlink { clips } => format!("unlink {}", id_words(clips)),
+        Op::Attach { clips, to } => format!("attach {} to={to}", id_words(clips)),
+        Op::Detach { clips } => format!("detach {}", id_words(clips)),
     }
 }
 

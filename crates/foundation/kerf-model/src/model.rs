@@ -409,6 +409,12 @@ pub struct Clip {
     /// The clip of the same sequence this one moves with: its position, scale, and rotation
     /// apply on top of this clip's own.
     pub parent: Option<Id>,
+    /// The clip of the same sequence this one follows in time: it starts so long after that
+    /// one starts (or before), which is how a document writes where it is
+    /// (`at=c9.start+12f`), it moves when an edit moves that one, and a ripple edit neither
+    /// cuts nor moves it for where it is itself. A title over a shot follows the shot, and
+    /// music under a whole scene its first.
+    pub follows: Option<Id>,
     /// What a clip of footage shows between the frames of its file.
     pub retime: Retime,
     /// On a clip of a nested sequence, the one track of it that shows or is heard, as a cut of a
@@ -484,6 +490,7 @@ impl Clip {
             name: None,
             link: None,
             parent: None,
+            follows: None,
             retime: Retime::default(),
             angle: None,
             props: Params::new(),

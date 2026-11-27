@@ -583,6 +583,13 @@ impl Place<'_> {
             Op::Unlink { clips } => Op::Unlink {
                 clips: self.clips(clips)?,
             },
+            Op::Attach { clips, to } => Op::Attach {
+                clips: self.clips(clips)?,
+                to: self.clip(to)?.0,
+            },
+            Op::Detach { clips } => Op::Detach {
+                clips: self.clips(clips)?,
+            },
         })
     }
 
@@ -719,6 +726,7 @@ enum Part {
         enabled: bool,
         name: Option<String>,
         parent: Option<Id>,
+        follows: Option<Id>,
         retime: Retime,
         angle: Option<Id>,
         props: Params,
@@ -819,6 +827,7 @@ fn parts(project: &Project, names: &Names) -> Parts {
                         enabled: clip.enabled,
                         name: clip.name.clone(),
                         parent: clip.parent.as_ref().map(|parent| names.now(parent)),
+                        follows: clip.follows.as_ref().map(|followed| names.now(followed)),
                         retime: clip.retime,
                         angle: clip.angle.clone(),
                         props: clip.props.clone(),

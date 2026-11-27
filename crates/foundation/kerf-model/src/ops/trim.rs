@@ -16,6 +16,8 @@ impl Editor<'_> {
         if delta == Time::ZERO {
             return Ok(());
         }
+        // A ripple edit passes under a clip that follows another: its own trim ripples nothing.
+        let ripple = ripple && self.clip(at).follows.is_none();
         let edge_time = |c: &Clip| match edge {
             Edge::In => c.start,
             Edge::Out => c.end(),
@@ -52,14 +54,14 @@ impl Editor<'_> {
         if ripple {
             let edited: Vec<usize> = members.iter().map(|id| self.find(id).track).collect();
             match (edge, delta.is_positive()) {
-                (Edge::Out, true) => self.open_time(s, &edited, target_edge, delta, &exclude),
+                (Edge::Out, true) => self.open_time(s, &edited, target_edge, delta, &exclude)?,
                 (Edge::Out, false) => {
                     self.close_time(s, &edited, target_edge + delta, target_edge, &exclude)?
                 }
                 (Edge::In, true) => {
                     self.close_time(s, &edited, target_edge, target_edge + delta, &exclude)?
                 }
-                (Edge::In, false) => self.open_time(s, &edited, target_edge, -delta, &exclude),
+                (Edge::In, false) => self.open_time(s, &edited, target_edge, -delta, &exclude)?,
             }
         } else {
             for id in &members {
@@ -97,6 +99,12 @@ impl Editor<'_> {
                 }
             }
             self.check_source(member)?;
+        }
+        if ripple && edge == Edge::In {
+            // What the clip shows from the cut on came `delta` earlier, and what follows it
+            // there with it; what stood over the head that was cut stays.
+            let from = target_edge + delta.max(Time::ZERO);
+            self.carry_from(s, exclude, -delta, Some(from))?;
         }
         Ok(())
     }
@@ -271,7 +279,7 @@ impl Editor<'_> {
             let member = self.find(id);
             self.project.clip_at_mut(member).start += delta;
         }
-        Ok(())
+        self.carry(s, members.into_iter().collect(), delta)
     }
 
     pub(super) fn speed(&mut self, clip: &Id, speed: &Speed) -> Outcome {

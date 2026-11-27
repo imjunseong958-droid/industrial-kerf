@@ -11,19 +11,19 @@ use std::fmt::Write as _;
 
 const GRAMMAR: &str = r#"# Kerf edit script
 
-A project is a `.kerf` document. Change it with a script: one operation per
-line, applied in order and atomically.
+A project is a `.kerf` document. A script changes it: one operation a
+line, in order, all or none.
 
 ## Times
 - Positions are sequence timecode (`01:00:04:12`, drop-frame `01:00:04;12`)
   or offsets from the sequence start (`96f`, `4.5s`), or anchors: `end` (the
-  end of the sequence), `c3.start`, `c3.end`, a marker's id (`beat1`, or
+  sequence's), `c3.start`, `c3.end`, a marker's id (`beat1`, or
   `beat1.end` past its duration), or `c3@<media timecode>`, where clip c3
   plays that media position. Each takes an optional amount, such as
   `at=c3.end`, `to=c3.start-6f`, `at=beat1+2f`, or `at=c3@00:12:04:10`.
   Prefer anchors to timecode.
 - Source positions (`src=`, `out=`) are media timecode or offsets from the
-  media's first frame, or a quoted phrase a transcript heard (`src="so we
+  media's first frame, or a phrase a transcript heard (`src="so we
   closed"`): an in point where it starts, an out point where it ends.
 - Durations: `00:00:02:12`, `60f`, or `2.5s`. Amounts: `+12f`, `-6f`, `-0.5s`.
   Seconds round to a frame.
@@ -34,15 +34,15 @@ line, applied in order and atomically.
   Its `z`, `rotate_x`, and `rotate_y` take children in depth, a camera, and a light with it, round its middle; a flat child stays flat.
 - `retime=flow` on footage draws new frames between its own for slow motion; `retime=blend` fades.
 - `rect=`, `ellipse=`, and `points=` on a mask animate: `rect={0f:0,0,0.2,0.2 24f:0.5,0,0.7,0.2:ease}`,
-  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens the edge there by that many pixels.
-- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none it shows every
-  track, the highest over the rest: each part of a multicam wants its own.
+  `points={0f:0,0;0.5,0;0.5,0.5 24f:0.1,0;0.6,0;0.6,0.5}`, corners one for one. A third number on a corner, `0.5,0,12`, softens its edge by that many pixels.
+- `angle=V2` on a clip of a nested sequence shows or plays that track alone; `angle=""` undoes it. With none every
+  track shows, the highest on top: each part of a multicam wants its own.
 - `gen=shape@1 align=left scale_x={0f:0 9f:1}` grows from its left edge at `x`, as a title; `gen=particles@1 rate=200 life=2 gravity=0.5` emits from the clip's center; a `title`'s `weight=900` picks its face, and `reveal={0f:0 24f:1} reveal_by=word` brings it in piece by piece.
 - `three_d=true z=0.5 rotate_y=30` places a clip in depth, under `gen=camera@1` and `gen=light@1`. Adjacent 3D tracks draw far to near, cut where they cross.
 
 ## Versions
-Effects, transitions, and generators have versions, listed below as
-`id@version`. Documents keep the one an edit used; omit it for the current one.
+Effects, transitions, and generators are listed below as `id@version`.
+Documents keep the version an edit used; omit it for the current one.
 
 ## Operations
 ```
@@ -51,7 +51,7 @@ insert <content> at=<pos> dur=<dur>|out=<src> on=<track>[,<track>] [as=<id>[,<id
     open time on every unlocked track; several tracks get linked clips
 overwrite <same as insert>  replace the range on the target tracks: lays a clip over others, where insert pushes them along
     <content> is media=<id> [src=<src>] [speed=<speed>] | seq=<id> [src=<src>] | gen=<generator> | caption="…"
-delete <clip> …  remove clips (and linked partners), leaving gaps
+delete <clip> …  remove clips and linked partners, leaving gaps
 ripple-delete <clip> …  remove and close the gap on every unlocked track
 lift from=<pos> to=<pos> [tracks=…]  clear a range, leaving a gap
 extract from=<pos> to=<pos> [tracks=…]  cut a range out and close it
@@ -81,6 +81,9 @@ captions <clip> on=<subtitle track> [words=<n>]
     caption what the clip says, timed to its speech, from its media's transcript,
     up to <n> words a line (4)
 link <clip> <clip> … [as=<group>]  ·  unlink <clip> …
+attach <clip> … to=<clip>  ·  detach <clip> …
+    a title follows its shot, music the first clip, `at=c2.start+12f` in a document:
+    a move, slide, or ripple of that clip takes it along, and ripples pass under it uncut
 track add <id> video|audio|subtitle [before=<track>|after=<track>] [name="…"] [locked=true]
 bus add <id> [to=<bus>] [name="…"] [gain=…] [pan=…]  ·  bus set <id> …  ·  bus remove <id>
 bus fx <id> add <effect> [<param>=<value> …]  ·  bus fx <id> set|remove <n|effect>
@@ -202,9 +205,7 @@ from, and a center is `center_x`/`center_y` in fractions of the frame.";
 
 const KERF_EFFECTS: &str = "## Effects from FilmCraft
 Run in stack order on a clip's picture after its
-masks: Lumetri grades and color correction, blurs, keys and track mattes,
-glows and light leaks, distortions, burn-ins, and 360° effects. A move is
-the clip's own: keyframes, an expression, or a look.
+masks. A move is the clip's own: keyframes, an expression, or a look.
 Written like any effect (`fx c1 add color.lumetri@2 exposure=0.5`); `look`
 with `effect: \"<id>\"` lists the parameters of one, or of a transition. A
 point is `<name>_x`/`<name>_y` across the picture (0 to 1), an offset is in pixels, a curve is text of `x,y` points from 0 to 1, a LUT
@@ -227,7 +228,7 @@ so order matters, and each with its own `amount`, which animates
 (`amount={0f:0 24f:1:ease}`). At 0 a grade is not there, to the byte.";
 
 const RASTER: &str = "## Effects kept from EffectCraft
-The EffectCraft effects Kerf keeps, which FilmCraft has nothing like:
+What FilmCraft has nothing like:
 restoration (grain, dust, rolling shutter, lens, upscaling), key and matte
 clean-up, curves and finer color, and a few blurs and distortions. They run
 in stack order beside FilmCraft's effects. `look` with

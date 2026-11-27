@@ -25,6 +25,7 @@ pub fn validate(project: &Project, catalog: &Catalog) -> Vec<Diagnostic> {
     validator.nesting();
     validator.links();
     validator.parents();
+    validator.follows();
     validator.out
 }
 
@@ -78,6 +79,46 @@ impl Validator<'_> {
                     }
                     seen += 1;
                     at = parents.get(id).copied().flatten();
+                }
+            }
+        }
+    }
+
+    /// Every clip another follows is a clip of the same sequence, and none follows itself.
+    fn follows(&mut self) {
+        let project = self.project;
+        for sequence in &project.sequences {
+            let follows: HashMap<&Id, Option<&Id>> = sequence
+                .tracks
+                .iter()
+                .flat_map(|track| &track.clips)
+                .map(|clip| (&clip.id, clip.follows.as_ref()))
+                .collect();
+            for (clip, followed) in &follows {
+                let Some(followed) = followed else {
+                    continue;
+                };
+                if !follows.contains_key(followed) {
+                    self.error(
+                        "clip.follows",
+                        clip,
+                        format!("`{clip}` follows `{followed}`, not a clip of its sequence"),
+                    );
+                    continue;
+                }
+                let mut seen = 0;
+                let mut at = Some(*followed);
+                while let Some(id) = at {
+                    if id == *clip || seen > follows.len() {
+                        self.error(
+                            "clip.follows",
+                            clip,
+                            format!("`{clip}` follows itself through `{followed}`"),
+                        );
+                        break;
+                    }
+                    seen += 1;
+                    at = follows.get(id).copied().flatten();
                 }
             }
         }
