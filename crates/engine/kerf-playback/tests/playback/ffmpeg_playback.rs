@@ -836,3 +836,95 @@ fn a_paused_seek_shows_the_frame_at_the_playhead() {
     let ahead = (paused * 10.0 + 1e-6).floor() as i64 + 3;
     seek(ahead, 0.0, "a frame decoded ahead while playing");
 }
+
+/// Where no clip shows, native playback shows the program's empty canvas, black, as a render
+/// draws it: paused, skimming and playing through a gap, and not the first frame of the clip
+/// after it. Played on, each frame is of the clip at its start: at a cut, the first frame of
+/// the clip after it, not one more of the clip before.
+#[test]
+fn a_gap_shows_the_empty_canvas() {
+    let binary = ffmpeg_binary();
+    if !ffmpeg_available(&binary) {
+        eprintln!("skipping playback integration test: ffmpeg is unavailable");
+        return;
+    }
+    let directory = tempdir().expect("temporary directory");
+    let source = numbered_source(&binary, directory.path(), 10, 28);
+    // Gaps on frames 0 to 2 and 12 to 14, and a cut on frame 8.
+    let text = format!(
+        "kerf 1\nproject name=\"Gaps\"\n\
+         media m path=\"{}\" rate=10 dur=28f video=64x36\n\
+         sequence s1 rate=10 size=64x36 audio=48000\n\
+         \x20 track V1 video\n\
+         \x20   clip c1 media=m src=0f at=3f dur=5f\n\
+         \x20   clip c2 media=m src=20f at=8f dur=4f\n\
+         \x20   clip c3 media=m src=10f at=15f dur=5f\n",
+        source.display()
+    );
+    let project = kerf_lang::parse_document(&text, kerf_model::Catalog::builtin())
+        .unwrap_or_else(|errors| panic!("{errors:?}"))
+        .project;
+    assert_eq!(
+        kerf_playback::preview_plan(&project).mode,
+        kerf_core::preview::PreviewMode::NativeExact
+    );
+    let session = PlaybackSession::open(
+        project,
+        PlaybackConfig::default()
+            .with_audio_enabled(false)
+            .with_frame_size(64, 36),
+    )
+    .expect("open playback session");
+    let frame_of =
+        |shown: &kerf_playback::PlaybackFrame| (shown.timeline_time * 10.0 + 1e-6).floor() as i64;
+    let blank = |shown: &kerf_playback::PlaybackFrame| {
+        (shown.width, shown.height) == (64, 36)
+            && shown
+                .pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 0, 0, 255])
+    };
+    // The media's frame the program shows on `frame`, or none in a gap.
+    let media = |frame: i64| match frame {
+        3..8 => Some(frame - 3),
+        8..12 => Some(frame + 12),
+        15..20 => Some(frame - 5),
+        _ => None,
+    };
+    let shows = |shown: &kerf_playback::PlaybackFrame| (!blank(shown)).then(|| numbered(shown));
+
+    // Paused on each frame of the gap before the first clip, then on its first frame.
+    for frame in 0..4 {
+        session.seek(frame as f64 / 10.0).expect("seek");
+        let shown = next_frame(&session, |_| true);
+        assert_eq!(
+            (frame_of(&shown), shows(&shown)),
+            (frame, media(frame)),
+            "paused on frame {frame}"
+        );
+    }
+    // Skimmed, and paused, in the gap between the clips.
+    session.scrub(1.3).expect("skim");
+    let shown = next_frame(&session, |_| true);
+    assert_eq!((frame_of(&shown), shows(&shown)), (13, None), "skimmed");
+    session.seek(1.4).expect("seek");
+    let shown = next_frame(&session, |_| true);
+    assert_eq!((frame_of(&shown), shows(&shown)), (14, None), "paused");
+
+    // Played from the first clip on, over the cut and through the gap into the last clip.
+    session.seek(0.6).expect("seek");
+    next_frame(&session, |_| true);
+    session.play().expect("play");
+    let mut played = Vec::new();
+    while played.last().is_none_or(|frame| *frame < 16) {
+        let shown = next_frame(&session, |_| true);
+        let frame = frame_of(&shown);
+        assert_eq!(shows(&shown), media(frame), "playing frame {frame}");
+        played.push(frame);
+    }
+    for frame in [8, 12] {
+        assert!(played.contains(&frame), "{frame} was not shown: {played:?}");
+    }
+}
