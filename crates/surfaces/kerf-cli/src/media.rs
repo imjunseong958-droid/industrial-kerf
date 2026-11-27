@@ -17,15 +17,17 @@ pub(crate) fn import_media(directory: &Path, kerfd: Option<&Path>, media: &str) 
 }
 
 /// The file `kerf <media>` imports into the project in `directory`. A
+/// relative path is read from the current directory, as the shell that
+/// named it reads it, not from a project `--dir` names elsewhere. A
 /// project that keeps its media in `media/` gets a copy there (named by its
 /// content) of a file its repository would not carry, as the editor's
 /// import does. A URL is refused, and said to be one: read as a path, it
-/// would be a file in the project that does not exist.
+/// would be a file that does not exist.
 fn media_file(directory: &Path, media: &str) -> Result<PathBuf> {
     if is_web_address(media) {
         bail!("URLs are not fetched; download {media} first and pass the file's path");
     }
-    let path = kerf_collab::media::absolute(directory, Path::new(media));
+    let path = std::path::absolute(media).with_context(|| format!("resolve {media}"))?;
     if !path.is_file() {
         bail!("media file does not exist: {}", path.display());
     }

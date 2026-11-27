@@ -442,7 +442,8 @@ fn a_url_to_import_is_refused_as_one() {
 
 /// `kerf --terminal <media>` with no API key imports the file and ends well, saying no agent
 /// session started, so a script can import with no editor and no key. With `-p` there is an
-/// instruction no agent carried out, and that fails.
+/// instruction no agent carried out, and that fails. The file is named as a shell in another
+/// folder names it: a relative path is read from there, not from the project.
 #[test]
 #[expect(
     clippy::disallowed_methods,
@@ -455,7 +456,10 @@ fn a_media_is_imported_from_a_terminal_with_no_api_key() {
     let folder = tempfile::tempdir().unwrap();
     let directory = folder.path();
     std::fs::write(directory.join("project.kerf"), DOCUMENT).unwrap();
-    let shot = directory.join("shot.mp4");
+    // The project keeps its media in `media/`, so the file is copied there.
+    std::fs::create_dir(directory.join("media")).unwrap();
+    let downloads = tempfile::tempdir().unwrap();
+    let shot = downloads.path().join("shot.mp4");
     let made = Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
         .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
         .arg("color=c=gray:s=64x36:r=24:d=1")
@@ -474,6 +478,7 @@ fn a_media_is_imported_from_a_terminal_with_no_api_key() {
             .env("HOME", directory)
             .env("USERPROFILE", directory)
             .env("KERF_MODELS", directory.join("models.json"))
+            .current_dir(downloads.path())
             .arg("--terminal")
             .arg("--dir")
             .arg(directory)
@@ -493,10 +498,10 @@ fn a_media_is_imported_from_a_terminal_with_no_api_key() {
     let (imported, said, ok) = run(&["shot.mp4"]);
     assert!(ok, "{said}");
     assert!(imported.starts_with("imported "), "{imported}");
-    assert!(imported.trim_end().ends_with("shot.mp4"), "{imported}");
+    assert!(imported.contains("shot-"), "{imported}");
     assert!(said.contains("no agent session started"), "{said}");
     let document = runtime.get_state().unwrap().document;
-    assert!(document.contains("path=\"shot.mp4\""), "{document}");
+    assert!(document.contains("path=\"media/shot-"), "{document}");
 
     let (_, said, ok) = run(&["shot.mp4", "-p", "trim the first clip to two seconds"]);
     assert!(!ok);
