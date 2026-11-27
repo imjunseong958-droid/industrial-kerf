@@ -156,25 +156,9 @@ pub fn takes(project: &Project, directory: &Path, id: &str) -> Result<Vec<Take>,
     kerf_engine::recipe::takes(project, directory, media).map_err(ShotError::from)
 }
 
-/// What going back to a take would write: the recipe as that take was made from it, and
-/// each workflow file it named that is no longer there as it was. Nothing is written.
-#[derive(Clone, Debug)]
-pub struct Restored {
-    /// The media's steps as the take had them, as text.
-    pub text: String,
-    /// Files to write beside the recipe: where each goes, its path from the project's
-    /// folder, and what it holds.
-    pub files: Vec<(std::path::PathBuf, String, String)>,
-}
-
 /// The recipe of media `id` as its take `take` was made from it: its text as that making
 /// read it, each seed as that take had it, so a making of it is that take's again where
-/// the model gives the same file for the same seed.
-///
-/// A workflow file the take's lines named comes back with it. Where the project still has
-/// it as it was, nothing is written; where it is gone it is written under its name; where
-/// the file there now holds something else it is left alone, the take's own is written
-/// beside it (`bounce.take3.video.comfy.json`), and the line names that.
+/// the model gives the same file for the same seed. Nothing is written.
 ///
 /// What a take was made from beside its recipe, the sequences its guides were drawn from
 /// and its signals, is the project's, and comes back by undoing in the project, not here.
@@ -183,8 +167,7 @@ pub fn restored(
     directory: &Path,
     id: &str,
     take: u32,
-) -> Result<Restored, ShotError> {
-    use kerf_engine::recipe::text::{self, Change};
+) -> Result<String, ShotError> {
     let media = project
         .media(id)
         .ok_or_else(|| ShotError::NoMedia(id.to_owned()))?;
@@ -192,63 +175,7 @@ pub fn restored(
     let kept = kerf_engine::recipe::takes::kept(directory, media, take).ok_or_else(|| {
         format!("take {take} keeps nothing of the steps it was made from: a take made before takes kept theirs, or one whose working folder is gone, has only what it is")
     })?;
-    let mut now = kept.recipe.clone();
-    let mut files = Vec::new();
-    for (named, held) in &kept.files {
-        let (file, stored) =
-            kerf_engine::recipe::beside(project, directory, id, named).map_err(ShotError::from)?;
-        match std::fs::read_to_string(&file) {
-            Ok(there) if there == *held => {}
-            Err(_) => files.push((file, stored, held.clone())),
-            Ok(_) => {
-                // The file there now is another's: the take's own goes beside it.
-                let (stem, extension) = named
-                    .split_once('.')
-                    .map_or((named.as_str(), String::new()), |(stem, rest)| {
-                        (stem, format!(".{rest}"))
-                    });
-                let (own, file, stored) = (1..)
-                    .map(|number| match number {
-                        1 => format!("{stem}.take{take}{extension}"),
-                        more => format!("{stem}.take{take}-{more}{extension}"),
-                    })
-                    .find_map(|own| {
-                        let (file, stored) =
-                            kerf_engine::recipe::beside(project, directory, id, &own).ok()?;
-                        let free = match std::fs::read_to_string(&file) {
-                            Ok(there) => there == *held,
-                            Err(_) => true,
-                        };
-                        free.then_some((own, file, stored))
-                    })
-                    .ok_or("no name is free for the take's workflow")?;
-                if !file.is_file() {
-                    files.push((file, stored, held.clone()));
-                }
-                // Each line that named it names the take's own.
-                let steps = Recipe::parse(&now).map_err(ShotError::from)?.steps;
-                for (line, step) in text::step_lines(&now.clone()).into_iter().zip(steps) {
-                    let names_it = matches!(
-                        &step,
-                        Step::Generate(ask) if ask.workflow == Some(kerf_engine::recipe::model::Source::File(named.clone()))
-                    );
-                    if names_it {
-                        now = text::changed(
-                            &now,
-                            line,
-                            Change::Set {
-                                key: kerf_engine::recipe::model::WORKFLOW,
-                                nth: 0,
-                                value: &own,
-                            },
-                        )
-                        .map_err(ShotError::from)?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(Restored { text: now, files })
+    Ok(kept.recipe)
 }
 
 /// What a shot's readings say together: the sequence and the clips they are of, the take

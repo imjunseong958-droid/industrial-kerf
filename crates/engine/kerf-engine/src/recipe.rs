@@ -29,8 +29,6 @@
 //!   (`prompt=`), what guides it (`guide=`, `first=`, `last=`, `ref=`), when
 //!   it happens (`signal=`, a signal clip of the project: [`signal`]), and
 //!   for how long and at what size (`seconds=`, `size=`), with a `seed=`.
-//!   `workflow=` hands a model whose program takes one a graph of its own to
-//!   run, a file of the project ([`model`]).
 //!   `cast=` and `style=` name who and what it shows and how it looks, as
 //!   the project says them once for every shot ([`cast`]).
 //! - `join` sets files earlier steps made end to end.
@@ -107,13 +105,6 @@ pub(crate) fn place_of(directory: &Path, media: &Media) -> Option<Result<takes::
     } else {
         uncarried(media).map(|recipe| takes::Place::of(directory, recipe, &media.path))
     }
-}
-
-/// The folder of the project the shot that is `media` keeps files of its own in, a copy
-/// of a model's workflow among them, from the project's folder: the one its takes'
-/// folder is in.
-pub fn shot_folder(directory: &Path, media: &Media) -> Result<PathBuf> {
-    Ok(takes::Place::of_media(directory, &media.path)?.beside())
 }
 
 /// Steps as text: a line that says what the text is, then each step as the document
@@ -197,8 +188,7 @@ fn steps_of_text(
                 .chain(ask.guides.iter_mut().map(|(_, source)| source))
                 .chain(&mut ask.first)
                 .chain(&mut ask.last)
-                .chain(&mut ask.references)
-                .chain(&mut ask.workflow);
+                .chain(&mut ask.references);
             for source in sources {
                 if let Source::File(file) = source {
                     *file = from_project(file)?;
@@ -591,20 +581,6 @@ pub(crate) fn within(folder: &Path, path: &str, what: &str) -> Result<PathBuf> {
         }
     }
     Ok(inside)
-}
-
-/// Where the file `file` is, named as the steps that make media `id` name their files,
-/// from the project's folder: its place on this machine, and its path as a document
-/// writes it. A path that leaves the project is refused, and so is a media nothing makes.
-pub fn beside(
-    project: &kerf_model::Project,
-    directory: &Path,
-    id: &str,
-    file: &str,
-) -> Result<(PathBuf, String)> {
-    written(project, id)?;
-    let inside = within(Path::new(""), file, "file its steps name")?;
-    Ok((directory.join(&inside), stored(&inside)))
 }
 
 /// `directory` as a whole path, from the root.
@@ -1186,11 +1162,7 @@ pub fn make(
         takes::record(&place, take, from, plan.roll)?;
         // What it was made from, to go back to: not what the take stands on, so one that
         // cannot be kept is still a take.
-        let kept = takes::keep(&place, take, &plan.text, plan.roll, &|named| {
-            within(Path::new(""), named, "file")
-                .ok()
-                .and_then(|inside| std::fs::read_to_string(directory.join(inside)).ok())
-        });
+        let kept = takes::keep(&place, take, &plan.text, plan.roll);
         if let Err(error) = kept {
             log::warn!(
                 "take {take} of `{}` is made, and what it was made from could not be kept with it: {error}",

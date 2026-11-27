@@ -3,7 +3,7 @@ name = "kerf-shots"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "A shot's graph and the workflow behind its model, read and changed the same way by the editor and by an agent"
+description = "A shot's graph, read and changed the same way by the editor and by an agent"
 publish.workspace = true
 
 [dependencies]
@@ -11,9 +11,6 @@ kerf-engine = { path = "../../engine/kerf-engine" }
 kerf-model = { path = "../../foundation/kerf-model" }
 # What follows a point and cuts an object out of footage.
 kerf-track = { path = "../../vfx/kerf-track" }
-# How a workflow reads: the file's format and the workflows that come with
-# kerf-comfy. ComfyUI itself is another program, never linked.
-kerf-workflow = { path = "../../surfaces/kerf-workflow" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true

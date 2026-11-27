@@ -323,8 +323,8 @@ pub fn first_line(text: &str) -> &str {
 }
 
 /// Whether an error the bridge sends stays in the error bar: not what a
-/// view answers in place (a making, a shot's graph, a recipe, a workflow,
-/// the Cast dialog).
+/// view answers in place (a making, a shot's graph, a recipe, the Cast
+/// dialog).
 pub fn kept_in_bar(command: Option<&CommandName>) -> bool {
     !matches!(
         command,
@@ -338,9 +338,6 @@ pub fn kept_in_bar(command: Option<&CommandName>) -> bool {
                 | CommandName::RecipeEdit
                 | CommandName::ShotPicture
                 | CommandName::ShotFollow
-                | CommandName::Workflow
-                | CommandName::WorkflowGet
-                | CommandName::WorkflowEdit
         )
     )
 }

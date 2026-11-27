@@ -7,7 +7,7 @@ use super::drag::Drag;
 use super::inspector::note;
 use super::paint::{paint_line, paint_ring, paint_under};
 use super::{MenuKind, ShotGraph};
-use crate::making::{GraphNode, Holds};
+use crate::making::GraphNode;
 use editor_state::model::{EditKey, EditParam, Interp};
 use editor_ui::icons::Icon;
 use editor_ui::theme::{self, radius};
@@ -202,7 +202,7 @@ impl ShotGraph {
     /// from a sound of its sequence.
     pub(super) fn signal_column(&self, node: &GraphNode, cx: &mut Context<Self>) -> gpui::Div {
         let mut column = div().flex().flex_col().gap(px(theme::space::S8));
-        let Holds::Shot(What::Signal(signal)) = &node.holds else {
+        let What::Signal(signal) = &node.what else {
             return column;
         };
         if node.is_missing() {

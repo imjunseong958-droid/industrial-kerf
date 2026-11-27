@@ -532,9 +532,6 @@ fn answered_in_place(command: Option<&CommandName>) -> bool {
                 | CommandName::RecipeEdit
                 | CommandName::ShotPicture
                 | CommandName::ShotFollow
-                | CommandName::Workflow
-                | CommandName::WorkflowGet
-                | CommandName::WorkflowEdit
         )
     )
 }

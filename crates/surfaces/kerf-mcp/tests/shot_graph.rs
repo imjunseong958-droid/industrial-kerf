@@ -1,18 +1,15 @@
 //! What a person does in the editor's graph of a shot, done by an agent with
 //! `look` and `edit`, against a real kerfd: the graph read, a word of a step
 //! set, an input wired in and let go, a step added and one taken out, and a
-//! value set in the workflow its model is run with.
+//! take gone back to.
 //!
 //! In a file of its own: it reads a models file of its own for the whole
-//! process ([`Models::use_file`]), and gives the programs they run no ComfyUI
-//! server in `KERF_COMFY` ([`model::set_program_env`]), which the other tests'
-//! process must not see. What a server says of a workflow's inputs is read in
-//! `workflow_server.rs`, from one that is a thread there.
+//! process ([`Models::use_file`]), which the other tests' process must not see.
 
-use kerf_engine::recipe::model::{self, Models};
+use kerf_engine::recipe::model::Models;
 use kerf_mcp::KerfMcpRouter;
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// The steps of the shot, as the graph's `text` lists them.
 const STEPS: &str = "render court {depth.mp4} pass=depth size=832x480 rate=16
@@ -64,10 +61,6 @@ fn refused(router: &KerfMcpRouter, name: &str, arguments: Value) -> String {
         .to_owned()
 }
 
-fn read(file: &Path) -> String {
-    std::fs::read_to_string(file).unwrap_or_else(|error| panic!("{}: {error}", file.display()))
-}
-
 /// The node of `graph` that `finds`.
 fn node(graph: &Value, finds: impl Fn(&Value) -> bool) -> &Value {
     graph["nodes"]
@@ -112,27 +105,21 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let dir = folder.path();
     std::fs::create_dir(dir.join("shots")).unwrap();
     std::fs::write(dir.join("project.kerf"), PROJECT).unwrap();
-    // The person's own models: one run with kerf-comfy, which has a workflow to read, and one not.
+    // The person's own models.
     let models = dir.join("models.json");
     std::fs::write(
         &models,
         r#"{"still": {"run": ["a-still-program", "{request}"]},
-            "video": {"run": ["kerf-comfy", "--workflow", "shot", "{request}"]}}"#,
+            "video": {"run": ["a-video-program", "{request}"]}}"#,
     )
     .unwrap();
     Models::use_file(&models);
-    // No server a person has named is asked what the workflow's nodes take: the file named
-    // here is not there, and nothing else names one.
-    model::set_program_env("KERF_COMFY", dir.join("no-such-comfy.json"));
-    for names_one in ["COMFY_URL", "COMFY_API_KEY", "COMFY_API_HEADER"] {
-        model::remove_program_env(names_one);
-    }
     let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
     let router = KerfMcpRouter::new(dir, Some(&kerfd)).unwrap();
     router.set_permissions(Some(kerf_mcp::permissions::Permissions::default()));
 
-    // The graph, as the editor shows it: the steps, what they read, and what runs the model,
-    // each node by its step's number.
+    // The graph, as the editor shows it: the steps and what they read, each node by its
+    // step's number.
     let graph = ok(&router, "look", json!({"graph": "shot"}));
     assert_eq!(graph["text"], STEPS);
     assert!(
@@ -153,13 +140,6 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         node(&graph, |node| node["id"] == "made:depth.mp4")["line"],
         1
     );
-    assert_eq!(
-        video["runner"],
-        json!({"kind": "comfy", "workflow": "shot"})
-    );
-    assert!(node(&graph, |node| node["model"] == "still")
-        .get("runner")
-        .is_none());
     assert!(wired(&graph, "signal:bounce", &made, "signal"), "{graph}");
     assert!(wired(&graph, "moves:ball", &made, "moves"), "{graph}");
     assert!(
@@ -205,66 +185,24 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     );
     assert_eq!(files(), before);
 
-    // On top of it: one input let go, another wired in, and a value of the model's workflow.
-    let workflow = ok(
-        &router,
-        "look",
-        json!({"workflow": {"media": "shot", "line": line}}),
-    );
-    assert_eq!(
-        (workflow["name"].as_str(), workflow["origin"].as_str()),
-        (Some("shot"), Some("bundled"))
-    );
-    assert!(workflow.get("text").is_none(), "the nodes say it");
-    // With no server named, none was asked: the workflow is read without, and says why.
-    assert!(
-        workflow.get("taken").is_none() && workflow["takenError"].is_string(),
-        "{workflow}"
-    );
-    assert_eq!(workflow["blanks"]["seed"]["given"], "7");
-    let loader = node(&workflow, |node| {
-        node["inputs"]
-            .as_array()
-            .is_some_and(|inputs| inputs.iter().any(|input| input["name"] == "weight_dtype"))
-    })["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    // On top of it: one input let go, another wired in.
     let wired_again = ok(
         &router,
         "edit",
         json!({
             "extend": seeded["proposal"],
             "script": format!("step shot set {line} signal=\"\"\nstep shot set {line} signal=hit"),
-            "workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "weight_dtype", "value": "fp8_e4m3fn"}],
         }),
-    );
-    assert_eq!(
-        wired_again["workflows"][0],
-        json!({"media": "shot", "line": line, "of": "shot", "keptAs": "shots/shot.video.comfy.json",
-               "set": [{"node": loader, "input": "weight_dtype", "value": "fp8_e4m3fn"}]})
     );
     assert_eq!(
         steps_in(&proposed(&router, &wired_again["proposal"]), "shot")[2],
         STEPS.lines().nth(2).unwrap().replace(
-            "signal=bounce moves=ball seconds=4 seed=7 strength=0.8",
-            "signal=hit moves=ball seconds=4 seed=8 workflow=shots/shot.video.comfy.json strength=0.8"
+            "signal=bounce moves=ball seconds=4 seed=7",
+            "signal=hit moves=ball seconds=4 seed=8"
         )
     );
-    assert!(
-        read(&dir.join("shots/shot.video.comfy.json")).contains("\"weight_dtype\": \"fp8_e4m3fn\"")
-    );
-    // The person reviewing it reads what was set, in the proposal's script.
-    let state = router.runtime().get_state().unwrap();
-    let script = &state.proposals[0].source;
-    assert!(
-        script.contains(&format!(
-            "# writes the workflow shots/shot.video.comfy.json, a copy of `shot` for step {line} of shot, with:\n#   node {loader} weight_dtype = \"fp8_e4m3fn\"\n"
-        )),
-        "{script}"
-    );
 
-    // What the proposal would make of the graph, and of the workflow.
+    // What the proposal would make of the graph.
     let shown = ok(
         &router,
         "look",
@@ -272,20 +210,6 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     );
     assert!(!wired(&shown, "signal:bounce", &made, "signal"), "{shown}");
     assert!(wired(&shown, "signal:hit", &made, "signal"), "{shown}");
-    assert_eq!(
-        node(&shown, |node| node["model"] == "video")["workflow"],
-        "shots/shot.video.comfy.json"
-    );
-    let own = ok(
-        &router,
-        "look",
-        json!({"workflow": {"media": "shot", "line": line}, "proposal": wired_again["proposal"]}),
-    );
-    assert_eq!(
-        (own["origin"].as_str(), own["file"].as_str()),
-        (Some("own"), Some("shots/shot.video.comfy.json"))
-    );
-    assert_eq!(own["blanks"]["seed"]["given"], "8");
     // The project itself is as it was until the person says yes.
     let project = ok(&router, "look", json!({"graph": "shot"}));
     assert!(wired(&project, "signal:bounce", &made, "signal"));
@@ -301,34 +225,11 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         )
         .unwrap();
 
-    // A value set again is another copy: the one the steps before name is not written over.
-    let first_copy = read(&dir.join("shots/shot.video.comfy.json"));
-    let again = ok(
-        &router,
-        "edit",
-        json!({"workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "weight_dtype", "value": "default"}]}),
-    );
-    assert_eq!(
-        again["workflows"][0]["keptAs"], "shots/shot.video-2.comfy.json",
-        "{again}"
-    );
-    assert!(
-        again["script"]
-            .as_str()
-            .unwrap()
-            .contains("workflow=shots/shot.video-2.comfy.json"),
-        "{again}"
-    );
-    assert_eq!(read(&dir.join("shots/shot.video.comfy.json")), first_copy);
-    // Back to the workflow as it comes: the word taken off the step.
+    // Another word of the step, on the project as accepted.
     let back = ok(
         &router,
         "edit",
-        json!({"revise": again["proposal"], "script": format!("step shot set {line} workflow=\"\"")}),
-    );
-    assert!(
-        !steps_in(&proposed(&router, &back["proposal"]), "shot")[2].contains("workflow="),
-        "{back}"
+        json!({"script": format!("step shot set {line} strength=0.9")}),
     );
 
     // A step added and one taken out, as a person does in the graph. Later lines count steps
@@ -366,10 +267,10 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
     let back = ok(
         &router,
         "edit",
-        json!({"revise": stepped["proposal"], "script": format!("step shot set {line} workflow=\"\"")}),
+        json!({"revise": stepped["proposal"], "script": format!("step shot set {line} strength=0.7")}),
     );
 
-    // What a step or a workflow cannot take is refused, with why, and nothing is kept of it.
+    // What a step cannot take is refused, with why, and nothing is kept of it.
     let before = files();
     let said = refused(
         &router,
@@ -377,21 +278,13 @@ fn an_agent_reads_a_shots_graph_and_sets_what_a_person_sets_there() {
         json!({"revise": back["proposal"], "script": format!("step shot set {line} seed=soon")}),
     );
     assert!(said.contains("`seed=soon` is not a whole number"), "{said}");
+    // A model is handed what the steps render, never a graph of its own to run.
     let said = refused(
         &router,
         "edit",
-        json!({"revise": back["proposal"], "workflowSet": [{"media": "shot", "line": line, "node": loader, "input": "unet_name", "value": "other"}]}),
+        json!({"revise": back["proposal"], "script": format!("step shot set {line} workflow=shots/own.json")}),
     );
-    assert!(said.contains("which the step fills"), "{said}");
-    let said = refused(
-        &router,
-        "look",
-        json!({"workflow": {"media": "shot", "line": line - 1}}),
-    );
-    assert!(
-        said.contains("model `still` is not run by kerf-comfy"),
-        "{said}"
-    );
+    assert!(said.contains("`workflow=` is no longer read"), "{said}");
     // A shot that says where nothing goes has nothing to hold its takes to.
     let alone = ok(
         &router,

@@ -2,7 +2,7 @@
 //! `type` names it (`{"type": "seek", "position": 2.5}`), as [`Command`] reads and writes it.
 //! Each variant says what it does, what answers it, and when it is refused.
 
-use crate::{conversations, media, paperwork, previews, queue, recipes, tracks, workflows};
+use crate::{conversations, media, paperwork, previews, queue, recipes, tracks};
 use kerf_agent::{OpenAiApiMode, ProviderName};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -369,18 +369,6 @@ pub enum Command {
     TakesRead {
         media: String,
     },
-    /// The workflow a `generate` step's model is run with, where its program is
-    /// kerf-comfy: `workflow`, every node and input of it, and a second `workflow` once the
-    /// model's program has said what the server takes at each input. A refusal is `error
-    /// {command: workflow, media}`.
-    WorkflowGet {
-        media: String,
-        line: usize,
-    },
-    /// Set a value of that workflow, in the shot's own copy of it beside its recipe:
-    /// `workflow`, then `recipe`; a refused change is an `error {command: workflow, media}`
-    /// before them.
-    WorkflowEdit(workflows::Edit),
     /// The person's models a recipe's `generate` can name, from their own models file:
     /// `models {file, exists, models, error?}`.
     Models,
@@ -528,8 +516,6 @@ impl Command {
             Self::ShotPicture { .. } => &CommandName::ShotPicture,
             Self::ShotFollow(_) => &CommandName::ShotFollow,
             Self::TakesRead { .. } => &CommandName::TakesRead,
-            Self::WorkflowGet { .. } => &CommandName::WorkflowGet,
-            Self::WorkflowEdit(_) => &CommandName::WorkflowEdit,
             Self::Models => &CommandName::Models,
             Self::ProjectionImport => &CommandName::ProjectionImport,
             Self::ProjectionRepair => &CommandName::ProjectionRepair,
@@ -579,8 +565,8 @@ impl UnnamedCommand {
 kerf_runtime::named! {
     unnamed = UnnamedCommand;
     /// A command's name, as its `type` says it (`seek`, `media_make`, ...), and what an
-    /// `error` says it is about where no one command is: a conversation, a recipe, a
-    /// workflow or the cast, whichever command it was that asked.
+    /// `error` says it is about where no one command is: a conversation, a recipe or the
+    /// cast, whichever command it was that asked.
     ///
     /// An `error` names one ([`ErrorEvent::command`](crate::event::ErrorEvent::command)) for
     /// what sent it to tell its own refusals from the rest. A name this build does not know
@@ -632,8 +618,6 @@ kerf_runtime::named! {
         ShotPicture = "shot_picture",
         ShotFollow = "shot_follow",
         TakesRead = "takes_read",
-        WorkflowGet = "workflow_get",
-        WorkflowEdit = "workflow_edit",
         Models = "models",
         ProjectionImport = "projection_import",
         ProjectionRepair = "projection_repair",
@@ -659,8 +643,6 @@ kerf_runtime::named! {
         Conversation = "conversation",
         /// Reading or changing a media's recipe.
         Recipe = "recipe",
-        /// Reading or changing the workflow a model is run with.
-        Workflow = "workflow",
         /// Reading or saving the cast.
         Cast = "cast",
     }

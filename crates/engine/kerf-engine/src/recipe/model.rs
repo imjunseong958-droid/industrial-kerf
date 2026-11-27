@@ -24,7 +24,6 @@
 //!   "size": [1920, 1080],
 //!   "seed": 7,
 //!   "signals": [{ "name": "swell", "rate": 24.0, "values": [0.0, 0.25, 0.5] }],
-//!   "workflow": null,
 //!   "more": { "strength": "0.6" },
 //!   "out": "/project/shots/open.takes/.making-003.mp4"
 //! }
@@ -131,7 +130,7 @@ pub const REQUEST_FILE: &str = "request.json";
 /// The version a request says it is.
 const REQUEST_VERSION: u32 = 1;
 
-pub use kerf_model::making::{names_a_guide, Ask, Source, FILES, MOVES, REGIONS, SIGNAL, WORKFLOW};
+pub use kerf_model::making::{names_a_guide, Ask, Source, FILES, MOVES, REGIONS, SIGNAL};
 
 /// The request a model's program reads, as [`REQUEST_FILE`] holds it: what a `generate` step
 /// asks, with every file it names where that file is.
@@ -159,8 +158,6 @@ pub(crate) struct Request<'a> {
     /// where some do, so a request of none reads as it did.
     #[serde(skip_serializing_if = "<[Region]>::is_empty")]
     regions: &'a [Region],
-    /// Under [`WORKFLOW`], the name a step hands a model a graph of its own by.
-    workflow: Option<String>,
     more: &'a BTreeMap<String, String>,
     out: String,
     /// Said only of a part of a longer shot: a request for a whole one reads as it did.
@@ -168,9 +165,7 @@ pub(crate) struct Request<'a> {
     from: Option<f64>,
 }
 
-// serde names a field by a literal: `workflow` is held to the name kerf-model gives it.
-const _: () = assert!(matches!(WORKFLOW.as_bytes(), b"workflow"));
-// And so is `regions`.
+// serde names a field by a literal: `regions` is held to the name kerf-model gives it.
 const _: () = assert!(matches!(REGIONS.as_bytes(), b"regions"));
 
 /// Words clips of a guide say they are (`prompt=`), and a grey video of where the guide shows
@@ -249,7 +244,6 @@ pub(crate) fn request<'a>(
         signals,
         moves,
         regions,
-        workflow: optional(&ask.workflow)?,
         more: &ask.more,
         out: made(&ask.out).to_string_lossy().into_owned(),
         from: ask.from,

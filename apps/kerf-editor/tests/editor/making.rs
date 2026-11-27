@@ -6,11 +6,10 @@ use kerf_editor::cast;
 use kerf_editor::cast::Entry;
 use kerf_editor::making::{
     another_seed, arrange, card_height, card_size, card_state, card_title, draw_signal,
-    draws_curve, extent, fitted_in, graph_start, in_port, input_kind, link_output, nearest_toward,
-    one_line, out_port, part_id, part_number, placed_over, point_on, port_says, ports_for,
-    reading_lines, reads_port, settle, shown_value, signal_keys, signal_line, signal_under,
-    take_tip, value_of, wants_carrying, wire_nth, zoom_about, Camera, CardState, GraphEdge,
-    GraphNode, GraphStart, Holds, InputKind, PictureQueue, Progress, Recipe, Toward, Workflow,
+    draws_curve, extent, fitted_in, graph_start, in_port, nearest_toward, one_line, out_port,
+    placed_over, point_on, port_says, ports_for, reading_lines, reads_port, settle, signal_keys,
+    signal_line, signal_under, take_tip, value_of, wants_carrying, wire_nth, zoom_about, Camera,
+    CardState, GraphEdge, GraphNode, GraphStart, PictureQueue, Progress, Recipe, Toward,
     ZOOM_LEAST, ZOOM_MOST, ZOOM_READ,
 };
 use kerf_editor::model::Ask;
@@ -188,19 +187,8 @@ fn a_picture_from_outside_is_copied_into_refs_under_a_free_name() {
 }
 
 /// A node as the bridge says one: one of a shot's graph, as its `recipe` lists it (there,
-/// and set up, unless `holds` says otherwise), or with the kind `part` one of a workflow's
-/// own, as its `workflow` lists it.
+/// and set up, unless `holds` says otherwise).
 fn node(id: &str, kind: &str, gives: &str, line: Option<usize>, holds: Value) -> GraphNode {
-    if kind == "part" {
-        return GraphNode {
-            id: id.into(),
-            title: id.into(),
-            detail: String::new(),
-            gives: Gives::File,
-            line,
-            holds: Holds::Part(serde_json::from_value(holds).unwrap()),
-        };
-    }
     let mut said = json!({"id": id, "kind": kind, "title": id, "gives": gives,
         "there": true, "setUp": true});
     if let Some(line) = line {
@@ -216,7 +204,7 @@ fn node(id: &str, kind: &str, gives: &str, line: Option<usize>, holds: Value) ->
         detail: node.detail,
         gives: node.gives,
         line: node.line,
-        holds: Holds::Shot(node.what),
+        what: node.what,
     }
 }
 
@@ -424,16 +412,6 @@ fn a_card_is_as_tall_as_what_it_shows_and_reads() {
     assert!(card_size(of(&recipe, "signal:bounce")).1 > card_size(of(&recipe, "cast:Ada")).1);
     // Six things come into the model apart.
     assert!(card_height(of(&recipe, "made:{out}"), 6) >= 16.0 + 24.0 * 6.0);
-    // A workflow's node is its name and a row an input, however many come in.
-    let part = node(
-        "part:3",
-        "part",
-        "file",
-        None,
-        json!({"inputs": [{"name": "a"}, {"name": "b"}, {"name": "c"}]}),
-    );
-    assert_eq!(card_height(&part, 9), card_size(&part).1);
-    assert!(card_size(&part).1 > card_size(&node("part:4", "part", "file", None, json!({}))).1);
 }
 
 proptest! {
@@ -613,108 +591,7 @@ proptest! {
 }
 
 #[test]
-fn a_models_workflow_reads_as_a_graph_of_its_nodes() {
-    let event = json!({
-        "type": "workflow", "media": "shot", "line": 3, "model": "video", "name": "shot",
-        "origin": "bundled", "file": null, "about": "A shot that follows a guide",
-        "text": "{…}",
-        "blanks": {
-            "prompt": {"says": "the line's prompt", "given": "it bounces"},
-            "guide": {"says": "the file the line gives as guide=", "by": "file"},
-            "steps": {"says": "20 unless the line says steps="}
-        },
-        "nodes": [
-            {"id": "1", "class": "UNETLoader", "title": "UNETLoader", "outputs": ["MODEL"],
-             "inputs": [{"name": "unet_name", "value": "{unet}", "blanks": ["unet"]},
-                        {"name": "weight_dtype", "value": "default", "choices": ["default", "fp8"]}]},
-            {"id": "2", "class": "KSampler", "title": "Sampler", "outputs": ["LATENT"],
-             "inputs": [{"name": "model", "link": ["1", 0], "type": "MODEL"},
-                        {"name": "steps", "value": 20, "min": 1, "max": 100},
-                        {"name": "cfg", "value": 7.5},
-                        {"name": "add_noise", "value": true}]},
-            {"id": "3", "class": "Other", "inputs": [{"name": "latent", "link": ["9", 0]}]},
-            {"class": "Nameless"}
-        ]
-    });
-    let workflow = Workflow::read(&serde_json::from_value(event).unwrap());
-    assert_eq!((workflow.line, workflow.model.as_str()), (3, "video"));
-    assert!(!workflow.is_own());
-    let graph = &workflow.graph;
-    assert!(graph.parts);
-    assert_eq!(graph.nodes.len(), 3, "a node without an id is left out");
-    let sampler = graph.node(&part_id("2")).unwrap();
-    // By what ComfyUI's editor calls it, and its kind under that.
-    assert_eq!(
-        (sampler.title.as_str(), sampler.detail.as_str()),
-        ("Sampler", "KSampler")
-    );
-    assert_eq!(graph.node(&part_id("1")).unwrap().detail, "");
-    // A link is an edge; one from a node that is not there is not.
-    assert_eq!(graph.edges.len(), 1);
-    assert_eq!(
-        (
-            graph.edges[0].from.as_str(),
-            graph.edges[0].to.as_str(),
-            graph.edges[0].port.as_str()
-        ),
-        ("part:1", "part:2", "model")
-    );
-    let inputs = |id: &str| {
-        graph
-            .node(&part_id(id))
-            .unwrap()
-            .part()
-            .unwrap()
-            .inputs
-            .clone()
-    };
-    assert_eq!(input_kind(&inputs("1")[0]), InputKind::Blank);
-    assert_eq!(input_kind(&inputs("1")[1]), InputKind::Value);
-    assert_eq!(input_kind(&inputs("2")[0]), InputKind::Link);
-    assert_eq!(shown_value(&json!(7.5)), "7.5");
-    assert_eq!(shown_value(&json!(20)), "20");
-    assert_eq!(shown_value(&json!(20.0)), "20");
-    assert_eq!(shown_value(&json!([1, 2])), "[1,2]");
-    // What fills each blank, and what the line gives for it now.
-    assert_eq!(
-        workflow.blank_says("prompt"),
-        "The line's prompt. Now: it bounces"
-    );
-    assert_eq!(
-        workflow.blank_says("guide"),
-        "The file the line gives as guide=. The line gives none, so the node is left out"
-    );
-    assert_eq!(
-        workflow.blank_says("steps"),
-        "20 unless the line says steps="
-    );
-    assert_eq!(workflow.blank_says("missing"), "");
-    // An output is read by an input that is a link already and takes what it gives.
-    let (loader, other) = (
-        graph.node(&part_id("1")).unwrap(),
-        graph.node(&part_id("3")).unwrap(),
-    );
-    assert_eq!(ports_for(loader, sampler), ["model"]);
-    assert!(ports_for(sampler, loader).is_empty());
-    assert_eq!(
-        ports_for(sampler, other),
-        ["latent"],
-        "an input that says no type takes any"
-    );
-    assert_eq!(link_output(loader, sampler, "model"), 0);
-    // A workflow's node reads nothing of the shot's, nor the shot's of it.
-    let step = node("made:{out}", "model", "video", Some(2), json!({}));
-    assert!(ports_for(loader, &step).is_empty() && ports_for(&step, loader).is_empty());
-}
-
-#[test]
-fn a_number_set_in_a_workflow_is_held_to_what_the_server_takes() {
-    assert_eq!(part_number(" 30 ", Some(1.0), Some(100.0)), Some(30.0));
-    assert_eq!(part_number("0.5", None, None), Some(0.5));
-    assert_eq!(part_number("101", Some(1.0), Some(100.0)), None);
-    assert_eq!(part_number("0", Some(1.0), None), None);
-    assert_eq!(part_number("thirty", None, None), None);
-    assert_eq!(part_number("inf", None, None), None);
+fn a_prompt_is_one_line_and_a_seed_fits_a_sampler() {
     // A prompt is one line, as its step's line is; a seed is under 2^31.
     assert_eq!(
         one_line("a ball\n  bounces\ton\r\nthe floor "),
@@ -755,12 +632,12 @@ fn a_graph_to_start_on_is_taken_out_of_the_arguments() {
             .map(|word| (*word).to_owned())
             .collect::<Vec<_>>()
     };
-    let mut args = words(&["/p/court", "--graph", "shot", "--graph-node", "workflow:3"]);
+    let mut args = words(&["/p/court", "--graph", "shot", "--graph-node", "made:{out}"]);
     assert_eq!(
         graph_start(&mut args),
         Ok(Some(GraphStart {
             media: "shot".into(),
-            node: Some("workflow:3".into())
+            node: Some("made:{out}".into())
         }))
     );
     assert_eq!(args, ["/p/court"]);
@@ -893,7 +770,7 @@ fn a_recipe_leaves_out_an_edge_to_what_is_not_there() {
         "edges": [{"from": "a", "to": "b", "port": "guide"}, {"from": "a", "to": "gone", "port": "x"}]
     })).unwrap());
     assert_eq!(recipe.edges.len(), 1);
-    assert!(!recipe.parts && recipe.reads());
+    assert!(recipe.reads());
     assert!(extent(&recipe, &arrange(&recipe)).is_some());
     assert!(!Recipe::default().reads());
 }

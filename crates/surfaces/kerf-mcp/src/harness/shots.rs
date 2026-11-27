@@ -1,24 +1,13 @@
-//! What `look` reads of a shot, a media its steps make: the graph the editor shows of it, the
-//! workflow a step's model is run with, its takes held to their guide, and a signal's keys from
-//! a sound; and what an edit's `workflowSet` and `restoreTake` write of its steps.
+//! What `look` reads of a shot, a media its steps make: the graph the editor shows of it, its
+//! takes held to their guide, and a signal's keys from a sound; and what an edit's
+//! `restoreTake` writes of its steps.
 
-use super::tools::{EditInput, HeldInput, PlacedInput, SignalInput, StepInput, WorkflowSetInput};
+use super::tools::{EditInput, HeldInput, PlacedInput, SignalInput};
 use super::{no_model_said, program, resolve_project_source_path};
 use crate::{KerfMcpRouter, McpCode, McpError};
 use kerf_model::Project;
 use kerf_shots::ShotError;
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
-
-/// A refusal as an agent is told it: a model that is not set up as [`no_model_said`] says it;
-/// any other keeps its kind.
-fn said_to_an_agent(why: ShotError, models: &kerf_engine::recipe::model::Models) -> ShotError {
-    match why {
-        ShotError::NoModel { name, .. } => ShotError::Other(no_model_said(&name, models)),
-        kind => kind,
-    }
-}
 
 impl KerfMcpRouter {
     /// What cannot be read of a shot, with where its media is when a proposal holds it.
@@ -78,52 +67,8 @@ impl KerfMcpRouter {
              Change one in an `edit` script: `step {media} set <n> <name>=<value>` sets a prompt, a seed, a knob, and an edge too, \
              since wiring a node in is the name its reader gives it (`signal=`, `ref=`, `guide=`, `moves=`; a name given more than \
              once takes every value, and `<name>=\"\"` lets it go); `step {media} add [<n>] <step>` adds one and \
-             `step {media} remove <n>` takes one out. A signal's curve is its clip's `value`. A model with a `runner` is run \
-             with a workflow: read it with `look` `workflow` ({{media, line}}). Make it with `make`."
+             `step {media} remove <n>` takes one out. A signal's curve is its clip's `value`. Make it with `make`."
         ));
-        Ok(shown)
-    }
-
-    /// `look` with `workflow`: the workflow a `generate` step's model is run with, as the
-    /// editor's graph opens it.
-    pub(super) fn shot_workflow(
-        &self,
-        project: &Project,
-        step: &StepInput,
-    ) -> Result<Value, McpError> {
-        let invalid = |why: ShotError| self.no_shot(&step.media, why);
-        let models = kerf_engine::recipe::model::Models::load().map_err(|error| {
-            invalid(format!("the person's models file does not read: {error}").into())
-        })?;
-        // A step is named by its number, which is a line on in the text of its steps.
-        let read =
-            kerf_shots::workflow::read(project, &self.dir, &step.media, step.line + 1, &models)
-                .map_err(|why| invalid(said_to_an_agent(why, &models)))?;
-        let mut workflow =
-            kerf_shots::workflow::shown(&step.media, step.line, &read).map_err(invalid)?;
-        // What each input takes on the server the model is run on, as its program says:
-        // the names to choose among, a number's least and most.
-        match kerf_shots::workflow::taken(&models, &read) {
-            Ok(taken) => kerf_shots::workflow::with_taken(&mut workflow, &taken),
-            Err(why) => {
-                workflow.taken_error = Some(format!(
-                    "what each input takes on the server could not be asked ({why}); a value is still set, and is refused there if it is not one it takes"
-                ));
-            }
-        }
-        let mut shown = json!(workflow);
-        // The file's own text is what an editor holds a change to; here the nodes say it all.
-        if let Some(shown) = shown.as_object_mut() {
-            shown.remove("text");
-        }
-        shown["change"] = json!(
-            "an input with a `link` is the graph's shape, and one with `blanks` is filled by the step \
-             (`blanks` says by what, and `given` what the step gives now): set those in an `edit` script, \
-             `step <media> set <n> <name>=<value>`. Any other `value` is the workflow's own: set it with `edit` \
-             `workflowSet` ({media, line, node, input, value}), which keeps a copy of the workflow in the project \
-             for this shot and has the step name it with `workflow=`. `step <media> set <n> workflow=\"\"` goes \
-             back to the workflow as it comes."
-        );
         Ok(shown)
     }
 
@@ -149,145 +94,32 @@ impl KerfMcpRouter {
         Ok(result)
     }
 
-    /// What an edit's `workflowSet` and `restoreTake` make of the steps of the media they
-    /// name: lines of the edit's own script, which set them, and the workflow copies those
-    /// name. Nothing is written here, and a workflow is a new copy once the proposal is
-    /// staged, so that undo goes back to the steps before and no take loses the file it was
-    /// made with.
+    /// What an edit's `restoreTake` makes of the steps of the media it names: lines of the
+    /// edit's own script, which set them as the take had them. Nothing is written here.
     pub(super) fn shot_changes(
         &self,
         project: &Project,
         input: &EditInput,
-    ) -> Result<ShotChanges, McpError> {
+    ) -> Result<Vec<String>, McpError> {
         let invalid = |why: String| McpError::new(McpCode::InvalidSteps, why);
-        // The steps of each media named, as text: as they were, and as this edit has them.
-        let mut texts: BTreeMap<String, (String, String)> = BTreeMap::new();
-        let read = |texts: &mut BTreeMap<String, (String, String)>,
-                    id: &str|
-         -> Result<(), McpError> {
-            if !texts.contains_key(id) {
-                let text = kerf_shots::graph::written(project, id)
-                    .map_err(|why| invalid(format!("{why}{}", self.in_pending(id, "extend"))))?;
-                texts.insert(id.to_owned(), (text.clone(), text));
-            }
-            Ok(())
+        let Some(restore) = &input.restore_take else {
+            return Ok(Vec::new());
         };
-        let mut kept: Vec<WorkflowKept> = Vec::new();
-        // A take gone back to: the steps it was made from, with the workflow they named.
-        if let Some(restore) = &input.restore_take {
-            if !input.workflow_set.is_empty() {
-                return Err(McpError::new(
-                    McpCode::InvalidArguments,
-                    "`restoreTake` writes every step as the take had it: change them in an edit after this one",
-                ));
-            }
-            let restored =
-                kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
-                    .map_err(|why| {
-                        invalid(format!(
-                            "{why}{}",
-                            self.in_pending(&restore.media, "extend")
-                        ))
-                    })?;
-            read(&mut texts, &restore.media)?;
-            for (file, stored, text) in restored.files {
-                kept.push(WorkflowKept {
-                    media: restore.media.clone(),
-                    step: 0,
-                    of: format!("take {}", restore.take),
-                    set: Vec::new(),
-                    copy: kerf_shots::workflow::Copy {
-                        file,
-                        stored,
-                        text,
-                        recipe: restored.text.clone(),
-                    },
-                });
-            }
-            if let Some(held) = texts.get_mut(&restore.media) {
-                held.1 = restored.text;
-            }
-        }
-        // Every value set in one step's workflow goes into the one copy.
-        let mut steps: Vec<(&str, usize, Vec<&WorkflowSetInput>)> = Vec::new();
-        for set in &input.workflow_set {
-            match steps
-                .iter_mut()
-                .find(|(media, line, _)| *media == set.media && *line == set.line)
-            {
-                Some((_, _, sets)) => sets.push(set),
-                None => steps.push((&set.media, set.line, vec![set])),
-            }
-        }
-        if !steps.is_empty() {
-            let models = kerf_engine::recipe::model::Models::load().map_err(|error| {
-                invalid(format!("the person's models file does not read: {error}"))
+        let was = kerf_shots::graph::written(project, &restore.media).map_err(|why| {
+            invalid(format!(
+                "{why}{}",
+                self.in_pending(&restore.media, "extend")
+            ))
+        })?;
+        let now = kerf_shots::takes::restored(project, &self.dir, &restore.media, restore.take)
+            .map_err(|why| {
+                invalid(format!(
+                    "{why}{}",
+                    self.in_pending(&restore.media, "extend")
+                ))
             })?;
-            for (media, step, sets) in steps {
-                read(&mut texts, media)?;
-                // A step is named by its number, which is a line on in the text of its steps.
-                let line = step + 1;
-                let read = kerf_shots::workflow::read_of(
-                    project,
-                    &self.dir,
-                    media,
-                    line,
-                    &models,
-                    texts[media].1.clone(),
-                )
-                .map_err(|why| invalid(said_to_an_agent(why, &models).to_string()))?;
-                let values: Vec<kerf_shots::workflow::Set> = sets
-                    .iter()
-                    .map(|set| match &set.link {
-                        Some((from, output)) => {
-                            kerf_shots::workflow::Set::link(&set.node, &set.input, from, *output)
-                        }
-                        None => kerf_shots::workflow::Set::value(&set.node, &set.input, &set.value),
-                    })
-                    .collect();
-                // Held to what the server takes there, where a `look` has asked.
-                let asked = kerf_shots::workflow::taken_before(&models, &read);
-                let now = kerf_shots::workflow::with(&read, &values, asked.as_ref())
-                    .map_err(|why| invalid(why.to_string()))?;
-                let taken: Vec<PathBuf> = kept.iter().map(|kept| kept.copy.file.clone()).collect();
-                let copy = kerf_shots::workflow::copied(
-                    project, &self.dir, media, line, &read, &now, &taken,
-                )
-                .map_err(|why| invalid(why.to_string()))?;
-                if let Some(held) = texts.get_mut(media) {
-                    held.1.clone_from(&copy.recipe);
-                }
-                kept.push(WorkflowKept {
-                    media: media.to_owned(),
-                    step,
-                    of: read.name,
-                    set: sets
-                        .iter()
-                        .map(|set| match &set.link {
-                            Some(link) => {
-                                json!({"node": set.node, "input": set.input, "link": link})
-                            }
-                            None => {
-                                json!({"node": set.node, "input": set.input, "value": set.value})
-                            }
-                        })
-                        .collect(),
-                    copy,
-                });
-            }
-        }
-        // What was set, as the lines that set it in the document.
-        let mut lines = Vec::new();
-        for (media, (was, now)) in &texts {
-            lines.extend(
-                kerf_shots::graph::step_lines(media, was, now)
-                    .map_err(|why| invalid(format!("{media}'s steps: {why}")))?,
-            );
-        }
-        Ok(ShotChanges {
-            workflows: kept,
-            steps: lines,
-        })
+        kerf_shots::graph::step_lines(&restore.media, &was, &now)
+            .map_err(|why| invalid(format!("{}'s steps: {why}", restore.media)))
     }
 
     /// The keys of a signal clip from the onsets of the sound a clip plays.
@@ -502,68 +334,5 @@ impl KerfMcpRouter {
             ));
         }
         Ok(result)
-    }
-}
-
-/// What an edit's `workflowSet` and `restoreTake` come to.
-pub(super) struct ShotChanges {
-    pub(super) workflows: Vec<WorkflowKept>,
-    /// Lines for the edit's own script, which set the steps.
-    pub(super) steps: Vec<String>,
-}
-
-/// A workflow an edit keeps for a shot: the step it is of, the copy, and what was set in it.
-pub(super) struct WorkflowKept {
-    media: String,
-    /// The step it is of, by its number; 0 for one that comes back with a take's steps.
-    step: usize,
-    /// The workflow it is a copy of, as the model's entry names it.
-    of: String,
-    set: Vec<Value>,
-    pub(super) copy: kerf_shots::workflow::Copy,
-}
-
-impl WorkflowKept {
-    pub(super) fn json(&self) -> Value {
-        json!({
-            "media": self.media,
-            "line": self.step,
-            "of": self.of,
-            "keptAs": self.copy.stored,
-            "set": self.set,
-        })
-    }
-
-    /// What a proposal's script says of it, as comments, for the person reviewing it.
-    pub(super) fn lines(&self) -> String {
-        // One that comes back with a take's steps is as that take had it.
-        if self.step == 0 {
-            return format!(
-                "# writes the workflow {}, as {} of {} was made with it\n",
-                self.copy.stored, self.of, self.media
-            );
-        }
-        let mut lines = format!(
-            "# writes the workflow {}, a copy of `{}` for step {} of {}, with:\n",
-            self.copy.stored, self.of, self.step, self.media
-        );
-        for set in &self.set {
-            lines.push_str(&match set.get("link") {
-                Some(link) => format!(
-                    "#   node {} {} reads output {} of node {}\n",
-                    set["node"].as_str().unwrap_or_default(),
-                    set["input"].as_str().unwrap_or_default(),
-                    link[1],
-                    link[0].as_str().unwrap_or_default()
-                ),
-                None => format!(
-                    "#   node {} {} = {}\n",
-                    set["node"].as_str().unwrap_or_default(),
-                    set["input"].as_str().unwrap_or_default(),
-                    set["value"]
-                ),
-            });
-        }
-        lines
     }
 }

@@ -338,8 +338,7 @@ pub struct Prefs {
     /// project's absolute folder ([`project_key`]).
     pub track_heights: BTreeMap<String, TrackHeights>,
     /// Where a shot's graph's cards were dragged, each card's place by its
-    /// id, under its project and shot (`making::placement_key`, or a
-    /// model's workflow under its shot, `making::workflow_key`).
+    /// id, under its project and shot (`making::placement_key`).
     pub graph_places: BTreeMap<String, BTreeMap<String, (f32, f32)>>,
     /// What this copy last read from or wrote to the file: bookkeeping,
     /// public only so prefs can be built field by field elsewhere

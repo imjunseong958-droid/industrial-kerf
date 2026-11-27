@@ -111,15 +111,12 @@ fn change(
     }
     if let Some(take) = edit.restore {
         let restored = kerf_shots::takes::restored(project, directory, &edit.media, take)?;
-        if restored.text == edit.was && restored.files.is_empty() {
+        if restored == edit.was {
             return Err(format!("the steps are as take {take} was made from them already").into());
-        }
-        for (file, _, held) in &restored.files {
-            kerf_shots::workflow::write(file, held)?;
         }
         return Ok(Changed {
             added: None,
-            script: kerf_shots::graph::step_lines(&edit.media, &edit.was, &restored.text)?,
+            script: kerf_shots::graph::step_lines(&edit.media, &edit.was, &restored)?,
         });
     }
     let now = match &edit.text {

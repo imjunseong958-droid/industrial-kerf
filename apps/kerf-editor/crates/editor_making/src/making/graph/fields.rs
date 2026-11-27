@@ -1,12 +1,9 @@
-//! The chosen node's fields: what each sets on its step's line (or on a
-//! node of a model's workflow), made again for another node or another
-//! shape of it, carrying over what a person is typing, and set as they
-//! leave it.
+//! The chosen node's fields: what each sets on its step's line, made again
+//! for another node or another shape of it, carrying over what a person is
+//! typing, and set as they leave it.
 
 use super::ShotGraph;
-use crate::making::{
-    input_kind, plain, shown_number, shown_value, value_text, GraphNode, Holds, InputKind,
-};
+use crate::making::{plain, value_text, GraphNode};
 use editor_ui::input::{InputEvent, TextInput};
 use editor_ui::theme::{self, radius, text};
 use editor_ui::ui;
@@ -15,13 +12,11 @@ use gpui::{
     Window,
 };
 use kerf_bridge::event::graph::What;
-use kerf_bridge::{RecipeEdit, WorkflowEdit};
-use serde_json::{json, Value};
+use kerf_bridge::RecipeEdit;
 use std::collections::HashMap;
 
-/// A field's name, before it; a workflow input's longer one.
+/// A field's name, before it.
 pub(super) const FIELD_LABEL: f32 = 76.0;
-pub(super) const INPUT_LABEL: f32 = 112.0;
 
 /// A field the chosen node's column shows: a name on its line to set.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,10 +49,10 @@ fn said(value: &Option<String>) -> String {
 }
 
 /// The fields of a node, by its kind: what its line sets. A guide's Draws
-/// is chosen from a menu, and a workflow's values are set by what each is.
+/// is chosen from a menu.
 fn wants_of(node: &GraphNode) -> Vec<Want> {
-    match &node.holds {
-        Holds::Shot(What::Model(model)) => {
+    match &node.what {
+        What::Model(model) => {
             let mut wants = vec![Want {
                 multiline: true,
                 ..want(
@@ -108,7 +103,7 @@ fn wants_of(node: &GraphNode) -> Vec<Want> {
             wants.push(want(ADD, "Add", "", "name=value"));
             wants
         }
-        Holds::Shot(What::Render(render)) => vec![
+        What::Render(render) => vec![
             want("sequence", "Sequence", render.sequence.as_str(), ""),
             want("size", "Size", said(&render.size), "the sequence's"),
             want("rate", "Rate", said(&render.rate), "the sequence's"),
@@ -121,7 +116,7 @@ fn wants_of(node: &GraphNode) -> Vec<Want> {
             want("from", "From", said(&render.from), "its start"),
             want("seconds", "Seconds", said(&render.seconds), "to its end"),
         ],
-        Holds::Shot(What::Join(join)) => {
+        What::Join(join) => {
             let lap = Some(join.lap).filter(|lap| *lap > 0);
             vec![want(
                 "lap",
@@ -130,51 +125,8 @@ fn wants_of(node: &GraphNode) -> Vec<Want> {
                 "0 frames",
             )]
         }
-        Holds::Part(part) => part
-            .inputs
-            .iter()
-            .filter(|input| input_kind(input) == InputKind::Value)
-            .filter(|input| {
-                let held = &input.value;
-                (held.is_string() || held.is_number())
-                    && input.choices.as_ref().is_none_or(Vec::is_empty)
-            })
-            .map(|input| {
-                let held = &input.value;
-                let (least, most) = (&input.min, &input.max);
-                let tip = (held.is_number() && (least.is_some() || most.is_some())).then(|| {
-                    let end = |end: &Option<serde_json::Number>| {
-                        end.as_ref().map_or_else(|| "any".to_owned(), shown_number)
-                    };
-                    format!("{} to {}", end(least), end(most))
-                });
-                Want {
-                    key: input.name.clone(),
-                    label: input.name.clone(),
-                    value: shown_value(held),
-                    placeholder: String::new(),
-                    multiline: false,
-                    tip,
-                }
-            })
-            .collect(),
-        Holds::Shot(_) => Vec::new(),
+        _ => Vec::new(),
     }
-}
-
-/// What a value typed into a workflow's number input sets it to: the
-/// number, where it reads as one the server takes there; none otherwise,
-/// and the field shows what it was.
-pub fn part_number(typed: &str, least: Option<f64>, most: Option<f64>) -> Option<f64> {
-    let value: f64 = typed
-        .trim()
-        .parse()
-        .ok()
-        .filter(|value: &f64| value.is_finite())?;
-    if least.is_some_and(|least| value < least) || most.is_some_and(|most| value > most) {
-        return None;
-    }
-    Some(value)
 }
 
 /// A prompt as its line holds it: one line, its spaces single.
@@ -194,19 +146,11 @@ pub fn another_seed() -> u32 {
     (hasher.finish() % (1u64 << 31)) as u32
 }
 
-/// What a field sets: a name on its line, a `name=value` added to it, or a
-/// value of a node of a model's workflow (a number held to what the
-/// server takes there).
+/// What a field sets: a name on its line, or a `name=value` added to it.
 #[derive(Clone, Debug, PartialEq)]
 enum FieldKind {
     Line,
     Add,
-    Part {
-        node: String,
-        number: bool,
-        least: Option<f64>,
-        most: Option<f64>,
-    },
 }
 
 /// A field of the chosen node, the line it was made for, and what it last
@@ -241,12 +185,6 @@ enum Commit {
         key: String,
         value: String,
     },
-    Part {
-        node: String,
-        input: String,
-        value: Value,
-    },
-    Revert(String),
 }
 
 impl ShotGraph {
@@ -255,9 +193,9 @@ impl ShotGraph {
     /// a person is typing.
     ///
     /// Nothing is set here. A person's own way to another node (choosing
-    /// it, going back from a workflow) sets what the fields say before it
-    /// comes here; what comes here from the bridge (the steps or the
-    /// workflow said again) may have moved the node to another line, or
+    /// it) sets what the fields say before it comes here; what comes here
+    /// from the bridge (the steps said again) may have moved the node to
+    /// another line, or
     /// taken it out, so what was typed for it is not set on the line it was
     /// typed for: it goes on in the node's new fields, under the same
     /// names, to be set on the node's line as the person leaves it.
@@ -308,17 +246,6 @@ impl ShotGraph {
         for want in wants {
             let kind = if want.key == ADD {
                 FieldKind::Add
-            } else if let Some(part) = node.part() {
-                let input = part.inputs.iter().find(|input| input.name == want.key);
-                let bound = |bound: &Option<serde_json::Number>| {
-                    bound.as_ref().and_then(serde_json::Number::as_f64)
-                };
-                FieldKind::Part {
-                    node: part.id.clone(),
-                    number: input.is_some_and(|input| input.value.is_number()),
-                    least: input.and_then(|input| bound(&input.min)),
-                    most: input.and_then(|input| bound(&input.max)),
-                }
             } else {
                 FieldKind::Line
             };
@@ -431,8 +358,7 @@ impl ShotGraph {
     }
 
     /// Field `key` set to what it says, on the line it was made for: the
-    /// name taken off the line when it says nothing; a `name=value` added;
-    /// a workflow's value set, a number only where the server takes it.
+    /// name taken off the line when it says nothing; a `name=value` added.
     fn commit(&mut self, key: &str, cx: &mut Context<Self>) {
         let Some(field) = self
             .inspecting
@@ -472,40 +398,6 @@ impl ShotGraph {
                     value: now,
                 }
             }
-            FieldKind::Part {
-                node,
-                number,
-                least,
-                most,
-            } => {
-                if !number {
-                    field.shown = now.clone();
-                    Commit::Part {
-                        node: node.clone(),
-                        input: field.key.clone(),
-                        value: json!(now),
-                    }
-                } else {
-                    match part_number(&now, *least, *most) {
-                        Some(value) => {
-                            field.shown = now;
-                            let value = if value.fract() == 0.0 && value.abs() < 1e15 {
-                                json!(value as i64)
-                            } else {
-                                json!(value)
-                            };
-                            Commit::Part {
-                                node: node.clone(),
-                                input: field.key.clone(),
-                                value,
-                            }
-                        }
-                        // A number stays a number, and one the server does
-                        // not take there is not sent to be refused.
-                        None => Commit::Revert(field.shown.clone()),
-                    }
-                }
-            }
         };
         match commit {
             Commit::Nothing => {}
@@ -532,20 +424,6 @@ impl ShotGraph {
                         },
                         cx,
                     );
-                }
-            }
-            Commit::Part { node, input, value } => self.edit_workflow(
-                WorkflowEdit {
-                    node,
-                    input,
-                    value,
-                    ..WorkflowEdit::default()
-                },
-                cx,
-            ),
-            Commit::Revert(was) => {
-                if let Some(field) = self.field(key) {
-                    field.input.update(cx, |input, cx| input.set_text(was, cx));
                 }
             }
         }

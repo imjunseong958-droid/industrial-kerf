@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use super::{bind_close, bind_keys, Close, MakePlan, Recipe, Workflow, CONTEXT, HEAD};
+use super::{bind_close, bind_keys, Close, MakePlan, Recipe, CONTEXT, HEAD};
 use drag::Drag;
 use fields::Inspecting;
 use footage::{PointStage, Pointing};
@@ -41,15 +41,14 @@ mod paint;
 mod pictures;
 mod signal;
 mod takes;
-mod workflow;
 
 pub(super) use canvas::bind_graph_keys;
-pub use fields::{another_seed, one_line, part_number};
+pub use fields::{another_seed, one_line};
 pub use footage::{fitted_in, point_on};
 pub use layout::{
     arrange, card_height, card_rect, card_size, draws_curve, extent, in_port, nearest_toward,
-    out_port, placed_over, placement_key, settle, workflow_key, zoom_about, Camera, Toward,
-    ZOOM_LEAST, ZOOM_MOST, ZOOM_READ, ZOOM_STEP,
+    out_port, placed_over, placement_key, settle, zoom_about, Camera, Toward, ZOOM_LEAST,
+    ZOOM_MOST, ZOOM_READ, ZOOM_STEP,
 };
 pub use pictures::{output_within, PictureQueue};
 pub use signal::{draw_signal, signal_keys, signal_line, signal_under};
@@ -71,7 +70,6 @@ enum MenuKind {
     Port,
     Pass,
     Sound,
-    Choice,
 }
 
 impl MenuKind {
@@ -80,7 +78,7 @@ impl MenuKind {
         match self {
             MenuKind::Port => 420.0,
             MenuKind::Several | MenuKind::Pass => 220.0,
-            MenuKind::AddStep | MenuKind::Sound | MenuKind::Choice => 240.0,
+            MenuKind::AddStep | MenuKind::Sound => 240.0,
         }
     }
 }
@@ -94,8 +92,7 @@ struct GraphMenu {
 
 /// A shot's graph, over the window: its steps and what they read, wired
 /// left to right on a dotted canvas, a chosen node's settings at the right,
-/// and its making and takes. A model run with kerf-comfy opens into its
-/// ComfyUI workflow, on the same canvas.
+/// and its making and takes.
 pub struct ShotGraph {
     session: Entity<Session>,
     media: SharedString,
@@ -103,10 +100,6 @@ pub struct ShotGraph {
     /// The canvas's own, for its keys.
     canvas_focus: FocusHandle,
     recipe: Option<Recipe>,
-    /// The model's workflow shown in place of the shot's graph.
-    workflow: Option<Workflow>,
-    /// The line of the model whose workflow is asked for or shown; 0 for none.
-    workflow_line: usize,
     /// Why the graph could not be read, before any was.
     refused: Option<String>,
     /// It could not be read because the media's steps are still in a recipe file, which
@@ -118,8 +111,7 @@ pub struct ShotGraph {
     asked: Option<u64>,
     /// What the shot's cards are kept under, by its project and media.
     shot_key: String,
-    /// Where the person put a card, by its node, over where it was laid out,
-    /// in what is shown (the shot's graph or its model's workflow).
+    /// Where the person put a card, by its node, over where it was laid out.
     placed: HashMap<String, (f32, f32)>,
     camera: Camera,
     /// The canvas looks at all of the graph, and goes on doing so as the
@@ -202,8 +194,6 @@ impl ShotGraph {
             focus_handle: cx.focus_handle(),
             canvas_focus,
             recipe: None,
-            workflow: None,
-            workflow_line: 0,
             refused: None,
             uncarried: false,
             said: None,
@@ -251,10 +241,9 @@ impl ShotGraph {
     }
 
     fn heard(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
-        // What is said of this shot's media; a recipe and a workflow say it among their fields.
+        // What is said of this shot's media; a recipe says it among its fields.
         let media = match event {
             Event::Recipe(recipe) => Some(recipe.graph.media.as_str()),
-            Event::Workflow(shown) => Some(shown.media.as_str()),
             Event::Error(error) => error.media.as_deref(),
             Event::TakeRead(read) => Some(read.media.as_str()),
             Event::TakesRead(read) => Some(read.media.as_str()),
@@ -266,22 +255,9 @@ impl ShotGraph {
         let ours = media == Some(self.media.as_str());
         match event {
             Event::Recipe(recipe) if ours => self.set_recipe(recipe, window, cx),
-            Event::Workflow(shown) if ours => {
-                if shown.line > 0 && shown.line == self.workflow_line {
-                    self.set_workflow(Workflow::read(shown), window, cx);
-                }
-            }
             Event::Error(error) => {
                 let message = error.message.clone();
                 match &error.command {
-                    Some(CommandName::Workflow) if ours => {
-                        self.said = Some(message);
-                        // Asked for and refused: the shot's graph stays, and its
-                        // model's Open workflow asks again.
-                        if self.workflow.is_none() {
-                            self.workflow_line = 0;
-                        }
-                    }
                     Some(CommandName::Recipe) if ours => {
                         if self.recipe.is_some() {
                             self.said = Some(message);
@@ -328,9 +304,6 @@ impl ShotGraph {
                 let revision = Some(snapshot.revision);
                 if revision != self.asked {
                     self.request(cx);
-                    if self.workflow.is_some() {
-                        self.request_workflow(cx);
-                    }
                 }
             }
             Event::Models { .. } | Event::Cast(_) => self.request(cx),
@@ -343,20 +316,14 @@ impl ShotGraph {
         cx.notify();
     }
 
-    /// The graph shown: the model's workflow, or the shot's.
+    /// The graph shown: the shot's.
     fn shown(&self) -> Option<&Recipe> {
-        match &self.workflow {
-            Some(workflow) => Some(&workflow.graph),
-            None => self.recipe.as_ref(),
-        }
+        self.recipe.as_ref()
     }
 
     /// What the cards shown are kept under.
     fn places_key(&self) -> String {
-        match &self.workflow {
-            Some(workflow) => workflow_key(&self.shot_key, &workflow.name),
-            None => self.shot_key.clone(),
-        }
+        self.shot_key.clone()
     }
 
     fn places(&self) -> HashMap<String, (f32, f32)> {
@@ -429,7 +396,6 @@ impl ShotGraph {
             .recipe
             .as_ref()
             .is_none_or(|old| old.media != recipe.media || old.name != recipe.name);
-        let edited = event.edited;
         // A step just added is the one to set next.
         if let Some(line) = event.added
             && let Some(node) = recipe.nodes.iter().find(|node| node.line == Some(line))
@@ -446,24 +412,7 @@ impl ShotGraph {
             self.drawing = None;
         }
         if let Some(node) = pending {
-            match node
-                .strip_prefix("workflow:")
-                .map(|line| line.parse::<usize>())
-            {
-                Some(Ok(line)) => self.open_workflow(line, window, cx),
-                Some(Err(_)) => {}
-                None => self.selected = Some(node),
-            }
-        }
-        // While a workflow is only asked for, the shot's graph is the one
-        // shown, and follows its steps as ever.
-        if self.workflow.is_some() {
-            // The line a workflow is of was changed: what fills its blanks,
-            // and which file it is, are read again.
-            if edited {
-                self.request_workflow(cx);
-            }
-            return;
+            self.selected = Some(node);
         }
         if self
             .selected
@@ -763,8 +712,7 @@ impl Render for ShotGraph {
 
 // ------------------------------------------------------------------ starting on a graph
 
-/// A shot's graph to start on, and what is chosen in it: a node's id, or
-/// `workflow:<line>` for the workflow of the model on that line.
+/// A shot's graph to start on, and what is chosen in it: a node's id.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphStart {
     pub media: String,
@@ -813,8 +761,8 @@ pub fn graph_start(args: &mut Vec<String>) -> Result<Option<GraphStart>, String>
 static START: std::sync::Mutex<Option<GraphStart>> = std::sync::Mutex::new(None);
 
 /// Opens the graph `start` names (with `open`, which puts it over its
-/// window) once `session`'s project has said its media, choosing its node,
-/// or opening its model's workflow, once the bridge has said the graph.
+/// window) once `session`'s project has said its media, choosing its node
+/// once the bridge has said the graph.
 /// `app::open_graph_when_up` calls it for `--graph` as the window opens.
 pub fn open_when_ready(
     start: GraphStart,

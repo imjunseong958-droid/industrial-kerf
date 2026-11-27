@@ -7,7 +7,7 @@ use crate::viewer::preview::{self, install_project, preview_unstarted};
 use crate::wake::Outbox;
 use crate::{
     analysis, emit, error, key, looks, media, paperwork, presets, queue, recipes, takes, tracks,
-    workflows, Command, CommandName, Event, MediaProject, Shared,
+    Command, CommandName, Event, MediaProject, Shared,
 };
 use kerf_mcp::{KerfMcpRouter, PresetInspection, ToolError};
 use kerf_runtime::{RuntimeClient, StateSnapshot};
@@ -533,7 +533,7 @@ impl Worker {
     }
 
     /// Carry out a command that answers with events of its own, never a state: makings, the
-    /// cast, recipes, workflows, shots and takes, and presets saved, exported or read. Any
+    /// cast, recipes, shots and takes, and presets saved, exported or read. Any
     /// other command is let go.
     fn on_its_own(&self, command: Command, active_client: &RuntimeClient) {
         match command {
@@ -568,9 +568,6 @@ impl Worker {
             Command::RecipeEdit(edit) => {
                 recipes::edit(&self.shared, active_client, &edit, &self.tx);
             }
-            Command::WorkflowGet { media, line } => {
-                workflows::get(&self.shared, active_client, &media, line, &self.tx);
-            }
             Command::ShotPicture { clip, of } => {
                 tracks::picture(&self.shared, active_client, clip, of, &self.tx);
             }
@@ -579,9 +576,6 @@ impl Worker {
             }
             Command::TakesRead { media } => {
                 takes::read(&self.shared, active_client, media, &self.tx);
-            }
-            Command::WorkflowEdit(edit) => {
-                workflows::edit(&self.shared, active_client, &edit, &self.tx);
             }
             Command::PresetSave { name, replace } => {
                 self.preset_save(active_client, name, replace);

@@ -134,7 +134,7 @@ impl ShotGraph {
         );
         let session = self.session.read(cx);
         let making = self.making(session).cloned();
-        if making.is_some() && !motion::reduced() && self.workflow.is_none() {
+        if making.is_some() && !motion::reduced() {
             window.request_animation_frame();
         }
         let cards = self.placed_cards(&graph, &places, making.as_ref(), cx);
@@ -247,11 +247,7 @@ impl ShotGraph {
                 let at = camera.to_view((x, y));
                 let size = (width * zoom, height * zoom);
                 let over = wire_over.as_deref() == Some(node.id.as_str());
-                Some(if node.is_part() {
-                    self.part_card(node, graph, at, size, zoom, cx)
-                } else {
-                    self.card(node, at, size, making, over, cx)
-                })
+                Some(self.card(node, at, size, making, over, cx))
             })
             .collect()
     }
@@ -343,11 +339,7 @@ impl ShotGraph {
         room: gpui::Stateful<gpui::Div>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        let reading = if self.workflow_line > 0 {
-            "Reading the model's workflow…".to_owned()
-        } else {
-            format!("Reading how {} is made…", self.media)
-        };
+        let reading = format!("Reading how {} is made…", self.media);
         let said = match &self.refused {
             Some(why) => ui::label(why.clone(), text::BODY, theme::neg()),
             None => ui::label(reading, text::BODY, theme::ink3()),
@@ -374,8 +366,7 @@ impl ShotGraph {
             .child(column)
     }
 
-    /// The legend of what the edges carry, or of what a workflow's rows
-    /// are, and beside it the zoom's buttons. They sit on the canvas, but a
+    /// The legend of what the edges carry, and beside it the zoom's buttons. They sit on the canvas, but a
     /// press on them is theirs: it neither pans the canvas, nor chooses the
     /// shot, nor counts towards a double-click that fits the graph.
     fn legend(&self, graph: &Recipe, cx: &mut Context<Self>) -> AnyElement {
@@ -393,44 +384,7 @@ impl ShotGraph {
                 .border_color(theme::line2())
         };
         let sample = |color: Rgba| div().w(px(16.0)).h(px(1.5)).rounded_full().bg(color);
-        let legend = if graph.parts {
-            let fills = if self.recipe.as_ref().is_some_and(|recipe| !recipe.document) {
-                "the recipe fills"
-            } else {
-                "the steps fill"
-            };
-            card()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(theme::space::S6))
-                        .child(sample(gives_color(Gives::File)))
-                        .child(ui::label("link", text::META, theme::ink2())),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(theme::space::S6))
-                        .child(
-                            div()
-                                .px(px(5.0))
-                                .rounded(px(radius::SMALL))
-                                .bg(theme::accent_wash())
-                                .child(ui::label("{blank}", text::MONO_SMALL, theme::accent_ink())),
-                        )
-                        .child(ui::label(fills, text::META, theme::ink2())),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(theme::space::S6))
-                        .child(ui::label("value", text::MONO_SMALL, theme::ink2()))
-                        .child(ui::label("set here", text::META, theme::ink2())),
-                )
-        } else {
+        let legend = {
             // The four a shot is told by, always; words and other files where the graph has them.
             let mut shown = vec![Gives::Video, Gives::Image, Gives::Path, Gives::Signal];
             for more in [Gives::Words, Gives::File] {
@@ -566,7 +520,7 @@ fn port_labels(
         .filter(|edge| {
             graph
                 .node(&edge.to)
-                .is_some_and(|to| matches!(to.kind(), Some(Kind::Model | Kind::Join)))
+                .is_some_and(|to| matches!(to.kind(), Kind::Model | Kind::Join))
         })
         .filter_map(|edge| {
             let end = camera.to_view(in_port(graph, places, edge)?);

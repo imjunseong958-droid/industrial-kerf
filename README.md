@@ -54,8 +54,7 @@ for a rendered preview whenever it would show something different.
 A shot a renderer or a video model makes comes in as media with the steps
 that make it written under it in the document; each making is a take, and
 the document says which one the media is. Kerf
-ships no model: one is a program a person names in `~/.kerf/models.json`, and
-`tools/kerf-comfy` is such a program for a model on a ComfyUI server.
+ships no model: one is a program a person names in `~/.kerf/models.json`.
 
 Kerf draws with its own renderer, in linear light, with drawing carried from
 [FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache), for renders,

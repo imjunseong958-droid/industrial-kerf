@@ -1,7 +1,7 @@
 //! What the editor keeps in its settings file, and how it reads an older one.
 
 use kerf_bridge::UpdateCheck;
-use kerf_editor::making::{placement_key, workflow_key};
+use kerf_editor::making::placement_key;
 use kerf_editor::prefs::{
     default_provider, merge, migrate, project_key, ApiMode, Keymap, MasterOutput, Prefs, Provider,
     UPDATE_EVERY_MS, VERSION,
@@ -421,7 +421,7 @@ proptest! {
             .map(|(id, (x, y))| (id, (x.round(), y.round())))
             .collect();
         let shot = placement_key(Some(Path::new("/projects/court")), "shot");
-        let flow = workflow_key(&shot, "shot");
+        let flow = placement_key(Some(Path::new("/projects/court")), "other");
         let folder = tempfile::tempdir().unwrap();
         let file = folder.path().join("editor.json");
         let mut prefs = Prefs::load_from(&file);
@@ -440,11 +440,10 @@ proptest! {
 }
 
 #[test]
-fn a_shots_cards_and_its_workflows_are_kept_apart() {
+fn each_shots_cards_are_kept_apart() {
     let shot = placement_key(Some(Path::new("/p/court")), "shot");
     assert_ne!(shot, placement_key(Some(Path::new("/p/harbour")), "shot"));
     assert_ne!(shot, placement_key(Some(Path::new("/p/court")), "other"));
-    assert_ne!(shot, workflow_key(&shot, "shot"));
     // Two windows each keep their own shot's cards: neither loses the other's.
     let folder = tempfile::tempdir().unwrap();
     let file = folder.path().join("editor.json");

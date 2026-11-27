@@ -250,7 +250,7 @@ impl ShotGraph {
                 ui::button("graph-restore", format!("Restore take {restore}'s steps"))
                     .disabled(making)
                     .tooltip(format!(
-                        "Write the shot's steps back as take {restore} was made from them: its words, its seeds, and the workflow it named. The sequences and signals it was made from are the project's, and come back by undoing there"
+                        "Write the shot's steps back as take {restore} was made from them: its words and its seeds. The sequences and signals it was made from are the project's, and come back by undoing there"
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.edit(

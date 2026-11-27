@@ -36,7 +36,7 @@ With `follows`, how a take's depth read back holds beside the guide a sequence d
 With `signal`, the keys of a signal clip from the onsets of a sound on the timeline, so that what a model is told happens on its beats. \
 With `shows` and `at`, what shows of each clip on those frames, read from the frame and not from the document: where each is, what hides it, and what has left the frame. Read it of a scene in depth before a making is asked for. \
 With `stands`, what each clip in depth stands on, measured in the scene and not on a frame: which floats over the floor and by how much, which is sunk in it, which goes through another, and the line that sets it down. Place a thing roughly, read this, and run the line. \
-With `graph`, a media its steps make as the graph the person sees of it in the editor: its steps and what each reads, wired, with what would refuse its making; and with `workflow`, the workflow a step's model is run with, every node and input of it. With `takes`, each take of a shot held to its guide by where its subject is, to choose among them by. What they can see and set there you can: read the graph before you change a shot, and say what you changed by its nodes. \
+With `graph`, a media its steps make as the graph the person sees of it in the editor: its steps and what each reads, wired, with what would refuse its making. With `takes`, each take of a shot held to its guide by where its subject is, to choose among them by. What they can see and set there you can: read the graph before you change a shot, and say what you changed by its nodes. \
 With `proposal` it shows what a pending proposal would make: its document, \
 what it would have made (`toMake`), its frames, and what it says.
 - `edit` runs one script. It becomes a proposal for the user, returned with \
@@ -70,8 +70,7 @@ model's rate and size, then a `step <media> add` line for each step, in the orde
 (the language below). There is no file to write first, and undo takes a step back as it does \
 any edit. To change a shot that is there, set a name on a step (`step <media> set <n> seed=8`): \
 a prompt, a seed, a knob, and what a step reads, since wiring a node in or letting one go is a \
-name on its reader. `workflowSet` sets a value in the workflow a model is run with, in a copy \
-the shot keeps, and `restoreTake` writes back the steps a take was made from. \
+name on its reader. `restoreTake` writes back the steps a take was made from. \
 A shot longer than its model makes at once (`models` says its `seconds`) is written in parts: \
 `render <sequence> {d2.mp4} from=<seconds> seconds=<seconds>` draws a part of the guide, \
 `generate … guide={d2.mp4} first={a.mp4} from=<seconds> out={b.mp4}` goes on from the last frame \
@@ -178,7 +177,7 @@ pub(crate) fn metadata(name: &str) -> Option<(&'static str, Value, ToolAnnotatio
              around each cut it changed. The project is unchanged until the user accepts it, \
              unless their own permissions accept an agent's edits (`status: accepted`). `extend` builds \
              on a pending proposal; `revise` replaces it; `forward`, alone, brings one the project \
-             has changed under onto the project as it is. The steps that make a media are lines of the script (`step <media> add …`); `workflowSet` sets values of the workflow a model is run with, `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
+             has changed under onto the project as it is. The steps that make a media are lines of the script (`step <media> add …`); `restoreTake` goes back to the steps a take was made from, and `carry` writes the steps of a media that still names a recipe file under it. `savePreset` saves a portable \
              .kerfpreset file without changing the project. `preset` with `bindings` \
              applies one as a proposal replacing the chosen sequence.",
             input_schema::<EditInput>(),
@@ -246,11 +245,6 @@ fn as_written(schema: &mut Schema) {
 /// field's description; the schema does not list it.
 fn true_or_object(_: &mut SchemaGenerator) -> Schema {
     json_schema!({"type": ["boolean", "object"]})
-}
-
-/// A schema that takes any value: `{}`, an object as every schema here is, not `true`.
-fn anything(_: &mut SchemaGenerator) -> Schema {
-    json_schema!({})
 }
 
 // On a type that derives `JsonSchema`, a doc comment is what an agent is shown: on a field,
@@ -346,10 +340,8 @@ pub(super) struct LookInput {
     pub(super) placed: Option<PlacedInput>,
     /// A take held to its guide in one reading, to choose between takes by: `take`, the media whose picture is the take, `depth`, the media that is its depth as a model read it back, and `clips`, the guide's clips that are its subjects. It is `follows` of the depth and, for each subject, `placed` of the take: `clips`, each with its `depth` (`off`, `farther`), its `place` (`overlap`, `off`, `size`, `frames` of `shown`), and `held`, the overlap of where it is with where it was asked for, less by how far its depth is off, from 0 to 1; and at the top `held`, the mean of them, with `order` and `off` of the whole frame. A subject the take has nothing of is held 0. Used alone, or with `sequence`.
     pub(super) held: Option<HeldInput>,
-    /// A media its steps make, as the graph the editor shows of it: `text`, its steps, a line each; `nodes`, each step (`kind` `guide` or `model`, with its `line`, the step's number, and what it holds: a model's `prompt`, `seed`, knobs) and each thing of the project a step reads (a sequence, a file, a signal, the way a clip goes, one of the cast), ending in its `takes`; `edges`, each reading, `from` a node `to` the step that reads it under the name `port`, the `nth` word of that name on the line; `cannot`, what would refuse its making; `notes`; a model's `runner`, the program's workflow it is run with, where it has one to read; and `takes`, each making with the line (`use`) that has the media be it. `change` says how each is changed. Used alone, or with `proposal`.
+    /// A media its steps make, as the graph the editor shows of it: `text`, its steps, a line each; `nodes`, each step (`kind` `guide` or `model`, with its `line`, the step's number, and what it holds: a model's `prompt`, `seed`, knobs) and each thing of the project a step reads (a sequence, a file, a signal, the way a clip goes, one of the cast), ending in its `takes`; `edges`, each reading, `from` a node `to` the step that reads it under the name `port`, the `nth` word of that name on the line; `cannot`, what would refuse its making; `notes`; and `takes`, each making with the line (`use`) that has the media be it. `change` says how each is changed. Used alone, or with `proposal`.
     pub(super) graph: Option<String>,
-    /// The workflow the model of one `generate` step is run with, for a model whose graph node has a `runner`: `media` and the step's `line`, as `graph` gives it. `nodes` is every node of it in the file's order, each with its `class` and `inputs`: a `link` to another node's output, or a `value`, which with `blanks` is filled by the step. `blanks` says of each what fills it (`by`, `says`), its `default`, and what the step gives now (`given`). A value's input also says what the server takes there, asked of the model's own program: `choices` to choose among, or a number's `min`, `max` and `step`; `takenError` says why where it could not be asked. `origin` is `bundled` or `file` for a workflow as it comes, and `own` with its `file` for the shot's own copy. Used alone, or with `proposal`.
-    pub(super) workflow: Option<StepInput>,
     /// A media its steps make: each of its `takes` held to its guide by where its subjects are, the clips its `generate` step names with `moves=`, with no model run. For each take, `overlap`, from 0 to 1, how much of where it has the subject and where the guide asked for it is the same over every frame the guide shows it on, and under `clips` the same for each subject with `off`, how far its middle is from where it was asked for in frame heights, `size`, how large beside what was asked, and `frames` of `shown`, how many of the frames the guide shows it on it was followed on: read `overlap` beside that, since a subject followed on few frames says little. `best` is the take that holds best, of more than one. The person sees the same numbers beside each take in the editor's graph. Used alone, or with `proposal`.
     pub(super) takes: Option<String>,
 }
@@ -418,17 +410,6 @@ fn given<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
     T::deserialize(deserializer).map(Some)
 }
 
-// One `generate` step: the media whose recipe it is in, and its line.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(transform = fields_unsaid)]
-pub(super) struct StepInput {
-    pub(super) media: String,
-    // The line of the recipe, from 1, as the graph's node says it.
-    #[schemars(range(min = 1))]
-    pub(super) line: usize,
-}
-
 // A take of a media, to go back to the steps it was made from.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -436,23 +417,6 @@ pub(super) struct RestoreInput {
     pub(super) media: String,
     #[schemars(range(min = 1))]
     pub(super) take: u32,
-}
-
-// One value of the workflow behind a `generate` step to set.
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(super) struct WorkflowSetInput {
-    pub(super) media: String,
-    #[schemars(range(min = 1))]
-    pub(super) line: usize,
-    pub(super) node: String,
-    pub(super) input: String,
-    // Whatever the input takes, as it was: a number, a text, or true or false.
-    #[serde(default)]
-    #[schemars(schema_with = "anything")]
-    pub(super) value: Value,
-    // The node and the output of it to read, in place of a value: a link pointed elsewhere.
-    pub(super) link: Option<(String, u64)>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -569,7 +533,7 @@ pub(super) struct TrackInput {
     pub(super) clip: Option<String>,
 }
 
-/// What the schemas of `look`'s `track`, `mesh`, `held`, `placed`, `workflow` and `signal` say
+/// What the schemas of `look`'s `track`, `mesh`, `held`, `placed` and `signal` say
 /// of fields they do not have: nothing, though each of them refuses one.
 fn fields_unsaid(schema: &mut Schema) {
     schema.remove("additionalProperties");
@@ -577,7 +541,7 @@ fn fields_unsaid(schema: &mut Schema) {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[schemars(extend("anyOf" = [{"required": ["script"]}, {"required": ["workflowSet"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}, {"required": ["forward"]}]))]
+#[schemars(extend("anyOf" = [{"required": ["script"]}, {"required": ["restoreTake"]}, {"required": ["carry"]}, {"required": ["cast"]}, {"required": ["preset"]}, {"required": ["savePreset"]}, {"required": ["forward"]}]))]
 pub(super) struct EditInput {
     /// One operation per line, applied in order and atomically.
     #[schemars(length(min = 1))]
@@ -602,11 +566,7 @@ pub(super) struct EditInput {
     pub(super) revise: Option<String>,
     /// The id of a pending proposal the project has changed under (stale), its newest version's, passed alone. Its own operations run again on the project as it is, each time they name moved with the clips that were at it, and that is the proposal's next version, which always waits for the user's review. Refused, naming the clip, where a clip a line names, or one a time it names was on, was cut, moved or removed since, or the line would change other clips than it did: nothing is staged, and `revise` replaces it.
     pub(super) forward: Option<String>,
-    /// Values to set in the workflow the model of a `generate` step is run with, each input `input` of node `node` (as `look` `workflow` lists them) to `value`, a number, a text, or true or false as it was. `line` is the step's, as `look` `graph` gives it. The workflow as it is is copied into the project beside the shot with those values changed and the rest as written, and the step names the copy with `workflow=`, by a `step` line of this edit: the answer's `workflows` says where each is kept. An input that is a `link` is pointed at another node with `link` in place of `value`, `[<node>, <output>]`, the output counted from 0 as the node's `outputs` lists what it gives: `{media, line, node: "12", input: "model", link: ["19", 0]}`. It is refused where the graph would go round, and, once the server has said what each gives, where the output is not what the input takes. Only a link is linked, and an input a blank fills is not set here. Nothing on the model's server changes, and the person's models file is not touched. To go back to the workflow as it comes, take `workflow` off the step (`step <media> set <n> workflow=""`).
-    #[serde(default, rename = "workflowSet")]
-    #[schemars(length(min = 1))]
-    pub(super) workflow_set: Vec<WorkflowSetInput>,
-    /// Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed; a workflow file they named comes back with them where the project no longer has it as it was. They are written back by `step` lines of this edit, which the proposal shows. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it.
+    /// Go back to the steps a take was made from: `media`, and the `take`'s number as `look` with `graph` or `media` lists it, where it says `kept`. The steps are written as that making read them, each seed as that take had it, so a making of them is that take's again where the model gives the same file for the same seed. They are written back by `step` lines of this edit, which the proposal shows. What else the take was made from, its sequences and signals, is the project's and is not changed. Used alone: change the steps in an edit after it.
     #[serde(rename = "restoreTake")]
     pub(super) restore_take: Option<RestoreInput>,
     /// Media that still name a recipe file (`recipe=`), to carry into the document: each recipe's `render`, `generate` and `join` lines are written as steps under its media, files named from the project's folder, and `recipe=` comes off its line. Its takes stay, and those made from the recipe as it stands are not asked for again; the answer's `carried` says how many (`takesHeld`) and what did not come with it (`notes`). The lines are first in the edit's script, so the `script` of the same edit can change the steps (`step <media> set <n> …`). A recipe with a `run` line cannot be carried, a document naming no program: its program is named in the person's own models file, and a `generate` step asks it.

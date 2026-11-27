@@ -1,4 +1,4 @@
-//! The steps that make a media as a graph, with what runs each of its models.
+//! The steps that make a media as a graph.
 
 use crate::ShotError;
 use kerf_engine::recipe::model::Models;
@@ -8,40 +8,19 @@ use std::path::Path;
 
 pub use kerf_engine::recipe::graph::{
     Edge, FileNode, Gives, Graph, JoinNode, Kind, Knob, Made, ModelNode, MovesNode, NamedNode,
-    Node, RenderNode, Runner, RunnerKind, SequenceNode, SignalNode, Sound, TakeSaid, TakesNode,
-    What,
+    Node, RenderNode, SequenceNode, SignalNode, Sound, TakeSaid, TakesNode, What,
 };
 
 /// The recipe of media `id` as a graph: its nodes and edges, its text, what
 /// would refuse its making (`cannot`) and what is worth knowing first
-/// (`notes`), as [`kerf_engine::recipe::graph()`] lays it out. A model its
-/// entry runs with a program whose workflow can be opened says so under
-/// `runner`: which program, and which workflow.
+/// (`notes`), as [`kerf_engine::recipe::graph()`] lays it out.
 pub fn shown(
     project: &Project,
     directory: &Path,
     id: &str,
     models: &Models,
 ) -> Result<Graph, ShotError> {
-    let mut shown =
-        kerf_engine::recipe::graph(project, directory, id, models).map_err(ShotError::from)?;
-    // Which workflow a model is run with is the person's own models file's to say.
-    for node in &mut shown.nodes {
-        let What::Model(model) = &mut node.what else {
-            continue;
-        };
-        let workflow = models
-            .command(&model.model)
-            .ok()
-            .and_then(crate::workflow::runs);
-        if let Some(workflow) = workflow {
-            model.runner = Some(Runner {
-                kind: RunnerKind::Comfy,
-                workflow: workflow.to_owned(),
-            });
-        }
-    }
-    Ok(shown)
+    kerf_engine::recipe::graph(project, directory, id, models).map_err(ShotError::from)
 }
 
 /// One name on one line of a recipe to set, or with no `value` to take off.

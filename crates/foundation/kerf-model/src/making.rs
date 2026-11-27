@@ -154,11 +154,6 @@ pub struct Ask {
     /// the steps are read for a making.
     pub cast: Vec<String>,
     pub styles: Vec<String>,
-    /// A graph of the model's own to run in place of the one its program
-    /// would: a file of the project, for a model whose program takes one. A
-    /// program that takes none has no use for it, and nothing says so: what
-    /// a program reads of a request is its own.
-    pub workflow: Option<Source>,
     /// Anything else the step says, which only that model reads.
     pub more: BTreeMap<String, String>,
     /// The file it writes: `out`, or the name of one a later step reads.
@@ -178,14 +173,11 @@ pub const MOVES: &str = "moves";
 /// clip), each with where the guide shows it.
 pub const REGIONS: &str = "regions";
 
-/// The name a `generate` step hands a model a graph of its own to run by.
-pub const WORKFLOW: &str = "workflow";
-
 /// The file a project says its cast and styles in, which `cast=` and `style=` name.
 pub const CAST_FILE: &str = "cast.kerfcast";
 
 /// Whether `name` is what a guide beside the first is named by, after `guide_`: lowercase
-/// letters and digits, as a workflow's blank is.
+/// letters and digits.
 pub fn names_a_guide(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -221,7 +213,6 @@ impl Ask {
             moves: Vec::new(),
             cast: Vec::new(),
             styles: Vec::new(),
-            workflow: None,
             more: BTreeMap::new(),
             out: OUT.to_owned(),
         };
@@ -265,7 +256,12 @@ impl Ask {
                 }
                 "first" => ask.first = Some(source(value)?),
                 "last" => ask.last = Some(source(value)?),
-                WORKFLOW => ask.workflow = Some(source(value)?),
+                // A model is handed what Kerf renders, never a graph of its own to run.
+                "workflow" => {
+                    return Err(
+                        "`workflow=` is no longer read: a model takes what the steps render and what the line says, and how it runs is its own".to_owned(),
+                    )
+                }
                 "ref" => ask.references.push(source(value)?),
                 "from" => {
                     ask.from = Some(
@@ -357,7 +353,6 @@ impl Ask {
             .chain(&self.first)
             .chain(&self.last)
             .chain(&self.references)
-            .chain(&self.workflow)
     }
 
     /// What it asks, as a person reads it.
@@ -391,9 +386,6 @@ impl Ask {
         }
         if let Some(seed) = self.seed {
             parts.push(format!("seed {seed}"));
-        }
-        if let Some(workflow) = &self.workflow {
-            parts.push(format!("{WORKFLOW} {}", workflow.shown()));
         }
         parts.extend(self.signals.iter().map(|signal| format!("signal {signal}")));
         parts.extend(self.moves.iter().map(|clip| format!("moves {clip}")));
@@ -447,9 +439,6 @@ impl Ask {
         }
         if let Some(seed) = self.seed {
             words.push(format!("seed={seed}"));
-        }
-        if let Some(workflow) = &self.workflow {
-            words.push(format!("{WORKFLOW}={}", workflow.shown()));
         }
         words.extend(
             self.more
@@ -675,7 +664,6 @@ impl Step {
                     first,
                     last,
                     references,
-                    workflow,
                     signals,
                     moves,
                     ..
@@ -685,8 +673,7 @@ impl Step {
                     .chain(guides.iter_mut().map(|(_, source)| source))
                     .chain(first.iter_mut())
                     .chain(last.iter_mut())
-                    .chain(references.iter_mut())
-                    .chain(workflow.iter_mut());
+                    .chain(references.iter_mut());
                 for source in sources {
                     if let Source::File(file) = source {
                         one(Named::File, file);

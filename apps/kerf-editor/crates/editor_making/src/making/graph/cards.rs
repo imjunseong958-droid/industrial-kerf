@@ -1,19 +1,14 @@
 //! The graph's cards on the canvas: a step's, or a thing a step reads, by
 //! its kind, what it gives and what is wrong with it, with a model's
 //! settings and a signal's curve or a clip's path under its lines, and a
-//! making's stripes over the takes'; and a node of a model's workflow, its
-//! inputs a row each.
+//! making's stripes over the takes'.
 
 use super::fields::one_line;
-use super::layout::{
-    draws_curve, CARD_CURVE, CARD_H, CARD_MODEL, CARD_W, PART_HEAD, PART_ROW, PART_W,
-};
+use super::layout::{draws_curve, CARD_CURVE, CARD_H, CARD_MODEL, CARD_W};
 use super::paint::{paint_line, paint_ring, paint_under};
 use super::signal::signal_line;
 use super::ShotGraph;
-use crate::making::{
-    clock, gives_word, input_kind, plain, shown_value, GraphNode, Holds, InputKind, Recipe,
-};
+use crate::making::{clock, gives_word, plain, GraphNode};
 use editor_state::store::Making;
 use editor_ui::icons::Icon;
 use editor_ui::motion;
@@ -36,19 +31,18 @@ pub(super) fn gives_color(gives: Gives) -> Rgba {
     }
 }
 
-/// A node's icon, by what it is in a shot's graph: a dot for one of a workflow's own.
-pub(super) fn kind_icon(kind: Option<Kind>) -> Icon {
+/// A node's icon, by what it is in a shot's graph.
+pub(super) fn kind_icon(kind: Kind) -> Icon {
     match kind {
-        Some(Kind::Sequence) => Icon::Film,
-        Some(Kind::Render) => Icon::Eye,
-        Some(Kind::Model) => Icon::Sparkle,
-        Some(Kind::Join) => Icon::Scissors,
-        Some(Kind::File) => Icon::Folder,
-        Some(Kind::Signal) => Icon::Clock,
-        Some(Kind::Moves) => Icon::Pen,
-        Some(Kind::Cast | Kind::Style) => Icon::Chat,
-        Some(Kind::Takes) => Icon::Media,
-        None => Icon::Dot,
+        Kind::Sequence => Icon::Film,
+        Kind::Render => Icon::Eye,
+        Kind::Model => Icon::Sparkle,
+        Kind::Join => Icon::Scissors,
+        Kind::File => Icon::Folder,
+        Kind::Signal => Icon::Clock,
+        Kind::Moves => Icon::Pen,
+        Kind::Cast | Kind::Style => Icon::Chat,
+        Kind::Takes => Icon::Media,
     }
 }
 
@@ -81,10 +75,10 @@ fn model_line(node: &GraphNode) -> String {
 
 /// What is wrong with a node, by a dot: not there in brick, wanting a look in ochre.
 fn node_mark(node: &GraphNode) -> Option<Rgba> {
-    match &node.holds {
-        Holds::Shot(what) if !what.there() => Some(theme::neg()),
-        Holds::Shot(What::Model(model)) if !model.set_up => Some(theme::warn()),
-        Holds::Shot(What::Takes(takes)) if takes.wants.is_some() => Some(theme::warn()),
+    match &node.what {
+        what if !what.there() => Some(theme::neg()),
+        What::Model(model) if !model.set_up => Some(theme::warn()),
+        What::Takes(takes) if takes.wants.is_some() => Some(theme::warn()),
         _ => None,
     }
 }
@@ -179,136 +173,6 @@ impl ShotGraph {
             )
             .into_any_element()
     }
-
-    /// A node of a model's workflow: its name and number, over a row an
-    /// input: a link comes in at its row; a blank is the steps', in the
-    /// accent's ink on a wash of it; a value is the workflow's own, plain.
-    pub(super) fn part_card(
-        &self,
-        node: &GraphNode,
-        _graph: &Recipe,
-        at: (f32, f32),
-        size: (f32, f32),
-        zoom: f32,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let z = |points: f32| px(points * zoom);
-        let selected = self.selected.as_deref() == Some(node.id.as_str());
-        let id = node.id.clone();
-        let part = node.part();
-        let number = format!("#{}", part.map_or("", |part| part.id.as_str()));
-        let rows = part
-            .into_iter()
-            .flat_map(|part| &part.inputs)
-            .map(|input| {
-                let name = input.name.clone();
-                let kind = input_kind(input);
-                let value = shown_value(&input.value);
-                div()
-                    .h(z(PART_ROW))
-                    .flex()
-                    .items_center()
-                    .gap(z(10.0))
-                    .px(z(10.0))
-                    .child(
-                        zoomed(
-                            ui::line(
-                                name,
-                                text::META,
-                                if kind == InputKind::Link {
-                                    theme::ink2()
-                                } else {
-                                    theme::ink3()
-                                },
-                            ),
-                            text::META,
-                            zoom,
-                        )
-                        .flex_shrink()
-                        .min_w_0()
-                        .max_w(z(PART_W * 0.5)),
-                    )
-                    .child(div().flex_1())
-                    .when(kind == InputKind::Blank, |row| {
-                        row.child(
-                            div()
-                                .px(z(5.0))
-                                .rounded(z(radius::SMALL))
-                                .bg(theme::accent_wash())
-                                .min_w_0()
-                                .child(zoomed(
-                                    ui::line(value.clone(), text::MONO_SMALL, theme::accent_ink()),
-                                    text::MONO_SMALL,
-                                    zoom,
-                                )),
-                        )
-                    })
-                    .when(kind == InputKind::Value, |row| {
-                        row.child(
-                            zoomed(
-                                ui::line(value.clone(), text::MONO_SMALL, theme::ink2()),
-                                text::MONO_SMALL,
-                                zoom,
-                            )
-                            .min_w_0(),
-                        )
-                    })
-            })
-            .collect::<Vec<_>>();
-        div()
-            .id(ElementId::Name(format!("node-{}", node.id).into()))
-            .absolute()
-            .left(px(at.0))
-            .top(px(at.1))
-            .w(px(size.0))
-            .h(px(size.1))
-            .rounded(z(radius::CARD))
-            .overflow_hidden()
-            .bg(theme::card())
-            .border_1()
-            .border_color(if selected {
-                theme::accent()
-            } else {
-                theme::line2()
-            })
-            .when(!selected, |card| {
-                card.hover(|card| card.border_color(theme::lineh()))
-            })
-            .cursor_pointer()
-            .child(
-                div()
-                    .h(z(PART_HEAD))
-                    .flex()
-                    .items_center()
-                    .gap(z(8.0))
-                    .px(z(10.0))
-                    .pt(z(4.0))
-                    .child(
-                        zoomed(
-                            ui::line(node.title.clone(), text::CONTROL_STRONG, theme::ink()),
-                            text::CONTROL_STRONG,
-                            zoom,
-                        )
-                        .flex_1()
-                        .min_w_0(),
-                    )
-                    .child(zoomed(
-                        ui::label(number, text::MONO_SMALL, theme::ink3()),
-                        text::MONO_SMALL,
-                        zoom,
-                    )),
-            )
-            .child(div().mx(px(1.0)).h(px(1.0)).bg(theme::line()))
-            .children(rows)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    this.press_card(&id, event, window, cx);
-                }),
-            )
-            .into_any_element()
-    }
 }
 
 /// A card's lines: its title, by a dot what is wrong with it, and what it
@@ -387,9 +251,9 @@ fn card_lines(node: &GraphNode, striped: Option<&Making>, color: Rgba, zoom: f32
 /// A signal's curve or a clip's path drawn under a card's lines, `under`
 /// points down it.
 fn card_curve(node: &GraphNode, color: Rgba, under: f32, zoom: f32) -> AnyElement {
-    let (values, moves) = match &node.holds {
-        Holds::Shot(What::Signal(signal)) => (signal.values.clone().unwrap_or_default(), None),
-        Holds::Shot(What::Moves(moves)) => (Vec::new(), Some(moves)),
+    let (values, moves) = match &node.what {
+        What::Signal(signal) => (signal.values.clone().unwrap_or_default(), None),
+        What::Moves(moves) => (Vec::new(), Some(moves)),
         _ => (Vec::new(), None),
     };
     let aspect = moves

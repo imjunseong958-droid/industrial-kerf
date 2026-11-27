@@ -1,6 +1,6 @@
-//! The graph's head: back from a model's workflow, the shot's name and
-//! where its steps are, how it stands, and Stop, or Add step, Several and
-//! Make (Make again) with the menus they open; and Close.
+//! The graph's head: the shot's name and where its steps are, how it
+//! stands, and Stop, or Add step, Several and Make (Make again) with the
+//! menus they open; and Close.
 
 use super::{MenuKind, ShotGraph};
 use crate::making::{Recipe, HEAD};
@@ -57,9 +57,8 @@ impl ShotGraph {
         (said.clone(), theme::ink3(), said)
     }
 
-    /// The head: back from a model's workflow, the shot's name and where
-    /// its steps are, how it stands (its tip says all of it), what the
-    /// making can do, and Close.
+    /// The head: the shot's name and where its steps are, how it stands
+    /// (its tip says all of it), what the making can do, and Close.
     pub(super) fn head(&self, cx: &mut Context<Self>) -> AnyElement {
         let session = self.session.read(cx);
         let making = self.making(session).cloned();
@@ -71,38 +70,21 @@ impl ShotGraph {
             .map(|recipe| recipe.name.clone())
             .filter(|name| !name.is_empty())
             .unwrap_or(shot_name);
-        let path = match (&self.workflow, &self.recipe) {
-            (Some(workflow), _) => format!(
-                "{} · {}",
-                workflow.model,
-                if workflow.is_own() {
-                    &workflow.file
-                } else {
-                    &workflow.name
-                }
-            ),
-            (None, Some(recipe)) if recipe.document => "steps in the document".to_owned(),
-            (None, Some(recipe)) => recipe.recipe.clone(),
-            (None, None) => String::new(),
+        let path = match &self.recipe {
+            Some(recipe) if recipe.document => "steps in the document".to_owned(),
+            Some(recipe) => recipe.recipe.clone(),
+            None => String::new(),
         };
-        let mut head = div()
+        let head = div()
             .h(px(HEAD))
             .flex_none()
             .flex()
             .items_center()
             .gap(px(theme::space::S8))
-            .pl(px(if self.workflow.is_some() { 10.0 } else { 16.0 }))
+            .pl(px(16.0))
             .pr(px(theme::space::S12))
             .border_b_1()
-            .border_color(theme::line());
-        if self.workflow.is_some() {
-            head = head.child(
-                icon_button("graph-back", Icon::ChevronLeft)
-                    .tooltip("Back to the shot's graph")
-                    .on_click(cx.listener(|this, _, window, cx| this.close_workflow(window, cx))),
-            );
-        }
-        head = head
+            .border_color(theme::line())
             .child(Icon::Media.view(16.0, theme::ink2()))
             .child(
                 ui::line(name, text::TITLE, theme::ink())
@@ -137,9 +119,8 @@ impl ShotGraph {
             .into_any_element()
     }
 
-    /// While the shot is being made, Stop; else Add step (on the shot's own
-    /// graph, not a model's workflow), Several and Make, each greyed with
-    /// why while it cannot run.
+    /// While the shot is being made, Stop; else Add step, Several and Make,
+    /// each greyed with why while it cannot run.
     fn making_buttons(&self, making: bool, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if making {
             return vec![ui::button("graph-stop", "Stop")
@@ -175,34 +156,34 @@ impl ShotGraph {
             "The recipe does not read".to_owned()
         };
         let mut buttons = Vec::new();
-        if self.workflow.is_none() {
-            // A step is added to the shot's steps, not to a model's workflow, and to ones that read.
-            let can_add = reads;
-            buttons.push(
-                ui::trigger(
-                    "graph-add-step-trigger",
-                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                        if can_add {
-                            this.commit_fields(cx);
-                            let at = event.position + point(px(0.0), px(16.0));
-                            this.toggle_menu(MenuKind::AddStep, at, window, cx);
-                        }
+        // A step is added to steps that read.
+        let can_add = reads;
+        buttons.push(
+            ui::trigger(
+                "graph-add-step-trigger",
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if can_add {
+                        this.commit_fields(cx);
+                        let at = event.position + point(px(0.0), px(16.0));
+                        this.toggle_menu(MenuKind::AddStep, at, window, cx);
+                    }
+                }),
+            )
+            .child(
+                ui::button("graph-add-step", "Add step")
+                    .ghost()
+                    .icon(Icon::Plus)
+                    .disabled(!can_add)
+                    .when(open_menu != Some(MenuKind::AddStep), |button| {
+                        button
+                            .tooltip(
+                                "A new step, written to read as it stands, then set in its card",
+                            )
+                            .reason(why.clone())
                     }),
-                )
-                .child(
-                    ui::button("graph-add-step", "Add step")
-                        .ghost()
-                        .icon(Icon::Plus)
-                        .disabled(!can_add)
-                        .when(open_menu != Some(MenuKind::AddStep), |button| {
-                            button
-                                .tooltip("A new step, written to read as it stands, then set in its card")
-                                .reason(why.clone())
-                        }),
-                )
-                .into_any_element(),
-            );
-        }
+            )
+            .into_any_element(),
+        );
         buttons.push(
             ui::trigger(
                 "graph-several-trigger",
