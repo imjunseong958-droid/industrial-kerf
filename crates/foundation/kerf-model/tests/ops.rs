@@ -730,6 +730,53 @@ fn a_roll_alone_moves_one_track_s_cut_for_a_j_or_l_cut() {
 }
 
 #[test]
+fn a_cut_through_one_of_two_linked_clips_links_the_other_to_the_part_under_it() {
+    // The sound comes in half a second before its picture, and time is opened where the
+    // picture starts: the sound is cut there, and the picture is not.
+    let project = run(
+        &scene(),
+        vec![
+            Op::Roll {
+                clip: id("a1"),
+                delta: f(-12),
+                alone: true,
+            },
+            Op::Insert {
+                sequence: id("s1"),
+                at: f(48),
+                duration: f(24),
+                targets: vec![(id("V1"), new_media(600)), (id("A1"), new_media(600))],
+            },
+        ],
+    );
+    assert_eq!(
+        layout(&project, "A1"),
+        vec![
+            row("a1", 0, 36),
+            row("a2", 36, 48),
+            row("c4", 48, 72),
+            row("c5", 72, 120)
+        ]
+    );
+    // The picture is linked to the sound that plays under it, and the half second that
+    // stayed before the insert to nothing.
+    let picture = project.clip("c2").unwrap();
+    assert_eq!((picture.start, picture.end()), (f(72), f(120)));
+    assert!(picture.link.is_some());
+    assert_eq!(project.clip("c5").unwrap().link, picture.link);
+    assert_eq!(project.clip("a2").unwrap().link, None);
+    // So taking the picture out takes its sound, and leaves what came before.
+    let project = run(
+        &project,
+        vec![Op::Delete {
+            clips: vec![id("c2")],
+        }],
+    );
+    assert!(project.clip("c5").is_none());
+    assert!(project.clip("a2").is_some());
+}
+
+#[test]
 fn roll_moves_the_cut_on_linked_tracks() {
     let project = run(
         &scene(),
