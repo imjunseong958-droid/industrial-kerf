@@ -121,28 +121,35 @@ impl<'a> TimeMap<'a> {
     /// backwards, the one showing just before it. Before the source's start it is negative, and
     /// it runs on past its end.
     ///
-    /// A reversed clip counts back from its source out, which is a whole flick, by the exact
-    /// amount played. Where its speed puts the out a fraction of a flick off, a position that
-    /// would be exactly a frame's start can come out just past it, and the frame shown is then
-    /// the one after the frame [`Self::source`], rounded, would give.
+    /// The position is counted on from the source in: by what has played, or, backwards, by
+    /// what is left to play, so a reversed clip is a forward one run from its other end. At one
+    /// speed that is exact. Counted back from the source out it would not be: the out is a whole
+    /// flick, a fraction of one off where the speed's ratio does not divide the clip's length,
+    /// and a position that is exactly a frame's start would come out just past it.
     pub fn frame(&self, at: Time, rate: Rate) -> i64 {
         let units = |time: Time| i128::from(time.flicks());
         let time = self.time(at);
-        // Source flicks played, as a fraction over the speed's denominator: one ratio stays exact,
-        // and a ramp is exact to the flick.
-        let (played, den) = match self.speed.constant() {
-            Some(ratio) => (
-                units(time) * i128::from(ratio.num().unsigned_abs()),
-                i128::from(ratio.den()),
+        // Source flicks past the source in, as a fraction over the speed's denominator: one
+        // ratio stays exact, and a ramp is exact to the flick.
+        let (playing, den) = match (self.speed.constant(), self.is_reverse()) {
+            (Some(ratio), reverse) => {
+                let span = if reverse { self.duration - time } else { time };
+                (
+                    units(span) * i128::from(ratio.num().unsigned_abs()),
+                    i128::from(ratio.den()),
+                )
+            }
+            (None, true) => (
+                units(self.speed.played(self.duration) - self.speed.played(time)),
+                1,
             ),
-            None => (units(self.speed.played(time)), 1),
+            (None, false) => (units(self.speed.played(time)), 1),
         };
+        let position = (units(self.source_in) * den + playing) * i128::from(rate.num());
         let per = i128::from(FLICKS_PER_SECOND) * i128::from(rate.den()) * den;
         let frame = if self.is_reverse() {
-            let position = (units(self.out()) * den - played) * i128::from(rate.num());
             -(-position).div_euclid(per) - 1
         } else {
-            let position = (units(self.source_in) * den + played) * i128::from(rate.num());
             position.div_euclid(per)
         };
         frame.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
