@@ -31,9 +31,11 @@ trap 'rm -rf -- "$work"' EXIT
 rm -rf "$out"
 mkdir -p "$stage/ffmpeg-libraries"
 
-# Kerf, and the crates its Cargo.lock names.
+# Kerf, and the crates its two Cargo.lock files name: the repository's, and the editor's,
+# which is a workspace of its own (apps/kerf-editor) that cargo vendors only when told of it.
+# Without it the archive had none of the 400 crates only the editor takes, GPUI among them.
 git -C "$root" archive --format=tar --prefix=kerf/ HEAD | tar -x -C "$stage"
-(cd "$stage/kerf" && cargo vendor --locked --versioned-dirs vendor > cargo-vendor-config.toml)
+(cd "$stage/kerf" && cargo vendor --locked --versioned-dirs --sync apps/kerf-editor/Cargo.toml vendor > cargo-vendor-config.toml)
 
 # FFmpeg itself.
 curl -fsSL -o "$stage/ffmpeg-$FFMPEG_COMMIT.tar.gz" "https://github.com/FFmpeg/FFmpeg/archive/$FFMPEG_COMMIT.tar.gz"
@@ -64,7 +66,8 @@ cat > "$stage/README.txt" <<TEXT
 The complete source of Industrial Kerf $version for $system.
 
 kerf/               Kerf at commit $(git -C "$root" rev-parse HEAD), with the crates of
-                    its Cargo.lock in vendor/. To build from them, add the contents of
+                    its Cargo.lock and of the editor's (apps/kerf-editor/Cargo.lock) in
+                    vendor/. To build from them, add the contents of
                     cargo-vendor-config.toml to .cargo/config.toml.
                     scripts/$packer builds the package.
 ffmpeg-$FFMPEG_COMMIT.tar.gz

@@ -110,3 +110,73 @@ fn a_frame_that_reads_what_the_document_does_not_hold_is_not_kept() {
     kept.flush_frames();
     assert_eq!(frame_cache_stats(dir.path()).writes, 0);
 }
+
+// What the stamp of the code that draws frames is made of, as its build script takes it in.
+include!("../../stamped.rs");
+
+/// The files `source` has built into it by name, with `include_str!` or `include_bytes!`.
+fn built_in(source: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    for taking in ["include_str!(", "include_bytes!("] {
+        for (at, _) in source.match_indices(taking) {
+            let named = source[at + taking.len()..].trim_start();
+            if let Some(name) = named
+                .strip_prefix('"')
+                .and_then(|name| name.split('"').next())
+            {
+                found.push(name);
+            }
+        }
+    }
+    found
+}
+
+/// Every Rust file under `folder` but a crate's tests, which draw nothing a person is shown.
+fn rust_files(folder: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if path.file_name().is_none_or(|name| name != "tests") {
+                rust_files(&path, out);
+            }
+        } else if path.extension().is_some_and(|kind| kind == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+#[test]
+fn the_stamp_reads_every_file_built_into_what_draws() {
+    // Frames kept on disk are read back only under the stamp they were drawn under, so a file
+    // of a kind the stamp passes over can change what is drawn and leave the frames drawn
+    // before it to be read: the prelude every kernel is written out with for OpenCL was one.
+    // A look is none of the stamp's kinds and need not be: its lines become the effects of
+    // each clip that takes it, and those are in the key of every frame the clip is in.
+    let in_the_key = "kerflook";
+    let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    for folder in STAMPED_FOLDERS {
+        rust_files(&here.join(folder), &mut sources);
+    }
+    assert!(sources.len() > 100, "{} files found", sources.len());
+    let mut passed_over = Vec::new();
+    let mut built = 0;
+    for path in &sources {
+        let source = std::fs::read_to_string(path).expect("reads");
+        for name in built_in(&source) {
+            built += 1;
+            let kind = name.rsplit('.').next().unwrap_or_default();
+            if !STAMPED_KINDS.contains(&kind) && kind != in_the_key {
+                passed_over.push(format!("{}: {name}", path.display()));
+            }
+        }
+    }
+    // The kernels, the catalogs and the fonts are built in this way: finding none of them
+    // would be finding nothing.
+    assert!(built > 40, "{built} files built in");
+    assert!(
+        passed_over.is_empty(),
+        "built into what draws, and of no kind the stamp reads:\n{}",
+        passed_over.join("\n")
+    );
+}

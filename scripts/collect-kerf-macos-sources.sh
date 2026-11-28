@@ -20,9 +20,11 @@ stage="$out/$name"
 rm -rf "$out"
 mkdir -p "$stage/homebrew"
 
-# Kerf, and the crates its Cargo.lock names.
+# Kerf, and the crates its two Cargo.lock files name: the repository's, and the editor's,
+# which is a workspace of its own (apps/kerf-editor) that cargo vendors only when told of it.
+# Without it the archive had none of the 400 crates only the editor takes, GPUI among them.
 git -C "$root" archive --format=tar --prefix=kerf/ HEAD | tar -x -C "$stage"
-(cd "$stage/kerf" && cargo vendor --locked --versioned-dirs vendor > cargo-vendor-config.toml)
+(cd "$stage/kerf" && cargo vendor --locked --versioned-dirs --sync apps/kerf-editor/Cargo.toml vendor > cargo-vendor-config.toml)
 
 # Each formula's source as Homebrew fetches it, and the formula, which is how it was
 # built. A formula's installed version is the one the app carries.
