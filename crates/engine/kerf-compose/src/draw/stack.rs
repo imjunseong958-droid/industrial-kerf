@@ -664,7 +664,12 @@ impl Drawing {
                     three_d::Scene::ahead(sequence, at, self.step, size),
                     sequence.placement(plan, at + self.step).scaled(scale),
                 );
-                three_d::mesh::Shade::Moving(&next.0, &next.1, size.1 as f64 * self.kept)
+                three_d::mesh::Shade::Moving(
+                    &next.0,
+                    &next.1,
+                    size.1 as f64 * self.kept,
+                    self.step.seconds(),
+                )
             }
         };
         let (mut picture, depth, mut within) =

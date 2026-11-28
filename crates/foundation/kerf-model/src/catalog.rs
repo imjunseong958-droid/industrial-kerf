@@ -1526,6 +1526,11 @@ fn builtin_catalog() -> Catalog {
                 .range(0.0, 1.0)
                 .unit("frame heights")
                 .doc("Blur for depth of field, far from `focus`; 0 is none."),
+        )
+        .param(
+            P::toggle("geodesic", false).doc(
+                "Interpolate camera pose between keyframes along shortest SE(3) geodesics instead of per-axis Euler angles.",
+            ),
         ),
         FxDef::new(
             "light",
