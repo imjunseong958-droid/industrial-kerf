@@ -8,6 +8,10 @@
 //! parents is read at its own. So when a clip is and where it is are worked out together and
 //! kept together ([`Placement`]), for what is drawn on the frame and what is lifted into depth
 //! alike.
+//!
+//! Between two moments a clip has moved, and how is one answer as well ([`Moving`]): where what
+//! it had at a place on the output at the one is at the other. A shutter's smear and a motion
+//! pass both read it, each of the moments it asks about.
 
 use super::*;
 
@@ -77,6 +81,52 @@ impl SequencePlan {
     }
 }
 
+/// A clip from a moment of its sequence on: where what it has on the output then, drawn at a
+/// scale, is at any other moment. What a clip has moved by between two moments is asked here
+/// and nowhere else, so that each of the two is the clip as it is placed then, its parents with
+/// it ([`SequencePlan::placement`]).
+pub(super) struct Moving<'a> {
+    sequence: &'a SequencePlan,
+    plan: &'a ClipPlan,
+    scale: f64,
+    /// From the output, as the clip has its picture on it at the moment it moves from, back to
+    /// the picture.
+    back: Affine,
+}
+
+impl SequencePlan {
+    /// The clip of `plan`, drawn at `scale`, from `from` of the sequence on. None where it is
+    /// placed nowhere then, at no size: nothing of it is anywhere to move from.
+    pub(super) fn moving<'a>(
+        &'a self,
+        plan: &'a ClipPlan,
+        from: Time,
+        scale: f64,
+    ) -> Option<Moving<'a>> {
+        let back = self
+            .placement(plan, from)
+            .scaled(scale)
+            .to_output
+            .inverse()?;
+        Some(Moving {
+            sequence: self,
+            plan,
+            scale,
+            back,
+        })
+    }
+}
+
+impl Moving<'_> {
+    /// The clip at `at` of its sequence, and where what was at a place on the output at the
+    /// moment it moves from is then.
+    pub(super) fn to(&self, at: Time) -> (Placement, Affine) {
+        let there = self.sequence.placement(self.plan, at).scaled(self.scale);
+        let moved = there.to_output.then_apply(&self.back);
+        (there, moved)
+    }
+}
+
 /// How far apart on the canvas, in its pixels, the copies of a smeared picture may be drawn at most:
 /// no further, and they read as one smear.
 const SMEAR_STEP: f64 = 1.0;
@@ -105,14 +155,11 @@ impl SequencePlan {
             return None;
         }
         let open = self.rate.frame_duration().seconds() * shutter / 360.0;
-        let placed = |at: Time| self.placement(plan, at).scaled(scale).to_output;
-        let back = placed(placement.at).inverse()?;
+        let moving = self.moving(plan, placement.at, scale)?;
         // Where it is `share` of the way through the shutter, which opens half before that moment.
         let moved = |share: f64| {
             let at = placement.at + Time::from_seconds(open * (share - 0.5)).unwrap_or(Time::ZERO);
-            placed(at)
-                .then_apply(&back)
-                .then_apply(&placement.to_output)
+            moving.to(at).1.then_apply(&placement.to_output)
         };
         let corners = [
             Vec2::new(rect.x, rect.y),
