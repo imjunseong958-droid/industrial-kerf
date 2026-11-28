@@ -15,7 +15,7 @@ default = ["native-audio"]
 native-audio = ["dep:cpal", "dep:windows-sys"]
 
 [dependencies]
-cpal = { version = "0.15.3", optional = true }
+cpal = { version = "0.18.2", optional = true }
 kerf-compose = { path = "../../engine/kerf-compose" }
 kerf-core = { path = "../../engine/kerf-core" }
 kerf-fx = { path = "../../effects/kerf-fx" }
