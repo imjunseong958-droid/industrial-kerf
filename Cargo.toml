@@ -75,6 +75,13 @@ kurbo = "0.13"
 libc = "0.2"
 linesweeper = "0.5"
 log = "0.4"
+# The allocator of whatever draws frames in its own process: kerf-engine, kerf-mcp and kerf
+# here, and the editor, which names it in its own workspace. A frame is made of pictures the
+# size of the frame, and the system's allocator gives memory that large back to the system
+# as each is dropped, to be handed out new, and paid for a page at a time, for the next: a
+# 4K frame with an effect on it took 1.5 to 2.4 times as long under it. kerfd draws nothing
+# and keeps the system's.
+mimalloc = { version = "0.1", default-features = false }
 proptest = "1"
 rayon = "1"
 # The input schema kerf-mcp shows an agent for each tool, derived from the type

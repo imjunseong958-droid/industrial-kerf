@@ -1,6 +1,11 @@
 use std::env;
 use std::path::{Path, PathBuf};
 
+// Renders and stills are drawn in this process: `mimalloc` in the workspace's Cargo.toml
+// says what that asks of an allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 struct Options {
     directory: PathBuf,
     print_config: bool,

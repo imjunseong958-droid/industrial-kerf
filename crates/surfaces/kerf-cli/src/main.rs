@@ -39,6 +39,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+// The terminal agent's tools and `kerf make` draw their frames in this process: `mimalloc`
+// in the workspace's Cargo.toml says what that asks of an allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "kerf",

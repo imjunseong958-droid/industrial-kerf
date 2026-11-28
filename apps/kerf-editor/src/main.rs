@@ -29,6 +29,11 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
+// The preview, a render and the MCP tools draw their frames in this process: `mimalloc` in
+// this workspace's Cargo.toml says what that asks of an allocator.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 struct Arguments {
     /// kerf:// links to follow, the first instead of a project.
     links: Vec<String>,

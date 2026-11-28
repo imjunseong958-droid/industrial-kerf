@@ -1732,6 +1732,7 @@ dependencies = [
  "kerf-paths",
  "kerf-runtime",
  "kerf-skills",
+ "mimalloc",
  "serde_json",
  "tempfile",
 ]
@@ -1997,6 +1998,7 @@ dependencies = [
  "kerf-track",
  "libc",
  "log",
+ "mimalloc",
  "schemars",
  "serde",
  "serde_json",
