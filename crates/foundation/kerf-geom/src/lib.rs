@@ -21,6 +21,7 @@
 use serde::{Deserialize, Serialize};
 use std::ops::{Add, AddAssign, Div, Mul, Neg, Sub};
 
+pub mod lie;
 pub mod place;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
