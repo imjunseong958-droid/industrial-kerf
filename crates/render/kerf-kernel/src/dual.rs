@@ -232,7 +232,7 @@ pub fn derivative(f: impl Fn(Dual) -> Dual, at: f32) -> (f32, f32) {
 pub fn gradient<const K: usize>(f: impl Fn([Dual; K]) -> Dual, at: [f32; K]) -> (f32, [f32; K]) {
     let mut value = 0.0;
     let mut grad = [0.0; K];
-    for axis in 0..K {
+    for (axis, slot) in grad.iter_mut().enumerate() {
         let args = std::array::from_fn(|i| {
             if i == axis {
                 Dual::variable(at[i])
@@ -244,7 +244,7 @@ pub fn gradient<const K: usize>(f: impl Fn([Dual; K]) -> Dual, at: [f32; K]) -> 
         if axis == 0 {
             value = out.value;
         }
-        grad[axis] = out.deriv;
+        *slot = out.deriv;
     }
     (value, grad)
 }
@@ -265,11 +265,11 @@ pub fn jacobian<const I: usize, const O: usize>(
             }
         });
         let out = f(args);
-        for row in 0..O {
+        for ((val_slot, row_slots), item) in values.iter_mut().zip(jac.iter_mut()).zip(out) {
             if col == 0 {
-                values[row] = out[row].value;
+                *val_slot = item.value;
             }
-            jac[row][col] = out[row].deriv;
+            row_slots[col] = item.deriv;
         }
     }
     (values, jac)
