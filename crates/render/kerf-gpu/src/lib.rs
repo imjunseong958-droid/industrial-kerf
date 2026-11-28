@@ -2003,6 +2003,20 @@ mod tests {
     }
 
     #[test]
+    fn a_gpu_known_to_be_there_is_opened() {
+        // A Mac has Metal, and a driver on the CPU that is asked for by name has to be installed.
+        // Only there is it known that a device opens and carries the copy it is tried with: one
+        // turned down for no reason would leave every other test here with nothing to compare.
+        let known = match std::env::var_os("KERF_GPU") {
+            None => cfg!(target_os = "macos"),
+            Some(asked) => asked == "software",
+        };
+        if known {
+            assert!(shared().is_some(), "no device where one is known to be");
+        }
+    }
+
+    #[test]
     fn every_blend_mode_placed_matches_the_cpu() {
         let Some(gpu) = shared() else {
             eprintln!("no GPU: nothing to compare");
