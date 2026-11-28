@@ -830,10 +830,15 @@ impl Frame<'_> {
             .kept
             .as_ref()
             .map(|kept| format!("{kept}|distance|{crop:?}|{jumps:?}|{far}|{stretch}"));
-        if let Some(key) = &key
-            && let Some(Kept::Distance(distance)) = self.gpu.kept().get(key)
-        {
-            return Some(distance);
+        if let Some(key) = &key {
+            // One this frame is making is there for its own later commands.
+            let making = self.fields_to_keep.iter().find(|(made, ..)| made == key);
+            if let Some((.., distance)) = making {
+                return Some(distance.clone());
+            }
+            if let Some(Kept::Distance(distance)) = self.gpu.kept().get(key) {
+                return Some(distance);
+            }
         }
         let gpu = self.gpu;
         let kernels = gpu.depth_kernels()?;
@@ -898,7 +903,8 @@ impl Frame<'_> {
         );
         let distance = Distance { view: distance };
         if let Some(key) = keep {
-            gpu.kept().put(key, bytes, Kept::Distance(distance.clone()));
+            self.fields_to_keep
+                .push((key.to_owned(), bytes, distance.clone()));
         }
         Some(distance)
     }
