@@ -480,6 +480,45 @@ fn particles_leave_the_way_they_are_told_and_gravity_pulls_them() {
     assert_eq!(pixel(&arc, WIDE / 2 + 36, TALL / 2)[0], 0);
 }
 
+#[test]
+fn particles_physics_bounce_drag_and_random_seek_match() {
+    // Emit downward into a floor at +0.25 frame heights below center (y = TALL/2 + 45 = 135).
+    let bouncing = clip(
+        "particles",
+        "rate=80 life=1.5 velocity=0.3 direction=90 spread=20 vary=0.1 gravity=1.8 drag=0.4 bounce=0.8 floor=0.25 turbulence=0.3 size=0.02 size_end=0.02 color=#ffffff color_end=#ffffff soft=0",
+    );
+    // Scrub out of order (frame 36 -> frame 12 -> frame 36) through the compositor.
+    let late_a = frame(&bouncing, 36);
+    let _early = frame(&bouncing, 12);
+    let late_b = frame(&bouncing, 36);
+    assert_eq!(
+        late_a.rgba, late_b.rgba,
+        "random-seek simulated particles must be bit-identical"
+    );
+    // Floor sits at y = TALL/2 + 0.25*TALL = 135; with radius ~2px, nothing should light below y = 142.
+    let mut above = 0usize;
+    let mut below = 0usize;
+    for y in 0..TALL {
+        for x in 0..WIDE {
+            if pixel(&late_a, x, y)[0] > 20 {
+                if y > 142 {
+                    below += 1;
+                } else {
+                    above += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        above > 30,
+        "expected visible bouncing particles above floor, got {above}"
+    );
+    assert_eq!(
+        below, 0,
+        "bouncing particles must stay above the floor plane"
+    );
+}
+
 const WORDS: &str = "AAAA BBBB";
 
 /// The small variable font `kerf-text` tests with: its I is a stem 100 units wide and 700 high at

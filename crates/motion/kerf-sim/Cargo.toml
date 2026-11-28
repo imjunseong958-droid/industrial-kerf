@@ -1,0 +1,17 @@
+[package]
+name = "kerf-sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Deterministic flicks-quantized XPBD world simulation, temporal checkpointing, and inverse director solver"
+
+[dependencies]
+kerf-geom = { path = "../../foundation/kerf-geom" }
+kerf-model = { path = "../../foundation/kerf-model" }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

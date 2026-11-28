@@ -148,6 +148,8 @@ impl PictureSource for Particles {
         // Who is alive and where they are comes from the rate and the rest at the start, since
         // a particle's way is worked out from its birth.
         let start = Reading::generator(clip, "particles", Time::ZERO);
+        let origin = run.middle();
+        let bounce = start.number("bounce");
         Emitter {
             rate: start.number("rate"),
             life: start.number("life"),
@@ -156,20 +158,29 @@ impl PictureSource for Particles {
             direction: start.number("direction"),
             spread: start.number("spread"),
             gravity: start.number("gravity") * height,
+            drag: start.number("drag"),
+            bounce,
+            floor_y: if bounce > 0.0 {
+                Some(origin[1] + start.number("floor") * height)
+            } else {
+                None
+            },
+            turbulence: start.number("turbulence") * height,
+            turbulence_scale: (height * 0.2).max(16.0),
             size: (
                 read.number("size") * height,
                 read.number("size_end") * height,
             ),
             color: (read.color("color"), read.color("color_end")),
             soft: read.number("soft"),
-            origin: run.middle(),
+            origin,
             area: [
                 read.number("area_width") * height,
                 read.number("area_height") * height,
             ],
             seed: read.number("seed").round() as u64,
         }
-        .draw(&mut image, run.at.seconds());
+        .draw_at(&mut image, run.at);
         image
     }
 }
