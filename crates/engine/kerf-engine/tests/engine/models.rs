@@ -43,7 +43,9 @@ pub fn models<F: Fn(&Generation) -> Result<()>>(
     }
 }
 
-/// A model that answers with its guide: what it was handed is the take.
+/// A model that answers with its guide: what it was handed is the take. Unix only, as the
+/// tests that hand it a guide are.
+#[cfg(unix)]
 pub fn answers_with_its_guide(generation: &Generation) -> Result<()> {
     let guide = generation
         .request

@@ -1,11 +1,11 @@
 //! A model that is a program on the person's computer, run as a making runs it.
+#![cfg(unix)]
 
 use kerf_engine::error::EngineError;
 use kerf_engine::process::sidecar::CancellationToken;
 use kerf_engine::recipe::{make, plan};
 use kerf_generate::Generator;
 
-#[cfg(unix)]
 #[test]
 fn a_cancelled_making_lets_its_program_take_back_what_it_asked_for() {
     let folder = tempfile::tempdir().unwrap();

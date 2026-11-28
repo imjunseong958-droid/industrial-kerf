@@ -1,7 +1,9 @@
 //! A `render` step has Kerf draw a sequence of the project, which is how a guide blocked
 //! with Kerf's own clips reaches the steps after it.
 
-use crate::models::{answers_with_its_guide, models, none};
+use crate::models::none;
+#[cfg(unix)]
+use crate::models::{answers_with_its_guide, models};
 use kerf_engine::recipe;
 use kerf_engine::CancellationToken;
 use kerf_lang::parse_document;
