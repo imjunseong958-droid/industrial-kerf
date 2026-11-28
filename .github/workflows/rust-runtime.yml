@@ -101,9 +101,10 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     env:
-      # The runner has no GPU. Limiting wgpu to Vulkan, which has no driver
-      # here, keeps it off Mesa's software GL, so the GPU tests skip
-      # themselves rather than compare against a software rasterizer.
+      # The runner has no GPU. Limiting wgpu to Vulkan keeps it off Mesa's
+      # software GL, and Vulkan's one driver here is llvmpipe, on the CPU,
+      # which Kerf takes for a GPU only where a step asks (KERF_GPU=software):
+      # in `Test workspace` the GPU tests skip themselves.
       WGPU_BACKEND: vulkan
     steps:
       - uses: actions/checkout@v7
@@ -158,12 +159,19 @@ jobs:
             done
             cargo test --workspace --lib real_keychain -- --ignored'
       # Which of the catalog goes to the CPU, asked of Mesa's llvmpipe in place
-      # of a GPU: looks, grades and transitions stay on the GPU. Only this
-      # runs on llvmpipe; its pow and exp are a byte off color.basic's.
+      # of a GPU: looks, grades and transitions stay on the GPU.
       - name: Test what the catalog sends to the CPU
         env:
           KERF_GPU: software
         run: "cargo test --workspace --test compose -- catalog_cost:: --nocapture"
+      # The compositor's frames drawn on the GPU against the CPU's, on
+      # llvmpipe as well: `Test workspace` above skips them for want of a GPU,
+      # which left them to macOS's Metal alone. The step before fails where
+      # the driver is missing, so these have not skipped if it passed.
+      - name: Test the compositor's drawing on the GPU
+        env:
+          KERF_GPU: software
+        run: "cargo test --workspace --test compose -- gpu::"
 
   # The rest of the checks README.md's Verification names. Clippy checks
   # rather than builds, so it shares nothing with the tests' build and
