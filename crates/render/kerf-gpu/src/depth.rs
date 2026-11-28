@@ -1026,7 +1026,8 @@ impl Frame<'_> {
     }
 
     /// `layers` over `canvas`, at each pixel in the order of their depth there, the nearest last.
-    pub fn by_depth(&mut self, canvas: Picture, layers: Layers) -> Option<Picture> {
+    /// When `hard`, a pixel along the crossing line belongs wholly to whichever covers more of it.
+    pub fn by_depth(&mut self, canvas: Picture, layers: Layers, hard: bool) -> Option<Picture> {
         let gpu = self.gpu;
         let kernels = gpu.depth_kernels()?;
         let Layers {
@@ -1052,7 +1053,11 @@ impl Frame<'_> {
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("kerf-uniforms"),
-                contents: &Uniforms::default().bytes(),
+                contents: &Uniforms {
+                    a: [u32::from(hard), 0, 0, 0],
+                    ..Uniforms::default()
+                }
+                .bytes(),
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let out = self.take(canvas.w, canvas.h);

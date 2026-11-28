@@ -88,6 +88,12 @@ fn by_depth(@builtin(global_invocation_id) id: vec3<u32>) {
         if place > 0u {
             shared_by = cover(here[place - 1u], index, x, y, size);
         }
+        if u.a.x != 0u {
+            if shared_by < 0.5 {
+                continue;
+            }
+            shared_by = 1.0;
+        }
         let color = textureLoad(aux, vec2(x, y + i32(index) * size.y), 0);
         out = mix(out, color * (layers[index].opacity * shared_by), id.xy, layers[index].blend);
     }

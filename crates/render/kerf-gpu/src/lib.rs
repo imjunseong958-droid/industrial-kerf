@@ -28,6 +28,7 @@ use wgpu::util::DeviceExt;
 pub mod depth;
 pub mod focus;
 pub mod kept;
+pub mod pass;
 
 pub use wgpu;
 
@@ -107,6 +108,7 @@ pub struct Gpu {
     failed: Arc<AtomicBool>,
     depth: OnceLock<Option<depth::Kernels>>,
     focus: OnceLock<Option<focus::Kernels>>,
+    pass: OnceLock<Option<pass::Kernels>>,
     kept: Mutex<kept::Store<Kept>>,
 }
 
@@ -772,6 +774,7 @@ impl Gpu {
             failed,
             depth: OnceLock::new(),
             focus: OnceLock::new(),
+            pass: OnceLock::new(),
             kept: Mutex::new(kept::Store::new(KEPT_BYTES)),
         })
     }
@@ -2288,6 +2291,7 @@ mod tests {
             ("by_depth", by_depth.as_str()),
             ("distance", include_str!("distance.wgsl")),
             ("focus", include_str!("focus.wgsl")),
+            ("pass", include_str!("pass.wgsl")),
         ] {
             let kernels = written_for_opencl(source).unwrap_or_else(|why| panic!("{name}: {why}"));
             assert!(kernels > 0, "{name} has no kernel");

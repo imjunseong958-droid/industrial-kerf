@@ -1209,6 +1209,106 @@ impl Scene {
     pub(super) fn back_for_gpu(&self, plane: &Plane, depth: f64) -> [f32; 3] {
         narrow(minus(plane.pushed(depth).origin, self.camera.eye))
     }
+
+    /// Depth-pass plane coefficients for the GPU, matching [`shade_by_depth`].
+    pub(super) fn depth_for_gpu(
+        &self,
+        plan: &ClipPlan,
+        size: (f64, f64),
+        placement: &Placement,
+    ) -> kerf_gpu::pass::Depth {
+        let plane = Plane::of(self, plan, size, placement);
+        let origin = minus(plane.origin, self.camera.eye);
+        let unit = self.camera.height / 2.0 / (DEFAULT_FOV.to_radians() / 2.0).tan();
+        kerf_gpu::pass::Depth {
+            base: dot(origin, self.camera.forward) as f32,
+            du: dot(plane.across, self.camera.forward) as f32,
+            dv: dot(plane.down, self.camera.forward) as f32,
+            unit: unit as f32,
+        }
+    }
+
+    /// Normals-pass flat color for a 3D clip plane on the GPU, matching [`shade_by_facing`].
+    pub(super) fn facing_for_gpu(
+        &self,
+        plan: &ClipPlan,
+        size: (f64, f64),
+        placement: &Placement,
+    ) -> [f32; 3] {
+        let plane = Plane::of(self, plan, size, placement);
+        self.facing(plane.point(size.0 / 2.0, size.1 / 2.0), plane.normal)
+    }
+
+    /// Projective camera-plane dot products in f64 for [`motion_for_gpu`].
+    fn motion_plane_coeffs(&self, plane: &Plane) -> ([f32; 3], [f32; 3], [f32; 3]) {
+        let origin = minus(plane.origin, self.camera.eye);
+        let focal = self.camera.focal;
+        let ahead = [
+            dot(origin, self.camera.forward) as f32,
+            dot(plane.across, self.camera.forward) as f32,
+            dot(plane.down, self.camera.forward) as f32,
+        ];
+        let rx = [
+            (focal * dot(origin, self.camera.right)) as f32,
+            (focal * dot(plane.across, self.camera.right)) as f32,
+            (focal * dot(plane.down, self.camera.right)) as f32,
+        ];
+        let ry = [
+            (focal * dot(origin, self.camera.down)) as f32,
+            (focal * dot(plane.across, self.camera.down)) as f32,
+            (focal * dot(plane.down, self.camera.down)) as f32,
+        ];
+        (ahead, rx, ry)
+    }
+}
+
+/// 2D motion-pass affine displacement coefficients for the GPU, matching [`shade_by_motion_flat`].
+pub(super) fn motion_flat_for_gpu(
+    to_output: &Affine,
+    moved: &Affine,
+    height: f64,
+) -> kerf_gpu::pass::MotionFlat {
+    let next = moved.then_apply(to_output);
+    kerf_gpu::pass::MotionFlat {
+        dx: [
+            (next.a - to_output.a) as f32,
+            (next.c - to_output.c) as f32,
+            (next.e - to_output.e) as f32,
+        ],
+        dy: [
+            (next.b - to_output.b) as f32,
+            (next.d - to_output.d) as f32,
+            (next.f - to_output.f) as f32,
+        ],
+        most: (MOST_MOTION * height.max(1.0)) as f32,
+    }
+}
+
+/// 3D motion-pass projective coefficients for the GPU, matching [`shade_by_motion`].
+pub(super) fn motion_for_gpu(
+    (now, next): (&Scene, &Scene),
+    plan: &ClipPlan,
+    size: (f64, f64),
+    placement: (&Placement, &Placement),
+    height: f64,
+) -> kerf_gpu::pass::Motion3d {
+    let here = Plane::of(now, plan, size, placement.0);
+    let there = Plane::of(next, plan, size, placement.1);
+    let (ahead_now, rx_now, ry_now) = now.motion_plane_coeffs(&here);
+    let (ahead_next, rx_next, ry_next) = next.motion_plane_coeffs(&there);
+    kerf_gpu::pass::Motion3d {
+        ahead_now,
+        rx_now,
+        ry_now,
+        ahead_next,
+        rx_next,
+        ry_next,
+        center_delta: [
+            (next.camera.center.0 - now.camera.center.0) as f32,
+            (next.camera.center.1 - now.camera.center.1) as f32,
+        ],
+        most: (MOST_MOTION * height.max(1.0)) as f32,
+    }
 }
 
 /// What a clip does to the rays from a pixel to a light with a size.
