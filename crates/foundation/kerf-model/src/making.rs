@@ -40,7 +40,7 @@ pub const OUT: &str = "out";
 ///
 /// A pass is drawn from the same clips, placed and seen as the picture's are, with no lights, no
 /// focus, no adjustment layers, no dips, no captions, and every clip laid over what is behind it
-/// whatever its blend. It is drawn on the CPU.
+/// whatever its blend.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Pass {
     /// The picture.

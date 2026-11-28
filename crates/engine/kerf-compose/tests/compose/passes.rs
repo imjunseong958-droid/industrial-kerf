@@ -1,7 +1,7 @@
 //! Passes: which clip each pixel is of, and how near it is, drawn from the same clips as the
 //! picture.
 
-use kerf_compose::{ComposeOptions, Compositor, Frame, Pass};
+use kerf_compose::{Accel, ComposeOptions, Compositor, Frame, Pass};
 use kerf_lang::parse_document;
 use kerf_model::{Catalog, Rate};
 
@@ -309,8 +309,25 @@ fn a_pass_holds_still_and_is_kept_apart_from_the_picture() {
     let (picture, ids, depth) = (key(Pass::Picture), key(Pass::Ids), key(Pass::Depth));
     assert!(picture.is_some() && ids.is_some() && depth.is_some());
     assert!(picture != ids && ids != depth && picture != depth);
-    // A pass is the CPU's.
-    assert!(!compositor(SCENE, Pass::Ids).draws_on_gpu(at, 1.0));
+    // A pass runs on the GPU when one is available, just like the picture.
+    let gpu_ids = Compositor::new(
+        &parse_document(
+            &format!(
+                "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=320x180 audio=48000\n{SCENE}"
+            ),
+            Catalog::builtin(),
+        )
+        .unwrap()
+        .project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass: Pass::Ids,
+            accel: Accel::Always,
+            ..ComposeOptions::default()
+        },
+    )
+    .expect("composes");
+    assert_eq!(gpu_ids.draws_on_gpu(at, 1.0), kerf_gpu::shared().is_some());
 }
 
 #[test]
@@ -1014,6 +1031,181 @@ fn passes_drawn_together_are_each_as_drawn_alone() {
             assert!(
                 together.frame16(at, 0.75) == alone.frame16(at, 0.75),
                 "{what}, deep"
+            );
+        }
+    }
+}
+
+#[test]
+fn guide_passes_on_gpu_hold_to_the_cpu() {
+    if kerf_gpu::shared().is_none() {
+        eprintln!("guide_passes_on_gpu_hold_to_the_cpu: no GPU here");
+        return;
+    }
+    // Rich scene exercising 2D flat clips, crossing 3D planes, an extruded beveled solid,
+    // a 3D mesh, a feathered mask, a dissolve transition, a nested sequence, a moving camera,
+    // lights/shadows, aperture, and an adjustment layer (all of which bare out in passes).
+    let body = concat!(
+        "  track V1 video\n    clip sky gen=solid@1 at=0f dur=24f\n      set color=#88aaff\n",
+        "  track V2 video\n    clip floor gen=solid@1 at=0f dur=24f\n",
+        "      set color=#404040 three_d=true rotate_x=-80 y=0.4 z=1 scale=3\n",
+        "  track V3 video\n    clip wall gen=solid@1 at=0f dur=24f\n",
+        "      set color=#c0c0c0 three_d=true rotate_y=35 z=1.2 scale=0.8 blend=screen\n",
+        "  track V4 video\n    clip box gen=shape@1 at=0f dur=24f\n",
+        "      set kind=rect width=0.3 height=0.3 fill=#c02020 three_d=true depth=0.15 bevel=0.02 x={0f:-0.25 23f:0.25} y=0.05 z=0.4 rotate_y={0f:-15 23f:45}\n",
+        "  track V5 video\n    clip plate gen=mesh@1 at=0f dur=24f\n",
+        "      set kind=box width=0.25 height=0.25 length=0.05 color=#20c020 x={0f:0.25 23f:-0.15} y=0.15 z=0.6 rotate_x=20\n",
+        "  track V6 video\n    clip flyer gen=solid@1 at=0f dur=24f\n",
+        "      set color=#ffcc00 scale=0.2 x={0f:-0.3 23f:0.3} y=-0.25 rotation={0f:0 23f:40} opacity=0.8\n",
+        "      mask k1 ellipse=0.5,0.5,0.4,0.4 feather=14\n",
+        "  track V7 video\n    clip glow gen=solid@1 at=0f dur=12f\n      set scale=0.25 x=-0.3 y=0.25\n",
+        "    clip spark gen=solid@1 at=12f dur=12f\n      set scale=0.2 x=-0.3 y=0.25 rotation=25\n",
+        "    transition t1 from=glow to=spark fx=dissolve@1 dur=8f\n",
+        "  track V8 video\n    clip shot seq=s2 src=0f at=0f dur=24f\n      set scale=0.35 x=0.3 y=-0.25\n",
+        "  track V9 video\n    clip sun gen=light@1 at=0f dur=24f\n",
+        "      set kind=directional x=0.3 y=0.6 z=1 shadow=0.9\n",
+        "  track V10 video\n    clip cam gen=camera@1 at=0f dur=24f\n",
+        "      set z={0f:-0.3 23f:0.15} pan={0f:-5 23f:5} focus=0.5 aperture=0.04\n",
+        "  track V11 video\n    clip grade gen=adjustment@1 at=0f dur=24f\n",
+        "      fx color.basic@1 exposure=2\n",
+        "sequence s2 rate=24 size=640x360 audio=48000\n",
+        "  track V1 video\n    clip inner gen=solid@1 at=0f dur=24f\n",
+        "      set color=#40c040 three_d=true scale=0.6 rotate_x=30\n",
+    );
+    let project = parse_document(
+        &format!(
+            "kerf 1\nproject name=\"t\"\nsequence s1 rate=24 size=640x360 audio=48000\n{body}"
+        ),
+        Catalog::builtin(),
+    )
+    .unwrap_or_else(|errors| panic!("{errors:?}"))
+    .project;
+    let cases = [
+        ("ids soft", Pass::Ids, false, None),
+        ("ids hard", Pass::Ids, true, None),
+        ("matte wall", Pass::Picture, false, Some("wall")),
+        ("matte hard box", Pass::Picture, true, Some("box")),
+        ("depth", Pass::Depth, false, None),
+        ("relative", Pass::Relative, false, None),
+        ("normals", Pass::Normals, false, None),
+        ("motion", Pass::Motion, false, None),
+    ];
+    let at = Rate::FPS_24.time_of(11);
+    for (name, pass, hard_edges, matte) in cases {
+        let make = |accel: Accel| {
+            Compositor::new(
+                &project,
+                Catalog::builtin(),
+                &ComposeOptions {
+                    pass,
+                    hard_edges,
+                    matte: matte.into_iter().map(str::to_owned).collect(),
+                    accel,
+                    frame_folder: None,
+                    keep_frames: false,
+                    ..ComposeOptions::default()
+                },
+            )
+            .expect("composes")
+        };
+        let gpu = make(Accel::Always);
+        let cpu = make(Accel::Never);
+        assert!(gpu.draws_on_gpu(at, 1.0), "{name} went to CPU");
+        let drawn = gpu
+            .frame_on_gpu(at, 1.0)
+            .unwrap_or_else(|| panic!("{name} gave up on GPU"));
+        let reference = cpu.frame(at, 1.0);
+        assert!(kerf_gpu::shared().is_some(), "{name} failed device");
+        assert_eq!(
+            (drawn.width, drawn.height),
+            (reference.width, reference.height)
+        );
+        let (mut sum, mut off1, mut off2, mut most) = (0u64, 0u64, 0u64, 0u8);
+        for (a, b) in drawn
+            .rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(reference.rgba.as_chunks::<4>().0.iter())
+        {
+            let worst = (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0);
+            sum += u64::from(worst);
+            off1 += u64::from(worst > 1);
+            off2 += u64::from(worst > 2);
+            most = most.max(worst);
+        }
+        let pixels = u64::from(drawn.width) * u64::from(drawn.height);
+        let mean = sum as f64 / pixels as f64;
+        let share_off1 = off1 as f64 / pixels as f64;
+        let share_off2 = off2 as f64 / pixels as f64;
+        println!(
+            "pass {name:<16} mean {mean:.4}, off >1 {:.4}%, off >2 {:.4}%, most {most}",
+            share_off1 * 100.0,
+            share_off2 * 100.0,
+        );
+        // Normals and motion map zero to exact sRGB 0.5 (= 127.5/255), where CPU's 16-bit encode
+        // table and GPU float sRGB conversion legitimately differ by 1/255 (127 vs 128).
+        let max_mean = if matches!(pass, Pass::Normals | Pass::Motion) {
+            0.6
+        } else {
+            0.05
+        };
+        assert!(
+            mean <= max_mean && share_off1 <= 0.002 && share_off2 <= 0.0005,
+            "{name}: mean {mean:.4}, {:.4}% off >1, {:.4}% off >2, most {most}",
+            share_off1 * 100.0,
+            share_off2 * 100.0,
+        );
+        // 16-bit output must also match CPU closely.
+        let drawn16 = gpu.frame16(at, 1.0);
+        let reference16 = cpu.frame16(at, 1.0);
+        let (mut sum16, mut off16) = (0u64, 0u64);
+        for (a, b) in drawn16
+            .rgba
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .zip(reference16.rgba.as_chunks::<8>().0.iter())
+        {
+            let worst = (0..3)
+                .map(|k| {
+                    let va = u16::from_le_bytes([a[k * 2], a[k * 2 + 1]]);
+                    let vb = u16::from_le_bytes([b[k * 2], b[k * 2 + 1]]);
+                    va.abs_diff(vb)
+                })
+                .max()
+                .unwrap_or(0);
+            sum16 += u64::from(worst);
+            off16 += u64::from(worst > 512);
+        }
+        let mean16 = sum16 as f64 / pixels as f64;
+        let share_off16 = off16 as f64 / pixels as f64;
+        assert!(
+            mean16 <= 25.0 && share_off16 <= 0.001,
+            "{name} (16-bit): mean {mean16:.2}, {:.4}% off >512",
+            share_off16 * 100.0,
+        );
+        // Hard ids pass must output ONLY exact clip colors or black.
+        if pass == Pass::Ids && hard_edges {
+            let colors: Vec<[u8; 3]> = gpu.ids().into_iter().map(|(_, c)| c).collect();
+            assert!(
+                drawn.rgba.as_chunks::<4>().0.iter().all(|p| {
+                    let rgb = [p[0], p[1], p[2]];
+                    rgb == [0; 3] || colors.contains(&rgb)
+                }),
+                "{name}: produced an in-between color on GPU"
+            );
+        }
+        // Motion pass must output blue = 0 or 255 everywhere (whole or nothing).
+        if pass == Pass::Motion {
+            assert!(
+                drawn
+                    .rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| p[2] == 0 || p[2] == 255),
+                "{name}: partial blue on GPU"
             );
         }
     }

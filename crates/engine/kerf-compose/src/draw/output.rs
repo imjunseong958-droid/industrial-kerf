@@ -125,22 +125,7 @@ impl Drawing {
             }
             _ => image.to_rgba16_over_black(),
         };
-        if self.pass == Pass::Relative {
-            stretch_to_its_own16(&mut rgba);
-        }
-        if !self.matte.is_empty() {
-            rgba.par_chunks_mut(8).for_each(|pixel| {
-                let byte = |at: usize| {
-                    let code = u16::from_le_bytes([pixel[at * 2], pixel[at * 2 + 1]]);
-                    ((u32::from(code) * 255 + 32_767) / 65_535) as u8
-                };
-                let its = self
-                    .matte
-                    .iter()
-                    .any(|color| (0..3).all(|at| color[at].abs_diff(byte(at)) <= NEAR));
-                pixel[..6].fill(if its { u8::MAX } else { 0 });
-            });
-        }
+        self.finish_pass_bytes16(&mut rgba);
         let (width, height) = (image.w as u32, image.h as u32);
         spare::keep(image);
         Frame {
@@ -183,8 +168,20 @@ impl Drawing {
             });
         }
         let mut rgba = image.to_rgba8_over_black();
+        self.finish_pass_bytes(&mut rgba);
+        let (width, height) = (image.w as u32, image.h as u32);
+        spare::keep(image);
+        Frame {
+            width,
+            height,
+            rgba,
+        }
+    }
+
+    /// Finish 8-bit pass bytes after sRGB encoding: relative-depth stretching and matte selection.
+    pub(super) fn finish_pass_bytes(&self, rgba: &mut [u8]) {
         if self.pass == Pass::Relative {
-            stretch_to_its_own(&mut rgba);
+            stretch_to_its_own(rgba);
         }
         if !self.matte.is_empty() {
             rgba.par_chunks_mut(4).for_each(|pixel| {
@@ -197,12 +194,25 @@ impl Drawing {
                 pixel[..3].fill(if its { u8::MAX } else { 0 });
             });
         }
-        let (width, height) = (image.w as u32, image.h as u32);
-        spare::keep(image);
-        Frame {
-            width,
-            height,
-            rgba,
+    }
+
+    /// Finish 16-bit pass bytes after sRGB encoding: relative-depth stretching and matte selection.
+    pub(super) fn finish_pass_bytes16(&self, rgba: &mut [u8]) {
+        if self.pass == Pass::Relative {
+            stretch_to_its_own16(rgba);
+        }
+        if !self.matte.is_empty() {
+            rgba.par_chunks_mut(8).for_each(|pixel| {
+                let byte = |at: usize| {
+                    let code = u16::from_le_bytes([pixel[at * 2], pixel[at * 2 + 1]]);
+                    ((u32::from(code) * 255 + 32_767) / 65_535) as u8
+                };
+                let its = self
+                    .matte
+                    .iter()
+                    .any(|color| (0..3).all(|at| color[at].abs_diff(byte(at)) <= NEAR));
+                pixel[..6].fill(if its { u8::MAX } else { 0 });
+            });
         }
     }
 

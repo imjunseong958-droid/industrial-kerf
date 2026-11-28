@@ -169,12 +169,7 @@ impl Drawing {
             pictures: Pictures::new(builder.clips),
             sounds: crate::sound::Sounds::default(),
             captions: options.captions,
-            // A pass has no kernels: the CPU draws it.
-            accel: if pass == Pass::Picture {
-                options.accel
-            } else {
-                Accel::Never
-            },
+            accel: options.accel,
             keep_frames: options.keep_frames,
             disk: options.frame_folder.as_deref().map(crate::disk::open),
             files,

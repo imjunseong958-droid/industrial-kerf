@@ -78,6 +78,7 @@ fn ready_gpu() -> Option<&'static Gpu> {
         video::gpu::available(gpu)
             && kerf_fx::transitions::gpu::available(gpu)
             && gpu.depth_kernels().is_some()
+            && gpu.pass_kernels().is_some()
     })
 }
 
@@ -147,26 +148,30 @@ struct Shape {
 impl Drawing {
     /// The frame at `at`, when the GPU draws it.
     pub(super) fn gpu_frame(&self, at: Time, scale: f64) -> Option<Frame> {
-        let hdr = self.hdr.clone();
-        self.gpu_frame_as(at, scale, move |mut frame, canvas| match &hdr {
+        let hdr = self.hdr.clone().filter(|_| self.pass == Pass::Picture);
+        let mut frame = self.gpu_frame_as(at, scale, move |mut frame, canvas| match &hdr {
             Some(output) => {
                 let sdr = frame.hdr_output(canvas, output, false);
                 frame.finish(&sdr)
             }
             None => frame.finish(canvas),
-        })
+        })?;
+        self.finish_pass_bytes(&mut frame.rgba);
+        Some(frame)
     }
 
     /// The frame at `at` at 16 bits a component, when the GPU draws it.
     pub(super) fn gpu_frame16(&self, at: Time, scale: f64) -> Option<Frame> {
-        let hdr = self.hdr.clone();
-        self.gpu_frame_as(at, scale, move |mut frame, canvas| match &hdr {
+        let hdr = self.hdr.clone().filter(|_| self.pass == Pass::Picture);
+        let mut frame = self.gpu_frame_as(at, scale, move |mut frame, canvas| match &hdr {
             Some(output) => {
                 let signal = frame.hdr_output(canvas, output, true);
                 frame.finish_signal(&signal)
             }
             None => frame.finish16(canvas),
-        })
+        })?;
+        self.finish_pass_bytes16(&mut frame.rgba);
+        Some(frame)
     }
 
     fn gpu_frame_as(
@@ -185,7 +190,10 @@ impl Drawing {
             return None;
         }
         let mut frame = gpu.frame();
-        let canvas = self.gpu_draw(&mut frame, 0, at, scale, None)?;
+        let mut canvas = self.gpu_draw(&mut frame, 0, at, scale, None)?;
+        if self.pass == Pass::Motion {
+            canvas = frame.whole_or_nothing(canvas)?;
+        }
         let rgba = finish(frame, &canvas)?;
         Some(Frame {
             width: w as u32,
@@ -382,6 +390,9 @@ impl Drawing {
         if count > kerf_gpu::depth::MOST_LAYERS || !gpu.fits(w, h * count) {
             return false;
         }
+        if self.pass != Pass::Picture {
+            return true;
+        }
         let scene = three_d::Scene::at(plan, at, (w, h));
         if scene.has_aperture() && !gpu.fits(w + kerf_gpu::focus::SUMS_WIDER, h) {
             return false;
@@ -455,10 +466,16 @@ impl Drawing {
         if plan.clip.retime == kerf_model::Retime::Flow {
             return false;
         }
+        if matches!(plan.source, Source::Adjustment) && self.pass != Pass::Picture {
+            return true;
+        }
         // A mesh is drawn on the CPU and handed over as a picture and how far off it is,
         // which does where its light is the scene's lights alone: a shadow is cast through
         // the GPU's own planes and a light from a picture is the GPU's to read.
         if matches!(plan.source, Source::Mesh) {
+            if self.pass != Pass::Picture {
+                return true;
+            }
             let size = output_size(sequence.width, sequence.height, scale);
             let scene = three_d::Scene::at(sequence, at, size);
             return !scene.casts_shadows() && scene.environments().is_empty();
@@ -504,6 +521,11 @@ impl Drawing {
         }
         let size = output_size(sequence.width, sequence.height, scale);
         let scene = three_d::Scene::at(sequence, at, size);
+        let scene = if self.pass == Pass::Picture {
+            scene
+        } else {
+            scene.bare()
+        };
         self.reach(sequence, plan, at, scale, Some(&scene))
     }
 
@@ -730,30 +752,32 @@ impl Drawing {
                     }
                 };
             }
-            for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
-                let opacity = f64::from(dip.color.a) / 255.0
-                    * (1.0 - (2.0 * progress(at, dip.from, dip.to) - 1.0).abs());
-                let solid = frame.filled(
-                    w as u32,
-                    h as u32,
-                    premultiplied(Rgba {
-                        a: 255,
-                        ..dip.color
-                    }),
-                );
-                let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
-                canvas = frame.composite(
-                    canvas,
-                    &solid,
-                    &Affine::IDENTITY,
-                    whole,
-                    opacity as f32,
-                    Blend::Normal,
-                );
-                frame.release(solid);
+            if self.pass == Pass::Picture {
+                for dip in track.dips.iter().filter(|dip| dip.shows(at)) {
+                    let opacity = f64::from(dip.color.a) / 255.0
+                        * (1.0 - (2.0 * progress(at, dip.from, dip.to) - 1.0).abs());
+                    let solid = frame.filled(
+                        w as u32,
+                        h as u32,
+                        premultiplied(Rgba {
+                            a: 255,
+                            ..dip.color
+                        }),
+                    );
+                    let whole = Rect::new(0.0, 0.0, w as f64, h as f64);
+                    canvas = frame.composite(
+                        canvas,
+                        &solid,
+                        &Affine::IDENTITY,
+                        whole,
+                        opacity as f32,
+                        Blend::Normal,
+                    );
+                    frame.release(solid);
+                }
             }
         }
-        if self.captions {
+        if self.captions && self.pass == Pass::Picture {
             for caption in plan.captions.iter().filter(|caption| caption.shows(at)) {
                 let key = caption_key(caption, plan, scale, (w, h));
                 let picture = frame.image_kept(&key, || caption_on(caption, plan, scale, (w, h)));
@@ -811,15 +835,27 @@ impl Drawing {
         let mixed = kernel.run(frame, &a, &b)?;
         frame.release(a);
         frame.release(b);
-        // A fade from or to nothing keeps the one clip's blend mode; between two they mix normally.
-        let blend = match (from.shows(at), to.shows(at)) {
-            (true, false) => from.plan.blend,
-            (false, true) => to.plan.blend,
-            _ if pair.from == pair.to => from.plan.blend,
-            _ => Blend::Normal,
+        let out = if self.hard {
+            let colors = [&from.plan.clip.id, &to.plan.clip.id].map(|id| self.id_color(id));
+            frame.lay_hard(canvas, &mixed, &colors)?
+        } else {
+            // A fade from or to nothing keeps the one clip's blend mode; between two they mix normally.
+            let blend = match (from.shows(at), to.shows(at)) {
+                (true, false) => from.plan.blend,
+                (false, true) => to.plan.blend,
+                _ if pair.from == pair.to => from.plan.blend,
+                _ => Blend::Normal,
+            };
+            let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
+            frame.composite(
+                canvas,
+                &mixed,
+                &Affine::IDENTITY,
+                whole,
+                1.0,
+                self.blend(blend),
+            )
         };
-        let whole = Rect::new(0.0, 0.0, f64::from(w), f64::from(h));
-        let out = frame.composite(canvas, &mixed, &Affine::IDENTITY, whole, 1.0, blend);
         frame.release(mixed);
         Some(out)
     }
@@ -835,15 +871,47 @@ impl Drawing {
         blend: Blend,
     ) -> Option<GpuPicture> {
         let plan = &shown.plan;
+        if !self.hard || matches!(plan.source, Source::Nothing | Source::Adjustment) {
+            return self.gpu_lay(frame, canvas, (sequence, shown), depth, (at, scale), blend);
+        }
+        let alone = frame.clear(canvas.w, canvas.h);
+        let alone = self.gpu_lay(
+            frame,
+            alone,
+            (sequence, shown),
+            depth,
+            (at, scale),
+            Blend::Normal,
+        )?;
+        let out = frame.lay_hard(canvas, &alone, &[self.id_color(&plan.clip.id)])?;
+        frame.release(alone);
+        Some(out)
+    }
+
+    /// [`Self::gpu_layer`], with the clip covering as much of each pixel as it does.
+    fn gpu_lay(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        canvas: GpuPicture,
+        (sequence, shown): (&SequencePlan, &Shown),
+        depth: Option<&mut Depth>,
+        (at, scale): (Time, f64),
+        blend: Blend,
+    ) -> Option<GpuPicture> {
+        let plan = &shown.plan;
         let clip = &plan.clip;
         if matches!(plan.source, Source::Nothing) {
             return Some(canvas);
         }
         if matches!(plan.source, Source::Adjustment) {
+            if self.pass != Pass::Picture {
+                return Some(canvas);
+            }
             let shape = self.gpu_shape(sequence, plan, at, scale, None);
             let ops = self.gpu_ops(sequence, plan, clip.time_at(at), at, scale, &shape)?;
             return self.gpu_adjust(frame, canvas, (sequence, plan, at, scale), &ops);
         }
+        let blend = self.blend(blend);
         let size = (canvas.w, canvas.h);
         if matches!(plan.source, Source::Mesh) {
             // Drawn on the CPU, as the scene sees it, and laid over what is there.
@@ -941,6 +1009,11 @@ impl Drawing {
         size: (usize, usize),
     ) -> Option<Depth> {
         let scene = three_d::Scene::at(plan, at, size);
+        let scene = if self.pass == Pass::Picture {
+            scene
+        } else {
+            scene.bare()
+        };
         let canvas = (size.0 as u32, size.1 as u32);
         let mut depth_numbers = Vec::new();
         let mut distances = Vec::new();
@@ -1177,8 +1250,16 @@ impl Drawing {
                     continue;
                 };
                 let drawn = frame.image(&mesh.picture);
+                let (drawn, opacity) = if self.hard {
+                    (
+                        frame.harden(drawn, mesh.opacity, &[self.id_color(id)])?,
+                        1.0,
+                    )
+                } else {
+                    (drawn, mesh.opacity)
+                };
                 frame.lay_depths(&layers, &mesh.depth, size.0);
-                frame.lay(&mut layers, &drawn, mesh.opacity, shown.plan.blend);
+                frame.lay(&mut layers, &drawn, opacity, self.blend(shown.plan.blend));
                 frame.release(drawn);
                 continue;
             }
@@ -1194,11 +1275,19 @@ impl Drawing {
             };
             let depths = layers.next_depths();
             let drawn = self.gpu_project(frame, depth, &shown.plan, &ready, size, Some(depths))?;
-            frame.lay(&mut layers, &drawn, ready.opacity, shown.plan.blend);
+            let (drawn, opacity) = if self.hard {
+                (
+                    frame.harden(drawn, ready.opacity, &[self.id_color(id)])?,
+                    1.0,
+                )
+            } else {
+                (drawn, ready.opacity)
+            };
+            frame.lay(&mut layers, &drawn, opacity, self.blend(shown.plan.blend));
             frame.release(drawn);
             frame.release(ready.picture);
         }
-        frame.by_depth(canvas, layers)
+        frame.by_depth(canvas, layers, self.hard)
     }
 
     /// A shown clip's picture with its effects and reveal done, as [`Drawing::ready`] makes it, a
@@ -1329,13 +1418,81 @@ impl Drawing {
                 Source::Solid(color) => color.a == 255,
                 _ => plan.letterboxed,
             };
+        let placement = Placement::of(plan, at, to_output);
+        if self.pass != Pass::Picture {
+            let out_size = (canvas.0 as usize, canvas.1 as usize);
+            picture = self.gpu_as_pass(
+                frame,
+                (sequence, plan),
+                picture,
+                &placement,
+                (at, scale),
+                out_size,
+            )?;
+        }
         Some(Some(GpuReady {
             picture,
-            placement: Placement::of(plan, at, to_output),
+            placement,
             crop,
             opacity,
             opaque,
         }))
+    }
+
+    /// Shade a clip's GPU picture for a guide pass, matching [`Drawing::as_pass`].
+    fn gpu_as_pass(
+        &self,
+        frame: &mut GpuFrame<'static>,
+        (sequence, plan): (&SequencePlan, &ClipPlan),
+        picture: GpuPicture,
+        placement: &Placement,
+        (at, scale): (Time, f64),
+        size: (usize, usize),
+    ) -> Option<GpuPicture> {
+        let to_output = &placement.to_output;
+        let pic_size = (f64::from(picture.w), f64::from(picture.h));
+        match self.pass {
+            Pass::Picture => Some(picture),
+            Pass::Ids => {
+                let [r, g, b, _] = self.id_color(&plan.clip.id);
+                frame.shade_flat(picture, [r, g, b])
+            }
+            Pass::Depth | Pass::Relative if plan.three_d => {
+                let scene = three_d::Scene::at(sequence, at, size);
+                let depth = scene.depth_for_gpu(plan, pic_size, placement);
+                frame.shade_depth(picture, &depth)
+            }
+            Pass::Depth | Pass::Relative => frame.shade_flat(picture, [0.0; 3]),
+            Pass::Normals if plan.three_d => {
+                let scene = three_d::Scene::at(sequence, at, size);
+                let color = scene.facing_for_gpu(plan, pic_size, placement);
+                frame.shade_flat(picture, color)
+            }
+            Pass::Normals => frame.shade_flat(picture, [0.0; 3]),
+            Pass::Motion => {
+                let Some(moving) = sequence.moving(plan, at, scale) else {
+                    return frame.shade_flat(picture, three_d::motion_color((0.0, 0.0), 1.0));
+                };
+                let (there, moved) = moving.to(at + self.step);
+                let height = size.1 as f64 * self.kept;
+                if plan.three_d {
+                    let now = three_d::Scene::at(sequence, at, size);
+                    let next = three_d::Scene::ahead(sequence, at, self.step, size);
+                    let there = there.with(moved.then_apply(to_output));
+                    let motion = three_d::motion_for_gpu(
+                        (&now, &next),
+                        plan,
+                        pic_size,
+                        (placement, &there),
+                        height,
+                    );
+                    frame.shade_motion_3d(picture, &motion)
+                } else {
+                    let motion = three_d::motion_flat_for_gpu(to_output, &moved, height);
+                    frame.shade_motion_flat(picture, &motion)
+                }
+            }
+        }
     }
 
     /// An adjustment layer, as [`Drawing::adjust`] draws it: its effects on the picture beneath
