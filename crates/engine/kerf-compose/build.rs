@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+include!("stamped.rs");
+
 fn files(folder: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(folder) else {
         return;
@@ -14,7 +16,7 @@ fn files(folder: &Path, out: &mut Vec<PathBuf>) {
         } else if path
             .extension()
             .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| matches!(extension, "rs" | "wgsl" | "tsv" | "cube" | "ttf"))
+            .is_some_and(|extension| STAMPED_KINDS.contains(&extension))
         {
             out.push(path);
         }
@@ -25,15 +27,7 @@ fn main() {
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("cargo says where the crate is");
     let manifest = Path::new(&manifest);
     let mut found = Vec::new();
-    for folder in [
-        "../../foundation",
-        "../../render",
-        "../../effects",
-        "../../color",
-        "../../image",
-        "../kerf-core/src",
-        "src",
-    ] {
+    for folder in STAMPED_FOLDERS {
         let folder = manifest.join(folder);
         println!("cargo:rerun-if-changed={}", folder.display());
         files(&folder, &mut found);

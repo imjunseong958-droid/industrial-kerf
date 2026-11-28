@@ -10,7 +10,7 @@ cargo build --release -p kerf-engine
 cargo build --profile maxperf -p kerf-engine   # fat LTO, slowest link, fastest binary
 ```
 
-Release builds use thin LTO, `codegen-units = 1`, `panic = abort`, and mimalloc.
+Release builds use thin LTO and `codegen-units = 1`, and the binary's allocator is mimalloc.
 
 Default resource limits:
 

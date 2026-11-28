@@ -8,6 +8,10 @@
 # not walk into these, and scripts/check-kerf-linux.sh fails the package if it loads
 # anything else from outside.
 #
+# One more it opens and is not named below: the system's OpenCL library (libOpenCL.so),
+# where there is one and Vulkan reaches no GPU that works, to draw frames on a card that
+# only computes. Kerf runs without it, and a package depends on whatever is named here.
+#
 # One soname a line.
 
 # glibc

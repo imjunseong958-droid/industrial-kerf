@@ -248,8 +248,12 @@ jobs:
         with:
           shared-key: linux
           save-if: false
+      # --locked: each of the two lock files, the repository's and the editor's,
+      # has to be what its manifests ask for. Without it cargo writes a lock
+      # that is behind afresh and the build passes, which is how the editor's
+      # went without the OpenCL crates for four pull requests.
       - name: Build the editor and the daemon
-        run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
+        run: cargo build --locked -p kerf-runtime --bin kerfd && cargo build --locked --manifest-path apps/kerf-editor/Cargo.toml
       # It has to open its window and quit on its own when asked to. Xvfb
       # needs the Composite extension, or the editor's Vulkan frames come
       # out black.
@@ -356,9 +360,10 @@ jobs:
         run: cargo test -p kerf-sidecar && cargo test -p kerf-engine --lib "sidecar::"
       # The editor steps run even when a test above failed, so the editor
       # and the bridge it links are built regardless.
+      # --locked, as linux-editor has it: a lock file that is behind fails.
       - name: Build the editor and the daemon
         if: ${{ !cancelled() }}
-        run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
+        run: cargo build --locked -p kerf-runtime --bin kerfd && cargo build --locked --manifest-path apps/kerf-editor/Cargo.toml
       # The real store API keys and the Kerf Cloud token go to, which every
       # other test replaces with one in memory: here Credential Manager, which
       # also refuses a value over 1280 UTF-16 units.
@@ -420,8 +425,9 @@ jobs:
           save-if: false
       # Only what Linux cannot show: the editor against Homebrew's libav,
       # drawn with GPUI's Metal renderer, and the daemon beside it.
+      # --locked, as linux-editor has it: a lock file that is behind fails.
       - name: Build the editor and the daemon
-        run: cargo build -p kerf-runtime --bin kerfd && cargo build --manifest-path apps/kerf-editor/Cargo.toml
+        run: cargo build --locked -p kerf-runtime --bin kerfd && cargo build --locked --manifest-path apps/kerf-editor/Cargo.toml
 
   macos-workspace:
     needs: changes
