@@ -155,6 +155,29 @@ impl GpuEffect {
         super::vfx::gpu::Kernel::in_gamut(frame, picture, |frame, inside| self.run(frame, inside))
     }
 
+    /// The effect as a fusible pointwise [`kerf_kernel::fusion::PixelOp`], when covered.
+    pub fn as_pixel_op(&self) -> Option<kerf_kernel::fusion::PixelOp> {
+        match self {
+            Self::Op(op) => super::gpu::as_pixel_op(op),
+            Self::Kernel(super::vfx::gpu::Kernel::Cineon { way, told }) => {
+                Some(kerf_kernel::fusion::PixelOp::Cineon {
+                    way: *way,
+                    told: *told,
+                })
+            }
+            Self::Kernel(_) => None,
+        }
+    }
+
+    /// Run a chain of fusible pointwise ops in a single fused GPU dispatch.
+    pub fn run_fused(
+        frame: &mut kerf_gpu::Frame<'static>,
+        picture: kerf_gpu::Picture,
+        ops: &[kerf_kernel::fusion::PixelOp],
+    ) -> Option<kerf_gpu::Picture> {
+        super::gpu::run_fused(frame, picture, ops)
+    }
+
     /// The effect on `picture`, or `None` when its kernels did not build.
     pub fn run(
         &self,

@@ -1351,19 +1351,7 @@ impl Drawing {
                 picture = frame.multiply(picture, &covered);
             }
         }
-        for op in &ops {
-            picture = match op {
-                Op::Effect(op) => op.run(frame, picture)?,
-                Op::Held(op) => op.run_held(frame, picture)?,
-                Op::Gamut(op) => op.run_in_gamut(frame, picture)?,
-                Op::Correct(correction) => frame.correct(picture, correction),
-                Op::HeldCorrect(correction) => {
-                    video::vfx::gpu::Kernel::held(frame, picture, |frame, unit| {
-                        Some(frame.correct(unit, correction))
-                    })?
-                }
-            };
-        }
+        picture = run_gpu_ops(frame, picture, &ops)?;
         let mut to_output = shape.to_output;
         let mut past = past;
         let tall = past.map_or(f64::from(plan.size.1) * source_per, |past| past.h);
@@ -1507,19 +1495,7 @@ impl Drawing {
         let (sequence, plan, at, scale) = placed;
         let (w, h) = (canvas.w as usize, canvas.h as usize);
         let mut adjusted = frame.copy(&canvas);
-        for op in ops {
-            adjusted = match op {
-                Op::Effect(op) => op.run(frame, adjusted)?,
-                Op::Held(op) => op.run_held(frame, adjusted)?,
-                Op::Gamut(op) => op.run_in_gamut(frame, adjusted)?,
-                Op::Correct(correction) => frame.correct(adjusted, correction),
-                Op::HeldCorrect(correction) => {
-                    video::vfx::gpu::Kernel::held(frame, adjusted, |frame, unit| {
-                        Some(frame.correct(unit, correction))
-                    })?
-                }
-            };
-        }
+        adjusted = run_gpu_ops(frame, adjusted, ops)?;
         let placement = sequence.placement(plan, at).scaled(scale);
         let time = placement.time();
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
@@ -1631,6 +1607,49 @@ impl Drawing {
             Source::Adjustment | Source::Nothing | Source::Mesh => return None,
         }))
     }
+}
+
+/// Run a sequence of GPU clip ops, fusing contiguous runs of two or more pointwise `Op::Effect`s
+/// into a single compiled GPU dispatch to avoid intermediate VRAM round-trips and redundant
+/// sRGB↔linear conversions.
+fn run_gpu_ops(
+    frame: &mut GpuFrame<'static>,
+    mut picture: GpuPicture,
+    ops: &[Op],
+) -> Option<GpuPicture> {
+    let mut i = 0;
+    while i < ops.len() {
+        let mut fused = Vec::new();
+        let mut j = i;
+        while j < ops.len() {
+            if let Op::Effect(effect) = &ops[j]
+                && let Some(pixel_op) = effect.as_pixel_op()
+            {
+                fused.push(pixel_op);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if fused.len() >= 2 {
+            picture = GpuEffect::run_fused(frame, picture, &fused)?;
+            i = j;
+            continue;
+        }
+        picture = match &ops[i] {
+            Op::Effect(op) => op.run(frame, picture)?,
+            Op::Held(op) => op.run_held(frame, picture)?,
+            Op::Gamut(op) => op.run_in_gamut(frame, picture)?,
+            Op::Correct(correction) => frame.correct(picture, correction),
+            Op::HeldCorrect(correction) => {
+                video::vfx::gpu::Kernel::held(frame, picture, |frame, unit| {
+                    Some(frame.correct(unit, correction))
+                })?
+            }
+        };
+        i += 1;
+    }
+    Some(picture)
 }
 
 /// The kernel of a transition at sequence time `at`, on pictures of `size`, or `None` when it stays

@@ -1,5 +1,10 @@
 //! One source for a kernel. Written once in Rust over [`Num`], a kernel runs on the CPU as plain `f32`,
-//! and run over [`Traced`] it writes itself out as WGSL, one line for each thing it does.
+//! differentiates via [`dual::Dual`], compiles into an algebraic/color-gauge-simplified SSA graph
+//! ([`ir::Graph`]) for multi-op GPU fusion ([`fusion`]), and writes itself out as WGSL over [`Traced`].
+
+pub mod dual;
+pub mod fusion;
+pub mod ir;
 
 use std::cell::{Cell, RefCell};
 use std::ops::{Add, Div, Mul, Neg, Sub};
@@ -37,6 +42,26 @@ pub trait Num:
 
     fn clamp(self, low: Self, high: Self) -> Self {
         self.max(low).min(high)
+    }
+
+    /// Linear light to sRGB display encoding (first-class color-gauge operator in [`ir::Graph`]).
+    fn linear_to_srgb(self) -> Self {
+        let [out] = self.if_at_most(
+            Self::lit(0.003_130_8),
+            || [self * Self::lit(12.92)],
+            || [Self::lit(1.055) * self.pow(1.0 / 2.4) - Self::lit(0.055)],
+        );
+        out
+    }
+
+    /// sRGB display encoding to linear light (inverse color-gauge operator in [`ir::Graph`]).
+    fn srgb_to_linear(self) -> Self {
+        let [out] = self.if_at_most(
+            Self::lit(0.04045),
+            || [self / Self::lit(12.92)],
+            || [((self + Self::lit(0.055)) / Self::lit(1.055)).pow(2.4)],
+        );
+        out
     }
 }
 
@@ -239,21 +264,11 @@ impl Num for Traced {
 // ------------------------------------------------------------------------------------------ A grade
 
 fn linear_to_srgb<N: Num>(v: N) -> N {
-    let [out] = v.if_at_most(
-        N::lit(0.003_130_8),
-        || [v * N::lit(12.92)],
-        || [N::lit(1.055) * v.pow(1.0 / 2.4) - N::lit(0.055)],
-    );
-    out
+    v.linear_to_srgb()
 }
 
 fn srgb_to_linear<N: Num>(v: N) -> N {
-    let [out] = v.if_at_most(
-        N::lit(0.04045),
-        || [v / N::lit(12.92)],
-        || [((v + N::lit(0.055)) / N::lit(1.055)).pow(2.4)],
-    );
-    out
+    v.srgb_to_linear()
 }
 
 /// What a color balance is told.

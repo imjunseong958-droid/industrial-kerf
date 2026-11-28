@@ -887,3 +887,139 @@ fn gpu_effect_chains_match_cpu() {
         );
     }
 }
+
+#[test]
+fn fused_pointwise_wgsl_is_written_out_for_opencl() {
+    use kerf_kernel::fusion::{compile_fused, OpKind};
+    let signatures: &[&[OpKind]] = &[
+        &[
+            OpKind::BrightnessContrast,
+            OpKind::Tint,
+            OpKind::ColorBalance,
+            OpKind::Gamma,
+            OpKind::Levels,
+            OpKind::AscCdl,
+            OpKind::ChannelMix,
+            OpKind::Invert(0),
+            OpKind::BlackWhite,
+            OpKind::Cineon(0),
+        ],
+        &[
+            OpKind::BrightnessContrast,
+            OpKind::AlphaAdjust,
+            OpKind::Invert(4),
+            OpKind::Gamma,
+            OpKind::Cineon(1),
+        ],
+        &[OpKind::BlackWhite, OpKind::Invert(2)],
+    ];
+    for sig in signatures {
+        let compiled = compile_fused(sig);
+        let kernels = kerf_gpu::written_for_opencl(&compiled.wgsl).unwrap_or_else(|why| {
+            panic!(
+                "fused {sig:?} failed OpenCL translation: {why}\n{}",
+                compiled.wgsl
+            )
+        });
+        assert_eq!(kernels, 1, "expected 1 fused kernel for {sig:?}");
+    }
+}
+
+#[test]
+fn fused_pointwise_chains_match_cpu_on_gpu() {
+    let Some(gpu) = kerf_gpu::shared() else {
+        eprintln!("no GPU; skipping");
+        return;
+    };
+    let (w, h) = (96usize, 54usize);
+    let image = Image {
+        w,
+        h,
+        px: picture(w as u32, h as u32),
+    };
+    let chains: Vec<Vec<EffectInstance>> = vec![
+        vec![
+            effect(
+                "brightness_contrast",
+                &[("brightness", fl(15.0)), ("contrast", fl(20.0))],
+            ),
+            effect("gamma_correction", &[("gamma", fl(12.0))]),
+            effect(
+                "levels",
+                &[
+                    ("in_black", fl(12.0)),
+                    ("in_white", fl(240.0)),
+                    ("out_black", fl(6.0)),
+                    ("out_white", fl(248.0)),
+                    ("gamma", fl(110.0)),
+                ],
+            ),
+            effect(
+                "color_balance",
+                &[
+                    ("shadow_r", fl(15.0)),
+                    ("mid_g", fl(-10.0)),
+                    ("hi_b", fl(20.0)),
+                    ("preserve", ParamValue::Bool(true)),
+                ],
+            ),
+            effect(
+                "asc_cdl",
+                &[
+                    ("r_slope", fl(1.05)),
+                    ("g_offset", fl(0.02)),
+                    ("b_power", fl(0.95)),
+                    ("saturation", fl(1.15)),
+                ],
+            ),
+        ],
+        vec![
+            effect(
+                "tint",
+                &[
+                    ("black", col(0.05, 0.02, 0.1)),
+                    ("white", col(0.98, 0.94, 0.85)),
+                    ("amount", fl(35.0)),
+                ],
+            ),
+            effect(
+                "channel_mix",
+                &[("rr", fl(90.0)), ("rg", fl(15.0)), ("bb", fl(95.0))],
+            ),
+            effect(
+                "invert",
+                &[("channel", ParamValue::Choice(1)), ("blend", fl(75.0))],
+            ),
+            effect("black_white", &[]),
+        ],
+        vec![
+            effect(
+                "brightness_contrast",
+                &[("brightness", fl(10.0)), ("contrast", fl(15.0))],
+            ),
+            effect(
+                "alpha_adjust",
+                &[("opacity", fl(70.0)), ("invert", ParamValue::Bool(false))],
+            ),
+            effect("gamma_correction", &[("gamma", fl(8.5))]),
+        ],
+    ];
+    for (idx, chain) in chains.iter().enumerate() {
+        let cx = cx(Tick::ZERO, 1.0);
+        let ops: Vec<FxOp> = chain
+            .iter()
+            .map(|e| FxOp::eval(e, &cx, w, h).expect("a GPU op"))
+            .collect();
+        let mut cpu = image.clone();
+        for op in &ops {
+            op.apply(&mut cpu);
+        }
+        let gpu_px = on_gpu(gpu, &image, &ops);
+        let (worst, flips) = compare(&cpu.px, &gpu_px);
+        println!("fused chain {idx}: worst {worst:.2e}, flips {flips:.4}");
+        assert!(
+            worst <= EXACT * 6.0 && flips <= FLIPS,
+            "fused chain {idx}: worst {worst:.2e}, flips {flips:.4}"
+        );
+    }
+}
