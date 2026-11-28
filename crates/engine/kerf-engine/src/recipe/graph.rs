@@ -21,7 +21,7 @@
 //! Nothing is run to say it, and nothing here changes the recipe: a change
 //! is made to its text ([`super::text`]) and the graph is read again.
 
-use super::model::{Ask, Models, Source};
+use super::model::{Ask, Generator, Source};
 use super::signal::Signal;
 use super::{stored, text::step_lines, within, Recipe, Step};
 use crate::error::{EngineError, Result};
@@ -291,8 +291,8 @@ pub struct JoinNode {
 }
 
 /// A name a `generate` line can set for its model alone: what the line sets it to
-/// (`null` where it leaves it), and what it is when the line does not, as the person's
-/// models file says.
+/// (`null` where it leaves it), and what it is when the line does not, as what reaches the
+/// model says.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Knob {
@@ -302,8 +302,8 @@ pub struct Knob {
 }
 
 /// A `generate` step: what its line asks (`null` where it says none), whether the model
-/// is set up on this computer, and what the person's models file says the model takes,
-/// each left out where the file does not say.
+/// is set up on this computer, and what the model takes, as what reaches it says, each left
+/// out where that is not said.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ModelNode {
@@ -468,7 +468,7 @@ struct Building<'a> {
     directory: &'a Path,
     /// The recipe's folder, from the project's.
     folder: &'a Path,
-    models: &'a Models,
+    generator: &'a dyn Generator,
     ids: Ids,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
@@ -748,7 +748,7 @@ impl Building<'_> {
     /// The node of a `generate` step, and an edge for each thing it reads.
     fn model(&mut self, ask: &Ask, line: usize, cast: Option<&super::cast::Cast>) -> String {
         let id = self.ids.of(format!("made:{}", ask.out));
-        let takes = self.models.takes(&ask.model);
+        let takes = self.generator.catalog().spec(&ask.model);
         // What the line sets for this model alone, then what the model has said it
         // takes and the line leaves as it comes.
         let mut knobs: Vec<Knob> = ask
@@ -776,7 +776,7 @@ impl Building<'_> {
         let sized = |(width, height): (u32, u32)| format!("{width}x{height}");
         let said = ModelNode {
             model: ask.model.clone(),
-            set_up: self.models.command(&ask.model).is_ok(),
+            set_up: self.generator.catalog().find(&ask.model).is_ok(),
             prompt: ask.prompt.clone(),
             seed: ask.seed,
             seconds: ask.seconds,
@@ -849,7 +849,12 @@ const POINTS: usize = 512;
 /// graph. Steps that do not end in the media's file are a graph with no nodes
 /// that says why (`error`); ones that read and cannot be made say that
 /// (`cannot`) and are laid out all the same. Nothing is run.
-pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> Result<Graph> {
+pub fn graph(
+    project: &Project,
+    directory: &Path,
+    id: &str,
+    generator: &dyn Generator,
+) -> Result<Graph> {
     let media = project
         .media(id)
         .ok_or_else(|| EngineError::NoMedia(id.to_string()))?;
@@ -881,7 +886,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
         project,
         directory,
         folder: &folder,
-        models,
+        generator,
         ids: Ids::default(),
         nodes: Vec::new(),
         edges: Vec::new(),
@@ -1046,7 +1051,7 @@ pub fn graph(project: &Project, directory: &Path, id: &str, models: &Models) -> 
     }
     graph.nodes = building.nodes;
     graph.edges = building.edges;
-    match super::plan(project, directory, id, models) {
+    match super::plan(project, directory, id, generator) {
         Ok(plan) => graph.notes = plan.notes,
         Err(error) => {
             if let EngineError::NoModel { name, .. } = &error {

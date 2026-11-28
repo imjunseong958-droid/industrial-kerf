@@ -46,10 +46,11 @@ impl KerfMcpRouter {
             Err(error) => result["brandError"] = json!(error),
         }
         // The models a recipe's `generate` can name: those the person has set up, each
-        // with what their file says it takes. Nothing is run to learn it.
-        match kerf_engine::recipe::model::Models::load() {
+        // with what it takes. Nothing is run to learn it.
+        match kerf_generate::Generator::load() {
             Ok(models) => {
-                let listed = models_listed(&models);
+                use kerf_engine::recipe::model::Generator as _;
+                let listed = models_listed(models.catalog());
                 if !listed.is_empty() {
                     result["models"] = json!(listed);
                 }
@@ -134,7 +135,7 @@ impl KerfMcpRouter {
         } else {
             ""
         };
-        let models = kerf_engine::recipe::model::Models::load();
+        let models = kerf_generate::Generator::load();
         // The project with its files where they are, for a mesh's, made when first wanted,
         // and what was found of each part of a sequence, which several media may draw.
         let resolved = std::cell::OnceCell::new();
@@ -191,7 +192,7 @@ impl KerfMcpRouter {
                     "media": id,
                     "why": why.reason(),
                 });
-                // What refuses it, as an agent is told it; a models file that does not read is
+                // What refuses it, as an agent is told it; a generation file that does not read is
                 // what does.
                 let plan = match &models {
                     Ok(models) => kerf_engine::recipe::plan(project, &self.dir, id, models)
@@ -423,21 +424,20 @@ impl KerfMcpRouter {
     }
 }
 
-/// The models set up, as `look` lists them: each by the name a `generate` line gives it,
-/// with what the person's models file says it takes. `size` is written as a line writes it,
-/// and `guide` is the `render` line that draws a guide for it, with no more than it reads.
-/// The models a recipe's `generate` can name, as `look` lists them: each
-/// with what its owner's file says it takes, and the `render` line that draws
-/// a guide for it where it follows one.
-pub fn models_listed(models: &kerf_engine::recipe::model::Models) -> Vec<ListedModel> {
-    models
-        .names()
-        .map(|name| {
+/// The models a recipe's `generate` can name, as `look` lists them: each by the name a
+/// `generate` line gives it, with what it takes as what reaches it says (`size` written as a
+/// line writes it), and the `render` line that draws a guide for it where it follows one, with
+/// no more than it reads.
+pub fn models_listed(catalog: &kerf_engine::recipe::model::Catalog) -> Vec<ListedModel> {
+    catalog
+        .models
+        .iter()
+        .map(|model| {
             let mut listed = ListedModel {
-                name: name.to_owned(),
+                name: catalog.name_of(model),
                 ..ListedModel::default()
             };
-            let Some(takes) = models.takes(name) else {
+            let Some(takes) = &model.spec else {
                 return listed;
             };
             let size = takes

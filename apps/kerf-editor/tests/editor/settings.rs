@@ -2,43 +2,43 @@
 
 use kerf_bridge::event::{CloudAccess, CloudAccount, CloudStatus, ListedModel};
 use kerf_editor::settings::{
-    account_status, cursor_imports, mcp_server_config, model_summary, models_opener, read_failure,
-    releases_url, validate_mcp_config, McpClient,
+    account_status, cursor_imports, generation_opener, mcp_server_config, model_summary,
+    read_failure, releases_url, validate_mcp_config, McpClient,
 };
 use proptest::prelude::*;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-// ---------------------------------------------------------------- Settings ▸ Models
+// ---------------------------------------------------------------- Settings ▸ Generation
 
 #[test]
-fn the_models_file_opens_itself_and_a_missing_one_its_folder() {
-    let file = Path::new("/home/me/.config/kerf/models.json");
+fn the_generation_file_opens_itself_and_a_missing_one_its_folder() {
+    let file = Path::new("/home/me/.kerf/generation.json");
     assert_eq!(
-        models_opener(file, true),
-        ("Open Models File", file.to_path_buf())
+        generation_opener(file, true),
+        ("Open generation.json", file.to_path_buf())
     );
     assert_eq!(
-        models_opener(file, false),
-        ("Open Its Folder", PathBuf::from("/home/me/.config/kerf"))
+        generation_opener(file, false),
+        ("Open Its Folder", PathBuf::from("/home/me/.kerf"))
     );
 }
 
 proptest! {
     #[test]
-    fn what_the_models_button_opens_is_the_file_or_the_folder_it_goes_in(
+    fn what_the_generation_button_opens_is_the_file_or_the_folder_it_goes_in(
         parts in proptest::collection::vec("[a-z0-9_]{1,8}", 1..5),
         exists in proptest::bool::ANY,
     ) {
         let folder: PathBuf = std::iter::once("/".to_owned()).chain(parts).collect();
-        let file = folder.join("models.json");
-        let (words, opened) = models_opener(&file, exists);
+        let file = folder.join("generation.json");
+        let (words, opened) = generation_opener(&file, exists);
         if exists {
-            prop_assert_eq!(words, "Open Models File");
+            prop_assert_eq!(words, "Open generation.json");
             prop_assert_eq!(opened, file);
         } else {
             prop_assert_eq!(words, "Open Its Folder");
-            prop_assert_eq!(opened.join("models.json"), file);
+            prop_assert_eq!(opened.join("generation.json"), file);
         }
     }
 }

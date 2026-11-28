@@ -1,4 +1,4 @@
-//! kerf-bridge's integration tests, one test binary, each former test file a module. connection stays a binary of its own (it counts access violations with a process-wide exception handler on Windows, and CI runs it alone), as do making, which sets the process-wide models file, and sharing, which runs each test again in a child given its own HOME.
+//! kerf-bridge's integration tests, one test binary, each former test file a module. connection stays a binary of its own (it counts access violations with a process-wide exception handler on Windows, and CI runs it alone), as do making, which sets the process-wide generation file, and sharing, which runs each test again in a child given its own HOME.
 
 mod api;
 mod delivery;

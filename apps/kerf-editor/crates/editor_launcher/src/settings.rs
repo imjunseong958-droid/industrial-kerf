@@ -1,6 +1,6 @@
 //! Settings: Kerf's account, what answers in the conversation and its key,
-//! the person's shot models, how the editor looks and moves, its shortcuts,
-//! MCP both ways, and about Kerf.
+//! what reaches the person's shot models and its key, how the editor looks
+//! and moves, its shortcuts, MCP both ways, and about Kerf.
 //!
 //! A panel over the dimmed window (the workspace, or the launcher with no
 //! project, draws the dim and the panel's rise): its pages named down its
@@ -8,7 +8,7 @@
 //! at the row's end, a hairline between one and the next. A page chosen
 //! fades in over the last. Esc, its close, or a press on the dim gives the
 //! window back. With no project (from the launcher) what reaches Kerf
-//! through a project, the account and the models, says so.
+//! through a project, the account and the models listed, says so.
 
 use crate::launcher::{ago, app_icon, field, home_relative};
 use editor_session::commands::{self, RunCommand};
@@ -26,6 +26,7 @@ use gpui::{
 };
 use kerf_bridge::event::{CloudAccess, CloudStatus, ListedModel};
 use kerf_bridge::{About, Command, CrashReports, Event, UpdateCheck};
+use kerf_generate::settings::{ProviderSettings, Settings as Generation};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -65,7 +66,7 @@ pub enum SettingsEvent {
 pub enum Page {
     Account,
     Chat,
-    Models,
+    Generation,
     Appearance,
     Shortcuts,
     Mcp,
@@ -76,7 +77,7 @@ impl Page {
     pub const ALL: [Page; 7] = [
         Page::Account,
         Page::Chat,
-        Page::Models,
+        Page::Generation,
         Page::Appearance,
         Page::Shortcuts,
         Page::Mcp,
@@ -87,7 +88,7 @@ impl Page {
         match self {
             Page::Account => "Account",
             Page::Chat => "Chat",
-            Page::Models => "Models",
+            Page::Generation => "Generation",
             Page::Appearance => "Appearance",
             Page::Shortcuts => "Shortcuts",
             Page::Mcp => "MCP",
@@ -99,7 +100,7 @@ impl Page {
         match self {
             Page::Account => Icon::Lock,
             Page::Chat => Icon::Chat,
-            Page::Models => Icon::Sparkle,
+            Page::Generation => Icon::Sparkle,
             Page::Appearance => Icon::Eye,
             Page::Shortcuts => Icon::Media,
             Page::Mcp => Icon::Gear,
@@ -172,8 +173,21 @@ pub struct SettingsView {
     token: Entity<TextInput>,
     /// A sign-in or out sent, its `cloud` answer awaited.
     signing: bool,
-    /// The last `models` event: the person's models file and what it names.
+    /// The last `models` event: the person's generation file and the models
+    /// its providers reach.
     models: Option<Event>,
+    /// Settings ▸ Generation: the generation file as last read, or why it
+    /// does not read.
+    generation: Result<Generation, String>,
+    /// A server's name, address and API key, as typed.
+    server_name: Entity<TextInput>,
+    server_url: Entity<TextInput>,
+    server_key: Entity<TextInput>,
+    /// What checking or saving the server came to, and whether it failed.
+    server_status: Option<(SharedString, bool)>,
+    /// Asking the server which models it reaches, dropped (and so let go)
+    /// with the answer.
+    checking: Option<Task<()>>,
     /// The project's `.kerf/mcp.json`, as edited here.
     servers: Entity<TextInput>,
     /// What loading or saving the servers came to, and whether it failed.
@@ -239,6 +253,13 @@ impl SettingsView {
             input
         });
         let token = cx.new(|cx| TextInput::new(cx, "Sign-in token").secret());
+        let server_name = cx.new(|cx| {
+            let mut input = TextInput::new(cx, "pod");
+            input.set_text("pod".to_owned(), cx);
+            input
+        });
+        let server_url = cx.new(|cx| TextInput::new(cx, "https://….trycloudflare.com"));
+        let server_key = cx.new(|cx| TextInput::new(cx, "kg_…").secret());
         let (servers_text, servers_status) = project_servers(project.as_deref());
         let servers = cx.new(|cx| {
             // JSON, in mono: Return starts a line, ⌘↩ / Ctrl+Enter saves.
@@ -255,6 +276,9 @@ impl SettingsView {
             cx.subscribe_in(&base_url, window, Self::base_url_event),
             cx.subscribe_in(&token, window, Self::token_event),
             cx.subscribe_in(&servers, window, Self::servers_event),
+            cx.subscribe_in(&server_name, window, Self::server_event),
+            cx.subscribe_in(&server_url, window, Self::server_event),
+            cx.subscribe_in(&server_key, window, Self::server_event),
             cx.subscribe(&session, |this, _, event: &BridgeEvent, cx| {
                 this.bridge_event(&event.0, cx)
             }),
@@ -270,7 +294,7 @@ impl SettingsView {
                 cx.notify();
             }));
         }
-        for input in [&token, &servers] {
+        for input in [&token, &servers, &server_name, &server_url, &server_key] {
             let handle = input.read(cx).focus_handle(cx);
             subscriptions.push(cx.on_focus(&handle, window, |_, _, cx| cx.notify()));
             subscriptions.push(cx.on_blur(&handle, window, |_, _, cx| cx.notify()));
@@ -289,6 +313,12 @@ impl SettingsView {
             token,
             signing: false,
             models: None,
+            generation: Generation::read(&kerf_generate::Generator::default_file()),
+            server_name,
+            server_url,
+            server_key,
+            server_status: None,
+            checking: None,
             servers,
             servers_status,
             client: McpClient::Cursor,
@@ -341,10 +371,7 @@ impl SettingsView {
                 self.session
                     .update(cx, |session, _| session.ask_bridge(Command::CloudRefresh));
             }
-            Page::Models => {
-                self.session
-                    .update(cx, |session, _| session.ask_bridge(Command::Models));
-            }
+            Page::Generation => self.reload_generation(cx),
             Page::About => self.crashes = kerf_bridge::crash_reports(),
             Page::Appearance | Page::Shortcuts | Page::Mcp => {}
         }
@@ -816,53 +843,370 @@ impl SettingsView {
         vec![group(rows).into_any_element()]
     }
 
-    // ------------------------------------------------------------ Models
+    // ------------------------------------------------------------ Generation
 
-    fn reload_models(&mut self, cx: &mut Context<Self>) {
+    /// The generation file read again, and, with a project open, the models
+    /// its providers reach.
+    fn reload_generation(&mut self, cx: &mut Context<Self>) {
+        self.generation = Generation::read(&kerf_generate::Generator::default_file());
         self.session
             .update(cx, |session, _| session.ask_bridge(Command::Models));
+        cx.notify();
     }
 
-    fn models_page(&self, cx: &Context<Self>) -> Vec<AnyElement> {
+    fn server_event(
+        &mut self,
+        _: &Entity<TextInput>,
+        event: &InputEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            InputEvent::Changed => {}
+            InputEvent::Submit => self.save_server(cx),
+            InputEvent::Cancel => self.dismiss(cx),
+        }
+    }
+
+    /// The server as typed: its name, its address as a provider holds it,
+    /// and its key (none where none is typed); or why it cannot be one.
+    fn server_typed(&self, cx: &Context<Self>) -> Result<(String, String, Option<String>), String> {
+        let name = self.server_name.read(cx).text().trim().to_owned();
+        if !kerf_generate::settings::names_a_provider(&name) {
+            return Err("A server's name is letters, digits, ., - and _".to_owned());
+        }
+        let url = kerf_generate::settings::endpoint_url(self.server_url.read(cx).text())?;
+        let key =
+            Some(self.server_key.read(cx).text().trim().to_owned()).filter(|key| !key.is_empty());
+        Ok((name, url, key))
+    }
+
+    /// Asks the server typed which models it reaches, with the key typed, or
+    /// the one kept for it where none is: off the window's thread, as it may
+    /// take a few seconds.
+    fn check_server(&mut self, cx: &mut Context<Self>) {
+        let (name, url, key) = match self.server_typed(cx) {
+            Ok(typed) => typed,
+            Err(why) => {
+                self.server_status = Some((why.into(), true));
+                cx.notify();
+                return;
+            }
+        };
+        let key = key.or_else(|| {
+            self.session
+                .read(cx)
+                .kept_secret(&kerf_generate::secret_name(&name))
+        });
+        let asked = cx
+            .background_executor()
+            .spawn(async move { kerf_generate::ask_models(&url, key.as_deref()) });
+        self.checking = Some(cx.spawn(async move |this, cx| {
+            let answer = asked.await;
+            let _ = this.update(cx, |this, cx| {
+                this.server_status = Some(match answer {
+                    Ok(models) => (connected_words(&models).into(), false),
+                    Err(why) => (why.into(), true),
+                });
+                this.checking = None;
+                cx.notify();
+            });
+        }));
+        self.server_status = Some(("Checking…".into(), false));
+        cx.notify();
+    }
+
+    /// Writes the server typed into the generation file, in place of one by
+    /// its name, and keeps its key where a chat's is kept.
+    fn save_server(&mut self, cx: &mut Context<Self>) {
+        let (name, url, key) = match self.server_typed(cx) {
+            Ok(typed) => typed,
+            Err(why) => {
+                self.server_status = Some((why.into(), true));
+                cx.notify();
+                return;
+            }
+        };
+        let file = kerf_generate::Generator::default_file();
+        let written = Generation::read(&file).and_then(|mut settings| {
+            settings.set_endpoint(&name, &url)?;
+            settings
+                .write(&file)
+                .map_err(|error| format!("{} could not be written: {error}", home_relative(&file)))
+        });
+        if let Err(why) = written {
+            self.server_status = Some((why.into(), true));
+            cx.notify();
+            return;
+        }
+        let kept = match key {
+            Some(key) => self
+                .session
+                .update(cx, |session, _| {
+                    session.keep_secret(&kerf_generate::secret_name(&name), &key)
+                })
+                .map(Some),
+            None => Ok(None),
+        };
+        self.server_status = Some(match kept {
+            Ok(Some(editor_session::session::KeyKept::Keychain)) => {
+                (format!("Saved `{name}`, its key in the system keychain").into(), false)
+            }
+            Ok(Some(editor_session::session::KeyKept::SettingsFile)) => (
+                format!("Saved `{name}`, its key in Kerf's settings file: the system keychain cannot be reached here").into(),
+                false,
+            ),
+            Ok(None) => (format!("Saved `{name}`").into(), false),
+            Err(error) => (format!("Saved `{name}`, and not its key: {error}").into(), true),
+        });
+        self.server_key
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.reload_generation(cx);
+    }
+
+    /// Puts server `name` in the fields, to be changed.
+    fn edit_server(&mut self, name: &str, url: &str, cx: &mut Context<Self>) {
+        self.server_name
+            .update(cx, |input, cx| input.set_text(name.to_owned(), cx));
+        self.server_url
+            .update(cx, |input, cx| input.set_text(url.to_owned(), cx));
+        self.server_key
+            .update(cx, |input, cx| input.set_text(String::new(), cx));
+        self.server_status = None;
+        cx.notify();
+    }
+
+    /// Takes server `name` out of the generation file, and forgets its key.
+    fn remove_server(&mut self, name: &str, cx: &mut Context<Self>) {
+        let file = kerf_generate::Generator::default_file();
+        let written = Generation::read(&file).and_then(|mut settings| {
+            settings.remove(name);
+            settings
+                .write(&file)
+                .map_err(|error| format!("{} could not be written: {error}", home_relative(&file)))
+        });
+        self.server_status = Some(match written {
+            Ok(()) => {
+                let forgot = self.session.update(cx, |session, _| {
+                    session.keep_secret(&kerf_generate::secret_name(name), "")
+                });
+                match forgot {
+                    Ok(_) => (format!("Removed `{name}` and its key").into(), false),
+                    Err(error) => (
+                        format!("Removed `{name}`, and not its key: {error}").into(),
+                        true,
+                    ),
+                }
+            }
+            Err(why) => (why.into(), true),
+        });
+        self.reload_generation(cx);
+    }
+
+    fn generation_page(&self, window: &Window, cx: &Context<Self>) -> Vec<AnyElement> {
         let connected = self.session.read(cx).has_project();
-        // The person's models file, whether it is there, the models it names
-        // (each as `look` lists it), and why it does not read.
+        let file = kerf_generate::Generator::default_file();
+        let exists = file.is_file();
+        // The providers the file sets up, each with what reaches it; a server
+        // can be put in the fields to change, or taken out.
+        let mut providers: Vec<AnyElement> = Vec::new();
+        match &self.generation {
+            Err(why) => providers.push(
+                ui::label(
+                    format!("The generation file does not read: {why}"),
+                    text::CONTROL,
+                    theme::neg(),
+                )
+                .into_any_element(),
+            ),
+            Ok(settings) if settings.providers().next().is_none() => providers.push(
+                ui::label(
+                    "Nothing is set up yet: add a server below",
+                    text::CONTROL,
+                    theme::ink3(),
+                )
+                .into_any_element(),
+            ),
+            Ok(settings) => {
+                for (index, (name, provider)) in settings.providers().enumerate() {
+                    let (kind, what) = match provider {
+                        ProviderSettings::Endpoint { url } => ("Server", url.clone()),
+                        ProviderSettings::Command { run, .. } => ("Program", run.join(" ")),
+                    };
+                    let mut line = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(theme::space::S8))
+                        .py(px(theme::space::S4))
+                        .child(ui::label(name.to_owned(), text::BODY_NAME, theme::ink()))
+                        .child(ui::chip(kind, theme::ink2()))
+                        .child(div().flex_1().min_w_0().child(ui::label(
+                            what.clone(),
+                            text::MONO_SMALL,
+                            theme::ink3(),
+                        )));
+                    if let ProviderSettings::Endpoint { url } = provider {
+                        let (edited, url) = (name.to_owned(), url.clone());
+                        let removed = name.to_owned();
+                        line = line
+                            .child(
+                                ui::button(("settings-generation-edit", index), "Edit")
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.edit_server(&edited, &url, cx)
+                                    })),
+                            )
+                            .child(
+                                ui::button(("settings-generation-remove", index), "Remove")
+                                    .ghost()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.remove_server(&removed, cx)
+                                    })),
+                            );
+                    }
+                    providers.push(line.into_any_element());
+                }
+            }
+        }
+        providers.push(
+            ui::label(
+                format!(
+                    "{}{}",
+                    home_relative(&file),
+                    if exists { "" } else { " (not there yet)" }
+                ),
+                text::MONO_SMALL,
+                theme::ink3(),
+            )
+            .into_any_element(),
+        );
+        let (open_words, _) = generation_opener(&file, exists);
+        let shown = file.clone();
+        let buttons = div()
+            .flex()
+            .flex_none()
+            .gap(px(theme::space::S8))
+            .child(
+                // The file itself, in the app that opens it, to be edited;
+                // not there yet, its folder (made), to put it in.
+                ui::button("settings-generation-open", open_words).on_click(move |_, _, cx| {
+                    let (_, opened) = generation_opener(&shown, shown.is_file());
+                    if !shown.is_file()
+                        && let Err(error) = std::fs::create_dir_all(&opened)
+                    {
+                        log::warn!(
+                            "{}: the folder could not be made: {error}",
+                            opened.display()
+                        );
+                    }
+                    cx.open_with_system(&opened);
+                }),
+            )
+            .child(
+                ui::button("settings-generation-reload", "Reload")
+                    .on_click(cx.listener(|this, _, _, cx| this.reload_generation(cx))),
+            );
+        let text_row = |label: &'static str, hint: &'static str, input: &Entity<TextInput>| {
+            row(
+                label,
+                Some(hint.into()),
+                Some(
+                    field(input, window, cx)
+                        .w(px(FIELD))
+                        .flex_none()
+                        .into_any_element(),
+                ),
+                Vec::new(),
+            )
+        };
+        let status = self.server_status.clone().map(|(said, failed)| {
+            ui::label(
+                said,
+                text::CONTROL,
+                if failed { theme::neg() } else { theme::pos() },
+            )
+            .into_any_element()
+        });
+        let server_buttons = div()
+            .flex()
+            .flex_none()
+            .gap(px(theme::space::S8))
+            .child(
+                ui::button("settings-generation-check", "Check Connection")
+                    .disabled(self.checking.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.check_server(cx))),
+            )
+            .child(
+                ui::button("settings-generation-save", "Save")
+                    .primary()
+                    .on_click(cx.listener(|this, _, _, cx| this.save_server(cx))),
+            );
+        vec![group(vec![
+            row(
+                "Providers",
+                Some("What reaches your shot models, from your generation file".into()),
+                Some(buttons.into_any_element()),
+                providers,
+            ),
+            text_row("Server name", "What a step names its models by where two servers have one", &self.server_name),
+            text_row("Server URL", "A server that speaks the Kerf generation API", &self.server_url),
+            text_row(
+                "API key",
+                "Kept in your system keychain; KERF_GENERATION_KEY is used when none is kept",
+                &self.server_key,
+            ),
+            row(
+                "Connection",
+                Some("Asks the server which models it reaches, with the key typed or the one kept".into()),
+                Some(server_buttons.into_any_element()),
+                status.into_iter().collect(),
+            ),
+            row(
+                "Models",
+                Some(if connected {
+                    "Video and image models your steps can name".into()
+                } else {
+                    "Your steps' models are listed with a project open".into()
+                }),
+                None,
+                self.models_listed(connected),
+            ),
+            row(
+                "Programs",
+                Some("A program on this computer is set up in the file: {\"<name>\": {\"run\": [\"<program>\", \"{request}\"], \"takes\": {…}}} under providers".into()),
+                None,
+                Vec::new(),
+            ),
+            row(
+                "Built in",
+                Some("Scene cuts, speech, tracking and cut-outs run on this computer, with no setup".into()),
+                None,
+                Vec::new(),
+            ),
+        ])
+        .into_any_element()]
+    }
+
+    /// The models of the last `models` event, each in a line, or why there
+    /// are none.
+    fn models_listed(&self, connected: bool) -> Vec<AnyElement> {
         let heard = match &self.models {
-            Some(Event::Models {
-                file,
-                exists,
-                models,
-                error,
-            }) => Some((file.as_str(), *exists, models.as_slice(), error.as_deref())),
+            Some(Event::Models { models, error, .. }) => {
+                Some((models.as_slice(), error.as_deref()))
+            }
             _ => None,
         };
-        let file = heard
-            .map(|(file, ..)| file)
-            .filter(|file| !file.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(models_file);
-        let exists = heard
-            .map(|(_, exists, ..)| exists)
-            .unwrap_or_else(|| file.is_file());
-        let listed: &[ListedModel] = heard.map_or(&[], |(_, _, models, _)| models);
-        let error = heard.and_then(|(.., error)| error);
-        let mut below: Vec<AnyElement> = Vec::new();
-        let note: Option<(String, bool)> = if let Some(error) = error {
-            Some((format!("The models file does not read: {error}"), true))
-        } else if !listed.is_empty() {
-            None
-        } else if !connected {
-            Some(("Models are read with a project open".to_owned(), false))
-        } else if heard.is_none() {
-            Some(("Reading…".to_owned(), false))
-        } else if exists {
-            Some(("Your models file names no model yet".to_owned(), false))
-        } else {
-            Some((
-                "No model is set up: there is no models file yet".to_owned(),
-                false,
-            ))
+        let listed: &[ListedModel] = heard.map_or(&[], |(models, _)| models);
+        let note = match heard {
+            _ if !connected => None,
+            None => Some(("Reading…".to_owned(), false)),
+            Some((_, Some(error))) => {
+                Some((format!("The generation file does not read: {error}"), true))
+            }
+            Some(([], None)) => Some(("No model is reached yet".to_owned(), false)),
+            Some(_) => None,
         };
+        let mut below: Vec<AnyElement> = Vec::new();
         if let Some((note, failed)) = note {
             below.push(
                 ui::label(
@@ -874,7 +1218,6 @@ impl SettingsView {
             );
         }
         below.extend(listed.iter().map(|model| {
-            let name = model.name.clone();
             div()
                 .flex()
                 .flex_col()
@@ -885,7 +1228,7 @@ impl SettingsView {
                         .flex()
                         .items_baseline()
                         .gap(px(theme::space::S8))
-                        .child(ui::label(name, text::BODY_NAME, theme::ink()))
+                        .child(ui::label(model.name.clone(), text::BODY_NAME, theme::ink()))
                         .child(ui::label(
                             model_summary(model),
                             text::CONTROL,
@@ -910,66 +1253,7 @@ impl SettingsView {
                 )
                 .into_any_element()
         }));
-        below.push(
-            ui::label(
-                format!(
-                    "{}{}",
-                    home_relative(&file),
-                    if exists { "" } else { " (not there yet)" }
-                ),
-                text::MONO_SMALL,
-                theme::ink3(),
-            )
-            .into_any_element(),
-        );
-        let (open_words, _) = models_opener(&file, exists);
-        let shown = file.clone();
-        let buttons = div()
-            .flex()
-            .flex_none()
-            .gap(px(theme::space::S8))
-            .child(
-                // The file itself, in the app that opens it, to be edited;
-                // not there yet, its folder (made), to put it in.
-                ui::button("settings-models-open", open_words).on_click(move |_, _, cx| {
-                    let (_, opened) = models_opener(&shown, shown.is_file());
-                    if !shown.is_file()
-                        && let Err(error) = std::fs::create_dir_all(&opened)
-                    {
-                        log::warn!(
-                            "{}: the folder could not be made: {error}",
-                            opened.display()
-                        );
-                    }
-                    cx.open_with_system(&opened);
-                }),
-            )
-            .child(
-                ui::button("settings-models-reload", "Reload")
-                    .disabled(!connected)
-                    .on_click(cx.listener(|this, _, _, cx| this.reload_models(cx))),
-            );
-        vec![group(vec![
-            row(
-                "Shot models",
-                Some("Video and image models your recipes can name, from your models file".into()),
-                Some(buttons.into_any_element()),
-                below,
-            ),
-            row(
-                "File format",
-                Some("Each entry names a program to run with {request} and, under takes, the size, rate, longest shot and files (guide, first, last, ref) its model accepts".into()),
-                None,
-                Vec::new(),
-            ),
-            row(
-                "Built in",
-                Some("Scene cuts, speech, tracking and cut-outs run on this computer, with no setup".into()),
-                None,
-                Vec::new(),
-            ),
-        ])
-        .into_any_element()]
+        below
     }
 
     // ------------------------------------------------------------ MCP
@@ -1726,7 +2010,7 @@ impl SettingsView {
         let content = match page {
             Page::Account => self.account_page(window, cx),
             Page::Chat => self.chat_page(window, cx),
-            Page::Models => self.models_page(cx),
+            Page::Generation => self.generation_page(window, cx),
             Page::Appearance => self.appearance_page(cx),
             Page::Shortcuts => self.shortcuts_page(cx),
             Page::Mcp => self.mcp_page(window, cx),
@@ -2197,14 +2481,22 @@ pub fn model_summary(model: &ListedModel) -> String {
     }
 }
 
-/// The person's models file: `KERF_MODELS`, else `~/.kerf/models.json`, as
-/// kerf-engine finds it when nothing in the process named another.
-pub fn models_file() -> PathBuf {
-    std::env::var_os("KERF_MODELS")
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| editor_state::prefs::user_dir().map(|folder| folder.join("models.json")))
-        .unwrap_or_else(|| PathBuf::from("models.json"))
+/// What Check Connection says of a server that answered: how many models
+/// it reaches, and their names.
+pub fn connected_words(models: &[kerf_generate::api::NamedModel]) -> String {
+    match models {
+        [] => "Connected: it reaches no model yet".to_owned(),
+        [model] => format!("Connected: it reaches {}", model.name),
+        models => format!(
+            "Connected: it reaches {} models, {}",
+            models.len(),
+            models
+                .iter()
+                .map(|model| model.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 /// The project's `.kerf/mcp.json` to edit, and what loading it came to.
@@ -2243,14 +2535,14 @@ fn write_project_servers(project: &Path, text: &str) -> Result<(), String> {
         .map_err(|error| format!("Could not save the servers: {error}"))
 }
 
-/// Settings ▸ Models' button for the models file at `file`: its words and
-/// what it opens in the system's app for it. The file itself while it is
-/// there ("Open Models File"); else its folder, which the press makes
-/// ("Open Its Folder"), to put the file in.
-pub fn models_opener(file: &Path, exists: bool) -> (&'static str, PathBuf) {
+/// Settings ▸ Generation's button for the generation file at `file`: its
+/// words and what it opens in the system's app for it. The file itself while
+/// it is there ("Open generation.json"); else its folder, which the press
+/// makes ("Open Its Folder"), to put the file in.
+pub fn generation_opener(file: &Path, exists: bool) -> (&'static str, PathBuf) {
     match file.parent().filter(|_| !exists) {
         Some(folder) => ("Open Its Folder", folder.to_path_buf()),
-        None => ("Open Models File", file.to_path_buf()),
+        None => ("Open generation.json", file.to_path_buf()),
     }
 }
 

@@ -9,6 +9,8 @@ members = [
     "crates/foundation/kerf-color",
     "crates/foundation/kerf-text",
     "crates/foundation/kerf-sidecar",
+    "crates/foundation/kerf-secrets",
+    "crates/foundation/kerf-generate-api",
     # render
     "crates/render/kerf-raster",
     "crates/render/kerf-draw",
@@ -43,6 +45,7 @@ members = [
     "crates/surfaces/kerf-bridge",
     "crates/surfaces/kerf-cloud",
     "crates/surfaces/kerf-shots",
+    "crates/surfaces/kerf-generate",
     # tools
     "tools/kerf-layers",
     "tools/kerf-icon",

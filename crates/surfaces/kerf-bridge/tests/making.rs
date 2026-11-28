@@ -8,7 +8,7 @@
 #![cfg(unix)]
 
 use kerf_bridge::Bridge;
-use kerf_engine::recipe::model::Models;
+use kerf_generate::Generator;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -47,13 +47,13 @@ fn gone() -> PathBuf {
 /// The models these tests make with, each a program handed the file it writes: one that
 /// says two things, the second twice, one that waits, as a model's program waits on
 /// its server, and takes its job back when it is asked to end, and one that waits and takes
-/// half a second over ending. Written once for this run of the tests, and the only models
+/// half a second over ending. Written once for this run of the tests, and the only generation
 /// file read.
 fn models() -> &'static Path {
     static FILE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     FILE.get_or_init(|| {
-        let file = std::env::temp_dir().join(format!("kq-models-{}.json", std::process::id()));
-        let models = json!({
+        let file = std::env::temp_dir().join(format!("kq-generation-{}.json", std::process::id()));
+        let models = json!({"providers": {
             "talk": {"run": [
                 "sh", "-c",
                 "echo blocking >&2; echo asking the model >&2; echo asking the model >&2; printf said > \"$1\"",
@@ -69,7 +69,7 @@ fn models() -> &'static Path {
                 "trap 'sleep 0.5; : > \"$2\"; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
                 "linger", "{out}", gone(),
             ]},
-        });
+        }});
         fs::write(&file, models.to_string()).unwrap();
         file
     })
@@ -82,7 +82,7 @@ struct Project(PathBuf);
 impl Project {
     fn new(tag: &str, steps: &[&str]) -> Self {
         // No models a person has set up are read: only these tests' own.
-        Models::use_file(models());
+        Generator::use_file(models());
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

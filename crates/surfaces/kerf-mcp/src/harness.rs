@@ -399,7 +399,7 @@ fn not_pending(id: &str) -> McpError {
 /// [`no_model_said`] says it, where `models` are the ones read; anything else as it is said.
 pub(crate) fn cannot_said(
     cannot: kerf_engine::EngineError,
-    models: Option<&kerf_engine::recipe::model::Models>,
+    models: Option<&kerf_generate::Generator>,
 ) -> String {
     match (&cannot, models) {
         (kerf_engine::EngineError::NoModel { name, .. }, Some(models)) => {
@@ -409,16 +409,36 @@ pub(crate) fn cannot_said(
     }
 }
 
-/// That no model `model` is set up, as an agent is told it: where a person's own models file
-/// is, is theirs to be told and not an agent's, which is told which models there are.
-pub(crate) fn no_model_said(model: &str, models: &kerf_engine::recipe::model::Models) -> String {
-    let have: Vec<&str> = models.names().collect();
+/// That no model `model` is set up, as an agent is told it: where a person's own file is, and
+/// the servers they reach, are theirs to be told and not an agent's, which is told which models
+/// there are, and which providers could not be asked just now.
+pub(crate) fn no_model_said(model: &str, models: &kerf_generate::Generator) -> String {
+    use kerf_engine::recipe::model::Generator as _;
+    let have = models.catalog().names();
+    let unreached: Vec<String> = models
+        .unreached()
+        .iter()
+        .map(|(provider, _)| format!("`{provider}`"))
+        .collect();
     format!(
-        "no model `{model}` is set up: {}; a person sets one up in their own models file",
+        "no model `{model}` is set up: {}{}; a person sets one up in Settings ▸ Generation",
         if have.is_empty() {
             "none is".to_owned()
         } else {
             format!("the models set up are {}", have.join(", "))
+        },
+        if unreached.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", and {} could not be asked which models {} reach just now",
+                unreached.join(", "),
+                if unreached.len() == 1 {
+                    "it can"
+                } else {
+                    "they can"
+                }
+            )
         }
     )
 }

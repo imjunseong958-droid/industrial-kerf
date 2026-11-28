@@ -1662,14 +1662,15 @@ dependencies = [
  "kerf-compose",
  "kerf-core",
  "kerf-engine",
+ "kerf-generate",
  "kerf-lang",
  "kerf-mcp",
  "kerf-model",
  "kerf-paths",
  "kerf-playback",
  "kerf-runtime",
+ "kerf-secrets",
  "kerf-shots",
- "keyring",
  "log",
  "proptest",
  "serde",
@@ -1689,6 +1690,7 @@ dependencies = [
  "kerf-agent",
  "kerf-collab",
  "kerf-engine",
+ "kerf-generate",
  "kerf-interchange",
  "kerf-lang",
  "kerf-mcp",
@@ -1800,6 +1802,7 @@ dependencies = [
  "kerf-color",
  "kerf-compose",
  "kerf-core",
+ "kerf-generate-api",
  "kerf-lang",
  "kerf-model",
  "kerf-paths",
@@ -1830,6 +1833,34 @@ dependencies = [
  "kerf-raster-fx",
  "kerf-text",
  "rayon",
+]
+
+[[package]]
+name = "kerf-generate"
+version = "0.1.7"
+dependencies = [
+ "hex",
+ "kerf-engine",
+ "kerf-generate-api",
+ "kerf-lang",
+ "kerf-model",
+ "kerf-paths",
+ "kerf-secrets",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "ureq",
+]
+
+[[package]]
+name = "kerf-generate-api"
+version = "0.1.7"
+dependencies = [
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1909,6 +1940,7 @@ dependencies = [
  "kerf-color",
  "kerf-compose",
  "kerf-engine",
+ "kerf-generate",
  "kerf-interchange",
  "kerf-lang",
  "kerf-model",
@@ -2023,6 +2055,13 @@ version = "0.1.7"
 dependencies = [
  "kerf-color",
  "serde",
+]
+
+[[package]]
+name = "kerf-secrets"
+version = "0.1.7"
+dependencies = [
+ "keyring",
 ]
 
 [[package]]

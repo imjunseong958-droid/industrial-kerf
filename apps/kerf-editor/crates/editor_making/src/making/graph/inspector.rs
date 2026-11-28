@@ -324,14 +324,14 @@ impl ShotGraph {
             column = column
                 .child(note(
                     format!(
-                        "No model named {} is set up on this computer. A model is a program your own models file names.",
+                        "No model named {} is set up on this computer. A model is reached by a server or a program you set up in Settings ▸ Generation.",
                         model.model
                     ),
                     theme::warn(),
                 ))
                 .child(
                     div().flex().child(
-                        ui::button("graph-models", "Models…")
+                        ui::button("graph-models", "Generation…")
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| this.open_models(window, cx))),
                     ),

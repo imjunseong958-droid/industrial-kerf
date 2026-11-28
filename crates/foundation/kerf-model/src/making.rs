@@ -122,7 +122,8 @@ impl Source {
 /// What a `generate` step asks of a model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ask {
-    /// The model, by the name the person's models file gives it.
+    /// The model, by the name it is set up by (`~/.kerf/generation.json`), or as
+    /// `<provider>/<model>`.
     pub model: String,
     /// What the file should show, in words.
     pub prompt: String,

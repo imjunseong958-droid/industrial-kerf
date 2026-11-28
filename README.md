@@ -54,7 +54,8 @@ for a rendered preview whenever it would show something different.
 A shot a renderer or a video model makes comes in as media with the steps
 that make it written under it in the document; each making is a take, and
 the document says which one the media is. Kerf
-ships no model: one is a program a person names in `~/.kerf/models.json`.
+ships no model: a person sets up what reaches theirs in
+`~/.kerf/generation.json` (see [Generation](#generation)).
 
 Kerf draws with its own renderer, in linear light, with drawing carried from
 [FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache), for renders,
@@ -367,6 +368,43 @@ Responses mode and reasoning effort are selected with `--api-mode responses`
 and `--reasoning-effort low|medium|high|...`. With Anthropic, the default
 model is `claude-opus-5-5`, and `--reasoning-effort` sets its effort
 (`none` and `minimal` ask for `low`).
+
+## Generation
+
+A `generate` step asks a model for a file through a provider the person sets
+up in `~/.kerf/generation.json` (`KERF_GENERATION` names another file), as
+Settings → Generation writes it: a server that speaks the Kerf generation API,
+reached with an API key, or a program on their own computer.
+
+```json
+{ "providers": {
+    "pod":    { "url": "https://example.trycloudflare.com" },
+    "previs": { "run": ["vork", "render", "{ref}", "--out", "{out}"],
+                "takes": { "reads": ["ref"] } } } }
+```
+
+A server says which models it reaches; Kerf keeps that list in its cache
+folder (`KERF_GENERATION_CACHE`, `off` for none) so its models are known while
+it cannot be reached. Its key is kept in the system keychain as
+`generation/<provider>`, else read from `KERF_GENERATION_KEY`; the file holds
+no key. A program is one model by its provider's name, handed the request's
+file (`{request}`) or its parts (`{out}`, `{prompt}`, `{guide}`, …). A model
+is named by its name alone, or as `<provider>/<model>` where two providers
+reach one by the same name. Settings → Generation's Check Connection asks a
+server for its models. An older Kerf's `~/.kerf/models.json` is read no more:
+its entries go under `providers`.
+
+`services/kerf-gen` is Kerf's own server: the standard library's HTTP server,
+one request at a time on one GPU, with keys kept as their SHA-256 alone. It
+needs Python 3.10 or newer, and FFmpeg for its test model:
+
+```bash
+services/kerf-gen/kerf-gen key add --data ~/kerf-gen --name laptop   # prints the key, once
+services/kerf-gen/kerf-gen serve --data ~/kerf-gen --listen 127.0.0.1:8190 --model fake
+```
+
+`--model fake` answers with its guide, or a test picture, and needs no GPU;
+its tests run with `python3 -m unittest discover -s services/kerf-gen -t services/kerf-gen`.
 
 ## MCP
 

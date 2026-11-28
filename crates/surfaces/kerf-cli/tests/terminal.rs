@@ -30,14 +30,14 @@ fn kerfd() -> Option<PathBuf> {
 
 /// Run `kerf` on the project in `directory`, with no terminal to ask at: what it printed,
 /// what it said, and whether it ended well. The models it reads are the project folder's
-/// `models.json`, and none where there is none: never those of whoever runs the tests.
+/// `generation.json`, and none where there is none: never those of whoever runs the tests.
 #[expect(
     clippy::disallowed_methods,
     reason = "a test runs the programs it checks, and git or FFmpeg to set itself up, and waits on each"
 )]
 fn kerf(directory: &Path, kerfd: &Path, words: &[&str]) -> (String, String, bool) {
     let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
-        .env("KERF_MODELS", directory.join("models.json"))
+        .env("KERF_GENERATION", directory.join("generation.json"))
         .arg("--dir")
         .arg(directory)
         .arg("--kerfd")
@@ -196,8 +196,8 @@ fn a_project_changed_by_hand_is_loaded_before_anything_is_made_from_it() {
     // A media with a step under it and another clip, written by hand, as an agent with
     // only file tools would; its model is a program that is not there.
     std::fs::write(
-        directory.join("models.json"),
-        r#"{"absent": {"run": ["no-such-program-of-kerf", "{out}"]}}"#,
+        directory.join("generation.json"),
+        r#"{"providers": {"absent": {"run": ["no-such-program-of-kerf", "{out}"]}}}"#,
     )
     .unwrap();
     let edited = DOCUMENT.replace(
@@ -423,7 +423,7 @@ fn a_url_to_import_is_refused_as_one() {
     let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
         .env("HOME", project.path())
         .env("USERPROFILE", project.path())
-        .env("KERF_MODELS", project.path().join("models.json"))
+        .env("KERF_GENERATION", project.path().join("generation.json"))
         .arg("--dir")
         .arg(project.path())
         .arg("https://example.com/a.mp4")
@@ -437,6 +437,173 @@ fn a_url_to_import_is_refused_as_one() {
             "URLs are not fetched; download https://example.com/a.mp4 first and pass the file's path"
         ),
         "{said}"
+    );
+}
+
+/// Kerf's generation server, `services/kerf-gen`, serving its test model on a free port of this
+/// machine, with a key it takes; stopped when it is dropped. `None` where there is no Python.
+struct GenerationServer {
+    child: std::process::Child,
+    url: String,
+    key: String,
+}
+
+impl GenerationServer {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test starts the server it speaks to, and kills it when it is done with it"
+    )]
+    fn start(data: &Path) -> Option<Self> {
+        use std::io::BufRead;
+        let script =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../services/kerf-gen/kerf-gen");
+        let python = |words: &[&str]| {
+            let mut command = Command::new("python3");
+            command.arg(&script).args(words).arg("--data").arg(data);
+            command
+        };
+        let Ok(added) = python(&["key", "add"]).output() else {
+            eprintln!("skipping: no python3 to run the generation server");
+            return None;
+        };
+        assert!(added.status.success(), "{added:?}");
+        let key = String::from_utf8(added.stdout).unwrap().trim().to_owned();
+        let mut child = python(&["serve", "--listen", "127.0.0.1:0", "--model", "fake"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("the server starts");
+        let mut first = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut first)
+            .unwrap();
+        let url = first
+            .trim()
+            .strip_prefix("listening on ")
+            .unwrap_or_else(|| panic!("the server said {first:?}"))
+            .to_owned();
+        Some(Self { child, url, key })
+    }
+}
+
+impl Drop for GenerationServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// A shot made by a server that speaks the Kerf generation API: the guide Kerf draws is sent
+/// to it, its model answers with it, and the take is what it sent back. The key is the one the
+/// server took; another is refused, and makes no take. Once the server is gone, its models are
+/// still known, as Kerf's cache kept them.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a test runs the programs it checks, and FFmpeg to read what they made, and waits on each"
+)]
+fn a_shot_is_made_by_a_generation_server() {
+    let Some(kerfd) = kerfd() else {
+        return;
+    };
+    let folder = tempfile::tempdir().unwrap();
+    let directory = folder.path();
+    let Some(server) = GenerationServer::start(&folder.path().join("server")) else {
+        return;
+    };
+    std::fs::create_dir(directory.join("shots")).unwrap();
+    std::fs::write(
+        directory.join("project.kerf"),
+        "kerf 1
+project name=\"generated\"
+media m1 path=\"shots/open.mp4\" rate=12 dur=24f video=160x90
+  render s1 {guide.mp4} size=160x90 rate=12
+  generate model=fake prompt=\"a red field\" guide={guide.mp4} seconds=1
+sequence s1 rate=12 size=160x90
+  track V1 video
+    clip c1 gen=solid@1 at=0f dur=12f
+      set color=#ff0000
+",
+    )
+    .unwrap();
+    std::fs::write(
+        directory.join("generation.json"),
+        format!(r#"{{"providers": {{"pod": {{"url": "{}"}}}}}}"#, server.url),
+    )
+    .unwrap();
+    let runtime = RuntimeClient::connect_or_spawn(directory, Some(&kerfd)).unwrap();
+    let _held = runtime.hold();
+    // The key from the environment alone, and a cache of the test's own: no keychain, and no
+    // cache of whoever runs the tests.
+    let kerf_make = |key: &str, yes: bool| {
+        let output = Command::new(env!("CARGO_BIN_EXE_kerf"))
+            .env("KERF_GENERATION", directory.join("generation.json"))
+            .env("KERF_GENERATION_KEY", key)
+            .env("KERF_GENERATION_CACHE", directory.join("cache"))
+            .env("KERF_SECRETS", "off")
+            .arg("--dir")
+            .arg(directory)
+            .arg("--kerfd")
+            .arg(&kerfd)
+            .args(["make", "m1"])
+            .args(yes.then_some("--yes"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("kerf runs");
+        (
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            output.status.success(),
+        )
+    };
+
+    let make = |key: &str| kerf_make(key, true);
+    let (_, said, ok) = make("kg_not-the-servers-key");
+    assert!(!ok);
+    assert!(said.contains("did not take the key"), "{said}");
+    assert!(!directory.join("shots/open.takes/001.mp4").exists());
+
+    let (shown, said, ok) = make(&server.key);
+    assert!(ok, "{shown}\n{said}");
+    assert!(
+        shown.contains(&format!("{} is handed ", server.url))
+            && shown.contains("asks model `fake` for prompt \"a red field\""),
+        "{shown}"
+    );
+    // What the server sent back is the guide Kerf drew, at the model's size: red, not the test
+    // picture it makes when it has none.
+    let take = directory.join("shots/open.takes/001.mp4");
+    let pixel = Command::new(kerf_engine::process::ffmpeg::resolve_ffmpeg_bin())
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(&take)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            "scale=1:1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ])
+        .output()
+        .expect("ffmpeg runs");
+    assert!(pixel.status.success(), "{pixel:?}");
+    assert!(
+        pixel.stdout[0] > 200 && pixel.stdout[1] < 60 && pixel.stdout[2] < 60,
+        "{:?}",
+        pixel.stdout
+    );
+    let request =
+        std::fs::read_to_string(directory.join("shots/open.takes/001.work/request.json")).unwrap();
+    assert!(request.contains("\"model\": \"fake\""), "{request}");
+
+    let key = server.key.clone();
+    drop(server);
+    let (shown, said, _) = kerf_make(&key, false);
+    assert!(
+        shown.contains("asks model `fake` for prompt"),
+        "{shown}\n{said}"
     );
 }
 
@@ -477,7 +644,7 @@ fn a_media_is_imported_from_a_terminal_with_no_api_key() {
             .env_remove("OPENAI_API_KEY")
             .env("HOME", directory)
             .env("USERPROFILE", directory)
-            .env("KERF_MODELS", directory.join("models.json"))
+            .env("KERF_GENERATION", directory.join("generation.json"))
             .current_dir(downloads.path())
             .arg("--terminal")
             .arg("--dir")

@@ -7,9 +7,8 @@ publish.workspace = true
 description = "Nonblocking editor bridge: commands in, events out, over kerfd and Rust workers"
 
 [dependencies]
-# API keys in the OS's own store: macOS Keychain, Windows Credential Manager,
-# and the Secret Service on Linux, reached over D-Bus in Rust (no libdbus).
-keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+# API keys in the OS's own store, the one kerf and kerf-mcp read too.
+kerf-secrets = { path = "../../foundation/kerf-secrets" }
 kerf-core = { path = "../../engine/kerf-core" }
 kerf-color = { path = "../../foundation/kerf-color" }
 kerf-compose = { path = "../../engine/kerf-compose" }
@@ -24,6 +23,8 @@ kerf-collab = { path = "../../edit/kerf-collab" }
 kerf-commands = { path = "../../surfaces/kerf-commands" }
 kerf-mcp = { path = "../../surfaces/kerf-mcp" }
 kerf-engine = { path = "../../engine/kerf-engine" }
+# What reaches the person's models: the providers of their generation.json.
+kerf-generate = { path = "../../surfaces/kerf-generate" }
 # A shot's graph, read and changed as an agent's tools read and change it.
 kerf-shots = { path = "../../surfaces/kerf-shots" }
 # The editor waits on the bridge for events and frames (`Wake`) rather than

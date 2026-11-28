@@ -22,7 +22,7 @@ impl KerfMcpRouter {
     /// `look` with `graph`: a media's recipe as the graph the editor shows of it, the same
     /// reading (`kerf_shots::graph`), with how each thing a person does there is done here.
     pub(super) fn shot_graph(&self, project: &Project, media: &str) -> Result<Value, McpError> {
-        let (models, models_error) = match kerf_engine::recipe::model::Models::load() {
+        let (models, models_error) = match kerf_generate::Generator::load() {
             Ok(models) => (models, None),
             Err(error) => (Default::default(), Some(error.to_string())),
         };

@@ -1,7 +1,10 @@
 //! A `render` step has Kerf draw a sequence of the project, which is how a guide blocked
 //! with Kerf's own clips reaches the steps after it.
 
-use kerf_engine::recipe::{self, model::Models};
+use crate::models::none;
+#[cfg(unix)]
+use crate::models::{answers_with_its_guide, models};
+use kerf_engine::recipe;
 use kerf_engine::CancellationToken;
 use kerf_lang::parse_document;
 use kerf_model::Catalog;
@@ -23,7 +26,7 @@ fn a_render_step_draws_a_sequence_of_the_project_as_a_take() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let models = Models::default();
+    let models = none();
     let plan = recipe::plan(&project, directory, "m1", &models).expect("a plan");
     assert_eq!(
         plan.steps,
@@ -65,12 +68,7 @@ fn a_guide_is_drawn_from_a_sequence_and_handed_to_a_model_by_steps_in_the_docume
     let folder = tempfile::tempdir().expect("a folder");
     let directory = folder.path();
     // A model that answers with its guide: what it was handed is the take.
-    std::fs::write(
-        directory.join("models.json"),
-        r#"{"shot": {"run": ["sh", "-c", "cp \"$(sed -n 's/.*\"guide\": \"\\(.*\\)\".*/\\1/p' \"$1\")\" \"$(sed -n 's/.*\"out\": \"\\(.*\\)\".*/\\1/p' \"$1\")\"", "shot", "{request}"]}}"#,
-    )
-    .expect("a models file");
-    let models = Models::read(&directory.join("models.json")).expect("models");
+    let models = models(&[("shot", None)], answers_with_its_guide);
     let document = "kerf 1\nproject name=\"shots\"\n\
          media depth path=\"shots/depth.mp4\" rate=12 dur=6f video=160x90\n\
          \x20 render s2 {guide.mp4} pass=depth size=160x90 rate=12\n\

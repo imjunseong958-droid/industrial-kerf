@@ -1,0 +1,15 @@
+[package]
+name = "kerf-secrets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "API keys and tokens in the operating system's own store, one for the editor, kerf and kerf-mcp alike"
+
+[dependencies]
+# API keys in the OS's own store: macOS Keychain, Windows Credential Manager,
+# and the Secret Service on Linux, reached over D-Bus in Rust (no libdbus).
+keyring = { version = "3.6", default-features = false, features = ["apple-native", "windows-native", "async-secret-service", "async-io", "crypto-rust"] }
+
+[lints]
+workspace = true

@@ -150,9 +150,9 @@ pub enum Event {
     },
     /// How one of an `agent_versions` request's agents is going.
     AgentVersion(AgentVersion),
-    /// The person's models a recipe's `generate` can name, from their own models file
-    /// (`file`, and whether it `exists`), each as `look` lists it; `error` when the file
-    /// does not read.
+    /// The person's models a recipe's `generate` can name, from the providers of their own
+    /// generation file (`file`, and whether it `exists`), each as `look` lists it; `error`
+    /// when the file does not read.
     Models {
         #[serde(default)]
         file: String,
@@ -1286,7 +1286,7 @@ pub struct MediaMakePlan {
 /// How a media is made: the graph kerf-shots' `graph::shown` lays out ([`graph::Graph`]:
 /// `media`, `recipe`, `document` when its steps are the document's own, `name`, `text`,
 /// `nodes`, `edges`, `error` and `cannot` when
-/// there is one, `notes`), with why the person's models file does not read where it does
+/// there is one, `notes`), with why the person's generation file does not read where it does
 /// not. After `recipe_edit` it has `edited: true`, and `added`, the line of the step added,
 /// when one was.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

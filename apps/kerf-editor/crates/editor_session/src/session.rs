@@ -44,10 +44,24 @@ pub use editor_ui::theme::motion::SCRUB_SETTLE;
 /// What the system's keychain answered for each key, for every window of
 /// this editor: asked once, written when a key is saved in any window, and
 /// asked again when Settings opens (a key changed outside Kerf).
-static KEYCHAIN: Mutex<BTreeMap<&'static str, Option<String>>> = Mutex::new(BTreeMap::new());
+static KEYCHAIN: Mutex<BTreeMap<String, Option<String>>> = Mutex::new(BTreeMap::new());
 
-fn keychain() -> MutexGuard<'static, BTreeMap<&'static str, Option<String>>> {
+fn keychain() -> MutexGuard<'static, BTreeMap<String, Option<String>>> {
     KEYCHAIN.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// What a generation server's key is kept under, before its provider's name
+/// (`generation/pod`), as [`kerf_generate::secret_name`] names it.
+const GENERATION_KEYS: &str = "generation/";
+
+/// Hands what asks a generation server the keys `prefs` keeps for one,
+/// where the keychain could not keep them: it reads the keychain alone.
+fn hand_generation_keys(prefs: &Prefs) {
+    for (name, key) in &prefs.kept_keys {
+        if let Some(provider) = name.strip_prefix(GENERATION_KEYS) {
+            kerf_generate::give_key(provider, Some(key));
+        }
+    }
 }
 
 /// Where a key was kept.
@@ -465,6 +479,7 @@ impl Session {
             if let Some(wake) = wake.clone() {
                 artwork.wake_with(move || wake.ring());
             }
+            hand_generation_keys(&prefs);
             let mut session = Self {
                 project,
                 bridge,
@@ -2055,21 +2070,28 @@ impl Session {
     /// environment variable. The keychain is asked once for every window;
     /// the settings are this window's as last refreshed.
     pub fn api_key(&self, provider: Provider) -> Option<String> {
-        let stored = provider.secret_name().and_then(|name| {
-            let in_keychain = keychain()
-                .entry(name)
-                .or_insert_with(|| {
-                    kerf_bridge::secret(&json!({"op": "get", "name": name}))["value"]
-                        .as_str()
-                        .map(str::to_owned)
-                })
-                .clone();
-            in_keychain.or_else(|| self.prefs.kept_keys.get(name).cloned())
-        });
-        stored
-            .filter(|key| !key.is_empty())
+        provider
+            .secret_name()
+            .and_then(|name| self.kept_secret(name))
             .or_else(|| provider.key_env().and_then(|name| std::env::var(name).ok()))
             .filter(|key| !key.trim().is_empty())
+    }
+
+    /// The secret kept as `name`: the keychain's, else the one kept in the
+    /// editor's settings where the keychain could not be reached. The
+    /// keychain is asked once for every window.
+    pub fn kept_secret(&self, name: &str) -> Option<String> {
+        let in_keychain = keychain()
+            .entry(name.to_owned())
+            .or_insert_with(|| {
+                kerf_bridge::secret(&json!({"op": "get", "name": name}))["value"]
+                    .as_str()
+                    .map(str::to_owned)
+            })
+            .clone();
+        in_keychain
+            .or_else(|| self.prefs.kept_keys.get(name).cloned())
+            .filter(|key| !key.is_empty())
     }
 
     /// Keeps `key` for `provider` (empty forgets it): in the system's
@@ -2077,9 +2099,17 @@ impl Session {
     /// Service, `KERF_SECRETS=off`), in the editor's settings file, as the
     /// answer says. Err only when it could be kept nowhere.
     pub fn set_api_key(&mut self, provider: Provider, key: &str) -> Result<KeyKept, String> {
-        let Some(name) = provider.secret_name() else {
-            return Ok(KeyKept::Keychain);
-        };
+        match provider.secret_name() {
+            Some(name) => self.keep_secret(name, key),
+            None => Ok(KeyKept::Keychain),
+        }
+    }
+
+    /// Keeps `key` as `name` (empty forgets it), as [`Session::set_api_key`]
+    /// keeps a chat's: in the system's keychain, else in the editor's
+    /// settings file. A generation server's key kept in the file is handed
+    /// to what asks the server, which reads the keychain alone.
+    pub fn keep_secret(&mut self, name: &str, key: &str) -> Result<KeyKept, String> {
         let key = key.trim();
         let request = if key.is_empty() {
             json!({"op": "delete", "name": name})
@@ -2109,7 +2139,11 @@ impl Session {
         };
         // Every window's next request takes it.
         let in_keychain = (kept == KeyKept::Keychain && !key.is_empty()).then(|| key.to_owned());
-        keychain().insert(name, in_keychain);
+        keychain().insert(name.to_owned(), in_keychain);
+        if let Some(provider) = name.strip_prefix(GENERATION_KEYS) {
+            let in_file = (kept == KeyKept::SettingsFile).then_some(key);
+            kerf_generate::give_key(provider, in_file);
+        }
         Ok(kept)
     }
 

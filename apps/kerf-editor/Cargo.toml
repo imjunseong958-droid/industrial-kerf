@@ -45,6 +45,9 @@ kerf-bridge = { path = "../../crates/surfaces/kerf-bridge" }
 # Where a clip's picture lands, and the curve it moves along: the sums the
 # compositor draws by, which the picture's overlays answer from.
 kerf-geom = { path = "../../crates/foundation/kerf-geom" }
+# What reaches the person's models (Settings ▸ Generation): their generation.json,
+# and asking a server which models it reaches.
+kerf-generate = { path = "../../crates/surfaces/kerf-generate" }
 kerf-model = { path = "../../crates/foundation/kerf-model" }
 kerf-paths = { path = "../../crates/foundation/kerf-paths" }
 # FFmpeg run for a picture is a sidecar, stopped with what it started.

@@ -537,14 +537,14 @@ impl ShotGraph {
         cx.notify();
     }
 
-    /// Settings, at its Models, over the graph.
+    /// Settings, at its Generation, over the graph.
     fn open_models(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.commit_fields(cx);
         let session = self.session.clone();
         let settings = cx.new(|cx| {
             editor_launcher::settings::SettingsView::new_at(
                 session,
-                editor_launcher::settings::Page::Models,
+                editor_launcher::settings::Page::Generation,
                 window,
                 cx,
             )

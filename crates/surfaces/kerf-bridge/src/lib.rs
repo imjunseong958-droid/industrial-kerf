@@ -273,20 +273,18 @@ fn key() -> String {
     )
 }
 
-/// The models event: where the person's models file is, whether it is
-/// there, and each model it names as `look` lists them. Nothing is run.
+/// The models event: where the person's generation file is, whether it is
+/// there, and each model its providers reach as `look` lists them. Nothing is
+/// run.
 fn models_event() -> Event {
-    use kerf_engine::recipe::model::Models;
-    let file = Models::default_file();
-    models_value(Models::read(&file), &file)
+    let file = kerf_generate::Generator::default_file();
+    models_value(kerf_generate::Generator::read(&file), &file)
 }
 
-fn models_value(
-    read: kerf_engine::error::Result<kerf_engine::recipe::model::Models>,
-    file: &Path,
-) -> Event {
+fn models_value(read: kerf_engine::error::Result<kerf_generate::Generator>, file: &Path) -> Event {
+    use kerf_engine::recipe::model::Generator as _;
     let (models, error) = match read {
-        Ok(models) => (kerf_mcp::harness::models_listed(&models), None),
+        Ok(models) => (kerf_mcp::harness::models_listed(models.catalog()), None),
         // A file that does not read: said, and what to mend.
         Err(error) => (Vec::new(), Some(error.to_string())),
     };

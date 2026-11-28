@@ -1,5 +1,5 @@
 #[cfg(unix)]
-use super::model::Models;
+use super::model::{Catalog, CatalogModel, Generation, Generator};
 use super::*;
 #[cfg(unix)]
 use kerf_model::Project;
@@ -35,12 +35,75 @@ fn shot(path: &str, steps: &str) -> Project {
     ))
 }
 
-/// A models file in `folder` naming `models`, read.
+/// A generator of the models `names`, each of whose files `make` writes.
 #[cfg(unix)]
-fn models(folder: &Path, models: &str) -> Models {
-    let file = folder.join("models.json");
-    std::fs::write(&file, models).unwrap();
-    Models::read(&file).unwrap()
+struct Closure<F> {
+    catalog: Catalog,
+    make: F,
+}
+
+#[cfg(unix)]
+impl<F: Fn(&Generation) -> Result<()>> Closure<F> {
+    fn new(names: &[&str], make: F) -> Self {
+        let models = names
+            .iter()
+            .map(|name| CatalogModel {
+                provider: (*name).to_owned(),
+                name: (*name).to_owned(),
+                spec: None,
+                by: "a test".to_owned(),
+            })
+            .collect();
+        Self {
+            catalog: Catalog {
+                models,
+                ..Catalog::default()
+            },
+            make,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl<F: Fn(&Generation) -> Result<()>> Generator for Closure<F> {
+    fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    fn generate(&self, generation: &Generation, _: &mut dyn FnMut(&str)) -> Result<()> {
+        (self.make)(generation)
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_model_is_found_by_its_name_or_with_its_providers_where_two_have_it() {
+    let model = |provider: &str, name: &str| CatalogModel {
+        provider: provider.to_owned(),
+        name: name.to_owned(),
+        spec: None,
+        by: provider.to_owned(),
+    };
+    let catalog = Catalog {
+        models: vec![
+            model("pod", "wan-vace"),
+            model("farm", "wan-vace"),
+            model("pod", "still"),
+        ],
+        ..Catalog::default()
+    };
+    assert_eq!(catalog.find("still").unwrap().provider, "pod");
+    assert_eq!(catalog.find("farm/wan-vace").unwrap().provider, "farm");
+    let shared = catalog.find("wan-vace").unwrap_err().to_string();
+    assert!(
+        shared.contains("`pod/wan-vace` or `farm/wan-vace`"),
+        "{shared}"
+    );
+    assert!(matches!(
+        catalog.find("dawn"),
+        Err(EngineError::NoModel { name, .. }) if name == "dawn"
+    ));
+    assert_eq!(catalog.names(), ["pod/wan-vace", "farm/wan-vace", "still"]);
 }
 
 #[test]
@@ -68,15 +131,19 @@ fn each_making_is_a_take_and_a_failed_one_leaves_none() {
     let directory = folder.path();
     std::fs::create_dir(directory.join("shots")).unwrap();
     std::fs::write(directory.join("shots/scene.txt"), "first").unwrap();
-    // Programs the person names, each handed where its file goes: one that copies the
-    // file it is handed there, and ones that fail, write nothing, or cannot start.
-    let some = models(
-        directory,
-        r#"{"copy": {"run": ["cp", "{ref}", "{out}"]},
-            "fail": {"run": ["false", "{out}"]},
-            "idle": {"run": ["true", "{out}"]},
-            "absent": {"run": ["no-such-program-of-kerf", "{out}"]}}"#,
-    );
+    // Models of the person's: one that copies the file it is handed to where its file goes,
+    // and ones that fail, or end well and write nothing.
+    let some = Closure::new(&["copy", "fail", "idle"], |generation: &Generation| {
+        let request = generation.request;
+        match request.model.as_str() {
+            "copy" => {
+                std::fs::copy(&request.references[0], &request.out)?;
+                Ok(())
+            }
+            "fail" => Err(EngineError::msg("the model failed")),
+            _ => Ok(()),
+        }
+    });
     let token = CancellationToken::new();
     let run = |project: &Project| {
         let plan = plan(project, directory, "m1", &some)?;
@@ -129,14 +196,15 @@ fn each_making_is_a_take_and_a_failed_one_leaves_none() {
         .to_string();
     assert!(absent.contains("no take 5; it has 1, 2"), "{absent}");
 
-    // A making that fails, writes nothing, or cannot start leaves no take and nothing of one.
+    // A making that fails, writes nothing, or asks a model no one has set up leaves no take and
+    // nothing of one.
     for (steps, why) in [
-        ("generate model=fail", "false failed"),
+        ("generate model=fail", "the model failed"),
         ("generate model=idle", "wrote nothing"),
-        ("generate model=absent", "could not start"),
+        ("generate model=absent", "no model `absent` is set up"),
         (
             "generate model=copy ref=shots/scene.txt out={guide.txt}\ngenerate model=fail",
-            "false failed",
+            "the model failed",
         ),
     ] {
         let failed = run(&shot(&first.stored, steps)).unwrap_err().to_string();
@@ -148,60 +216,6 @@ fn each_making_is_a_take_and_a_failed_one_leaves_none() {
         .filter(|name| !name.starts_with("001") && !name.starts_with("002"))
         .collect();
     assert!(left.is_empty(), "{left:?}");
-}
-
-#[cfg(unix)]
-#[test]
-fn a_cancelled_making_lets_its_model_take_back_what_it_asked_for() {
-    let folder = tempfile::tempdir().unwrap();
-    let directory = folder.path();
-    std::fs::create_dir_all(directory.join("shots")).unwrap();
-    // A model that waits on a server, and when asked to end says so and leaves a mark, as a
-    // program that takes its job back does.
-    let mark = directory.join("taken-back");
-    let script = format!(
-        "trap 'echo took the job back >&2; : > \"{}\"; exit 1' TERM; echo waiting >&2; while :; do sleep 0.05; done",
-        mark.display()
-    );
-    let some = models(
-        directory,
-        &serde_json::json!({"slow": {"run": ["sh", "-c", script, "slow", "{request}"]}})
-            .to_string(),
-    );
-    let project = shot(
-        "shots/open.mp4",
-        "generate model=slow prompt=\"a boat leaves\"",
-    );
-    let planned = plan(&project, directory, "m1", &some).unwrap();
-    let token = CancellationToken::new();
-    let (cancel, said) = (token.clone(), std::sync::Mutex::new(Vec::new()));
-    let started = std::time::Instant::now();
-    let cancelled = make(&project, directory, &planned, &some, &token, |line| {
-        // Cancelled once the model is known to be waiting.
-        if line == "waiting" {
-            cancel.cancel();
-        }
-        said.lock().unwrap().push(line.to_owned());
-    })
-    .unwrap_err();
-    assert!(matches!(cancelled, EngineError::Cancelled), "{cancelled}");
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(4),
-        "{:?}",
-        started.elapsed()
-    );
-    // It was asked, not killed: it did what it does on the way out, and was heard.
-    assert!(mark.exists());
-    assert!(
-        said.lock()
-            .unwrap()
-            .iter()
-            .any(|line| line == "took the job back"),
-        "{said:?}"
-    );
-    // No take, and nothing of one, is left.
-    assert!(!directory.join("shots/open.takes/001.work").exists());
-    assert!(!directory.join("shots/open.takes/.making-001.mp4").exists());
 }
 
 #[test]

@@ -16,7 +16,7 @@ pub(crate) fn run_make(
     let state = runtime.get_state().map_err(runtime_error)?;
     in_step(&state)?;
     let project = kerf_runtime::parse_document(&state.document).map_err(runtime_error)?;
-    let models = kerf_engine::recipe::model::Models::load().map_err(|error| anyhow!(error))?;
+    let models = kerf_generate::Generator::load().map_err(|error| anyhow!(error))?;
     // One making is the recipe as it is written. Several are rolls of it, each with its seeds
     // one on from the last, from the first roll no take of this recipe has had.
     let first = if rolls > 1 {

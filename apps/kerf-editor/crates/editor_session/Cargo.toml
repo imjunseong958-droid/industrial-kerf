@@ -16,6 +16,7 @@ test = false
 editor_state.workspace = true
 editor_ui.workspace = true
 kerf-bridge.workspace = true
+kerf-generate.workspace = true
 kerf-sidecar.workspace = true
 gpui.workspace = true
 image.workspace = true

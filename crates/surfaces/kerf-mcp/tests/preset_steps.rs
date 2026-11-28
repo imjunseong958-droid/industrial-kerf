@@ -7,11 +7,11 @@
 //! and plate are made of the footage the slot is bound to, and a shot from a
 //! guide, whose scene comes with the preset.
 //!
-//! In a file of its own: it reads a models file of its own for the whole
-//! process ([`Models::use_file`]), which the other tests' process must not see.
+//! In a file of its own: it reads a generation file of its own for the whole
+//! process ([`Generator::use_file`]), which the other tests' process must not see.
 #![cfg(unix)]
 
-use kerf_engine::recipe::model::Models;
+use kerf_generate::Generator;
 use kerf_mcp::permissions::{Mode, Permissions};
 use kerf_mcp::KerfMcpRouter;
 use kerf_model::{Catalog, Content, Project, Time};
@@ -182,17 +182,17 @@ fn a_preset_carries_how_its_media_are_made_and_they_are_made_where_it_is_applied
     );
     std::fs::write(source.join("project.kerf"), SOURCE).unwrap();
     std::fs::write(elsewhere.join("project.kerf"), ELSEWHERE).unwrap();
-    let models = folders.path().join("models.json");
+    let models = folders.path().join("generation.json");
     std::fs::write(
         &models,
         format!(
-            r#"{{"matte": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a matte of the thing the prompt names", "reads": ["guide"]}}}},
+            r#"{{"providers": {{"matte": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a matte of the thing the prompt names", "reads": ["guide"]}}}},
                 "plate": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "the guide with what guide_mask is white on taken out", "reads": ["guide", "guide_mask"]}}}},
-                "shot": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a shot that follows a depth guide", "size": [160, 90], "rate": 12, "seconds": 5, "reads": ["guide"]}}}}}}"#
+                "shot": {{"run": {ANSWERS_ITS_GUIDE}, "takes": {{"about": "a shot that follows a depth guide", "size": [160, 90], "rate": 12, "seconds": 5, "reads": ["guide"]}}}}}}}}"#
         ),
     )
     .unwrap();
-    Models::use_file(&models);
+    Generator::use_file(&models);
 
     // ---- Saved where the pattern was made: each a preset of its own.
     let author = router(&source);

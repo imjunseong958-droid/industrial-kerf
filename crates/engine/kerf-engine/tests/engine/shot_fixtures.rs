@@ -3,7 +3,7 @@
 //! making would ask of them: they read, each step is written as Kerf writes it, and a
 //! plan of every media can be made, with nothing run.
 
-use kerf_engine::recipe::{self, model::Models};
+use kerf_engine::recipe;
 use kerf_lang::{parse_document, print_step};
 use kerf_model::{Catalog, Project};
 use std::path::{Path, PathBuf};
@@ -38,22 +38,17 @@ fn read(name: &str) -> Project {
 }
 
 /// The models the fixtures name, none of which is run here.
-fn models(folder: &Path) -> Models {
-    let file = folder.join("models.json");
-    let named = [
+fn models() -> impl kerf_engine::recipe::model::Generator {
+    crate::models::not_run(&[
         "shot", "depth", "cameras", "matte", "shown", "into", "plate", "directed", "led", "still",
-    ]
-    .map(|name| format!(r#""{name}": {{"run": ["no-such-program", "{{request}}"]}}"#))
-    .join(", ");
-    std::fs::write(&file, format!("{{{named}}}")).expect("a models file");
-    Models::read(&file).expect("models")
+    ])
 }
 
 #[test]
 fn the_car_on_a_road_is_made_by_steps_in_its_document() {
     let project = read("car");
     let folder = tempfile::tempdir().expect("a folder");
-    let models = models(folder.path());
+    let models = models();
     for media in &project.media {
         assert!(
             !media.steps.is_empty() && recipe::uncarried(media).is_none(),
@@ -102,7 +97,7 @@ fn a_walk_in_layers_is_made_by_steps_in_its_document() {
     let directory = folder.path();
     std::fs::create_dir(directory.join("footage")).expect("a folder");
     std::fs::write(directory.join("footage/walk.mp4"), "footage").expect("a file");
-    let models = models(directory);
+    let models = models();
     let made: Vec<&str> = project
         .media
         .iter()
@@ -172,7 +167,7 @@ fn scenes_of_solids_are_made_by_steps_in_their_document() {
         std::fs::create_dir_all(file.parent().expect("a folder")).expect("a folder");
         std::fs::write(file, "a take").expect("a file");
     }
-    let models = models(directory);
+    let models = models();
     let made: Vec<&str> = project
         .media
         .iter()

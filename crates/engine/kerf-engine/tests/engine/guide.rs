@@ -2,8 +2,9 @@
 //! file made is inspected. The model is `cp`, so these run on Unix only.
 #![cfg(unix)]
 
+use crate::models::{answers_with_its_guide, models, none};
 use kerf_engine::process::ffmpeg::resolve_ffmpeg_bin;
-use kerf_engine::recipe::model::Models;
+use kerf_engine::recipe::model::ModelSpec;
 use kerf_engine::recipe::{make, plan};
 use kerf_engine::CancellationToken;
 use kerf_lang::parse_document;
@@ -55,13 +56,9 @@ fn pixel(file: &Path, x: u32, y: u32) -> [u8; 3] {
     [output.stdout[0], output.stdout[1], output.stdout[2]]
 }
 
-/// The models file of a project in `directory` that names one program: `copy`, which
-/// copies the guide it is handed to where its file goes.
-fn copy(directory: &Path) -> Models {
-    let file = directory.join("models.json");
-    std::fs::write(&file, r#"{"copy": {"run": ["cp", "{guide}", "{out}"]}}"#)
-        .expect("a models file");
-    Models::read(&file).expect("models")
+/// One model, `copy`, which answers with the guide it is handed.
+fn copy() -> impl kerf_engine::recipe::model::Generator {
+    models(&[("copy", None)], answers_with_its_guide)
 }
 
 #[test]
@@ -90,7 +87,7 @@ fn a_guide_is_the_size_and_rate_its_step_names_and_has_no_sound() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let copy = copy(directory);
+    let copy = copy();
     let planned = plan(&project, directory, "m1", &copy).expect("a plan");
     let mut said = Vec::new();
     let made = make(
@@ -162,7 +159,7 @@ fn a_pass_of_a_guide_is_a_file_of_its_own() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let copy = copy(directory);
+    let copy = copy();
     let planned = plan(&project, directory, "m1", &copy).expect("a plan");
     assert!(
         planned.steps[0].starts_with("Kerf renders the ids of sequence s2 to "),
@@ -243,7 +240,7 @@ fn a_file_render_steps_write_twice_is_what_the_last_made() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let copy = copy(directory);
+    let copy = copy();
     let planned = plan(&project, directory, "m1", &copy).expect("a plan");
     make(
         &project,
@@ -343,7 +340,7 @@ fn a_pass_is_written_with_no_loss_and_each_pixel_of_an_ids_pass_is_one_clips() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let copy = copy(directory);
+    let copy = copy();
     let planned = plan(&project, directory, "m1", &copy).expect("a plan");
     make(
         &project,
@@ -514,7 +511,7 @@ fn a_guide_of_only_what_a_model_films_is_held_to_those_clips_alone() {
     let only = " only=filmed";
     let near = |a: [u8; 3], b: [u8; 3]| a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 8);
     let project = scene_with_a_sign("#ff0000", "#0000ff", only, "shots/guide.mp4");
-    let models = Models::default();
+    let models = none();
     let planned = plan(&project, directory, "m1", &models).expect("a plan");
     assert!(
         planned.steps[0].contains("what a model films of sequence s2"),
@@ -649,7 +646,7 @@ fn a_motion_guide_says_how_far_things_go_in_a_frame_of_its_file() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    let models = Models::default();
+    let models = none();
     let planned = plan(&project, directory, "m1", &models).expect("a plan");
     assert!(
         planned.steps[0].contains("the motion of sequence s2"),
@@ -743,19 +740,15 @@ fn what_clips_of_a_guide_say_they_are_goes_to_a_model_with_where_each_is() {
     )
     .unwrap_or_else(|errors| panic!("{errors:?}"))
     .project;
-    // A model that copies its guide to its file, and says what of a line it reads.
-    let models = |reads: &str| {
-        let file = directory.join("models.json");
-        std::fs::write(
-            &file,
-            format!(
-                r#"{{"shot": {{"run": ["cp", "{{guide}}", "{{out}}"], "takes": {{"reads": {reads}}}}}}}"#
-            ),
-        )
-        .expect("a models file");
-        Models::read(&file).expect("models")
+    // A model that answers with its guide, and says what of a line it reads.
+    let reading = |reads: &[&str]| {
+        let spec = ModelSpec {
+            reads: Some(reads.iter().map(|read| (*read).to_owned()).collect()),
+            ..ModelSpec::default()
+        };
+        models(&[("shot", Some(spec))], answers_with_its_guide)
     };
-    let hears = models(r#"["guide", "regions"]"#);
+    let hears = reading(&["guide", "regions"]);
     let planned = plan(&project, directory, "m1", &hears).expect("a plan");
     assert!(planned.notes.is_empty(), "{:?}", planned.notes);
     make(
@@ -801,7 +794,7 @@ fn what_clips_of_a_guide_say_they_are_goes_to_a_model_with_where_each_is() {
     }
 
     // A model that reads no such thing is handed none, and the plan says it is not told.
-    let deaf = models(r#"["guide"]"#);
+    let deaf = reading(&["guide"]);
     let planned = plan(&project, directory, "m1", &deaf).expect("a plan");
     assert!(
         planned
