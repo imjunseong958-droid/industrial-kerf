@@ -90,6 +90,7 @@ pub struct Gpu {
     planes_codes: wgpu::ComputePipeline,
     by_weight: wgpu::ComputePipeline,
     plus: wgpu::ComputePipeline,
+    smear: wgpu::ComputePipeline,
     finish_layout: wgpu::BindGroupLayout,
     finish: wgpu::ComputePipeline,
     finish16_layout: wgpu::BindGroupLayout,
@@ -408,6 +409,28 @@ fn picture_kernels(device: &wgpu::Device) -> (wgpu::BindGroupLayout, [wgpu::Comp
     )
 }
 
+/// The kernel of `smear.wgsl`, a picture added up over the places it has while a shutter is open,
+/// which takes what the kernels of `picture.wgsl` take: their `layout`.
+fn smear_kernel(device: &wgpu::Device, layout: &wgpu::BindGroupLayout) -> wgpu::ComputePipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("kerf-smear"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("smear.wgsl").into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("kerf-smear"),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("smear"),
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some("smear"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
 /// The kernel of `input.wgsl`, deep footage into the working picture, and its layout.
 fn input_kernel(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
     let input_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -671,6 +694,7 @@ impl Gpu {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let (layout, [decode, fill, multiply, halve, composite, correct, by_weight, plus]) =
             picture_kernels(&device);
+        let smear = smear_kernel(&device, &layout);
         let (input_layout, input) = input_kernel(&device);
         let (finish_layout, finish) = finish_kernel(&device);
         let (finish16_layout, finish16, finish_signal) = finish16_kernels(&device);
@@ -700,6 +724,7 @@ impl Gpu {
             planes_codes,
             by_weight,
             plus,
+            smear,
             finish_layout,
             finish,
             finish16_layout,
@@ -861,6 +886,44 @@ pub struct Frame<'a> {
     /// Distance fields it makes to keep, by key and bytes. They are kept once it is submitted:
     /// before that their making is only recorded, and a frame that read one would read nothing.
     fields_to_keep: Vec<(String, usize, depth::Distance)>,
+}
+
+/// The most places one run of `smear.wgsl` adds up (`places` in its `U`).
+const MOST_SMEARED: usize = 64;
+
+/// The uniforms of `smear.wgsl` (`U` there) for `places`, [`MOST_SMEARED`] at most, of a picture
+/// they all read: each lands a copy of it that is `share` of the smear, added to what the places
+/// before them came to when there were any (`adds`).
+fn smear_uniforms(places: &[Landing], share: f32, adds: bool) -> Vec<u8> {
+    let Some(first) = places.first() else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(64 + 48 * MOST_SMEARED);
+    for value in [places.len() as u32, u32::from(adds), 0, 0] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    let (rect, lo, hi) = (first.rect, first.lo, first.hi);
+    for value in [
+        [rect.x, rect.y, rect.right(), rect.bottom()],
+        [lo[0], lo[1], hi[0], hi[1]],
+        [f64::from(share), 0.0, 0.0, 0.0],
+    ]
+    .iter()
+    .flatten()
+    {
+        out.extend_from_slice(&(*value as f32).to_le_bytes());
+    }
+    for at in places {
+        let m = &at.inverse;
+        for value in [m.a, m.b, m.c, m.d, m.e, m.f, at.across, at.down] {
+            out.extend_from_slice(&(value as f32).to_le_bytes());
+        }
+        for value in [at.columns.start, at.columns.end, at.rows.start, at.rows.end] {
+            out.extend_from_slice(&(value as u32).to_le_bytes());
+        }
+    }
+    out.resize(64 + 48 * MOST_SMEARED, 0);
+    out
 }
 
 const WORKING_USAGE: wgpu::TextureUsages = wgpu::TextureUsages::TEXTURE_BINDING
@@ -1670,6 +1733,10 @@ impl<'a> Frame<'a> {
     /// `source` placed through each of `places`, cropped to `rect` of it, and the pictures that
     /// makes averaged, as a picture moving while a shutter is open is seen, over `canvas` with
     /// `opacity` and `mode`, as `kerf_draw::blend::composite_smeared` does.
+    ///
+    /// The copies are added up where they are sampled, a pass for as many as read one picture and
+    /// not a pass for each: a copy shrunk to under half reads the picture halved first, as
+    /// [`Self::composite`] has it, so the places are taken in runs that read the same one.
     pub fn smeared(
         &mut self,
         canvas: Picture,
@@ -1682,21 +1749,77 @@ impl<'a> Frame<'a> {
         let gpu = self.gpu;
         let size = (canvas.w, canvas.h);
         let share = 1.0 / places.len().max(1) as f32;
-        let mut smeared = self.clear(size.0, size.1);
+        // Each place that lands, with how often the picture it reads is halved.
+        let mut landed = Vec::with_capacity(places.len());
         for m in places {
-            let empty = self.clear(size.0, size.1);
-            let copy = self.composite(empty, source, m, rect, share, Blend::Normal);
-            let sum = self.kernel(
-                &gpu.plus,
-                &Uniforms::default(),
-                &smeared.view,
-                Some(&copy.view),
-                size,
-            );
-            self.release(smeared);
-            self.release(copy);
-            smeared = sum;
+            let (mut halvings, mut m, mut rect) = (0usize, *m, rect);
+            let mut of = (source.w as usize, source.h as usize);
+            while Landing::halves(of, &m) {
+                halvings += 1;
+                of = ((of.0 / 2).max(1), (of.1 / 2).max(1));
+                m = m.then_apply(&Affine::scale(2.0, 2.0));
+                rect = Rect::new(rect.x / 2.0, rect.y / 2.0, rect.w / 2.0, rect.h / 2.0);
+            }
+            let canvas_size = (size.0 as usize, size.1 as usize);
+            if let Some(at) = Landing::new(of, canvas_size, &m, rect) {
+                landed.push((halvings, at));
+            }
         }
+        // The source halved once, twice, and on, as far as a place has asked.
+        let mut halved: Vec<Picture> = Vec::new();
+        let mut smeared: Option<Picture> = None;
+        let mut rest = landed.as_slice();
+        while let Some(&(halvings, _)) = rest.first() {
+            let run = rest
+                .iter()
+                .take(MOST_SMEARED)
+                .take_while(|(other, _)| *other == halvings)
+                .count();
+            let (now, later) = rest.split_at(run);
+            rest = later;
+            while halved.len() < halvings {
+                let (view, w, h) = {
+                    let from = halved.last().unwrap_or(source);
+                    (from.view.clone(), from.w, from.h)
+                };
+                let half = self.kernel(
+                    &gpu.halve,
+                    &Uniforms::default(),
+                    &view,
+                    None,
+                    ((w / 2).max(1), (h / 2).max(1)),
+                );
+                halved.push(half);
+            }
+            let read = halvings
+                .checked_sub(1)
+                .and_then(|level| halved.get(level))
+                .unwrap_or(source);
+            let places: Vec<Landing> = now.iter().map(|(_, at)| at.clone()).collect();
+            let uniforms = smear_uniforms(&places, share, smeared.is_some());
+            let out = self.take(size.0, size.1);
+            let before = smeared
+                .as_ref()
+                .map_or_else(|| gpu.dummy.clone(), |before| before.view.clone());
+            let (read, layout) = (read.view.clone(), gpu.layout.clone());
+            self.dispatch(
+                &gpu.smear,
+                &layout,
+                &uniforms,
+                (&before, &out.view, Some(&read)),
+                (size.0.div_ceil(16), size.1.div_ceil(16)),
+            );
+            if let Some(before) = smeared.replace(out) {
+                self.release(before);
+            }
+        }
+        for half in halved {
+            self.release(half);
+        }
+        let smeared = match smeared {
+            Some(smeared) => smeared,
+            None => self.clear(size.0, size.1),
+        };
         let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
         let out = self.composite(canvas, &smeared, &Affine::IDENTITY, whole, opacity, mode);
         self.release(smeared);
@@ -1961,7 +2084,7 @@ enum Finish {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kerf_draw::blend::composite_placed;
+    use kerf_draw::blend::{composite_placed, composite_smeared};
 
     /// A picture of premultiplied colors, varied over its pixels, with partial transparency.
     fn test_picture(w: usize, h: usize, seed: f32) -> Image {
@@ -1997,6 +2120,7 @@ mod tests {
         let by_depth = depth::by_depth_source();
         for (name, source) in [
             ("picture", include_str!("picture.wgsl")),
+            ("smear", include_str!("smear.wgsl")),
             ("input", include_str!("input.wgsl")),
             ("finish", include_str!("finish.wgsl")),
             ("finish16", include_str!("finish16.wgsl")),
@@ -2063,6 +2187,44 @@ mod tests {
                 // Blend modes through pow differ in the last bits; a step of a byte is 1/255.
                 assert_close(&floats, &cpu.px, 2e-3, &format!("{mode:?} {how}"));
             }
+        }
+    }
+
+    #[test]
+    fn a_smear_matches_the_cpu() {
+        let Some(gpu) = shared() else {
+            eprintln!("no GPU: nothing to compare");
+            return;
+        };
+        let (cw, ch) = (96, 64);
+        let source = test_picture(48, 32, 0.25);
+        let backdrop = test_picture(cw, ch, 0.6);
+        let rect = Rect::new(2.0, 1.5, 40.0, 28.0);
+        // The picture moving, turning and shrinking to under half its size and under a quarter,
+        // where it is read halved and halved again: more places than the kernel adds up at once
+        // read each of the three, and the last lands nowhere.
+        let places: Vec<Affine> = (0..200)
+            .map(|n| {
+                let along = f64::from(n) / 199.0;
+                let scale = 1.1 - 0.95 * along;
+                Affine::motion(
+                    kerf_draw::Vec2::new(20.0 + 50.0 * along, 20.0 + 25.0 * along),
+                    kerf_draw::Vec2::new(scale, scale),
+                    60.0 * along,
+                    kerf_draw::Vec2::new(24.0, 16.0),
+                )
+            })
+            .chain([Affine::scale(0.0, 0.0)])
+            .collect();
+        for mode in [Blend::Normal, Blend::Multiply] {
+            let mut cpu = backdrop.clone();
+            composite_smeared(&mut cpu, &source, &places, rect, 0.8, mode);
+            let mut frame = gpu.frame();
+            let canvas = frame.image(&backdrop);
+            let layer = frame.image(&source);
+            let out = frame.smeared(canvas, &layer, &places, rect, 0.8, mode);
+            let floats = frame.read_floats(&out).expect("read back");
+            assert_close(&floats, &cpu.px, 2e-3, &format!("{mode:?}"));
         }
     }
 
