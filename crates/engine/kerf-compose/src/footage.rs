@@ -97,7 +97,28 @@ pub(crate) struct ClipSource {
     pub map: TimeMap<'static>,
 }
 
+/// What of its media a clip shows at a moment: a frame of it, or a moment between two of them,
+/// which a clip that makes frames between frames shows as one made of the two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Showing {
+    Frame(i64),
+    /// After this frame, on toward the next by this many 64ths.
+    Between(i64, u16),
+}
+
 impl ClipSource {
+    /// What of its media the clip shows at clip time `at`: the frame its map names, or, where
+    /// it makes frames between frames and its map lands between two, how far from the one to
+    /// the next. Whoever draws the clip asks here, so they show the same.
+    pub fn showing(&self, at: Time) -> Showing {
+        match self.between_at(at) {
+            Some((first, between)) if self.retime != Retime::Frames => {
+                Showing::Between(first, between)
+            }
+            _ => Showing::Frame(self.frame_at_time(at)),
+        }
+    }
+
     /// The media frame shown at clip time `at`: the one the clip's map names, kept within the
     /// media's frames.
     pub fn frame_at_time(&self, at: Time) -> i64 {
@@ -336,12 +357,10 @@ impl Pictures {
     pub fn picture(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Arc<Picture>> {
         let clip = self.clips.get(index)?;
         let size = (size.0.max(1), size.1.max(1));
-        if clip.retime != Retime::Frames
-            && let Some((first, between)) = clip.between_at(at)
-        {
-            return self.between(clip, first, between, size);
+        match clip.showing(at) {
+            Showing::Between(first, between) => self.between(clip, first, between, size),
+            Showing::Frame(frame) => self.whole(clip, frame, size),
         }
-        self.whole(clip, clip.frame_at_time(at), size)
     }
 
     /// The picture a fraction of the way from one frame of the file to the next.
@@ -393,24 +412,36 @@ impl Pictures {
 
     /// The frame clip `index` shows at clip time `at`, decoded at `size`, in its planes if the GPU can
     /// take it so ([`yuv_of`]) or else as the straight RGBA it decodes to, for the GPU to take into
-    /// linear light.
+    /// linear light. At a moment between two frames of a clip that makes frames between frames,
+    /// both of them, for the GPU to cross-fade once each is in linear light, as
+    /// [`Self::picture`] does for a clip that cross-fades them. One that moves each along the
+    /// motion between them is the CPU's to draw, and is not asked for here.
     pub fn decoded(&self, index: usize, at: Time, size: (u32, u32)) -> Option<Decoded> {
         let clip = self.clips.get(index)?;
-        let frame = clip.frame_at_time(at);
         let size = (size.0.max(1), size.1.max(1));
-        let key = (clip.path.clone(), frame, size, 0);
-        // Not held while decoding: other frames go on.
-        let kept = lock(&self.decoded).get(&key);
-        let picture = match kept {
-            Some(picture) => picture,
-            None => {
-                let picture = self.pool.for_gpu(clip, frame, size)?;
-                lock(&self.decoded).insert(key, picture.clone());
-                picture
+        let frame = |frame: i64| {
+            let key = (clip.path.clone(), frame, size, 0);
+            // Not held while decoding: other frames go on.
+            let kept = lock(&self.decoded).get(&key);
+            match kept {
+                Some(picture) => Some(picture),
+                None => {
+                    let picture = self.pool.for_gpu(clip, frame, size)?;
+                    lock(&self.decoded).insert(key, picture.clone());
+                    Some(picture)
+                }
             }
+        };
+        let (picture, toward) = match clip.showing(at) {
+            Showing::Frame(shown) => (frame(shown)?, None),
+            Showing::Between(first, between) => (
+                frame(first)?,
+                Some((frame(first + 1)?, f32::from(between) / 64.0)),
+            ),
         };
         Some(Decoded {
             picture,
+            toward,
             alpha: clip.alpha,
             deep: clip.deep,
         })
@@ -437,6 +468,9 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// A frame as it decoded, and how to read it.
 pub(crate) struct Decoded {
     pub picture: Arc<frame::Video>,
+    /// The frame after it and how far on toward that one the moment is, where the clip shows
+    /// the two cross-faded.
+    pub toward: Option<(Arc<frame::Video>, f32)>,
     pub alpha: bool,
     pub deep: Option<&'static InputTransform>,
 }

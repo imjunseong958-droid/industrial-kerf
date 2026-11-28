@@ -90,6 +90,7 @@ pub struct Gpu {
     planes_codes: wgpu::ComputePipeline,
     by_weight: wgpu::ComputePipeline,
     plus: wgpu::ComputePipeline,
+    between: wgpu::ComputePipeline,
     smear: wgpu::ComputePipeline,
     finish_layout: wgpu::BindGroupLayout,
     finish: wgpu::ComputePipeline,
@@ -370,8 +371,8 @@ fn watch_for_failure(device: &wgpu::Device) -> Arc<AtomicBool> {
 }
 
 /// The kernels of `picture.wgsl` and their layout: decode, fill, multiply, halve, composite,
-/// correct, by_weight, and plus.
-fn picture_kernels(device: &wgpu::Device) -> (wgpu::BindGroupLayout, [wgpu::ComputePipeline; 8]) {
+/// correct, by_weight, plus, and between.
+fn picture_kernels(device: &wgpu::Device) -> (wgpu::BindGroupLayout, [wgpu::ComputePipeline; 9]) {
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("kerf-picture"),
         source: wgpu::ShaderSource::Wgsl(include_str!("picture.wgsl").into()),
@@ -400,11 +401,11 @@ fn picture_kernels(device: &wgpu::Device) -> (wgpu::BindGroupLayout, [wgpu::Comp
         kernel("composite"),
         kernel("correct"),
     );
-    let (by_weight, plus) = (kernel("by_weight"), kernel("plus"));
+    let (by_weight, plus, between) = (kernel("by_weight"), kernel("plus"), kernel("between"));
     (
         layout,
         [
-            decode, fill, multiply, halve, composite, correct, by_weight, plus,
+            decode, fill, multiply, halve, composite, correct, by_weight, plus, between,
         ],
     )
 }
@@ -692,7 +693,7 @@ impl Gpu {
         let failed = watch_for_failure(&device);
 
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let (layout, [decode, fill, multiply, halve, composite, correct, by_weight, plus]) =
+        let (layout, [decode, fill, multiply, halve, composite, correct, by_weight, plus, between]) =
             picture_kernels(&device);
         let smear = smear_kernel(&device, &layout);
         let (input_layout, input) = input_kernel(&device);
@@ -724,6 +725,7 @@ impl Gpu {
             planes_codes,
             by_weight,
             plus,
+            between,
             smear,
             finish_layout,
             finish,
@@ -1178,6 +1180,26 @@ impl<'a> Frame<'a> {
         );
         self.release(under);
         self.release(top);
+        out
+    }
+
+    /// `from` on the way to `to`, a picture of its size, `along` of the way: two frames of
+    /// footage cross-faded, as a moment between them shows them
+    /// (`kerf_raster::flow::mix`).
+    pub fn between(&mut self, from: Picture, to: &Picture, along: f32) -> Picture {
+        let gpu = self.gpu;
+        let uniforms = Uniforms {
+            p: [along, 0.0, 0.0, 0.0],
+            ..Uniforms::default()
+        };
+        let out = self.kernel(
+            &gpu.between,
+            &uniforms,
+            &from.view,
+            Some(&to.view),
+            (from.w, from.h),
+        );
+        self.release(from);
         out
     }
 

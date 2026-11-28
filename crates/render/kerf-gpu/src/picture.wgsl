@@ -391,3 +391,12 @@ fn plus(@builtin(global_invocation_id) id: vec3<u32>) {
     let p = vec2<i32>(id.xy);
     textureStore(dst, p, textureLoad(src, p, 0) + textureLoad(aux, p, 0));
 }
+
+// `src` on the way to `aux`, p.x of the way: two frames cross-faded (`kerf_raster::flow::mix`).
+@compute @workgroup_size(16, 16)
+fn between(@builtin(global_invocation_id) id: vec3<u32>) {
+    if !inside(id) { return; }
+    let p = vec2<i32>(id.xy);
+    let first = textureLoad(src, p, 0);
+    textureStore(dst, p, first + (textureLoad(aux, p, 0) - first) * u.p.x);
+}
