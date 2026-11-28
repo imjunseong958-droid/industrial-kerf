@@ -177,7 +177,7 @@ impl Drawing {
             })
             .filter_map(|shown| {
                 let ready = self.ready(plan, shown, at, scale, size, Some(scene))?;
-                let time = ready.placement.time;
+                let time = ready.placement.time();
                 let caster = three_d::Caster::new(
                     scene,
                     &shown.plan,
@@ -210,7 +210,7 @@ impl Drawing {
             .filter(|shown| shown.shows(at) && matches!(shown.plan.source, Source::Mesh))
             .filter_map(|shown| {
                 let placement = plan.placement(&shown.plan, at).scaled(scale);
-                let opacity = param(&shown.plan.clip, "opacity").value_at(placement.time);
+                let opacity = param(&shown.plan.clip, "opacity").value_at(placement.time());
                 let opacity = number(&opacity) as f32;
                 (opacity > 0.0)
                     .then(|| three_d::mesh::Standing::of(scene, &shown.plan, &placement, opacity))
@@ -277,7 +277,7 @@ impl Drawing {
         scene: &three_d::Scene,
     ) -> (three_d::Plane, Rect) {
         let placement = plan.placement(clip, at).scaled(scale);
-        let time = placement.time;
+        let time = placement.time();
         let (w, h) = (f64::from(clip.size.0), f64::from(clip.size.1));
         let frame = Rect::new(0.0, 0.0, w, h);
         // As far as its picture reaches, for a generator that reaches past its frame.
@@ -531,14 +531,12 @@ impl Drawing {
             at, scale, scene, ..
         } = *moment;
         let plan = &shown.plan;
-        let clip = &plan.clip;
-        let time = clip.time_at(at);
         if matches!(plan.source, Source::Nothing) {
             return;
         }
         if matches!(plan.source, Source::Adjustment) {
             if self.pass == Pass::Picture {
-                self.adjust(canvas, sequence, plan, time, scale);
+                self.adjust(canvas, sequence, plan, at, scale);
             }
             return;
         }
@@ -573,7 +571,7 @@ impl Drawing {
         // which says one thing of each pixel, is not.
         if self.pass == Pass::Picture {
             let kept = crop.unwrap_or(whole);
-            if let Some(places) = self.smeared(sequence, plan, time, scale, &to_output, kept) {
+            if let Some(places) = sequence.smeared(plan, &placement, scale, kept) {
                 composite_smeared(canvas, &picture, &places, kept, opacity, blend);
                 return;
             }
@@ -605,7 +603,7 @@ impl Drawing {
         let plan = &shown.plan;
         let clip = &plan.clip;
         let placement = sequence.placement(plan, at).scaled(scale);
-        let time = placement.time;
+        let time = placement.time();
         // Its picture is the one the camera sees of it, on the canvas: that is what a wipe
         // crosses, a mask cuts, and an effect is done to.
         let reveal = shown

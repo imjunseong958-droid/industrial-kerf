@@ -11,18 +11,41 @@
 
 use super::*;
 
-/// A clip at a moment: when that is of the clip's own time, which its keyframes are read at,
-/// and where the pixels of a picture of it are on the output then. The two are one answer of a
-/// moment of the clip's sequence ([`SequencePlan::placement`]) and go about as one: a clip in
-/// depth is lifted from both at once ([`three_d::Plane::of`]), so that none is put where it is
-/// at one time and turned as it is at another.
+/// A clip at a moment: when that is, of its sequence and of the clip's own time, which its
+/// keyframes are read at, and where the pixels of a picture of it are on the output then. They
+/// are one answer of a moment of the clip's sequence ([`SequencePlan::placement`]) and go about
+/// as one: a clip in depth is lifted from them at once ([`three_d::Plane::of`]), so that none is
+/// put where it is at one time and turned as it is at another.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Placement {
-    pub(super) time: Time,
+    at: Time,
+    /// Of `at`, and set nowhere but where `at` is ([`Placement::of`]): the two cannot be of
+    /// different moments.
+    time: Time,
     pub(super) to_output: Affine,
 }
 
 impl Placement {
+    /// The clip of `plan` at `at` of its sequence, a picture of it being where `to_output` puts
+    /// it then.
+    pub(super) fn of(plan: &ClipPlan, at: Time, to_output: Affine) -> Self {
+        Self {
+            at,
+            time: plan.clip.time_at(at),
+            to_output,
+        }
+    }
+
+    /// When it is, of the clip's sequence.
+    pub(super) fn at(&self) -> Time {
+        self.at
+    }
+
+    /// When it is, of the clip's own time.
+    pub(super) fn time(&self) -> Time {
+        self.time
+    }
+
     /// The same moment, drawn at `scale` of what it was.
     pub(super) fn scaled(self, scale: f64) -> Self {
         self.with(Affine::scale(scale, scale).then_apply(&self.to_output))
@@ -44,24 +67,13 @@ impl SequencePlan {
     /// scene.
     pub(super) fn placement(&self, plan: &ClipPlan, at: Time) -> Placement {
         let canvas = (f64::from(self.width), f64::from(self.height));
-        let time = plan.clip.time_at(at);
-        Placement {
-            time,
-            to_output: self
-                .moved_by_parents(&plan.clip, at)
-                .then_apply(&place(plan, canvas, time).0),
-        }
-    }
-}
-
-impl Drawing {
-    /// Where a clip's source pixels land on the canvas at clip time `time`, in canvas pixels:
-    /// where it is at that moment of its sequence ([`SequencePlan::placement`]), for one who
-    /// has the clip's own time alone.
-    pub(super) fn geometry(&self, sequence: &SequencePlan, plan: &ClipPlan, time: Time) -> Affine {
-        sequence
-            .placement(plan, plan.clip.sequence_time(time))
-            .to_output
+        // As its parents have moved it, and then as it is placed itself at its own time.
+        let moved = Placement::of(plan, at, self.moved_by_parents(&plan.clip, at));
+        moved.with(
+            moved
+                .to_output
+                .then_apply(&place(plan, canvas, moved.time).0),
+        )
     }
 }
 
@@ -72,36 +84,35 @@ const SMEAR_STEP: f64 = 1.0;
 /// The most copies a smeared picture is drawn as.
 const MOST_SMEARS: usize = 64;
 
-impl Drawing {
-    /// Where a picture that `to_output` puts on the canvas at clip time `time`, `rect` of it showing,
-    /// is at each moment the clip's shutter is open about that time: as many as keep the copies
-    /// [`SMEAR_STEP`] apart where it moves fastest. None when its `shutter` is shut, when it is in
-    /// depth, where a camera puts it, or when it moves less than half a pixel while it is open.
+impl SequencePlan {
+    /// Where a picture of the clip of `plan` that `placement` has on the canvas, drawn at `scale`
+    /// and `rect` of it showing, is at each moment the clip's shutter is open about that one: as
+    /// many as keep the copies [`SMEAR_STEP`] apart where it moves fastest. None when its
+    /// `shutter` is shut, when it is in depth, where a camera puts it, or when it moves less than
+    /// half a pixel while it is open.
     pub(super) fn smeared(
         &self,
-        sequence: &SequencePlan,
         plan: &ClipPlan,
-        time: Time,
+        placement: &Placement,
         scale: f64,
-        to_output: &Affine,
         rect: Rect,
     ) -> Option<Vec<Affine>> {
         if plan.three_d {
             return None;
         }
-        let shutter = number(&param(&plan.clip, "shutter").value_at(time));
+        let shutter = number(&param(&plan.clip, "shutter").value_at(placement.time));
         if shutter.is_nan() || shutter <= 0.0 {
             return None;
         }
-        let open = sequence.rate.frame_duration().seconds() * shutter / 360.0;
-        let placed = |time: Time| {
-            Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time))
-        };
-        let back = placed(time).inverse()?;
-        // Where it is `share` of the way through the shutter, which opens half before `time`.
+        let open = self.rate.frame_duration().seconds() * shutter / 360.0;
+        let placed = |at: Time| self.placement(plan, at).scaled(scale).to_output;
+        let back = placed(placement.at).inverse()?;
+        // Where it is `share` of the way through the shutter, which opens half before that moment.
         let moved = |share: f64| {
-            let at = time + Time::from_seconds(open * (share - 0.5)).unwrap_or(Time::ZERO);
-            placed(at).then_apply(&back).then_apply(to_output)
+            let at = placement.at + Time::from_seconds(open * (share - 0.5)).unwrap_or(Time::ZERO);
+            placed(at)
+                .then_apply(&back)
+                .then_apply(&placement.to_output)
         };
         let corners = [
             Vec2::new(rect.x, rect.y),

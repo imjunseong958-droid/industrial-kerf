@@ -132,7 +132,7 @@ pub(in crate::draw) fn of(
         };
     };
     let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-    let time = placement.time;
+    let time = placement.time();
     let front = Plane::of(scene, plan, size, placement);
     let deep = depth_of(plan, time, scene.camera.height);
     let mut corners: Vec<Vector> = front.corners(rect).to_vec();
