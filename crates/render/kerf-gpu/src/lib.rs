@@ -18,6 +18,7 @@
 use kerf_color::{HdrOutput, InputTransform};
 use kerf_draw::correct::Correction;
 use kerf_draw::{Affine, Blend, Image, Landing, Rect};
+use std::any::Any;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -193,6 +194,37 @@ impl Yuv<'_> {
 pub fn written_for_opencl(source: &str) -> Result<usize, String> {
     kerf_gpu_cl::write_out_all(source)
 }
+
+/// A frame of footage as it decoded, and the way a [`Frame`] takes it into linear light.
+#[derive(Clone, Copy)]
+pub enum AsDecoded<'a> {
+    /// As [`Frame::rgba8`] takes it.
+    Rgba8 {
+        rgba: &'a [u8],
+        size: (u32, u32),
+        stride: u32,
+        alpha: bool,
+    },
+    /// As [`Frame::rgba16`] takes it.
+    Rgba16 {
+        rgba: &'a [u8],
+        size: (u32, u32),
+        stride: u32,
+        alpha: bool,
+        input: &'a InputTransform,
+    },
+    /// As [`Frame::yuv`] takes it.
+    Yuv(Yuv<'a>),
+    /// As [`Frame::yuv16`] takes it.
+    Yuv16(Yuv<'a>, &'a InputTransform),
+}
+
+/// What holds the bytes of a frame of footage for as long as it is held.
+type Holder = Arc<dyn Any + Send + Sync>;
+
+/// Bytes sent up as a texture: where they are, how many, and how they were read (the format, the
+/// size, and the bytes a row takes).
+type Sent = (usize, usize, wgpu::TextureFormat, (u32, u32), u32);
 
 /// The one device every compositor shares. `None` when the CPU has to draw.
 pub fn shared() -> Option<&'static Gpu> {
@@ -784,6 +816,7 @@ impl Gpu {
             used: Vec::new(),
             used_buffers: Vec::new(),
             fields_to_keep: Vec::new(),
+            sent: HashMap::new(),
         }
     }
 
@@ -888,6 +921,10 @@ pub struct Frame<'a> {
     /// Distance fields it makes to keep, by key and bytes. They are kept once it is submitted:
     /// before that their making is only recorded, and a frame that read one would read nothing.
     fields_to_keep: Vec<(String, usize, depth::Distance)>,
+    /// The footage [`Frame::decoded`] has sent up, each texture with what holds the bytes it was
+    /// sent from. Held until the frame is submitted, so that nothing else comes to be where those
+    /// bytes are while the frame knows them by it.
+    sent: HashMap<Sent, (wgpu::Texture, Holder)>,
 }
 
 /// The most places one run of `smear.wgsl` adds up (`places` in its `U`).
@@ -1117,6 +1154,28 @@ impl<'a> Frame<'a> {
         texture
     }
 
+    /// `data` in a texture as [`Self::upload`] sends it, and sent once for this frame when `held`
+    /// holds the bytes: asked for again, it is the texture they went up to, which nothing writes.
+    fn footage(
+        &mut self,
+        held: Option<&Holder>,
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        data: &[u8],
+        row_bytes: u32,
+    ) -> wgpu::Texture {
+        let Some(holder) = held else {
+            return self.upload(format, size, data, row_bytes);
+        };
+        let sent = (data.as_ptr() as usize, data.len(), format, size, row_bytes);
+        if let Some((texture, _)) = self.sent.get(&sent) {
+            return texture.clone();
+        }
+        let texture = self.upload(format, size, data, row_bytes);
+        self.sent.insert(sent, (texture.clone(), holder.clone()));
+        texture
+    }
+
     /// A copy of `picture` that later commands may change.
     pub fn copy(&mut self, picture: &Picture) -> Picture {
         let out = self.take(picture.w, picture.h);
@@ -1222,15 +1281,16 @@ impl<'a> Frame<'a> {
     /// Straight sRGB-encoded RGBA bytes, `stride` bytes a row, in linear light. Opaque unless
     /// `alpha` says the picture's transparency counts.
     pub fn rgba8(&mut self, rgba: &[u8], w: u32, h: u32, stride: u32, alpha: bool) -> Picture {
-        let gpu = self.gpu;
-        let view = self
-            .upload(wgpu::TextureFormat::Rgba8Unorm, (w, h), rgba, stride)
-            .create_view(&Default::default());
-        let uniforms = Uniforms {
-            a: [0, u32::from(alpha), 0, 0],
-            ..Uniforms::default()
-        };
-        self.kernel(&gpu.decode, &uniforms, &view, None, (w, h))
+        let size = (w, h);
+        self.taken(
+            None,
+            AsDecoded::Rgba8 {
+                rgba,
+                size,
+                stride,
+                alpha,
+            },
+        )
     }
 
     /// Straight 16-bit little-endian RGBA, `stride` bytes a row, taken into linear light by `input`,
@@ -1239,45 +1299,117 @@ impl<'a> Frame<'a> {
     pub fn rgba16(
         &mut self,
         rgba: &[u8],
-        (w, h): (u32, u32),
+        size: (u32, u32),
         stride: u32,
         alpha: bool,
         input: &InputTransform,
     ) -> Picture {
-        let source = self
-            .upload(wgpu::TextureFormat::Rgba16Uint, (w, h), rgba, stride)
-            .create_view(&Default::default());
-        self.take_into_light(&source, (w, h), alpha, input)
+        self.taken(
+            None,
+            AsDecoded::Rgba16 {
+                rgba,
+                size,
+                stride,
+                alpha,
+                input,
+            },
+        )
     }
 
     /// A decoded frame as its planes, opaque and taken into linear light as sRGB-encoded, as
     /// [`Self::rgba8`] takes the same frame made into RGBA.
     pub fn yuv(&mut self, yuv: &Yuv<'_>) -> Picture {
-        let (w, h) = yuv.size;
-        let out = self.take(w, h);
-        self.draw_planes(yuv, &out.view, true);
-        out
+        self.taken(None, AsDecoded::Yuv(*yuv))
     }
 
     /// A decoded frame as its planes, taken into linear light by `input`, as [`Self::rgba16`] takes
     /// the same frame made into 16-bit RGBA.
     pub fn yuv16(&mut self, yuv: &Yuv<'_>, input: &InputTransform) -> Picture {
-        let (w, h) = yuv.size;
-        let key = (
-            w,
-            h,
-            wgpu::TextureFormat::Rgba16Uint,
-            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
-        );
-        let codes = self.gpu.texture(key);
-        self.used.push((key, codes.clone()));
-        let view = codes.create_view(&Default::default());
-        self.draw_planes(yuv, &view, false);
-        self.take_into_light(&view, (w, h), false, input)
+        self.taken(None, AsDecoded::Yuv16(*yuv, input))
     }
 
-    /// Draw `yuv` into `out`: floats in linear light when `light`, or else 16-bit code values.
-    fn draw_planes(&mut self, yuv: &Yuv<'_>, out: &wgpu::TextureView, light: bool) {
+    /// The picture of the frame of footage that `holder` holds, which `of` reads from it. More
+    /// than one clip can show one frame, and its bytes go up once for this frame of work however
+    /// many times it is asked for; each asking gets a picture of its own to write.
+    ///
+    /// The bytes are known by where they are. So the frame holds `holder` until it is submitted,
+    /// and nothing else comes to be there in that time; and `of` can hand over no bytes but ones
+    /// `holder` keeps or ones that are never freed, since they have to last as long as any
+    /// borrow of it. `None` when `of` has nothing to take.
+    pub fn decoded<T: Any + Send + Sync>(
+        &mut self,
+        holder: &Arc<T>,
+        of: impl for<'b> FnOnce(&'b T) -> Option<AsDecoded<'b>>,
+    ) -> Option<Picture> {
+        let footage = of(holder)?;
+        let held: Holder = holder.clone();
+        Some(self.taken(Some(&held), footage))
+    }
+
+    /// `footage` in linear light, its bytes sent up once for this frame when `held` holds them
+    /// ([`Self::footage`]).
+    fn taken(&mut self, held: Option<&Holder>, footage: AsDecoded<'_>) -> Picture {
+        let gpu = self.gpu;
+        match footage {
+            AsDecoded::Rgba8 {
+                rgba,
+                size,
+                stride,
+                alpha,
+            } => {
+                let view = self
+                    .footage(held, wgpu::TextureFormat::Rgba8Unorm, size, rgba, stride)
+                    .create_view(&Default::default());
+                let uniforms = Uniforms {
+                    a: [0, u32::from(alpha), 0, 0],
+                    ..Uniforms::default()
+                };
+                self.kernel(&gpu.decode, &uniforms, &view, None, size)
+            }
+            AsDecoded::Rgba16 {
+                rgba,
+                size,
+                stride,
+                alpha,
+                input,
+            } => {
+                let source = self
+                    .footage(held, wgpu::TextureFormat::Rgba16Uint, size, rgba, stride)
+                    .create_view(&Default::default());
+                self.take_into_light(&source, size, alpha, input)
+            }
+            AsDecoded::Yuv(yuv) => {
+                let (w, h) = yuv.size;
+                let out = self.take(w, h);
+                self.draw_planes(held, &yuv, &out.view, true);
+                out
+            }
+            AsDecoded::Yuv16(yuv, input) => {
+                let (w, h) = yuv.size;
+                let key = (
+                    w,
+                    h,
+                    wgpu::TextureFormat::Rgba16Uint,
+                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+                );
+                let codes = self.gpu.texture(key);
+                self.used.push((key, codes.clone()));
+                let view = codes.create_view(&Default::default());
+                self.draw_planes(held, &yuv, &view, false);
+                self.take_into_light(&view, (w, h), false, input)
+            }
+        }
+    }
+
+    /// Draw `yuv` into `out`: floats in linear light when `light`, or else 16-bit code values. Its
+    /// planes go up once for this frame when `held` holds them ([`Self::footage`]).
+    fn draw_planes(
+        &mut self,
+        held: Option<&Holder>,
+        yuv: &Yuv<'_>,
+        out: &wgpu::TextureView,
+        light: bool,
+    ) {
         let gpu = self.gpu;
         let (w, h) = yuv.size;
         let format = if yuv.bits > 8 {
@@ -1289,7 +1421,7 @@ impl<'a> Frame<'a> {
         let chroma = (w.div_ceil(1 << across), h.div_ceil(1 << down));
         let plane = |frame: &mut Self, at: usize, size: (u32, u32)| {
             frame
-                .upload(format, size, yuv.planes[at], yuv.strides[at])
+                .footage(held, format, size, yuv.planes[at], yuv.strides[at])
                 .create_view(&Default::default())
         };
         let views = [
@@ -2018,6 +2150,8 @@ impl<'a> Frame<'a> {
     ) -> Option<T> {
         let submission = self.submit();
         self.working.clear();
+        // Its textures are others' to write from here on.
+        self.sent.clear();
         self.gpu.give_back(std::mem::take(&mut self.used));
         self.gpu
             .keep_buffers(std::mem::take(&mut self.used_buffers));
@@ -2275,6 +2409,49 @@ mod tests {
                 assert!(g.abs_diff(*c) <= 1, "{g} against {c}");
             }
         }
+    }
+
+    #[test]
+    fn footage_sent_up_once_is_not_taken_for_other_footage() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        let (w, h) = (37usize, 11usize);
+        let taken = |frame: &mut Frame<'_>, footage: &Arc<Vec<u8>>| {
+            frame
+                .decoded(footage, |rgba| {
+                    Some(AsDecoded::Rgba8 {
+                        rgba,
+                        size: (w as u32, h as u32),
+                        stride: w as u32 * 4,
+                        alpha: false,
+                    })
+                })
+                .expect("taken up")
+        };
+        let mut frame = gpu.frame();
+        let mut last = None;
+        for seed in 0..8usize {
+            // Each frame of footage is let go of before the next is made, which is then where
+            // it was unless the frame of work holds it.
+            let footage: Arc<Vec<u8>> = Arc::new(
+                (0..w * h * 4)
+                    .map(|i| ((i * 3 + seed * 41) % 256) as u8)
+                    .collect(),
+            );
+            let first = taken(&mut frame, &footage);
+            let again = taken(&mut frame, &footage);
+            let cpu = Image::from_rgba8(&footage, w, h, w * 4, false);
+            if let Some((first, again, _)) = last.replace((first, again, cpu)) {
+                frame.release(first);
+                frame.release(again);
+            }
+        }
+        let (first, again, cpu) = last.expect("some footage");
+        // Half of each: the footage's own picture only if both are.
+        let both = frame.between(first, &again, 0.5);
+        let floats = frame.read_floats(&both).expect("read back");
+        assert_close(&floats, &cpu.px, 1e-4, "the last footage, asked for twice");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use super::*;
 use kerf_fx::transitions::gpu::Kernel as TransitionKernel;
 use kerf_fx::video::catalog::Headroom;
 use kerf_fx::video::instance::GpuEffect;
-use kerf_gpu::{Frame as GpuFrame, Gpu, Picture as GpuPicture};
+use kerf_gpu::{AsDecoded, Frame as GpuFrame, Gpu, Picture as GpuPicture};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, Once, PoisonError};
 use std::time::Duration;
@@ -1414,21 +1414,32 @@ impl Drawing {
                 let Some(decoded) = self.pictures.decoded(*picture, time, size) else {
                     return Some(None);
                 };
-                // A frame as it decoded, in linear light.
-                let mut taken = |rgba: &ffmpeg_next::frame::Video| {
-                    if (rgba.width(), rgba.height()) != size {
-                        return None;
-                    }
-                    let stride = rgba.stride(0) as u32;
-                    Some(match (decoded.deep, crate::footage::yuv_of(rgba)) {
-                        (Some(input), Some(yuv)) => frame.yuv16(&yuv, input),
-                        (None, Some(yuv)) => frame.yuv(&yuv),
-                        (Some(input), None) => {
-                            frame.rgba16(rgba.data(0), size, stride, decoded.alpha, input)
+                // A frame as it decoded, in linear light. Another clip that shows the same frame
+                // takes the bytes that went up for this one.
+                let alpha = decoded.alpha;
+                let mut taken = |held: &Arc<ffmpeg_next::frame::Video>| {
+                    frame.decoded(held, |rgba| {
+                        if (rgba.width(), rgba.height()) != size {
+                            return None;
                         }
-                        (None, None) => {
-                            frame.rgba8(rgba.data(0), size.0, size.1, stride, decoded.alpha)
-                        }
+                        let stride = rgba.stride(0) as u32;
+                        Some(match (decoded.deep, crate::footage::yuv_of(rgba)) {
+                            (Some(input), Some(yuv)) => AsDecoded::Yuv16(yuv, input),
+                            (None, Some(yuv)) => AsDecoded::Yuv(yuv),
+                            (Some(input), None) => AsDecoded::Rgba16 {
+                                rgba: rgba.data(0),
+                                size,
+                                stride,
+                                alpha,
+                                input,
+                            },
+                            (None, None) => AsDecoded::Rgba8 {
+                                rgba: rgba.data(0),
+                                size,
+                                stride,
+                                alpha,
+                            },
+                        })
                     })
                 };
                 let shown = taken(&decoded.picture)?;
