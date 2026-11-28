@@ -248,19 +248,13 @@ impl Drawing {
         match self.pass {
             Pass::Picture => {}
             Pass::Motion => {
-                // The clip now, and a frame on.
-                let here = sequence.placement(plan, at).scaled(scale);
-                let there = sequence.placement(plan, at + self.step).scaled(scale);
-                // Where what is at an output pixel now is a frame on, as the clip is placed
-                // then. One placed nowhere now, at no size, goes nowhere.
-                let Some(moved) = here
-                    .to_output
-                    .inverse()
-                    .map(|back| there.to_output.then_apply(&back))
-                else {
+                // The clip a frame on, and where what is at an output pixel now is then, as the
+                // clip is placed then. One placed nowhere now, at no size, goes nowhere.
+                let Some(moving) = sequence.moving(plan, at, scale) else {
                     three_d::shade_still(picture);
                     return;
                 };
+                let (there, moved) = moving.to(at + self.step);
                 let height = size.1 as f64 * self.kept;
                 if plan.three_d {
                     let now = three_d::Scene::at(sequence, at, size);
