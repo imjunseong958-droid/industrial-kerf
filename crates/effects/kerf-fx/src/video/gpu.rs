@@ -6,7 +6,9 @@
 
 use super::gpufx::FxOp;
 use kerf_gpu::{wgpu, Frame, Gpu, Picture};
-use std::sync::OnceLock;
+use kerf_kernel::fusion::{self, OpKind, PixelOp};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 /// Box radii up to this many pixels are summed per output pixel; larger ones as a running sum,
 /// which measured faster from here up (FilmCraft kept this at 32, which made a blur no faster than
@@ -391,7 +393,11 @@ struct Stage {
     px: wgpu::ComputePipeline,
     run: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
+    fused_cache: Mutex<HashMap<Vec<OpKind>, Arc<wgpu::ComputePipeline>>>,
 }
+
+/// Cap cached fused pipelines so pathological dynamic op permutations cannot grow unbounded.
+const MAX_CACHED_FUSED: usize = 128;
 
 impl Stage {
     fn new(gpu: &Gpu) -> Option<Self> {
@@ -417,12 +423,168 @@ impl Stage {
                 })
             };
             let (px, run) = (kernel("fx_px"), kernel("fx_run"));
-            Self { px, run, layout }
+            Self {
+                px,
+                run,
+                layout,
+                fused_cache: Mutex::new(HashMap::new()),
+            }
         });
         built
             .map_err(|error| eprintln!("kerf-fx: effect kernels did not build: {error}"))
             .ok()
     }
+
+    fn fused_pipeline(&self, gpu: &Gpu, kinds: &[OpKind]) -> Option<Arc<wgpu::ComputePipeline>> {
+        {
+            let cache = self
+                .fused_cache
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if let Some(pipeline) = cache.get(kinds) {
+                return Some(Arc::clone(pipeline));
+            }
+        }
+        let compiled = fusion::compile_fused(kinds);
+        let pipeline = gpu
+            .build(|device| {
+                let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("kerf-fx-fused"),
+                    source: wgpu::ShaderSource::Wgsl(compiled.wgsl.into()),
+                });
+                let pipeline_layout =
+                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("kerf-fx-fused"),
+                        bind_group_layouts: &[Some(&self.layout)],
+                        immediate_size: 0,
+                    });
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("fused"),
+                    layout: Some(&pipeline_layout),
+                    module: &module,
+                    entry_point: Some("fused"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            })
+            .map_err(|error| eprintln!("kerf-fx: fused kernel did not build: {error}"))
+            .ok()?;
+        let pipeline = Arc::new(pipeline);
+        let mut cache = self
+            .fused_cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if cache.len() >= MAX_CACHED_FUSED {
+            cache.clear();
+        }
+        cache.insert(kinds.to_vec(), Arc::clone(&pipeline));
+        Some(pipeline)
+    }
+}
+
+/// Convert a pointwise [`FxOp`] into a fusible [`PixelOp`], when covered by `kerf-kernel`'s
+/// fusion compiler.
+pub fn as_pixel_op(op: &FxOp) -> Option<PixelOp> {
+    Some(match *op {
+        FxOp::BrightnessContrast { br, co } => PixelOp::BrightnessContrast { br, co },
+        FxOp::Tint {
+            black,
+            white,
+            amount,
+        } => PixelOp::Tint {
+            black,
+            white,
+            amount,
+        },
+        FxOp::BlackWhite => PixelOp::BlackWhite,
+        FxOp::ColorBalance {
+            sh,
+            md,
+            hi,
+            preserve,
+        } => PixelOp::ColorBalance {
+            shadows: sh,
+            middles: md,
+            highlights: hi,
+            preserve,
+        },
+        FxOp::Gamma { g } => PixelOp::Gamma { g },
+        FxOp::Levels { ib, iw, ob, ow, g } => PixelOp::Levels { ib, iw, ob, ow, g },
+        FxOp::Invert { channel, blend } => PixelOp::Invert { channel, blend },
+        FxOp::AscCdl {
+            slope,
+            offset,
+            power,
+            sat,
+        } => PixelOp::AscCdl {
+            slope,
+            offset,
+            power,
+            sat,
+        },
+        FxOp::ChannelMix { m } => PixelOp::ChannelMix { m },
+        FxOp::AlphaAdjust {
+            opacity,
+            ignore,
+            invert,
+            mask_only,
+        } => PixelOp::AlphaAdjust {
+            opacity,
+            ignore,
+            invert,
+            mask_only,
+        },
+        _ => return None,
+    })
+}
+
+/// Run a chain of pointwise [`PixelOp`]s in a single fused compute dispatch (splitting only if
+/// uniform parameters exceed [`fusion::MAX_FUSED_VEC4S`]).
+pub fn run_fused(
+    frame: &mut Frame<'static>,
+    mut picture: Picture,
+    ops: &[PixelOp],
+) -> Option<Picture> {
+    if ops.is_empty() {
+        return Some(picture);
+    }
+    let stage = stage(frame.gpu())?;
+    let mut start = 0;
+    while start < ops.len() {
+        let mut end = start;
+        let mut vec4s = 0usize;
+        while end < ops.len() {
+            let need = ops[end].kind().vec4s();
+            if end > start && vec4s + need > fusion::MAX_FUSED_VEC4S {
+                break;
+            }
+            vec4s += need;
+            end += 1;
+        }
+        let chunk = &ops[start..end];
+        let kinds: Vec<OpKind> = chunk.iter().map(PixelOp::kind).collect();
+        let pipeline = stage.fused_pipeline(frame.gpu(), &kinds)?;
+        let packed = fusion::pack_params(chunk);
+        let mut bytes = Vec::with_capacity(packed.len() * 16);
+        for row in &packed {
+            for value in row {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let (w, h) = (picture.w, picture.h);
+        let out = frame.take(w, h);
+        frame.dispatch(
+            &pipeline,
+            &stage.layout,
+            &bytes,
+            (&picture.view, &out.view, None),
+            (w.div_ceil(16), h.div_ceil(16)),
+        );
+        frame.release(picture);
+        picture = out;
+        start = end;
+    }
+    Some(picture)
 }
 
 fn stage(gpu: &'static Gpu) -> Option<&'static Stage> {
@@ -436,7 +598,33 @@ pub fn available(gpu: &'static Gpu) -> bool {
 }
 
 /// `ops` run in order on `picture`, or `None` when the kernels did not build.
+/// Contiguous runs of two or more fusible pointwise ops execute in a single fused dispatch.
 pub fn run(frame: &mut Frame<'static>, picture: Picture, ops: &[FxOp]) -> Option<Picture> {
+    let mut current = picture;
+    let mut i = 0;
+    while i < ops.len() {
+        let mut fused = Vec::new();
+        let mut j = i;
+        while j < ops.len() {
+            if let Some(pixel_op) = as_pixel_op(&ops[j]) {
+                fused.push(pixel_op);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        if fused.len() >= 2 {
+            current = run_fused(frame, current, &fused)?;
+            i = j;
+            continue;
+        }
+        current = run_unfused(frame, current, &ops[i..i + 1])?;
+        i += 1;
+    }
+    Some(current)
+}
+
+fn run_unfused(frame: &mut Frame<'static>, picture: Picture, ops: &[FxOp]) -> Option<Picture> {
     let stage = stage(frame.gpu())?;
     let (w, h) = (picture.w, picture.h);
     let mut current = picture;
