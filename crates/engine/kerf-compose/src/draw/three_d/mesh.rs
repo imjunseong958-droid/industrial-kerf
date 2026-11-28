@@ -48,6 +48,8 @@ const AROUND: usize = 48;
 const BANDS: usize = 24;
 /// No triangle.
 const NONE: u32 = u32::MAX;
+/// How many rows of the places read one core scans at a time.
+const BAND: usize = 16;
 
 /// Triangles, with the way each corner faces, in runs of one color.
 pub(in crate::draw) struct Mesh {
@@ -614,24 +616,155 @@ fn cut_near(corners: &[Cut], near: f64) -> Vec<Cut> {
     out
 }
 
+/// A triangle on the screen: each corner's place among the places read, and what it is of the
+/// triangle it was cut from.
+type OnScreen = [(f64, f64, Cut); 3];
+
+/// The places read that a triangle on the screen can be the nearest at, of `across` of them by
+/// `down`: from the left, to the right, from the top, and to the bottom. None for one with
+/// no area, which is nowhere.
+fn reach(corners: &OnScreen, (across, down): (usize, usize)) -> Option<[usize; 4]> {
+    let [(ax, ay, _), (bx, by, _), (cx, cy, _)] = *corners;
+    let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if area == 0.0 || !area.is_finite() {
+        return None;
+    }
+    let reach = |least: f64, most: f64, size: usize| {
+        let from = least.floor().max(0.0) as usize;
+        let to = (most.ceil().max(0.0) as usize).min(size);
+        (from, to)
+    };
+    let (left, right) = reach(ax.min(bx).min(cx), ax.max(bx).max(cx), across);
+    let (top, bottom) = reach(ay.min(by).min(cy), ay.max(by).max(cy), down);
+    Some([left, right, top, bottom])
+}
+
 /// What is nearest at each place read: its triangle, how far ahead it is, and how much of the
-/// triangle's first two corners it is.
+/// triangle's first two corners it is. It holds only the places its triangles reach, whole
+/// pixels of them: a mesh is seldom all over the frame, and nothing is nearest anywhere else.
 struct Nearest {
+    /// The places read it holds, of all there are: from `left` for `across`, and from `top`.
+    left: usize,
+    top: usize,
     across: usize,
+    /// How many places are read across the frame and down it.
+    frame: (usize, usize),
     triangle: Vec<u32>,
     ahead: Vec<f32>,
     of: Vec<[f32; 2]>,
 }
 
 impl Nearest {
-    /// The triangle `corners` on the screen, each a place and how far ahead it is, kept where it is
-    /// the nearest yet.
-    fn take(&mut self, index: u32, corners: [(f64, f64, Cut); 3], down: usize) {
-        let [(ax, ay, a), (bx, by, b), (cx, cy, c)] = corners;
-        let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-        if area == 0.0 || !area.is_finite() {
+    /// Room for what is nearest wherever any of `triangles` reaches, among the places read of
+    /// a frame of `frame` pixels, and the pixels those places are of: its columns and rows.
+    fn over(
+        triangles: &[(u32, OnScreen)],
+        (w, h): (usize, usize),
+    ) -> (Self, std::ops::Range<usize>, std::ops::Range<usize>) {
+        let frame = (w * SAMPLES, h * SAMPLES);
+        let mut reached: Option<[usize; 4]> = None;
+        for (_, corners) in triangles {
+            let Some([left, right, top, bottom]) = reach(corners, frame) else {
+                continue;
+            };
+            reached = Some(match reached {
+                Some([l, r, t, b]) => [l.min(left), r.max(right), t.min(top), b.max(bottom)],
+                None => [left, right, top, bottom],
+            });
+        }
+        // Out to whole pixels, so that each pixel it holds has every place read of it.
+        let [left, right, top, bottom] = reached.unwrap_or([0; 4]);
+        let columns = left / SAMPLES..right.div_ceil(SAMPLES).max(left / SAMPLES);
+        let rows = top / SAMPLES..bottom.div_ceil(SAMPLES).max(top / SAMPLES);
+        let (across, down) = (columns.len() * SAMPLES, rows.len() * SAMPLES);
+        let nearest = Self {
+            left: columns.start * SAMPLES,
+            top: rows.start * SAMPLES,
+            across,
+            frame,
+            triangle: vec![NONE; across * down],
+            ahead: vec![f32::INFINITY; across * down],
+            of: vec![[0.0; 2]; across * down],
+        };
+        (nearest, columns, rows)
+    }
+
+    /// Where the place read at (`x`, `y`) of the frame's is kept, which is one it holds.
+    fn at(&self, x: usize, y: usize) -> usize {
+        (y - self.top) * self.across + (x - self.left)
+    }
+
+    /// Each of `triangles` kept where it is the nearest yet, in their order: one as near as
+    /// another that came before it leaves the place to that one. Its rows are scanned a band at
+    /// a time, each band by one core, and a band takes the triangles that reach it in that same
+    /// order, so every place is asked about the same triangles one after another as it would be
+    /// were they scanned whole.
+    fn take_all(&mut self, triangles: &[(u32, OnScreen)]) {
+        let per_band = self.across * BAND;
+        if per_band == 0 || self.triangle.is_empty() {
             return;
         }
+        let bands = self.triangle.len().div_ceil(per_band);
+        let mut reaching: Vec<Vec<u32>> = vec![Vec::new(); bands];
+        for (which, (_, corners)) in triangles.iter().enumerate() {
+            let Some([_, _, top, bottom]) = reach(corners, self.frame) else {
+                continue;
+            };
+            if top < bottom {
+                for band in &mut reaching[(top - self.top) / BAND..=(bottom - 1 - self.top) / BAND]
+                {
+                    band.push(which as u32);
+                }
+            }
+        }
+        let (left, top, across, frame) = (self.left, self.top, self.across, self.frame);
+        self.triangle
+            .par_chunks_mut(per_band)
+            .zip(self.ahead.par_chunks_mut(per_band))
+            .zip(self.of.par_chunks_mut(per_band))
+            .zip(reaching)
+            .enumerate()
+            .for_each(|(band, (((triangle, ahead), of), reaching))| {
+                let from = top + band * BAND;
+                let mut band = Band {
+                    left,
+                    across,
+                    rows: from..from + triangle.len() / across,
+                    frame,
+                    triangle,
+                    ahead,
+                    of,
+                };
+                for which in reaching {
+                    let (index, corners) = triangles[which as usize];
+                    band.take(index, corners);
+                }
+            });
+    }
+}
+
+/// Some rows of what is nearest ([`Nearest`]), for one core to scan.
+struct Band<'a> {
+    left: usize,
+    across: usize,
+    /// The rows of the places read that it holds.
+    rows: std::ops::Range<usize>,
+    frame: (usize, usize),
+    triangle: &'a mut [u32],
+    ahead: &'a mut [f32],
+    of: &'a mut [[f32; 2]],
+}
+
+impl Band<'_> {
+    /// The triangle `corners` on the screen, each a place and how far ahead it is, kept where it is
+    /// the nearest yet, in the rows held here.
+    fn take(&mut self, index: u32, corners: OnScreen) {
+        let Some([left, right, top, bottom]) = reach(&corners, self.frame) else {
+            return;
+        };
+        let (top, bottom) = (top.max(self.rows.start), bottom.min(self.rows.end));
+        let [(ax, ay, a), (bx, by, b), (cx, cy, c)] = corners;
+        let area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
         // Wound one way round, so that inside is where every edge is positive.
         let [(bx, by, b), (cx, cy, c)] = if area < 0.0 {
             [(cx, cy, c), (bx, by, b)]
@@ -639,13 +772,6 @@ impl Nearest {
             [(bx, by, b), (cx, cy, c)]
         };
         let area = area.abs();
-        let reach = |least: f64, most: f64, size: usize| {
-            let from = least.floor().max(0.0) as usize;
-            let to = (most.ceil().max(0.0) as usize).min(size);
-            (from, to)
-        };
-        let (left, right) = reach(ax.min(bx).min(cx), ax.max(bx).max(cx), self.across);
-        let (top, bottom) = reach(ay.min(by).min(cy), ay.max(by).max(cy), down);
         // An edge is a triangle's own when it is its top, or its left.
         let own = |(px, py): (f64, f64), (qx, qy): (f64, f64)| {
             let (dx, dy) = (qx - px, qy - py);
@@ -681,7 +807,7 @@ impl Nearest {
                     continue;
                 }
                 let ahead = (1.0 / sum) as f32;
-                let at = y * self.across + x;
+                let at = (y - self.rows.start) * self.across + (x - self.left);
                 if ahead >= self.ahead[at] {
                     continue;
                 }
@@ -1237,15 +1363,15 @@ impl InTheWay {
 }
 
 /// The mesh of the clip of `plan`, its clip as `placement` has it, as `scene` sees it on a
-/// picture of `(w, h)`, and how far along the camera's way it is at each pixel: infinite where
-/// it is not.
+/// picture of `(w, h)`, how far along the camera's way it is at each pixel, infinite where
+/// it is not, and the pixels all of it is within.
 pub(in crate::draw) fn draw(
     scene: &Scene,
     plan: &ClipPlan,
     placement: &Placement,
     (w, h): (usize, usize),
     shade: Shade,
-) -> (Image, Vec<f32>) {
+) -> (Image, Vec<f32>, Within) {
     let (mesh, space, points) = at_moment(scene, plan, placement);
     // The ways are square to each other, so a side faces along each by its length less.
     let ways = [space.x, space.y, space.z];
@@ -1274,13 +1400,6 @@ pub(in crate::draw) fn draw(
         })
         .collect();
 
-    let (across, down) = (w * SAMPLES, h * SAMPLES);
-    let mut nearest = Nearest {
-        across,
-        triangle: vec![NONE; across * down],
-        ahead: vec![f32::INFINITY; across * down],
-        of: vec![[0.0; 2]; across * down],
-    };
     let near = NEAR * scene.camera.height;
     let onto = |cut: Cut| {
         let by = scene.camera.focal / cut.seen[2] * SAMPLES as f64;
@@ -1295,6 +1414,9 @@ pub(in crate::draw) fn draw(
     // triangle covers.
     let pictured = mesh.parts.iter().any(|part| part.texture.is_some());
     let mut sizes = vec![0.0f32; if pictured { mesh.triangles.len() } else { 0 }];
+    // Its triangles on the screen, in their order: one that is the nearest at a place keeps it
+    // from another as near that comes after.
+    let mut on_screen: Vec<(u32, OnScreen)> = Vec::with_capacity(mesh.triangles.len());
     for (index, triangle) in mesh.triangles.iter().enumerate() {
         let corners = [0, 1, 2].map(|corner| Cut {
             seen: seen[triangle[corner] as usize],
@@ -1302,11 +1424,10 @@ pub(in crate::draw) fn draw(
         });
         let cut = cut_near(&corners, near);
         for last in 2..cut.len() {
-            nearest.take(
+            on_screen.push((
                 index as u32,
                 [onto(cut[0]), onto(cut[last - 1]), onto(cut[last])],
-                down,
-            );
+            ));
         }
         let texture = mesh
             .part_of(index)
@@ -1334,6 +1455,9 @@ pub(in crate::draw) fn draw(
             }
         }
     }
+
+    let (mut nearest, columns, rows) = Nearest::over(&on_screen, (w, h));
+    nearest.take_all(&on_screen);
 
     // Where each point of the mesh is a frame on, for a motion pass. A file's animation that
     // gives it other points then tells nothing of where each went, and it is said to hold still.
@@ -1422,20 +1546,28 @@ pub(in crate::draw) fn draw(
         }
     };
     let mut out = Image::new(w, h);
-    let mut depth = vec![f32::INFINITY; w * h];
+    // Infinitely far all over, written by every core: one writing it all took longer than a
+    // small mesh takes to draw.
+    let mut depth = vec![0.0f32; w * h];
+    depth
+        .par_chunks_mut(w.max(1))
+        .for_each(|row| row.fill(f32::INFINITY));
     let share = 1.0 / (SAMPLES * SAMPLES) as f32;
+    // Only the pixels its triangles reach: every other is clear and infinitely far, as made.
     out.px
         .par_chunks_mut(w.max(1) * 4)
         .zip(depth.par_chunks_mut(w.max(1)))
         .enumerate()
+        .skip(rows.start)
+        .take(rows.len())
         .for_each(|(y, (row, depth))| {
-            for x in 0..w {
+            for x in columns.clone() {
                 let mut sum = [0.0f32; 4];
                 // A pixel is mostly of one triangle, which is then lit once.
                 let mut last: Option<(u32, [f32; 3])> = None;
                 for place in 0..SAMPLES * SAMPLES {
                     let at =
-                        (y * SAMPLES + place / SAMPLES) * across + x * SAMPLES + place % SAMPLES;
+                        nearest.at(x * SAMPLES + place % SAMPLES, y * SAMPLES + place / SAMPLES);
                     let triangle = nearest.triangle[at];
                     if triangle == NONE {
                         continue;
@@ -1479,8 +1611,10 @@ pub(in crate::draw) fn draw(
             }
         }
         out = super::super::focus::blurred(&out, &radii);
+        // Blurred, it reaches past where its triangles do.
+        return (out, depth, Within::all((w, h)));
     }
-    (out, depth)
+    (out, depth, Within { columns, rows })
 }
 
 #[cfg(test)]

@@ -2165,15 +2165,66 @@ impl Solid<'_> {
     }
 }
 
+/// The pixels of a picture all that is in it lies within: outside them it is clear, and is not
+/// read to learn so.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Within {
+    pub columns: std::ops::Range<usize>,
+    pub rows: std::ops::Range<usize>,
+}
+
+impl Within {
+    /// Anywhere in a picture of `size`.
+    pub(super) fn all((w, h): (usize, usize)) -> Self {
+        Self {
+            columns: 0..w,
+            rows: 0..h,
+        }
+    }
+
+    fn holds(&self, x: usize, y: usize) -> bool {
+        self.columns.contains(&x) && self.rows.contains(&y)
+    }
+}
+
 /// A clip of a run that crosses, ready to go down.
 pub(super) struct Layer {
     pub picture: Image,
+    /// Where in `picture` anything is.
+    pub within: Within,
     pub depth: Vec<f32>,
     pub opacity: f32,
     pub blend: Blend,
     /// It draws nothing, and what is behind it at a pixel is made clear by as much of the pixel
     /// as it covers: a clip a model films, in a sequence drawn as a clip of another.
     pub clears: bool,
+}
+
+/// `layer`'s picture over `canvas`, a picture of its size, with its opacity and `blend`, mixed
+/// as `kerf_draw::blend::composite` mixes one, and read only where anything is in it: the rest
+/// of it is clear, which leaves `canvas` as it is.
+pub(super) fn composite_within(canvas: &mut Image, layer: &Layer, blend: Blend) {
+    let (w, opacity) = (canvas.w.max(1), layer.opacity);
+    let (columns, rows) = (&layer.within.columns, &layer.within.rows);
+    canvas
+        .px
+        .par_chunks_mut(w * 4)
+        .zip(layer.picture.px.par_chunks(w * 4))
+        .enumerate()
+        .skip(rows.start)
+        .take(rows.len())
+        .for_each(|(y, (canvas, picture))| {
+            for x in columns.clone() {
+                let at = x * 4;
+                let source = [
+                    picture[at] * opacity,
+                    picture[at + 1] * opacity,
+                    picture[at + 2] * opacity,
+                    picture[at + 3] * opacity,
+                ];
+                kerf_draw::blend::mix(&mut canvas[at..at + 4], source, x, y, blend);
+            }
+        });
 }
 
 /// How much of a pixel the nearer of two planes covers in front of the farther: all of it, but for a
@@ -2227,7 +2278,7 @@ pub(super) fn composite_by_depth(canvas: &mut Image, layers: &[Layer], hard: boo
                 let at = y * w + x;
                 here.clear();
                 for (index, layer) in layers.iter().enumerate() {
-                    if layer.picture.px[at * 4 + 3] <= 0.0 {
+                    if !layer.within.holds(x, y) || layer.picture.px[at * 4 + 3] <= 0.0 {
                         continue;
                     }
                     // Past all that is farther, and at the same depth past those too, so that clips

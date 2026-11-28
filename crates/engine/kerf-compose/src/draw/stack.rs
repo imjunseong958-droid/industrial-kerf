@@ -352,6 +352,7 @@ impl Drawing {
         );
         Some(three_d::Layer {
             picture,
+            within: three_d::Within::all(size),
             depth,
             opacity: ready.opacity,
             blend: self.blend(shown.plan.blend),
@@ -544,7 +545,7 @@ impl Drawing {
         let (w, h) = (canvas.w, canvas.h);
         if matches!(plan.source, Source::Mesh) {
             if let Some(mesh) = self.mesh(sequence, shown, moment, (w, h)) {
-                composite(canvas, &mesh.picture, mesh.opacity, blend);
+                three_d::composite_within(canvas, &mesh, blend);
             }
             return;
         }
@@ -637,7 +638,8 @@ impl Drawing {
                 three_d::mesh::Shade::Moving(&next.0, &next.1, size.1 as f64 * self.kept)
             }
         };
-        let (mut picture, depth) = three_d::mesh::draw(scene, plan, &placement, size, shade);
+        let (mut picture, depth, mut within) =
+            three_d::mesh::draw(scene, plan, &placement, size, shade);
         if let Some((Reveal::Wipe { angle, softness }, progress)) = reveal {
             let covered = wipe::coverage(picture.w, picture.h, angle, softness, progress);
             picture.mul_coverage(&covered);
@@ -659,9 +661,12 @@ impl Drawing {
                 reach: None,
             };
             self.effects(&mut picture, plan, time, &placed, plan.effects.len());
+            // An effect may put something anywhere in it.
+            within = three_d::Within::all(size);
         }
         Some(three_d::Layer {
             picture,
+            within,
             depth,
             opacity,
             blend: self.blend(plan.blend),
