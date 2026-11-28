@@ -61,7 +61,10 @@ Kerf draws with its own renderer, in linear light, with drawing carried from
 [FilmCraft](https://github.com/storytold/filmcraft) (MIT/Apache), for renders,
 previews, and live playback. A frame is drawn on the GPU when every part of it
 has a kernel there, and otherwise on the CPU, which stays the reference;
-`KERF_GPU=0` keeps everything on the CPU. A video editor's
+`KERF_GPU=0` keeps everything on the CPU. A card that only computes, such as
+an AMD Instinct, has no graphics driver to be reached by: with its vendor's
+OpenCL installed, Kerf draws on it through that, and `KERF_GPU=opencl` asks
+for OpenCL on any machine. A video editor's
 transitions (pushes, whips, zooms, flashes, light leaks, glitches, irises)
 and effects (Lumetri, blurs, keys and track mattes, lens and tracking fixes,
 burn-ins, 360° video) are FilmCraft's, less those that
