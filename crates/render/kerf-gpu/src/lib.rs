@@ -698,6 +698,7 @@ impl Gpu {
             working: HashMap::new(),
             used: Vec::new(),
             used_buffers: Vec::new(),
+            fields_to_keep: Vec::new(),
         }
     }
 
@@ -799,6 +800,9 @@ pub struct Frame<'a> {
     used: Vec<(TextureKey, wgpu::Texture)>,
     /// Every working buffer it holds, the same way.
     used_buffers: Vec<wgpu::Buffer>,
+    /// Distance fields it makes to keep, by key and bytes. They are kept once it is submitted:
+    /// before that their making is only recorded, and a frame that read one would read nothing.
+    fields_to_keep: Vec<(String, usize, depth::Distance)>,
 }
 
 const WORKING_USAGE: wgpu::TextureUsages = wgpu::TextureUsages::TEXTURE_BINDING
@@ -1833,7 +1837,15 @@ impl<'a> Frame<'a> {
                     label: Some("kerf-unused"),
                 }),
         );
-        self.gpu.queue.submit([encoder.finish()])
+        let submission = self.gpu.queue.submit([encoder.finish()]);
+        // What it made is in the queue now, ahead of whatever reads it from here on.
+        let mut kept = self.gpu.kept();
+        for (key, bytes, distance) in self.fields_to_keep.drain(..) {
+            if kept.get(&key).is_none() {
+                kept.put(&key, bytes, Kept::Distance(distance));
+            }
+        }
+        submission
     }
 
     fn wait_and_read<T>(
@@ -2117,6 +2129,59 @@ mod tests {
                 });
             }
         });
+    }
+
+    #[test]
+    fn a_field_kept_is_made_by_the_time_another_frame_reads_it() {
+        let Some(gpu) = shared() else {
+            return;
+        };
+        if gpu.depth_kernels().is_none() {
+            return;
+        }
+        // A disc, so that there is an outline to be far from.
+        let (w, h) = (64, 48);
+        let mut disc = Image::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 32.0, y as f32 - 24.0);
+                if dx * dx + dy * dy < 18.0 * 18.0 {
+                    disc.px[(y * w + x) * 4..][..4].copy_from_slice(&[0.2, 0.5, 0.8, 1.0]);
+                }
+            }
+        }
+        let field = |frame: &mut Frame<'_>| {
+            let picture = frame.image_kept("a disc to take in", || disc.clone());
+            let crop = [0.0, 0.0, w as f32, h as f32];
+            let distance = frame
+                .distance(&picture, crop, &[16, 8, 4, 2, 1, 1], 32.0, 1.0)
+                .expect("a field");
+            (picture, distance)
+        };
+        let taken_in = |mut frame: Frame<'_>, (picture, distance): (Picture, depth::Distance)| {
+            let out = frame.eroded(&picture, &distance, 4.0).expect("taken in");
+            frame.read_floats(&out).expect("read back")
+        };
+        // The first frame keeps nothing, and the second keeps the picture and is the first to ask
+        // for its field: both make the field for themselves.
+        let mut frame = gpu.frame();
+        let made = field(&mut frame);
+        let alone = taken_in(frame, made);
+        assert!(alone.iter().any(|value| *value > 0.0), "nothing is left");
+        let mut frame = gpu.frame();
+        let made = field(&mut frame);
+        assert_eq!(taken_in(frame, made), alone, "from the picture kept");
+        // The third keeps the field, and before it has run, a fourth reads it.
+        let mut keeps = gpu.frame();
+        let kept = field(&mut keeps);
+        let mut reads = gpu.frame();
+        let read = field(&mut reads);
+        assert_eq!(taken_in(reads, read), alone, "read before its maker ran");
+        assert_eq!(taken_in(keeps, kept), alone, "by its maker");
+        // And from then on it is there to read.
+        let mut frame = gpu.frame();
+        let made = field(&mut frame);
+        assert_eq!(taken_in(frame, made), alone, "from the field kept");
     }
 
     #[test]
