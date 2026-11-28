@@ -617,20 +617,29 @@ impl QueueInterface for Queue {
     }
 
     fn submit(&self, command_buffers: &mut dyn Iterator<Item = DispatchCommandBuffer>) -> u64 {
-        for buffer in command_buffers {
-            let Some(buffer) = buffer.as_custom::<CommandBuffer>() else {
-                continue;
-            };
-            let commands = std::mem::take(&mut *lock(&buffer.0));
-            for command in commands {
-                if let Err(why) = command.run(&self.shared) {
-                    self.shared.report(why);
+        let mut failed = Vec::new();
+        {
+            // All of a submission goes to the queue as one: whatever another thread submits or
+            // writes meanwhile comes wholly before it or wholly after, as wgpu has it. A frame
+            // drawn beside another reads what the other keeps, and must find it whole.
+            let cl = lock(&self.shared.cl);
+            for buffer in command_buffers {
+                let Some(buffer) = buffer.as_custom::<CommandBuffer>() else {
+                    continue;
+                };
+                let commands = std::mem::take(&mut *lock(&buffer.0));
+                for command in commands {
+                    if let Err(why) = command.run(&cl) {
+                        failed.push(why);
+                    }
                 }
             }
+            if let Err(error) = cl.queue.flush() {
+                failed.push(format!("the queue did not take its work: {error}"));
+            }
         }
-        if let Err(error) = lock(&self.shared.cl).queue.flush() {
-            self.shared
-                .report(format!("the queue did not take its work: {error}"));
+        for why in failed {
+            self.shared.report(why);
         }
         self.shared.submitted.fetch_add(1, Ordering::Relaxed) + 1
     }
@@ -987,8 +996,8 @@ enum Command {
 }
 
 impl Command {
-    fn run(self, shared: &Shared) -> Result<(), String> {
-        let cl = lock(&shared.cl);
+    /// Hand it to the device's queue.
+    fn run(self, cl: &Cl) -> Result<(), String> {
         match self {
             Command::Copy { from, to, runs } => {
                 if Arc::ptr_eq(&from, &to) {

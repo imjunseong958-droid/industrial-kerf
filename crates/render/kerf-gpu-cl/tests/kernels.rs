@@ -369,3 +369,60 @@ fn a_kernel_of_buffers_runs_on_opencl_as_its_arithmetic_says() {
         "the least"
     );
 }
+
+#[test]
+fn a_submission_runs_with_none_of_another_between_its_commands() {
+    let Some((device, queue)) = kerf_gpu_cl::open(false) else {
+        eprintln!("no OpenCL device: nothing to run");
+        return;
+    };
+    use wgpu::BufferUsages as Usage;
+    const BYTES: u64 = 1024;
+    const TIMES: u64 = 16;
+    let buffer = |size, usage| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size,
+            usage,
+            mapped_at_creation: false,
+        })
+    };
+    // Every thread's submissions write here on their way, so it holds what the last one wrote.
+    let shared = buffer(BYTES, Usage::COPY_SRC | Usage::COPY_DST);
+    std::thread::scope(|threads| {
+        for thread in 1..=8u8 {
+            let (device, queue, shared, buffer) = (&device, &queue, &shared, &buffer);
+            threads.spawn(move || {
+                let own = buffer(BYTES, Usage::COPY_SRC | Usage::COPY_DST);
+                queue.write_buffer(&own, 0, &[thread; BYTES as usize]);
+                for round in 0..50 {
+                    let back = buffer(BYTES * TIMES, Usage::COPY_DST | Usage::MAP_READ);
+                    let mut encoder = device.create_command_encoder(&Default::default());
+                    for time in 0..TIMES {
+                        encoder.copy_buffer_to_buffer(&own, 0, shared, 0, Some(BYTES));
+                        encoder.copy_buffer_to_buffer(shared, 0, &back, time * BYTES, Some(BYTES));
+                    }
+                    queue.submit([encoder.finish()]);
+                    let slice = back.slice(..);
+                    let (sender, receiver) = std::sync::mpsc::channel();
+                    slice.map_async(wgpu::MapMode::Read, move |result| {
+                        let _ = sender.send(result);
+                    });
+                    device
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .expect("the queue ran");
+                    receiver
+                        .recv()
+                        .expect("the map was answered")
+                        .expect("the buffer came back");
+                    let data = slice.get_mapped_range().expect("its bytes");
+                    let others = data.iter().filter(|byte| **byte != thread).count();
+                    assert_eq!(
+                        others, 0,
+                        "thread {thread}, round {round}: bytes another wrote"
+                    );
+                }
+            });
+        }
+    });
+}
