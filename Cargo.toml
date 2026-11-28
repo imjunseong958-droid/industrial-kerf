@@ -27,6 +27,7 @@ members = [
     "crates/color/kerf-scopes",
     # motion
     "crates/motion/kerf-motion",
+    "crates/motion/kerf-sim",
     # vfx
     "crates/vfx/kerf-track",
     # image

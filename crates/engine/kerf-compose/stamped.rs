@@ -3,11 +3,12 @@
 // this file in as it is.
 
 /// The folders whose files are that code, from this crate's.
-const STAMPED_FOLDERS: [&str; 7] = [
+const STAMPED_FOLDERS: [&str; 8] = [
     "../../foundation",
     "../../render",
     "../../effects",
     "../../color",
+    "../../motion",
     "../../image",
     "../kerf-core/src",
     "src",

@@ -1414,6 +1414,28 @@ fn builtin_catalog() -> Catalog {
                 .doc("Pulling down; negative floats up."),
         )
         .param(
+            P::number("drag", 0.0)
+                .range(0.0, 50.0)
+                .doc("Air resistance slowing particles over time."),
+        )
+        .param(
+            P::number("bounce", 0.0)
+                .range(0.0, 1.0)
+                .doc("How much speed particles keep when bouncing off the floor; 0 disables floor bounce."),
+        )
+        .param(
+            P::number("floor", 0.5)
+                .range(-10.0, 10.0)
+                .unit("frame heights")
+                .doc("Floor distance below the emitter's center when bounce is above 0."),
+        )
+        .param(
+            P::number("turbulence", 0.0)
+                .range(0.0, 100.0)
+                .unit("frame heights a second a second")
+                .doc("Divergence-free curl wind stirring particles."),
+        )
+        .param(
             P::number("size", 0.01)
                 .range(0.0, 10.0)
                 .unit("frame heights"),

@@ -4017,6 +4017,7 @@ version = "0.1.7"
 dependencies = [
  "kerf-draw",
  "kerf-model",
+ "kerf-sim",
  "kurbo 0.13.1",
  "linesweeper",
  "rayon",
@@ -4124,6 +4125,14 @@ dependencies = [
  "log",
  "signal-hook",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "kerf-sim"
+version = "0.1.7"
+dependencies = [
+ "kerf-geom",
+ "kerf-model",
 ]
 
 [[package]]

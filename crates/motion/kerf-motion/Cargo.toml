@@ -9,6 +9,7 @@ description = "Motion graphics drawn from numbers: shapes and particles"
 [dependencies]
 kerf-draw = { path = "../../render/kerf-draw" }
 kerf-model = { path = "../../foundation/kerf-model" }
+kerf-sim = { path = "../kerf-sim" }
 kurbo.workspace = true
 linesweeper.workspace = true
 rayon.workspace = true
