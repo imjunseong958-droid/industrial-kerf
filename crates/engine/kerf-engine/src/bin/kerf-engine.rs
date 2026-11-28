@@ -254,9 +254,23 @@ enum CliCodec {
     Hevc,
 }
 
+/// How long the process waits, before it ends, for a GPU it began to bring up: far longer than
+/// that takes on any machine, a driver building every kernel for the first time included.
+const GPU_SETTLES_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
+
 fn main() -> Result<()> {
     kerf_engine::process::sidecar::forward_termination_signals();
-    let cli = Cli::parse();
+    let done = run(Cli::parse());
+    // A command that drew frames may have had the GPU brought up on a thread of its own, and a
+    // process that ends under that thread now and then dies as it ends, its work done
+    // (`kerf_compose::gpu_settled`).
+    if !kerf_compose::gpu_settled(GPU_SETTLES_WITHIN) {
+        eprintln!("kerf-engine: ending while the GPU is still being brought up");
+    }
+    done
+}
+
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Probe { action } => match action {
             ProbeAction::Info { src } => print_json(&info(&src)?)?,
@@ -655,6 +669,14 @@ fn draw_frame(args: &FrameArgs) -> Result<Value> {
         &kerf_compose::ComposeOptions {
             sequence: args.sequence.clone(),
             captions: args.captions,
+            // The first frame a process draws is the CPU's, the GPU not being up yet. Where it
+            // is the only one, asking for the GPU would bring it up for nothing, and the process
+            // would wait for that before it ends.
+            accel: if args.frames > 1 {
+                kerf_compose::Accel::Auto
+            } else {
+                kerf_compose::Accel::Never
+            },
             ..Default::default()
         },
     )?;
