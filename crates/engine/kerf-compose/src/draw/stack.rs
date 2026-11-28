@@ -16,6 +16,14 @@ pub(super) struct Moment<'a> {
     pub(super) clears: bool,
 }
 
+/// Whether a clip's picture is one the spare pictures hand out ([`spare`]), to be given back to
+/// them: a clip of one color's, and a nested sequence's, which is its canvas. A title's or a
+/// shape's is made new and written only where something is, the rest of it never paid for:
+/// kept, it would be handed out in place of one that has been.
+fn from_spare(source: &Source) -> bool {
+    matches!(source, Source::Solid(_) | Source::Nested { .. })
+}
+
 impl Drawing {
     /// Sequence `index` at its time `at`, at `scale` of its canvas,
     /// transparent where nothing is.
@@ -27,7 +35,7 @@ impl Drawing {
     pub(super) fn draw_of(&self, index: usize, at: Time, scale: f64, angle: Option<&Id>) -> Image {
         let plan = &self.sequences[index];
         let (w, h) = output_size(plan.width, plan.height, scale);
-        let mut canvas = Image::new(w, h);
+        let mut canvas = spare::clear(w, h);
         let tracks = self.in_order(plan, at, scale, angle);
         let in_depth = tracks.iter().any(|track| {
             track
@@ -324,6 +332,14 @@ impl Drawing {
             })
             .collect();
         three_d::composite_by_depth(canvas, &layers, self.hard);
+        // A picture written all over is worth keeping. A mesh's is written only where the mesh
+        // is, and the rest of it has never been paid for: kept, it would be handed out in place
+        // of one that has.
+        for layer in layers {
+            if layer.within == three_d::Within::all(size) {
+                spare::keep(layer.picture);
+            }
+        }
     }
 
     /// A clip of a run that crosses, projected, and how far ahead it is at each pixel.
@@ -350,6 +366,9 @@ impl Drawing {
             size,
             self.shared_by(ready.share),
         );
+        if from_spare(&shown.plan.source) {
+            spare::keep_if_alone(ready.picture);
+        }
         Some(three_d::Layer {
             picture,
             within: three_d::Within::all(size),
@@ -564,6 +583,10 @@ impl Drawing {
             let projected =
                 three_d::project(scene, plan, &picture, (&placement, crop), (w, h), share);
             composite(canvas, &projected, opacity, blend);
+            spare::keep(projected);
+            if from_spare(&plan.source) {
+                spare::keep_if_alone(picture);
+            }
             return;
         }
         let to_output = placement.to_output;
@@ -574,6 +597,9 @@ impl Drawing {
             let kept = crop.unwrap_or(whole);
             if let Some(places) = sequence.smeared(plan, &placement, scale, kept) {
                 composite_smeared(canvas, &picture, &places, kept, opacity, blend);
+                if from_spare(&plan.source) {
+                    spare::keep_if_alone(picture);
+                }
                 return;
             }
         }
@@ -585,6 +611,9 @@ impl Drawing {
                 let crop = crop.unwrap_or(whole);
                 composite_placed(canvas, &picture, &to_output, crop, opacity, blend);
             }
+        }
+        if from_spare(&plan.source) {
+            spare::keep_if_alone(picture);
         }
     }
 

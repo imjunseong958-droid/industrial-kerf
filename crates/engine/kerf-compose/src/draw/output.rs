@@ -141,9 +141,11 @@ impl Drawing {
                 pixel[..6].fill(if its { u8::MAX } else { 0 });
             });
         }
+        let (width, height) = (image.w as u32, image.h as u32);
+        spare::keep(image);
         Frame {
-            width: image.w as u32,
-            height: image.h as u32,
+            width,
+            height,
             rgba,
         }
     }
@@ -195,9 +197,11 @@ impl Drawing {
                 pixel[..3].fill(if its { u8::MAX } else { 0 });
             });
         }
+        let (width, height) = (image.w as u32, image.h as u32);
+        spare::keep(image);
         Frame {
-            width: image.w as u32,
-            height: image.h as u32,
+            width,
+            height,
             rgba,
         }
     }

@@ -57,6 +57,7 @@ mod output;
 mod plan;
 mod ready;
 mod share;
+mod spare;
 mod stack;
 mod three_d;
 mod titles;
