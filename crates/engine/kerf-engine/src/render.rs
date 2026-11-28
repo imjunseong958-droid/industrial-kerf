@@ -1269,6 +1269,8 @@ fn compose_options(sequence: Option<&str>, opts: &RenderOptions) -> ComposeOptio
         shape: opts.size,
         // A file of the pass is read a pixel at a time, each taken for one clip's.
         hard_edges: true,
+        // The same file each time: no frame is the CPU's because the GPU was not ready yet.
+        accel: kerf_compose::Accel::Settled,
         ..Default::default()
     }
 }

@@ -36,9 +36,16 @@ impl ComposeError {
 /// Where frames are drawn.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Accel {
-    /// On the GPU when it can draw the frame and the frame is large enough to gain from it.
+    /// On the GPU when it can draw the frame and the frame is large enough to gain from it. The
+    /// CPU draws until the GPU's kernels are built, which a viewer should not wait for.
     #[default]
     Auto,
+    /// As [`Accel::Auto`] chooses, with the first frame that is the GPU's waiting for its
+    /// kernels to be built: for a render. The CPU's picture of a frame and the GPU's are
+    /// within 1 of 255 of each other and not the same bytes, and how many frames the CPU has
+    /// drawn by the time the kernels are built is not the same from one run to the next, so a
+    /// file whose first frames were the CPU's was not the same file twice.
+    Settled,
     /// On the CPU, the reference.
     Never,
     /// On the GPU whenever it can draw the frame, whatever its size.
