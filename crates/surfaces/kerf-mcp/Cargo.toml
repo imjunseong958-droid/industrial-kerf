@@ -36,6 +36,7 @@ kerf-track = { path = "../../vfx/kerf-track" }
 kerf-text = { path = "../../foundation/kerf-text" }
 libc.workspace = true
 log.workspace = true
+mimalloc.workspace = true
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

@@ -24,6 +24,7 @@ kerf-model = { path = "../../foundation/kerf-model" }
 kerf-paths = { path = "../../foundation/kerf-paths" }
 kerf-runtime = { path = "../../surfaces/kerf-runtime" }
 kerf-skills = { path = "../../surfaces/kerf-skills" }
+mimalloc.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

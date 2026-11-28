@@ -72,6 +72,10 @@ log = "0.4"
 # time zone (its zoneinfo on Unix; on Windows the zone's rules come
 # bundled).
 jiff = { version = "1", default-features = false }
+# The editor's allocator, as it is kerf-engine's, kerf-mcp's and kerf's in the repository's
+# workspace (whose Cargo.toml says why): its frames are drawn in its own process, and under
+# the system's allocator a 4K frame with an effect on it took 1.5 to 2.4 times as long.
+mimalloc = { version = "0.1", default-features = false }
 # On macOS a project's window represents its project.kerf (the title bar's
 # proxy icon), as a document's window does there, and a drag on
 # the toolbar (the title bar there) moves the window: AppKit through its
@@ -137,6 +141,7 @@ image = { workspace = true, features = ["png"] }
 serde_json.workspace = true
 env_logger.workspace = true
 log.workspace = true
+mimalloc.workspace = true
 jiff = { workspace = true, features = ["std", "tz-system", "tzdb-zoneinfo", "tzdb-bundle-platform"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]

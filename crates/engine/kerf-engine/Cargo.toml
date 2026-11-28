@@ -29,7 +29,7 @@ kerf-sidecar = { path = "../../foundation/kerf-sidecar" }
 kerf-track = { path = "../../vfx/kerf-track" }
 hex.workspace = true
 log.workspace = true
-mimalloc = { version = "0.1", default-features = false }
+mimalloc.workspace = true
 rayon.workspace = true
 regex = "1"
 serde = { workspace = true, features = ["derive"] }
