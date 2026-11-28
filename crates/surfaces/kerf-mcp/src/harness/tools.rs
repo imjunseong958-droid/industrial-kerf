@@ -344,6 +344,8 @@ pub(super) struct LookInput {
     pub(super) graph: Option<String>,
     /// A media its steps make: each of its `takes` held to its guide by where its subjects are, the clips its `generate` step names with `moves=`, with no model run. For each take, `overlap`, from 0 to 1, how much of where it has the subject and where the guide asked for it is the same over every frame the guide shows it on, and under `clips` the same for each subject with `off`, how far its middle is from where it was asked for in frame heights, `size`, how large beside what was asked, and `frames` of `shown`, how many of the frames the guide shows it on it was followed on: read `overlap` beside that, since a subject followed on few frames says little. `best` is the take that holds best, of more than one. The person sees the same numbers beside each take in the editor's graph. Used alone, or with `proposal`.
     pub(super) takes: Option<String>,
+    /// Inverse physics director for 3D `physics=dynamic|static` clips: pass `clip`, `target` (`[x, y, z]`, `x` in frame widths, `y` and `z` in frame heights), and `at` to solve the exact initial velocity so `clip` arrives at `target` under the sequence's XPBD simulation and return a ready-to-run `set` script; or pass `follow` (with optional `camera`, `offset`, `smoothing`, `fov`, `every`) to plan a smooth gimbal-lock-free $SE(3)$ tracking camera script following a simulated body. Used alone, or with `sequence` or `proposal`.
+    pub(super) direct: Option<DirectInput>,
 }
 
 /// What `cuts` or `eye` is given: `true`, or an object that says more of what is asked
@@ -496,6 +498,22 @@ impl JsonSchema for CameraName {
     fn json_schema(_: &mut SchemaGenerator) -> Schema {
         json_schema!({"type": ["string", "integer"]})
     }
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(transform = fields_unsaid)]
+pub(crate) struct DirectInput {
+    pub(crate) clip: Option<String>,
+    pub(crate) target: Option<[f64; 3]>,
+    pub(crate) at: Option<String>,
+    pub(crate) follow: Option<String>,
+    pub(crate) camera: Option<String>,
+    pub(crate) offset: Option<[f64; 3]>,
+    pub(crate) smoothing: Option<f64>,
+    pub(crate) fov: Option<f64>,
+    #[schemars(range(min = 1))]
+    pub(crate) every: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]

@@ -24,6 +24,9 @@ pub(super) struct SequencePlan {
     pub(super) captions: Vec<CaptionPlan>,
     /// The clips other clips move with.
     pub(super) rigs: HashMap<Id, Rig>,
+    /// Deterministic 3D rigid-body world for sequences with `physics=dynamic|static` clips.
+    pub(super) physics: Option<std::sync::Mutex<three_d::physics::PhysicsWorld>>,
+    pub(super) physics_digest: Option<u64>,
 }
 
 pub(super) struct SoundPlan {

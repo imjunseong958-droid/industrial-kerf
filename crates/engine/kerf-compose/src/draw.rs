@@ -77,7 +77,39 @@ use titles::*;
 
 pub use ids::ID_COLORS;
 pub(crate) use share::{Shared, MOST_SHARING};
+pub use three_d::physics::SequenceWorldSpec;
 pub use three_d::world::{Form, InDepth, World};
+
+/// Extract the deterministic `kerf-sim` world specification for a sequence's `physics=dynamic|static`
+/// clips without opening media decoders. Returns `None` when no clip enables physics.
+pub fn sequence_world_spec(
+    project: &Project,
+    catalog: &Catalog,
+    sequence: Option<&str>,
+) -> Result<Option<SequenceWorldSpec>> {
+    let expanded = kerf_model::look::expand(project, catalog).map_err(ComposeError::Invalid)?;
+    let project = &expanded;
+    let top = program_sequence(project, sequence)
+        .map_err(|error| ComposeError::Invalid(error.to_string()))?;
+    let mut builder = Builder {
+        project,
+        catalog,
+        sequences: Vec::new(),
+        built: HashMap::new(),
+        clips: Vec::new(),
+        nesting: vec![top.id.clone()],
+        effects: Vec::new(),
+        hdr: HdrOutput::new(top.color).is_some(),
+    };
+    builder.sequences.push(None);
+    let plan = builder.sequence(top)?;
+    Ok(three_d::physics::build_sequence_world(
+        &plan.tracks,
+        &plan.rigs,
+        (plan.width, plan.height),
+        plan.rate,
+    ))
+}
 
 type Result<T> = std::result::Result<T, ComposeError>;
 

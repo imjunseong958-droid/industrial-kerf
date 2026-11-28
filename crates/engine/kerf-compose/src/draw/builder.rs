@@ -72,8 +72,15 @@ impl<'a> Builder<'a> {
             }
         }
         let rigs = rigs(sequence, &tracks);
+        let physics_spec =
+            three_d::physics::build_sequence_world(&tracks, &rigs, (width, height), sequence.rate);
+        let physics_digest = physics_spec.as_ref().map(|w| w.digest);
+        let physics = physics_spec
+            .map(|w| std::sync::Mutex::new(three_d::physics::PhysicsWorld::from_spec(w)));
         Ok(SequencePlan {
             rigs,
+            physics,
+            physics_digest,
             name: sequence.name.clone(),
             width,
             height,
@@ -308,6 +315,7 @@ impl<'a> Builder<'a> {
             Content::Caption { .. } => return Ok(None),
         };
         let animated = clip.parent.is_some()
+            || three_d::physics::physics_mode(clip) == three_d::physics::PhysicsMode::Dynamic
             || !matches!(param(clip, "path"), Param::Static(Value::Text(text)) if text.is_empty())
             || Geometry::NAMES
                 .iter()

@@ -8,6 +8,7 @@
 //! the range it changed. Proposals are by the router's author: Kerf, or the
 //! MCP client that made them.
 
+mod director;
 mod edit;
 mod footage;
 mod look;

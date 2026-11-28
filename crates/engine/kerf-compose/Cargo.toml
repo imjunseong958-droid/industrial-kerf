@@ -16,6 +16,7 @@ kerf-gpu = { path = "../../render/kerf-gpu" }
 kerf-image = { path = "../../image/kerf-image" }
 kerf-model = { path = "../../foundation/kerf-model" }
 kerf-motion = { path = "../../motion/kerf-motion" }
+kerf-sim = { path = "../../motion/kerf-sim" }
 kerf-paths = { path = "../../foundation/kerf-paths" }
 kerf-raster = { path = "../../render/kerf-raster" }
 ffmpeg-next = { workspace = true, features = [

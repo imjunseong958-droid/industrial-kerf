@@ -228,6 +228,18 @@ impl KerfMcpRouter {
         if input.shows || input.stands {
             return self.look_shows(input).map(Some);
         }
+        if let Some(direct) = &input.direct {
+            if input.media.is_some() || !input.at.is_empty() {
+                return Err(McpError::new(
+                    McpCode::InvalidArguments,
+                    "`direct` solves physics trajectories or camera tracking, and is used alone or with `sequence` or `proposal`",
+                ));
+            }
+            let (revision, project) = self.project_at(input.proposal.as_deref())?;
+            return self
+                .direct_scene(&project, input.sequence.as_deref(), revision, direct)
+                .map(Some);
+        }
         if !input.sync.is_empty() {
             let (revision, project) = self.project_at(input.proposal.as_deref())?;
             return self.line_up(&project, revision, &input.sync).map(Some);
