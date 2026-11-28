@@ -15,6 +15,7 @@ members = [
     "crates/render/kerf-raster",
     "crates/render/kerf-draw",
     "crates/render/kerf-gpu",
+    "crates/render/kerf-gpu-cl",
     "crates/render/kerf-kernel",
     # edit
     "crates/edit/kerf-interchange",

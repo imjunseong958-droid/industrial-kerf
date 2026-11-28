@@ -1,0 +1,17 @@
+[package]
+name = "kerf-gpu-cl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Kerf's GPU kernels on OpenCL, for an accelerator that computes and has no graphics queue: a device for wgpu whose kernels are the same WGSL, written out as OpenCL C"
+
+[dependencies]
+naga = { version = "30", features = ["wgsl-in"] }
+# Its default loads the system's OpenCL library when first asked, so nothing links to it and a
+# machine without one builds and runs as before.
+opencl3 = "0.12"
+wgpu = { version = "30", default-features = false, features = ["wgsl", "custom"] }
+
+[lints]
+workspace = true

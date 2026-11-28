@@ -11,6 +11,8 @@
 //! a real GPU, with `KERF_GPU=0` in the environment, or after the device fails, and the CPU then
 //! draws everything. A driver on the CPU, such as Mesa's llvmpipe, counts only with
 //! `KERF_GPU=software`, for checking kernels on a machine with no GPU; it is slower than the reference.
+//! An accelerator that only computes, an AMD Instinct, has no graphics queue for wgpu to reach it by:
+//! `KERF_GPU=opencl` draws on the machine's OpenCL device instead, with the same kernels (kerf-gpu-cl).
 
 use kerf_color::{HdrOutput, InputTransform};
 use kerf_draw::correct::Correction;
@@ -254,8 +256,13 @@ pub fn kernel_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 }
 
 /// The device to draw on and its queue. `None` without a backend, an adapter, or a device that
-/// has what these kernels need, and for a driver on the CPU unless `KERF_GPU=software`.
+/// has what these kernels need, and for a driver on the CPU unless `KERF_GPU=software`. With
+/// `KERF_GPU=opencl` it is the machine's OpenCL device (kerf-gpu-cl), which is how an accelerator
+/// that has no graphics queue draws.
 fn open_device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    if std::env::var_os("KERF_GPU").is_some_and(|value| value == "opencl") {
+        return kerf_gpu_cl::open(false);
+    }
     if wgpu::Instance::enabled_backend_features().is_empty() {
         return None;
     }
