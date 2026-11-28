@@ -8,7 +8,7 @@ use super::*;
 #[derive(Clone)]
 pub(super) struct Ready {
     pub(super) picture: Arc<Image>,
-    /// The clip's own time then, and its picture's pixels to output pixels.
+    /// When that is, and its picture's pixels to output pixels then.
     pub(super) placement: Placement,
     /// What its crop leaves of it, in its pixels.
     pub(super) crop: Option<Rect>,
@@ -186,7 +186,7 @@ impl Drawing {
             mut crop,
             per_source,
             mut frame,
-        } = self.input(sequence, plan, time, scale, (w, h), reach)?;
+        } = self.input(sequence, plan, at, scale, (w, h), reach)?;
         if !plan.effects.is_empty() {
             let placed = Placed {
                 sequence,
@@ -233,14 +233,14 @@ impl Drawing {
         let opacity = (number(&param(clip, "opacity").value_at(time)) * fade) as f32;
         Some(Ready {
             picture,
-            placement: Placement { time, to_output },
+            placement: Placement::of(plan, at, to_output),
             crop,
             opacity,
             share: None,
         })
     }
 
-    /// A clip's picture at clip time `time` as its effects get it, on a
+    /// A clip's picture at sequence time `at` as its effects get it, on a
     /// `canvas` of output pixels: masked and cropped, or, letterboxed, on
     /// black the size of the canvas. A generator is drawn as far past its
     /// frame as `reach` says.
@@ -248,15 +248,16 @@ impl Drawing {
         &self,
         sequence: &SequencePlan,
         plan: &ClipPlan,
-        time: Time,
+        at: Time,
         scale: f64,
         (w, h): (usize, usize),
         reach: Option<Reach>,
     ) -> Option<Input> {
+        let time = plan.clip.time_at(at);
         // Shared with the frame cache until something changes it.
         let (mut picture, per_source) = self.picture(sequence, plan, time, scale, reach)?;
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
-        let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        let place = sequence.placement(plan, at).scaled(scale).to_output;
         let frame = reach.map(|reach| {
             let canvas = output_size(sequence.width, sequence.height, scale);
             frame_in(&reach.run(time, canvas, scale))

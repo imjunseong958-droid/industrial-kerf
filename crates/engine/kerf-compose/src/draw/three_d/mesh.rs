@@ -403,7 +403,7 @@ pub(in crate::draw) fn camera(
 ) -> Option<crate::CameraPlace> {
     let clip = &plan.clip;
     let read = loaded(&file_of(clip)?).ok()?;
-    let at = clip.sequence_time(placement.time);
+    let at = placement.at();
     let seen = read.seen_from(which, pose_of(clip, &read, at))?;
     let fov = read.cameras[which].fov;
     Some(placed(scene, plan, placement, &read, &seen, fov))
@@ -441,7 +441,7 @@ fn placed(
 ) -> crate::CameraPlace {
     let clip = &plan.clip;
     let def = Catalog::builtin().fx("mesh");
-    let at = clip.sequence_time(placement.time);
+    let at = placement.at();
     let height = generated(def, clip, "height", at)
         .and_then(|value| value.as_number())
         .unwrap_or(0.0)
@@ -734,7 +734,7 @@ fn at_moment(
     plan: &ClipPlan,
     placement: &Placement,
 ) -> (Mesh, Affine3, Vec<Vector>) {
-    let mesh = Mesh::of(&plan.clip, plan.clip.sequence_time(placement.time));
+    let mesh = Mesh::of(&plan.clip, placement.at());
     let space = space_at(scene, plan, placement);
     let points = in_world(&mesh, &space);
     (mesh, space, points)

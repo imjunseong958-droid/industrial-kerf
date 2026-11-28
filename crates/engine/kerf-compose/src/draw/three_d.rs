@@ -927,8 +927,8 @@ impl Plane {
     /// as its numbers are at that time, and then by its parents in depth as `scene` has them.
     pub fn of(scene: &Scene, plan: &ClipPlan, size: (f64, f64), placement: &Placement) -> Self {
         let clip = &plan.clip;
-        let Placement { time, to_output } = placement;
-        let read = |name: &str| number(&param(clip, name).value_at(*time));
+        let (time, to_output) = (placement.time(), &placement.to_output);
+        let read = |name: &str| number(&param(clip, name).value_at(time));
         let numbers = [
             read("z") * scene.camera.height,
             read("rotate_x"),
@@ -1581,7 +1581,7 @@ fn projected(
     share: Option<Share<'_>>,
 ) -> (Image, Vec<f32>) {
     let (pw, ph) = (picture.w as f64, picture.h as f64);
-    let time = placement.time;
+    let time = placement.time();
     let plane = Plane::of(scene, plan, (pw, ph), placement);
     let (source, by) = match read_smaller(scene, &plane, (pw, ph)) {
         Some(by) => {

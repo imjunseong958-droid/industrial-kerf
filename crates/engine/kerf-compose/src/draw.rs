@@ -399,10 +399,7 @@ impl Drawing {
                 let fall = (moved.c.abs() <= 1e-9 * moved.d.abs() && moved.d.abs() > 1e-9)
                     .then_some(moved.d)
                     .and_then(|fall| scene.falls(plan, fall));
-                let placement = Placement {
-                    time,
-                    to_output: moved.then_apply(&own),
-                };
+                let placement = Placement::of(plan, at, moved.then_apply(&own));
                 world
                     .clips
                     .push(three_d::world::of(&scene, plan, &placement, held, fall));

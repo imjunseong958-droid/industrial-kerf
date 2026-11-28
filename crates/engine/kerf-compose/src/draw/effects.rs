@@ -129,15 +129,16 @@ impl Drawing {
         canvas: &mut Image,
         sequence: &SequencePlan,
         plan: &ClipPlan,
-        time: Time,
+        at: Time,
         scale: f64,
     ) {
         let (w, h) = (canvas.w, canvas.h);
+        let time = plan.clip.time_at(at);
         let mut adjusted = canvas.clone();
         // FilmCraft's effects see no clip of their own here.
         let placed = Placed {
             sequence,
-            at: plan.clip.sequence_time(time),
+            at,
             scale,
             to_output: Affine::IDENTITY,
             per_source: scale,
@@ -145,28 +146,30 @@ impl Drawing {
             reach: None,
         };
         self.effects(&mut adjusted, plan, time, &placed, plan.effects.len());
-        let weight = self.adjustment_weight(sequence, plan, time, scale, (w, h));
+        let weight = self.adjustment_weight(sequence, plan, at, scale, (w, h));
         weigh_in(canvas, adjusted, &weight, plan.blend);
     }
 
-    /// How much an adjustment layer at clip time `time` weighs at each pixel of a `w` × `h` canvas
+    /// How much an adjustment layer at sequence time `at` weighs at each pixel of a `w` × `h` canvas
     /// drawn at `scale`: as much as its opacity, masks, and frame cover there.
     fn adjustment_weight(
         &self,
         sequence: &SequencePlan,
         plan: &ClipPlan,
-        time: Time,
+        at: Time,
         scale: f64,
         (w, h): (usize, usize),
     ) -> Vec<f32> {
+        let placement = sequence.placement(plan, at).scaled(scale);
+        let time = placement.time();
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
         let mut frame = Image::filled(w, h, [1.0; 4]);
         let masks = mask::prepare(&plan.clip.masks, size, scale, time);
         if let Some(covered) = mask::coverage(&masks, w, h) {
             frame.mul_coverage(&covered);
         }
-        let place = Affine::scale(scale, scale)
-            .then_apply(&self.geometry(sequence, plan, time))
+        let place = placement
+            .to_output
             .then_apply(&Affine::scale(1.0 / scale, 1.0 / scale));
         frame = match crop_rect(plan, time, size, scale, (w, h)) {
             Some(crop) => frame.transformed_within(w, h, &place, crop),
@@ -257,7 +260,7 @@ impl ClipEnv<'_> {
         let input = self.drawing.input(
             placed.sequence,
             self.plan,
-            time,
+            at,
             placed.scale,
             (cw, ch),
             placed.reach,

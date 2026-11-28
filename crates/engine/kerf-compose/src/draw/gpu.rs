@@ -84,7 +84,8 @@ fn ready_gpu() -> Option<&'static Gpu> {
 /// A clip's picture with all done to it that is done to the picture itself, as [`Ready`] on the CPU.
 struct GpuReady {
     picture: GpuPicture,
-    to_output: Affine,
+    /// When that is, and its picture's pixels to output pixels then.
+    placement: Placement,
     crop: Option<Rect>,
     opacity: f32,
     /// Nothing can have left a hole in it.
@@ -295,7 +296,7 @@ impl Drawing {
         }
         let time = plan.clip.time_at(at);
         let reach = self.gpu_reach(sequence, plan, at, scale);
-        let shape = self.gpu_shape(sequence, plan, time, scale, reach);
+        let shape = self.gpu_shape(sequence, plan, at, scale, reach);
         if !gpu.fits(shape.source.0, shape.source.1) {
             why.push(format!("clip `{clip}` is larger than the GPU can hold"));
         }
@@ -476,7 +477,7 @@ impl Drawing {
             }
         }
         let reach = self.gpu_reach(sequence, plan, at, scale);
-        let shape = self.gpu_shape(sequence, plan, time, scale, reach);
+        let shape = self.gpu_shape(sequence, plan, at, scale, reach);
         // A card behind it makes its picture larger.
         let past = shape.past.as_ref().map(frame_in);
         let tall = past.map_or(f64::from(plan.size.1) * shape.source_per, |past| past.h);
@@ -504,16 +505,17 @@ impl Drawing {
         self.reach(sequence, plan, at, scale, Some(&scene))
     }
 
-    /// The numbers [`Drawing::input`] works out for a clip's picture, a generator's reaching as far
-    /// past its frame as `reach` says.
+    /// The numbers [`Drawing::input`] works out for a clip's picture at sequence time `at`, a
+    /// generator's reaching as far past its frame as `reach` says.
     fn gpu_shape(
         &self,
         sequence: &SequencePlan,
         plan: &ClipPlan,
-        time: Time,
+        at: Time,
         scale: f64,
         reach: Option<Reach>,
     ) -> Shape {
+        let time = plan.clip.time_at(at);
         let canvas = output_size(sequence.width, sequence.height, scale);
         let past = match &plan.source {
             Source::Title(_) | Source::Sound(_) | Source::Drawn(_) => {
@@ -553,7 +555,7 @@ impl Drawing {
                 }
             }
         };
-        let place = Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+        let place = sequence.placement(plan, at).scaled(scale).to_output;
         if plan.letterboxed {
             Shape {
                 source,
@@ -832,14 +834,13 @@ impl Drawing {
     ) -> Option<GpuPicture> {
         let plan = &shown.plan;
         let clip = &plan.clip;
-        let time = clip.time_at(at);
         if matches!(plan.source, Source::Nothing) {
             return Some(canvas);
         }
         if matches!(plan.source, Source::Adjustment) {
-            let shape = self.gpu_shape(sequence, plan, time, scale, None);
-            let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
-            return self.gpu_adjust(frame, canvas, (sequence, plan, time, scale), &ops);
+            let shape = self.gpu_shape(sequence, plan, at, scale, None);
+            let ops = self.gpu_ops(sequence, plan, clip.time_at(at), at, scale, &shape)?;
+            return self.gpu_adjust(frame, canvas, (sequence, plan, at, scale), &ops);
         }
         let size = (canvas.w, canvas.h);
         if matches!(plan.source, Source::Mesh) {
@@ -880,7 +881,7 @@ impl Drawing {
             let Some(ready) = ready else {
                 return Some(canvas);
             };
-            let drawn = self.gpu_project(frame, depth, (plan, time), &ready, size, None)?;
+            let drawn = self.gpu_project(frame, depth, plan, &ready, size, None)?;
             let whole = Rect::new(0.0, 0.0, f64::from(size.0), f64::from(size.1));
             let canvas = frame.composite(
                 canvas,
@@ -907,7 +908,7 @@ impl Drawing {
         // A picture that moves while its shutter is open is smeared over where it goes; a pass,
         // which says one thing of each pixel, is not.
         let smeared = (self.pass == Pass::Picture)
-            .then(|| self.smeared(sequence, plan, time, scale, &ready.to_output, kept))
+            .then(|| sequence.smeared(plan, &ready.placement, scale, kept))
             .flatten();
         let canvas = match smeared {
             Some(places) => {
@@ -916,7 +917,7 @@ impl Drawing {
             None => frame.composite(
                 canvas,
                 &ready.picture,
-                &ready.to_output,
+                &ready.placement.to_output,
                 kept,
                 ready.opacity,
                 blend,
@@ -958,13 +959,9 @@ impl Drawing {
                 else {
                     continue;
                 };
-                let time = shown.plan.clip.time_at(at);
+                let time = one.placement.time();
                 let (pw, ph) = (f64::from(one.picture.w), f64::from(one.picture.h));
-                let placement = Placement {
-                    time,
-                    to_output: one.to_output,
-                };
-                let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &placement);
+                let plane = three_d::Plane::of(&scene, &shown.plan, (pw, ph), &one.placement);
                 let height = size.1 as f64;
                 let deep = three_d::depth_of(&shown.plan, time, height);
                 let bevel = three_d::bevel_of(&shown.plan, time, height);
@@ -1058,13 +1055,13 @@ impl Drawing {
         })
     }
 
-    /// A clip in depth, on a picture of `size`, transparent around it, out of focus as far as the camera
-    /// has it.
+    /// A clip in depth, as `ready` has it, on a picture of `size`, transparent around it, out of focus
+    /// as far as the camera has it.
     fn gpu_project(
         &self,
         frame: &mut GpuFrame<'static>,
         depth: &mut Depth,
-        (plan, time): (&ClipPlan, Time),
+        plan: &ClipPlan,
         ready: &GpuReady,
         size: (u32, u32),
         depths: Option<kerf_gpu::depth::Depths>,
@@ -1080,11 +1077,8 @@ impl Drawing {
             })
         });
         let scene = &depth.scene;
-        let placement = Placement {
-            time,
-            to_output: ready.to_output,
-        };
-        let plane = three_d::Plane::of(scene, plan, (pw, ph), &placement);
+        let time = ready.placement.time();
+        let plane = three_d::Plane::of(scene, plan, (pw, ph), &ready.placement);
         let smaller = three_d::read_smaller(scene, &plane, (pw, ph)).map(|by| {
             let (sw, sh) = three_d::smaller_size((pw, ph), by);
             let empty = frame.clear(sw as u32, sh as u32);
@@ -1197,15 +1191,7 @@ impl Drawing {
                 continue;
             };
             let depths = layers.next_depths();
-            let time = shown.plan.clip.time_at(at);
-            let drawn = self.gpu_project(
-                frame,
-                depth,
-                (&shown.plan, time),
-                &ready,
-                size,
-                Some(depths),
-            )?;
+            let drawn = self.gpu_project(frame, depth, &shown.plan, &ready, size, Some(depths))?;
             frame.lay(&mut layers, &drawn, ready.opacity, shown.plan.blend);
             frame.release(drawn);
             frame.release(ready.picture);
@@ -1229,7 +1215,7 @@ impl Drawing {
         let clip = &plan.clip;
         let time = clip.time_at(at);
         let reach = self.reach(sequence, plan, at, scale, scene);
-        let shape = self.gpu_shape(sequence, plan, time, scale, reach);
+        let shape = self.gpu_shape(sequence, plan, at, scale, reach);
         let ops = self.gpu_ops(sequence, plan, time, at, scale, &shape)?;
         // Media that cannot be read draws nothing, as on the CPU.
         let Some(picture) = self.gpu_source(frame, sequence, plan, time, scale, &shape)? else {
@@ -1253,8 +1239,7 @@ impl Drawing {
             ),
         };
         if plan.letterboxed {
-            let place =
-                Affine::scale(scale, scale).then_apply(&self.geometry(sequence, plan, time));
+            let place = sequence.placement(plan, at).scaled(scale).to_output;
             let m = place.then_apply(&Affine::scale(1.0 / source_per, 1.0 / source_per));
             let whole = Rect::new(0.0, 0.0, picture.w as f64, picture.h as f64);
             let boxed = frame.filled(canvas.0, canvas.1, [0.0, 0.0, 0.0, 1.0]);
@@ -1344,7 +1329,7 @@ impl Drawing {
             };
         Some(Some(GpuReady {
             picture,
-            to_output,
+            placement: Placement::of(plan, at, to_output),
             crop,
             opacity,
             opaque,
@@ -1360,7 +1345,7 @@ impl Drawing {
         placed: (&SequencePlan, &ClipPlan, Time, f64),
         ops: &[Op],
     ) -> Option<GpuPicture> {
-        let (sequence, plan, time, scale) = placed;
+        let (sequence, plan, at, scale) = placed;
         let (w, h) = (canvas.w as usize, canvas.h as usize);
         let mut adjusted = frame.copy(&canvas);
         for op in ops {
@@ -1376,14 +1361,16 @@ impl Drawing {
                 }
             };
         }
+        let placement = sequence.placement(plan, at).scaled(scale);
+        let time = placement.time();
         let size = (f64::from(plan.size.0), f64::from(plan.size.1));
         let mut weight = frame.filled(canvas.w, canvas.h, [1.0; 4]);
         let masks = mask::prepare(&plan.clip.masks, size, scale, time);
         if let Some(covered) = mask::coverage(&masks, w, h) {
             weight = frame.multiply(weight, &covered);
         }
-        let place = Affine::scale(scale, scale)
-            .then_apply(&self.geometry(sequence, plan, time))
+        let place = placement
+            .to_output
             .then_apply(&Affine::scale(1.0 / scale, 1.0 / scale));
         let crop = crop_rect(plan, time, size, scale, (w, h));
         if crop.is_some() || !identity(&place) {
