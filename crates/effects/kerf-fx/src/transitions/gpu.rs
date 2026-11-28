@@ -897,6 +897,15 @@ fn how_grunge(id: &str, t: &Tx) -> Option<How> {
 }
 
 /// The kernels, built once.
+/// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
+pub(super) fn source() -> String {
+    format!(
+        "{}{}",
+        include_str!("kernels.wgsl"),
+        kerf_kernel::wipe_wgsl()
+    )
+}
+
 struct Stage {
     layout: wgpu::BindGroupLayout,
     wipes: wgpu::ComputePipeline,
@@ -912,14 +921,7 @@ impl Stage {
         let built = gpu.build(|device| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("kerf-transitions"),
-                source: wgpu::ShaderSource::Wgsl(
-                    format!(
-                        "{}{}",
-                        include_str!("kernels.wgsl"),
-                        kerf_kernel::wipe_wgsl()
-                    )
-                    .into(),
-                ),
+                source: wgpu::ShaderSource::Wgsl(source().into()),
             });
             let layout = kerf_gpu::kernel_layout(device);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

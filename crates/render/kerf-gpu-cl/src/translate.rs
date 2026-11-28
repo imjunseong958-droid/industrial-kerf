@@ -14,10 +14,10 @@ use crate::format::Texel;
 use naga::proc::{Layouter, TypeResolution};
 use naga::valid::{FunctionInfo, ModuleInfo};
 use naga::{
-    AddressSpace, ArraySize, BinaryOperator, Binding, Block, BuiltIn, Expression, Function,
-    GlobalVariable, Handle, ImageClass, ImageDimension, ImageQuery, Literal, MathFunction, Module,
-    RelationalFunction, Scalar, ScalarKind, Statement, StorageFormat, SwitchValue, Type, TypeInner,
-    UnaryOperator, VectorSize,
+    AddressSpace, ArraySize, AtomicFunction, BinaryOperator, Binding, Block, BuiltIn, Expression,
+    Function, GlobalVariable, Handle, ImageClass, ImageDimension, ImageQuery, Literal,
+    MathFunction, Module, RelationalFunction, Scalar, ScalarKind, Statement, StorageFormat,
+    SwitchValue, Type, TypeInner, UnaryOperator, VectorSize,
 };
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -65,8 +65,8 @@ pub struct Translated {
     /// The kernel's name in `source`.
     pub kernel: String,
     pub workgroup: [u32; 3],
-    /// Two arguments each: a buffer's bytes and their count, or a texture's texels and its
-    /// `(width, height, texel, 0)`.
+    /// The bindings the kernel uses. Two arguments each: a buffer's bytes and their count, or a
+    /// texture's texels and its `(width, height, texel, 0)`.
     pub resources: Vec<Resource>,
 }
 
@@ -99,7 +99,7 @@ pub fn translate(
         out: String::new(),
         gates: 0,
     };
-    let resources = writer.resources()?;
+    let resources = writer.resources(info.get_entry_point(index))?;
     let mut source = String::new();
     if exact {
         source.push_str("#define KERF_EXACT 1\n");
@@ -181,6 +181,13 @@ enum Place {
         buffer: String,
         offset: String,
         writable: bool,
+    },
+    /// One number of a vector that is a variable, which one being worked out when run: the
+    /// vector as C, which of its numbers, and the prelude's name for its kind and length.
+    Told {
+        vector: String,
+        index: String,
+        kind: String,
     },
 }
 
@@ -317,6 +324,14 @@ impl<'a> Writer<'a> {
                 Ok(format!("struct kerf_a{}", handle.index()))
             }
             (TypeInner::Image { .. }, _) => Ok("kerf_tex".to_owned()),
+            (
+                TypeInner::Matrix {
+                    columns,
+                    rows,
+                    scalar: Scalar::F32,
+                },
+                _,
+            ) => Ok(format!("kerf_m{}x{}", size_of(*columns), size_of(*rows))),
             (other, _) => unsupported(format!("a value of type {other:?}")),
         }
     }
@@ -327,6 +342,7 @@ impl<'a> Writer<'a> {
         match &self.module.types[handle].inner {
             TypeInner::Scalar(scalar) => scalar_name(*scalar).is_ok(),
             TypeInner::Vector { scalar, .. } => scalar_name(*scalar).is_ok(),
+            TypeInner::Matrix { scalar, .. } => *scalar == Scalar::F32,
             TypeInner::Struct { members, .. } => {
                 members.iter().all(|member| self.has_value(member.ty))
             }
@@ -339,10 +355,15 @@ impl<'a> Writer<'a> {
         }
     }
 
-    /// The module's bindings, by group and binding, each with the global it is.
-    fn resources(&self) -> Result<Vec<(Handle<GlobalVariable>, Resource)>> {
+    /// The bindings a kernel uses, itself or through what it calls, by group and binding, each
+    /// with the global it is. One its module declares for another kernel is none of its own: its
+    /// bind group need not hold it.
+    fn resources(&self, kernel: &FunctionInfo) -> Result<Vec<(Handle<GlobalVariable>, Resource)>> {
         let mut found = Vec::new();
         for (handle, global) in self.module.global_variables.iter() {
+            if kernel[handle].is_empty() {
+                continue;
+            }
             let Some(binding) = &global.binding else {
                 match global.space {
                     AddressSpace::Private | AddressSpace::WorkGroup => {
@@ -485,9 +506,9 @@ impl<'a> Writer<'a> {
     /// Whether a type is one a buffer holds: no boolean is.
     fn in_buffers(&self, handle: Handle<Type>) -> bool {
         match &self.module.types[handle].inner {
-            TypeInner::Scalar(scalar) | TypeInner::Vector { scalar, .. } => {
-                kind_letter(*scalar).is_ok()
-            }
+            TypeInner::Scalar(scalar)
+            | TypeInner::Atomic(scalar)
+            | TypeInner::Vector { scalar, .. } => kind_letter(*scalar).is_ok(),
             TypeInner::Struct { members, .. } => {
                 members.iter().all(|member| self.in_buffers(member.ty))
             }
@@ -499,7 +520,8 @@ impl<'a> Writer<'a> {
     /// A value of `shape` read from `buffer`, `offset` bytes in.
     fn read(&self, shape: &Shape<'a>, buffer: &str, offset: &str) -> Result<String> {
         match (&*self.inner(shape), shape) {
-            (TypeInner::Scalar(scalar), _) => Ok(format!(
+            // A number others may be changing is read as it is then.
+            (TypeInner::Scalar(scalar) | TypeInner::Atomic(scalar), _) => Ok(format!(
                 "kerf_rd_{}1({buffer}, {offset})",
                 kind_letter(*scalar)?
             )),
@@ -520,7 +542,7 @@ impl<'a> Writer<'a> {
     /// `value` of `shape` written into `buffer`, `offset` bytes in.
     fn write(&self, shape: &Shape<'a>, buffer: &str, offset: &str, value: &str) -> Result<String> {
         match (&*self.inner(shape), shape) {
-            (TypeInner::Scalar(scalar), _) => Ok(format!(
+            (TypeInner::Scalar(scalar) | TypeInner::Atomic(scalar), _) => Ok(format!(
                 "kerf_wr_{}1({buffer}, {offset}, {value})",
                 kind_letter(*scalar)?
             )),
@@ -700,8 +722,30 @@ impl<'a> Writer<'a> {
                 };
                 format!("(({of})({zero}))")
             }
-            TypeInner::Struct { .. } | TypeInner::Array { .. } => {
-                format!("(({}){{0}})", self.c_type(shape)?)
+            TypeInner::Struct { members, .. } => {
+                let mut parts = Vec::with_capacity(members.len());
+                for member in members {
+                    parts.push(self.zero(&Shape::Of(member.ty))?);
+                }
+                format!("(({}){{{}}})", self.c_type(shape)?, parts.join(", "))
+            }
+            TypeInner::Array {
+                base,
+                size: ArraySize::Constant(count),
+                ..
+            } => {
+                let one = self.zero(&Shape::Of(*base))?;
+                let parts = vec![one; count.get() as usize];
+                format!("(({}){{{{{}}}}})", self.c_type(shape)?, parts.join(", "))
+            }
+            TypeInner::Matrix {
+                columns,
+                rows,
+                scalar,
+            } => {
+                let column = format!("(({})(0.0f))", vector_name(*rows, *scalar)?);
+                let parts = vec![column; size_of(*columns)];
+                format!("(({}){{{{{}}}}})", self.c_type(shape)?, parts.join(", "))
             }
             other => return unsupported(format!("nothing of type {other:?}")),
         })
@@ -839,6 +883,11 @@ impl<'a> Writer<'a> {
                         self.write(&pointee, &buffer, &offset, &value)?
                     }
                     Place::Bytes { .. } => return unsupported("a store into what is only read"),
+                    Place::Told {
+                        vector,
+                        index,
+                        kind,
+                    } => format!("{vector} = kerf_with_{kind}({vector}, {index}, {value})"),
                 };
                 self.indent(depth);
                 let _ = writeln!(self.out, "{line};");
@@ -877,6 +926,56 @@ impl<'a> Writer<'a> {
                 match result {
                     Some(result) => {
                         let of = self.c_type(&self.shape(scope, *result))?;
+                        let _ = writeln!(self.out, "const {of} _e{} = {call};", result.index());
+                        scope.baked[result.index()] = true;
+                    }
+                    None => {
+                        let _ = writeln!(self.out, "{call};");
+                    }
+                }
+            }
+            Statement::Atomic {
+                pointer,
+                fun,
+                value,
+                result,
+            } => {
+                let TypeInner::Atomic(scalar) = &*self.inner(&self.pointee(scope, *pointer)?)
+                else {
+                    return unsupported("a change in step of what is no atomic");
+                };
+                let of = match scalar.kind {
+                    ScalarKind::Sint => "int",
+                    ScalarKind::Uint => "uint",
+                    other => return unsupported(format!("an atomic of {other:?}")),
+                };
+                let name = match fun {
+                    AtomicFunction::Add => "atomic_add",
+                    AtomicFunction::Subtract => "atomic_sub",
+                    AtomicFunction::And => "atomic_and",
+                    AtomicFunction::ExclusiveOr => "atomic_xor",
+                    AtomicFunction::InclusiveOr => "atomic_or",
+                    AtomicFunction::Min => "atomic_min",
+                    AtomicFunction::Max => "atomic_max",
+                    AtomicFunction::Exchange { compare: None } => "atomic_xchg",
+                    AtomicFunction::Exchange { compare: Some(_) } => {
+                        return unsupported("an exchange that compares first");
+                    }
+                };
+                let Place::Bytes {
+                    buffer,
+                    offset,
+                    writable: true,
+                } = self.place(scope, *pointer)?
+                else {
+                    return unsupported("a change in step of what is not a buffer's to write");
+                };
+                let value = self.value(scope, *value)?;
+                let call =
+                    format!("{name}((volatile __global {of}*)({buffer} + {offset}), {value})");
+                self.indent(depth);
+                match result {
+                    Some(result) => {
                         let _ = writeln!(self.out, "const {of} _e{} = {call};", result.index());
                         scope.baked[result.index()] = true;
                     }
@@ -998,6 +1097,16 @@ impl<'a> Writer<'a> {
                 (TypeInner::Vector { .. }, Index::Known(index)) => {
                     format!("{name}.{}", PARTS[*index as usize])
                 }
+                (TypeInner::Matrix { columns, .. }, index) => {
+                    format!("{name}.c[{}]", index.held(size_of(*columns) as u32))
+                }
+                (TypeInner::Vector { size, scalar }, Index::Told(index)) => {
+                    return Ok(Place::Told {
+                        vector: name,
+                        index: index.clone(),
+                        kind: format!("{}{}", kind_letter(*scalar)?, size_of(*size)),
+                    });
+                }
                 (
                     TypeInner::Array {
                         size: ArraySize::Constant(count),
@@ -1007,6 +1116,7 @@ impl<'a> Writer<'a> {
                 ) => format!("{name}.a[{}]", index.held(count.get())),
                 (other, _) => return unsupported(format!("a part of a variable of {other:?}")),
             })),
+            Place::Told { .. } => unsupported("a part of one number"),
             Place::Bytes {
                 buffer,
                 offset,
@@ -1016,8 +1126,12 @@ impl<'a> Writer<'a> {
                     (TypeInner::Struct { members, .. }, Index::Known(index)) => {
                         format!("{}u", members[*index as usize].offset)
                     }
-                    (TypeInner::Vector { scalar, .. }, index) => {
-                        format!("{} * {}u", index.told(), scalar.width)
+                    (TypeInner::Vector { size, scalar }, index) => {
+                        format!(
+                            "(uint)({}) * {}u",
+                            index.held(size_of(*size) as u32),
+                            scalar.width
+                        )
                     }
                     (
                         TypeInner::Array {
@@ -1027,6 +1141,24 @@ impl<'a> Writer<'a> {
                         },
                         index,
                     ) => format!("{} * {stride}u", index.held(count.get())),
+                    // As many as the buffer holds past where the array starts, which its binding
+                    // has made sure is at least one.
+                    (
+                        TypeInner::Array {
+                            size: ArraySize::Dynamic,
+                            stride,
+                            ..
+                        },
+                        index,
+                    ) => {
+                        let index = match index {
+                            Index::Known(index) => format!("{index}u"),
+                            Index::Told(index) => format!("(uint)({index})"),
+                        };
+                        format!(
+                            "min({index}, max(({buffer}_len - {offset}) / {stride}u, 1u) - 1u) * {stride}u"
+                        )
+                    }
                     (other, _) => return unsupported(format!("a part of a buffer's {other:?}")),
                 };
                 Ok(Place::Bytes {
@@ -1092,6 +1224,11 @@ impl<'a> Writer<'a> {
                     let pointee = self.pointee(scope, *pointer)?;
                     self.read(&pointee, &buffer, &offset)?
                 }
+                Place::Told {
+                    vector,
+                    index,
+                    kind,
+                } => format!("kerf_part_{kind}({vector}, {index})"),
             },
             Expression::AccessIndex { base, index } => {
                 let value = self.value(scope, *base)?;
@@ -1099,6 +1236,7 @@ impl<'a> Writer<'a> {
                     TypeInner::Vector { .. } => format!("({value}).{}", PARTS[*index as usize]),
                     TypeInner::Struct { .. } => format!("({value}).m{index}"),
                     TypeInner::Array { .. } => format!("({value}).a[{index}]"),
+                    TypeInner::Matrix { .. } => format!("({value}).c[{index}]"),
                     other => return unsupported(format!("a part of a value of {other:?}")),
                 }
             }
@@ -1110,6 +1248,11 @@ impl<'a> Writer<'a> {
                         size: ArraySize::Constant(count),
                         ..
                     } => format!("({value}).a[{}]", Index::Told(index).held(count.get())),
+                    TypeInner::Vector { size, scalar } => format!(
+                        "kerf_part_{}{}({value}, {index})",
+                        kind_letter(*scalar)?,
+                        size_of(*size)
+                    ),
                     other => return unsupported(format!("a part, told when run, of {other:?}")),
                 }
             }
@@ -1140,6 +1283,18 @@ impl<'a> Writer<'a> {
             } => {
                 let texture = self.value(scope, *image)?;
                 format!("((uint2)((uint)({texture}).w, (uint)({texture}).h))")
+            }
+            Expression::ArrayLength(array) => {
+                let TypeInner::Array { stride, .. } = &*self.inner(&self.pointee(scope, *array)?)
+                else {
+                    return unsupported("the length of what is no array");
+                };
+                match self.place(scope, *array)? {
+                    Place::Bytes { buffer, offset, .. } => {
+                        format!("(({buffer}_len - {offset}) / {stride}u)")
+                    }
+                    _ => return unsupported("the length of an array that is in no buffer"),
+                }
             }
             Expression::Unary { op, expr } => {
                 let value = self.value(scope, *expr)?;
@@ -1211,6 +1366,16 @@ impl<'a> Writer<'a> {
                 format!("(({}){{{}}})", self.c_type(&shape)?, parts.join(", "))
             }
             TypeInner::Array { .. } => {
+                let parts: Vec<&str> = parts.iter().map(|(value, _)| value.as_str()).collect();
+                format!("(({}){{{{{}}}}})", self.c_type(&shape)?, parts.join(", "))
+            }
+            // A matrix is put together of its columns here, each a vector.
+            TypeInner::Matrix { columns, .. }
+                if parts.len() == size_of(*columns)
+                    && parts
+                        .iter()
+                        .all(|(_, inner)| matches!(inner, TypeInner::Vector { .. })) =>
+            {
                 let parts: Vec<&str> = parts.iter().map(|(value, _)| value.as_str()).collect();
                 format!("(({}){{{{{}}}}})", self.c_type(&shape)?, parts.join(", "))
             }
@@ -1421,6 +1586,7 @@ impl<'a> Writer<'a> {
             MathFunction::Cross if float => format!("cross({a}, {b})"),
             MathFunction::Mix => format!("mix({a}, {b}, {c})"),
             MathFunction::Step => format!("step({a}, {b})"),
+            MathFunction::SmoothStep if float => format!("kerf_smooth{count}({a}, {b}, {c})"),
             MathFunction::Fma => format!("((({a}) * ({b})) + ({c}))"),
             MathFunction::CountOneBits => simple("popcount"),
             other => return unsupported(format!("the function {other:?}")),
@@ -1502,13 +1668,6 @@ impl Index {
         match self {
             Index::Known(index) => format!("{index}"),
             Index::Told(index) => format!("min((uint)({index}), {}u)", count.saturating_sub(1)),
-        }
-    }
-
-    fn told(&self) -> String {
-        match self {
-            Index::Known(index) => format!("{index}u"),
-            Index::Told(index) => format!("min((uint)({index}), 3u)"),
         }
     }
 }

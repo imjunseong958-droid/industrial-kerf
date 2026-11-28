@@ -60,6 +60,44 @@ static uint2 kerf_umod2(uint2 a, uint2 b) { return (uint2)(kerf_umod1(a.x, b.x),
 static uint3 kerf_umod3(uint3 a, uint3 b) { return (uint3)(kerf_umod1(a.x, b.x), kerf_umod1(a.y, b.y), kerf_umod1(a.z, b.z)); }
 static uint4 kerf_umod4(uint4 a, uint4 b) { return (uint4)(kerf_umod1(a.x, b.x), kerf_umod1(a.y, b.y), kerf_umod1(a.z, b.z), kerf_umod1(a.w, b.w)); }
 
+// A smooth step from 0 at `a` to 1 at `b`.
+static float kerf_smooth1(float a, float b, float x) { const float t = clamp(kerf_div1(x - a, b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+static float2 kerf_smooth2(float2 a, float2 b, float2 x) { const float2 t = clamp(kerf_div2(x - a, b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+static float3 kerf_smooth3(float3 a, float3 b, float3 x) { const float3 t = clamp(kerf_div3(x - a, b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+static float4 kerf_smooth4(float4 a, float4 b, float4 x) { const float4 t = clamp(kerf_div4(x - a, b - a), 0.0f, 1.0f); return t * t * (3.0f - 2.0f * t); }
+
+// One number of a vector, which one being worked out when run: the last of them where `i` is
+// past it. And the vector with that number another.
+static float kerf_part_f2(float2 v, uint i) { return i == 0u ? v.x : v.y; }
+static float2 kerf_with_f2(float2 v, uint i, float x) { if (i == 0u) v.x = x; else v.y = x; return v; }
+static float kerf_part_f3(float3 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : v.z; }
+static float3 kerf_with_f3(float3 v, uint i, float x) { if (i == 0u) v.x = x; else if (i == 1u) v.y = x; else v.z = x; return v; }
+static float kerf_part_f4(float4 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : i == 2u ? v.z : v.w; }
+static float4 kerf_with_f4(float4 v, uint i, float x) { if (i == 0u) v.x = x; else if (i == 1u) v.y = x; else if (i == 2u) v.z = x; else v.w = x; return v; }
+static int kerf_part_i2(int2 v, uint i) { return i == 0u ? v.x : v.y; }
+static int2 kerf_with_i2(int2 v, uint i, int x) { if (i == 0u) v.x = x; else v.y = x; return v; }
+static int kerf_part_i3(int3 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : v.z; }
+static int3 kerf_with_i3(int3 v, uint i, int x) { if (i == 0u) v.x = x; else if (i == 1u) v.y = x; else v.z = x; return v; }
+static int kerf_part_i4(int4 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : i == 2u ? v.z : v.w; }
+static int4 kerf_with_i4(int4 v, uint i, int x) { if (i == 0u) v.x = x; else if (i == 1u) v.y = x; else if (i == 2u) v.z = x; else v.w = x; return v; }
+static uint kerf_part_u2(uint2 v, uint i) { return i == 0u ? v.x : v.y; }
+static uint2 kerf_with_u2(uint2 v, uint i, uint x) { if (i == 0u) v.x = x; else v.y = x; return v; }
+static uint kerf_part_u3(uint3 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : v.z; }
+static uint3 kerf_with_u3(uint3 v, uint i, uint x) { if (i == 0u) v.x = x; else if (i == 1u) v.y = x; else v.z = x; return v; }
+static uint kerf_part_u4(uint4 v, uint i) { return i == 0u ? v.x : i == 1u ? v.y : i == 2u ? v.z : v.w; }
+static uint4 kerf_with_u4(uint4 v, uint i, uint x) { if (i == 0u) v.x = x; else if (i == 1u) v.y = x; else if (i == 2u) v.z = x; else v.w = x; return v; }
+
+// A matrix: its columns.
+typedef struct { float2 c[2]; } kerf_m2x2;
+typedef struct { float3 c[2]; } kerf_m2x3;
+typedef struct { float4 c[2]; } kerf_m2x4;
+typedef struct { float2 c[3]; } kerf_m3x2;
+typedef struct { float3 c[3]; } kerf_m3x3;
+typedef struct { float4 c[3]; } kerf_m3x4;
+typedef struct { float2 c[4]; } kerf_m4x2;
+typedef struct { float3 c[4]; } kerf_m4x3;
+typedef struct { float4 c[4]; } kerf_m4x4;
+
 // A picture: its texels row by row in a buffer, how many across and down, and what a texel is.
 typedef struct {
     __global uchar* p;

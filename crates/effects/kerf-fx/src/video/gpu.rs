@@ -377,6 +377,16 @@ fn steps(op: &FxOp) -> Vec<Step> {
 }
 
 /// The effect kernels on a device.
+/// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
+fn source() -> String {
+    format!(
+        "{}{}{}",
+        include_str!("fx.wgsl"),
+        kerf_kernel::color_balance_wgsl(),
+        kerf_kernel::box_line_wgsl()
+    )
+}
+
 struct Stage {
     px: wgpu::ComputePipeline,
     run: wgpu::ComputePipeline,
@@ -388,15 +398,7 @@ impl Stage {
         let built = gpu.build(|device| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("kerf-fx"),
-                source: wgpu::ShaderSource::Wgsl(
-                    format!(
-                        "{}{}{}",
-                        include_str!("fx.wgsl"),
-                        kerf_kernel::color_balance_wgsl(),
-                        kerf_kernel::box_line_wgsl()
-                    )
-                    .into(),
-                ),
+                source: wgpu::ShaderSource::Wgsl(source().into()),
             });
             let layout = kerf_gpu::kernel_layout(device);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {

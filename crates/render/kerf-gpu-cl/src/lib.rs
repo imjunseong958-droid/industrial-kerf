@@ -27,6 +27,19 @@ pub fn open(software: bool) -> Option<(wgpu::Device, wgpu::Queue)> {
     now(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
 }
 
+/// Every kernel of a WGSL module written out, to see that each can be: how many there are, or
+/// the first that cannot be and why. One that cannot runs nowhere OpenCL does the drawing.
+pub fn write_out_all(source: &str) -> Result<usize, String> {
+    let (module, info) = parse(source).map_err(|error| error.0)?;
+    for point in &module.entry_points {
+        for exact in [false, true] {
+            translate::translate(&module, &info, &point.name, exact)
+                .map_err(|error| format!("`{}`: {error}", point.name))?;
+        }
+    }
+    Ok(module.entry_points.len())
+}
+
 /// What `future` comes to. Nothing here waits on anything else, so it is there when asked.
 fn now<F: Future>(future: F) -> F::Output {
     let mut future = pin!(future);

@@ -766,6 +766,14 @@ fn on_gpu(gpu: &'static Gpu, image: &Image, ops: &[FxOp]) -> Vec<f32> {
     frame.read_floats(&out).expect("read back")
 }
 
+/// An accelerator with no graphics queue runs these kernels through OpenCL, which writes each out
+/// from its WGSL: every one of them has to be something it writes.
+#[test]
+fn every_kernel_is_written_out_for_opencl() {
+    let kernels = kerf_gpu::written_for_opencl(&source()).unwrap_or_else(|why| panic!("{why}"));
+    assert!(kernels > 0);
+}
+
 #[test]
 fn gpu_effects_match_cpu_exactly() {
     let Some(gpu) = kerf_gpu::shared() else {

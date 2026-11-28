@@ -39,6 +39,16 @@ pub struct Kernels {
     no_picture: wgpu::TextureView,
 }
 
+/// The WGSL of the kernel that lays layers by their depth: a picture's kernels, whose blending
+/// it does, and its own on the end of them.
+pub(crate) fn by_depth_source() -> String {
+    format!(
+        "{}{}",
+        include_str!("picture.wgsl"),
+        include_str!("by_depth.wgsl")
+    )
+}
+
 fn uniform_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
@@ -135,15 +145,7 @@ impl Kernels {
                 buffer_entry(5, true),
             ],
         });
-        let by_depth = pipelines(
-            "kerf-by-depth",
-            format!(
-                "{}{}",
-                include_str!("picture.wgsl"),
-                include_str!("by_depth.wgsl")
-            ),
-            &by_depth_layout,
-        );
+        let by_depth = pipelines("kerf-by-depth", by_depth_source(), &by_depth_layout);
         let distance_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("kerf-distance"),
             entries: &[

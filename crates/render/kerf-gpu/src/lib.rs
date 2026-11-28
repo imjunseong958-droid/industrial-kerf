@@ -183,6 +183,14 @@ impl Yuv<'_> {
     }
 }
 
+/// How many kernels a WGSL module has, each written out as OpenCL C to see that it can be, or the
+/// first that cannot be and why. A kernel that cannot be runs nowhere OpenCL does the drawing
+/// (`KERF_GPU=opencl`), which no machine that tests it on a GPU of its own would show: a crate
+/// holds its kernels to this in its tests.
+pub fn written_for_opencl(source: &str) -> Result<usize, String> {
+    kerf_gpu_cl::write_out_all(source)
+}
+
 /// The one device every compositor shares. `None` when the CPU has to draw.
 pub fn shared() -> Option<&'static Gpu> {
     static SHARED: OnceLock<Option<Gpu>> = OnceLock::new();
@@ -1920,6 +1928,28 @@ mod tests {
             worst = worst.max((g - c).abs());
         }
         assert!(worst <= tolerance, "{what}: differs by {worst}");
+    }
+
+    #[test]
+    fn every_kernel_here_is_written_out_for_opencl() {
+        let by_depth = depth::by_depth_source();
+        for (name, source) in [
+            ("picture", include_str!("picture.wgsl")),
+            ("input", include_str!("input.wgsl")),
+            ("finish", include_str!("finish.wgsl")),
+            ("finish16", include_str!("finish16.wgsl")),
+            ("finish_signal", include_str!("finish_signal.wgsl")),
+            ("planes", include_str!("planes.wgsl")),
+            ("output", include_str!("output.wgsl")),
+            ("depth", include_str!("depth.wgsl")),
+            ("depth_prep", include_str!("depth_prep.wgsl")),
+            ("by_depth", by_depth.as_str()),
+            ("distance", include_str!("distance.wgsl")),
+            ("focus", include_str!("focus.wgsl")),
+        ] {
+            let kernels = written_for_opencl(source).unwrap_or_else(|why| panic!("{name}: {why}"));
+            assert!(kernels > 0, "{name} has no kernel");
+        }
     }
 
     #[test]

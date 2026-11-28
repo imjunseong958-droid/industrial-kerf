@@ -38,7 +38,7 @@ impl U {
 }
 
 /// The kernels' WGSL: what is written by hand, and on the end of it what `kerf_kernel` writes out.
-fn source() -> String {
+pub(super) fn source() -> String {
     format!(
         "{}{}",
         include_str!("../kernels.wgsl"),
