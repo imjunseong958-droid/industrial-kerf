@@ -127,6 +127,115 @@ fn is_generator(clip: &Clip, id: &str) -> bool {
     matches!(&clip.content, Content::Generator { fx, .. } if fx == id)
 }
 
+/// Evaluate a `gen=camera@1` clip along shortest $SE(3)$ geodesics between bracketing keyframe
+/// timestamps when `geodesic=true` is enabled.
+fn geodesic_camera(
+    clip: &Clip,
+    def: Option<&FxDef>,
+    at: Time,
+    (width, height): (f64, f64),
+    fov: f64,
+    rig: Option<&kerf_geom::place::Rigged>,
+) -> Option<Camera> {
+    if !matches!(
+        generated(def, clip, "geodesic", at),
+        Some(Value::Bool(true))
+    ) {
+        return None;
+    }
+    let clip_time = clip.time_at(at);
+    let mut key_times: Vec<Time> = Vec::new();
+    let mut collect_keys = |p: &Param| {
+        if let Param::Animated(keys) = p {
+            for k in keys {
+                key_times.push(k.at);
+            }
+        }
+    };
+    for name in ["x", "y", "z"] {
+        collect_keys(&param(clip, name));
+    }
+    if let Content::Generator { params, .. } = &clip.content {
+        for name in ["pan", "tilt", "roll"] {
+            if let Some(p) = params.get(name) {
+                collect_keys(p);
+            }
+        }
+    }
+    key_times.sort_unstable();
+    key_times.dedup();
+    if key_times.len() < 2 {
+        return None;
+    }
+    let next_idx = key_times.partition_point(|&t| t <= clip_time);
+    let (Some(left_idx), Some(&t1)) = (next_idx.checked_sub(1), key_times.get(next_idx)) else {
+        return None;
+    };
+    let t0 = key_times[left_idx];
+    let span = (t1 - t0).flicks() as f64;
+    if span <= 0.0 {
+        return None;
+    }
+    let raw_t = ((clip_time - t0).flicks() as f64 / span).clamp(0.0, 1.0);
+    // Use the easing curve of the first animated pose keyframe starting at `t0`.
+    let mut interp = kerf_model::Interp::Linear;
+    'find_interp: {
+        for name in ["pan", "tilt", "roll"] {
+            if let Content::Generator { params, .. } = &clip.content
+                && let Some(Param::Animated(keys)) = params.get(name)
+                && let Some(k) = keys.iter().find(|k| k.at == t0)
+            {
+                interp = k.interp;
+                break 'find_interp;
+            }
+        }
+        for name in ["x", "y", "z"] {
+            if let Param::Animated(keys) = param(clip, name)
+                && let Some(k) = keys.iter().find(|k| k.at == t0)
+            {
+                interp = k.interp;
+                break 'find_interp;
+            }
+        }
+    }
+    let alpha = interp.curve(raw_t);
+
+    let lens_at = |t_clip: Time| -> Lens {
+        let own = |name: &str| number(&param(clip, name).value_at(t_clip));
+        let gen_num = |name: &str| {
+            let Content::Generator { params, .. } = &clip.content else {
+                return 0.0;
+            };
+            match params.get(name) {
+                Some(p) => number(&p.value_at(t_clip)),
+                None => def
+                    .and_then(|d| d.find(name))
+                    .and_then(|d| d.default.as_number())
+                    .unwrap_or(0.0),
+            }
+        };
+        Lens {
+            at: [own("x"), own("y"), own("z")],
+            tilt: gen_num("tilt"),
+            pan: gen_num("pan"),
+            roll: gen_num("roll"),
+            fov,
+        }
+    };
+    let p0 = kerf_geom::lie::Se3::from_lens(&lens_at(t0), (width, height));
+    let p1 = kerf_geom::lie::Se3::from_lens(&lens_at(t1), (width, height));
+    let pose = p0.interpolate(&p1, alpha);
+    let focal = height / 2.0 / (fov.clamp(1.0, 179.0).to_radians() / 2.0).tan();
+    let mut cam = pose.to_camera(focal, (width / 2.0, height / 2.0), height);
+    if let Some(rig) = rig {
+        cam.eye = rig.point(cam.eye);
+        cam.right = unit(rig.way(cam.right));
+        cam.down = unit(rig.way(cam.down));
+        cam.forward = unit(rig.way(cam.forward));
+    }
+    Some(cam)
+}
+
 /// A light on the scene, with how much what is in its way takes of it, from 0 to 1, and how wide it
 /// is: 0 for a single ray.
 enum Light {
@@ -408,8 +517,14 @@ impl Scene {
             roll: read("roll", 0.0),
             fov: read("fov", DEFAULT_FOV),
         };
-        // A camera with a parent is where the parent takes it, looking as the parent turns it.
-        let seen_by = Camera::of(&lens, (width, height), camera.and_then(rigged).as_ref());
+        let cam_rig = camera.and_then(rigged);
+        // A camera with `geodesic=true` interpolates its 6-DOF pose along shortest SE(3) geodesics
+        // between keyframe timestamps, eliminating Euler gimbal wobble; default stays Euler.
+        let seen_by = camera
+            .and_then(|clip| {
+                geodesic_camera(clip, def, at, (width, height), lens.fov, cam_rig.as_ref())
+            })
+            .unwrap_or_else(|| Camera::of(&lens, (width, height), cam_rig.as_ref()));
         let (eye, forward) = (seen_by.eye, seen_by.forward);
         let simulated = sequence
             .physics
@@ -453,6 +568,19 @@ impl Scene {
             carried,
             simulated,
         }
+    }
+
+    /// Spatial camera twist $\xi \in \mathfrak{se}(3)$ over `dt` seconds satisfying
+    /// $T_{\text{next}} = \exp(\xi \cdot \Delta t)\,T_{\text{now}}$, in pixel-world coordinates.
+    pub(super) fn camera_twist(&self, next: &Scene, dt: f64) -> kerf_geom::lie::Twist {
+        if dt <= 1e-12 || self.camera_bits() == next.camera_bits() {
+            return kerf_geom::lie::Twist::ZERO;
+        }
+        let t_now = kerf_geom::lie::Se3::from_camera(&self.camera);
+        let t_next = kerf_geom::lie::Se3::from_camera(&next.camera);
+        let xi = t_next.compose(&t_now.inverse()).log();
+        let inv_dt = 1.0 / dt;
+        kerf_geom::lie::Twist::new(times(xi.omega, inv_dt), times(xi.v, inv_dt))
     }
 
     /// Where its camera is and how it sees, as bits: what says where a ray through each pixel goes.

@@ -1495,3 +1495,157 @@ fn rigid_body_mesh_falls_bounces_on_static_floor_and_random_seek_is_bit_identica
         "changing physics vel_x must change frame_key"
     );
 }
+
+#[test]
+fn geodesic_camera_follows_shortest_se3_arc_without_euler_wobble() {
+    let scene = |cam_extra: &str| {
+        format!(
+            "kerf 1\nproject name=\"geo_cam\"\nsequence s1 rate=24 size=320x180 audio=48000\n\
+             \x20\x20track V1 video\n\
+             \x20\x20\x20\x20clip cube gen=mesh@1 at=0f dur=25f\n\
+             \x20\x20\x20\x20\x20\x20set kind=box width=0.35 height=0.35 length=0.35 color=#44bbff z=0.4\n\
+             \x20\x20track V2 video\n\
+             \x20\x20\x20\x20clip sun gen=light@1 at=0f dur=25f\n\
+             \x20\x20\x20\x20\x20\x20set kind=directional x=-0.4 y=-0.5 z=1\n\
+             \x20\x20track V3 video\n\
+             \x20\x20\x20\x20clip cam gen=camera@1 at=0f dur=25f\n\
+             \x20\x20\x20\x20\x20\x20set {cam_extra}\n"
+        )
+    };
+    let anim = "pan={0f:0 24f:60} tilt={0f:0 24f:50} roll={0f:0 24f:-70} fov=45";
+    let render_at = |doc: &str, f: i64| {
+        let project = kerf_lang::parse_document(doc, Catalog::builtin())
+            .unwrap_or_else(|e| panic!("{e:?}"))
+            .project;
+        let comp =
+            Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default()).unwrap();
+        comp.frame(Rate::FPS_24.time_of(f), 1.0)
+    };
+
+    let euler_doc = scene(anim);
+    let geo_doc = scene(&format!("{anim} geodesic=true"));
+
+    // Endpoints must match bit-for-bit.
+    assert_eq!(render_at(&euler_doc, 0).rgba, render_at(&geo_doc, 0).rgba);
+    assert_eq!(render_at(&euler_doc, 24).rgba, render_at(&geo_doc, 24).rgba);
+
+    // Midpoint differs from scalar Euler interpolation and matches exact Se3::interpolate(0.5).
+    let euler_mid = render_at(&euler_doc, 12);
+    let geo_mid = render_at(&geo_doc, 12);
+    assert_ne!(
+        euler_mid.rgba, geo_mid.rgba,
+        "geodesic midpoint must differ from Euler"
+    );
+
+    let l0 = kerf_geom::place::Lens {
+        at: [0.0; 3],
+        pan: 0.0,
+        tilt: 0.0,
+        roll: 0.0,
+        fov: 45.0,
+    };
+    let l1 = kerf_geom::place::Lens {
+        at: [0.0; 3],
+        pan: 60.0,
+        tilt: 50.0,
+        roll: -70.0,
+        fov: 45.0,
+    };
+    let mid_lens = kerf_geom::lie::Se3::from_lens(&l0, (320.0, 180.0))
+        .interpolate(&kerf_geom::lie::Se3::from_lens(&l1, (320.0, 180.0)), 0.5)
+        .to_lens((320.0, 180.0), 45.0);
+    let exact_mid = render_at(
+        &scene(&format!(
+            "x={} y={} z={} pan={} tilt={} roll={} fov=45",
+            mid_lens.at[0],
+            mid_lens.at[1],
+            mid_lens.at[2],
+            mid_lens.pan,
+            mid_lens.tilt,
+            mid_lens.roll
+        )),
+        12,
+    );
+    let max_diff = geo_mid
+        .rgba
+        .iter()
+        .zip(&exact_mid.rgba)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    assert!(
+        max_diff <= 1,
+        "geodesic camera midpoint must match Se3::interpolate(0.5), max_diff={max_diff}"
+    );
+}
+
+#[test]
+fn analytical_3d_motion_pass_matches_rigid_body_velocity_under_moving_camera() {
+    // Dynamic box moving right (+0.96 frame heights/s) and down (+0.48 frame heights/s) with zero
+    // gravity, viewed by a stationary camera: over dt = 1/24s at z=0, the screen displacement is
+    // exactly (0.96/24 * 180, 0.48/24 * 180) = (+7.2 px, +3.6 px).
+    let doc = "kerf 1\nproject name=\"motion3d\"\nsequence s1 rate=24 size=320x180 audio=48000\n\
+         \x20\x20track V1 video\n\
+         \x20\x20\x20\x20clip box1 gen=mesh@1 at=0f dur=24f\n\
+         \x20\x20\x20\x20\x20\x20set kind=box width=0.35 height=0.35 length=0.1 color=#ffffff x=0 y=0 z=0 physics=dynamic world_gravity=0 vel_x=0.96 vel_y=0.48\n";
+    let project = kerf_lang::parse_document(doc, Catalog::builtin())
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .project;
+    let comp = Compositor::new(
+        &project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass: kerf_compose::Pass::Motion,
+            accel: Accel::Never,
+            ..ComposeOptions::default()
+        },
+    )
+    .unwrap();
+    // At frame 0, box front face is centered at (160, 90) at z = -0.05 (slightly closer than z=0).
+    let f0 = comp.frame(Rate::FPS_24.time_of(0), 1.0);
+    let [r, g, b] = pixel(&f0, 160, 90);
+    assert_eq!(b, 255, "motion pass blue channel marks hit pixel");
+    // Expected screen displacement at z = -0.05 (closer than z=0 by factor rest_dist/(rest_dist - 0.05*h)).
+    let h = 180.0_f64;
+    let rest_dist = h / 2.0 / (40.0_f64.to_radians() / 2.0).tan();
+    let scale_near = rest_dist / (rest_dist - 0.05 * h);
+    let most = 0.125 * h;
+    let dx = (0.96 / 24.0) * h * scale_near;
+    let dy = (0.48 / 24.0) * h * scale_near;
+    let exp_r = ((0.5 + 0.5 * (dx / most).clamp(-1.0, 1.0)) * 255.0).round() as u8;
+    let exp_g = ((0.5 + 0.5 * (dy / most).clamp(-1.0, 1.0)) * 255.0).round() as u8;
+    assert!(
+        r.abs_diff(exp_r) <= 2 && g.abs_diff(exp_g) <= 2,
+        "analytical optical flow mismatch: got ({r}, {g}), expected ({exp_r}, {exp_g})"
+    );
+
+    // Now add a geodesic camera panning right (`pan: 0 -> 12 deg` over 1s): the world appears to
+    // flow LEFT relative to the static-camera reading (`r_pan < r`), exercising `Scene::camera_twist`.
+    let pan_doc = format!(
+        "{doc}  track V2 video\n    clip cam gen=camera@1 at=0f dur=24f\n      set pan={{0f:0 24f:12}} geodesic=true\n"
+    );
+    let pan_project = kerf_lang::parse_document(&pan_doc, Catalog::builtin())
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .project;
+    let pan_comp = Compositor::new(
+        &pan_project,
+        Catalog::builtin(),
+        &ComposeOptions {
+            pass: kerf_compose::Pass::Motion,
+            accel: Accel::Never,
+            ..ComposeOptions::default()
+        },
+    )
+    .unwrap();
+    let pan_f0 = pan_comp.frame(Rate::FPS_24.time_of(0), 1.0);
+    let [r_pan, g_pan, b_pan] = pixel(&pan_f0, 160, 90);
+    assert_eq!(b_pan, 255);
+    assert!(
+        r_pan + 5 < r,
+        "panning camera right must shift analytical screen flow left: static_r={r}, pan_r={r_pan}"
+    );
+    assert!(
+        g_pan.abs_diff(g) <= 2,
+        "pure horizontal pan should preserve vertical flow: static_g={g}, pan_g={g_pan}"
+    );
+}

@@ -87,8 +87,8 @@ pub(in crate::draw) enum Shade<'a> {
     Facing,
     /// Colored by how far each place goes on the screen in a frame, as a motion pass has it:
     /// to where the scene `0` sees it a frame on, the clip as `1` has it then, by a frame `2`
-    /// tall.
-    Moving(&'a Scene, &'a Placement, f64),
+    /// tall, over `3` seconds (used for exact analytical `screen_velocity` on rigid-body meshes).
+    Moving(&'a Scene, &'a Placement, f64, f64),
 }
 
 impl Mesh {
@@ -1459,10 +1459,24 @@ pub(in crate::draw) fn draw(
     let (mut nearest, columns, rows) = Nearest::over(&on_screen, (w, h));
     nearest.take_all(&on_screen);
 
-    // Where each point of the mesh is a frame on, for a motion pass. A file's animation that
-    // gives it other points then tells nothing of where each went, and it is said to hold still.
+    // Analytical instantaneous optical flow via `kerf_geom::lie::screen_velocity` for simulated
+    // rigid-body meshes without skeletal vertex deformation (avoids rebuilding the mesh at t + dt).
+    let analytical_motion: Option<(kerf_geom::lie::Twist, Vector, Vector, Vector, f64)> =
+        match &shade {
+            Shade::Moving(next, _, _, dt) if mesh.file.is_none() => {
+                scene.simulated.get(&plan.clip.id).map(|&(pose, twist)| {
+                    let cam_twist = scene.camera_twist(next, *dt);
+                    let center_px = times(pose.trans, scene.camera.height);
+                    let vel_px = times(twist.v, scene.camera.height);
+                    (cam_twist, center_px, vel_px, twist.omega, *dt)
+                })
+            }
+            _ => None,
+        };
+
+    // Where each point of the mesh is a frame on, for non-rigid / animated meshes.
     let then: Option<(&Scene, Vec<Vector>)> = match &shade {
-        Shade::Moving(next, placement, _) => {
+        Shade::Moving(next, placement, _, _) if analytical_motion.is_none() => {
             let (_, _, later) = at_moment(next, plan, placement);
             (later.len() == points.len()).then_some((*next, later))
         }
@@ -1486,12 +1500,20 @@ pub(in crate::draw) fn draw(
     let colored = |triangle: u32, of: [f32; 2], ahead: f32| -> [f32; 3] {
         match &shade {
             Shade::Flat(color) => *color,
-            Shade::Moving(_, _, height) => {
-                let moved = then.as_ref().and_then(|(next, later)| {
-                    let from = scene.on_screen(place(triangle, of, &points))?;
-                    let to = next.on_screen(place(triangle, of, later))?;
-                    Some((to.0 - from.0, to.1 - from.1))
-                });
+            Shade::Moving(_, _, height, _) => {
+                let moved =
+                    if let Some((cam_twist, center_px, vel_px, omega, dt)) = analytical_motion {
+                        let world_p = place(triangle, of, &points);
+                        let world_v = add(vel_px, cross(omega, minus(world_p, center_px)));
+                        kerf_geom::lie::screen_velocity(&scene.camera, cam_twist, world_p, world_v)
+                            .map(|(du, dv)| (du * dt, dv * dt))
+                    } else {
+                        then.as_ref().and_then(|(next, later)| {
+                            let from = scene.on_screen(place(triangle, of, &points))?;
+                            let to = next.on_screen(place(triangle, of, later))?;
+                            Some((to.0 - from.0, to.1 - from.1))
+                        })
+                    };
                 motion_color(moved.unwrap_or((0.0, 0.0)), *height)
             }
             Shade::Near => [kerf_draw::color::to_linear(scene.nearness(f64::from(ahead))); 3],
