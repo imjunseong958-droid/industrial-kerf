@@ -871,6 +871,41 @@ fn builtin_catalog() -> Catalog {
             .range(-36000.0, 36000.0)
             .unit("degrees")
             .doc("With `three_d`, turned about the line down its middle."),
+        P::choice("physics", &["none", "dynamic", "static"]).doc(
+            "With `three_d` or `gen=mesh@1`, join the sequence's deterministic rigid-body simulation (`dynamic` moves under gravity and contacts; `static` is an immovable collider).",
+        ),
+        P::number("mass", 1.0)
+            .range(0.01, 10_000.0)
+            .doc("With `physics=dynamic`, mass of the rigid body."),
+        P::number("restitution", 0.4)
+            .range(0.0, 1.0)
+            .doc("With `physics`, bounciness on contact."),
+        P::number("friction", 0.35)
+            .range(0.0, 2.0)
+            .doc("With `physics`, Coulomb friction on contact."),
+        P::number("world_gravity", 1.8)
+            .range(-100.0, 100.0)
+            .unit("frame heights a second a second")
+            .doc("With `physics=dynamic`, downward gravity of the sequence's simulation world."),
+        P::number("vel_x", 0.0)
+            .range(-100.0, 100.0)
+            .unit("frame heights a second")
+            .doc("With `physics=dynamic`, initial velocity to the right."),
+        P::number("vel_y", 0.0)
+            .range(-100.0, 100.0)
+            .unit("frame heights a second")
+            .doc("With `physics=dynamic`, initial velocity downward."),
+        P::number("vel_z", 0.0)
+            .range(-100.0, 100.0)
+            .unit("frame heights a second")
+            .doc("With `physics=dynamic`, initial velocity away from the camera."),
+        P::number("linear_drag", 0.0)
+            .range(0.0, 50.0)
+            .doc("With `physics=dynamic`, air damping slowing velocity over time."),
+        P::number("pin_distance", 0.0)
+            .range(0.0, 100.0)
+            .unit("frame heights")
+            .doc("With `physics=dynamic`, rod length pinning the body to its parent (or a pivot above it)."),
         P::number("scale", 1.0)
             .range(0.0, 100.0)
             .unit("×")

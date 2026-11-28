@@ -1409,3 +1409,89 @@ fn a_transition_that_goes_by_what_a_model_films_is_a_dissolve_beside_it() {
         );
     }
 }
+
+#[test]
+fn rigid_body_mesh_falls_bounces_on_static_floor_and_random_seek_is_bit_identical() {
+    let doc = |vel_x: f64| {
+        format!(
+            "kerf 1\nproject name=\"sim3d\"\nsequence s1 rate=24 size=320x180 audio=48000\n\
+             \x20\x20track V1 video\n\
+             \x20\x20\x20\x20clip floor gen=solid@1 at=0f dur=48f\n\
+             \x20\x20\x20\x20\x20\x20set color=#445566 three_d=true y=0.3 rotate_x=90 physics=static restitution=0.8\n\
+             \x20\x20track V2 video\n\
+             \x20\x20\x20\x20clip ball gen=mesh@1 at=0f dur=48f\n\
+             \x20\x20\x20\x20\x20\x20set kind=ball width=0.16 height=0.16 length=0.16 color=#ff8822 y=-0.3 physics=dynamic world_gravity=3.2 restitution=0.8 vel_x={vel_x}\n\
+             \x20\x20track V3 video\n\
+             \x20\x20\x20\x20clip sun gen=light@1 at=0f dur=48f\n\
+             \x20\x20\x20\x20\x20\x20set kind=directional x=-0.4 y=-0.5 z=1\n"
+        )
+    };
+    let project = kerf_lang::parse_document(&doc(0.2), Catalog::builtin())
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .project;
+    let comp = Compositor::new(&project, Catalog::builtin(), &ComposeOptions::default()).unwrap();
+
+    // Measure the ball's vertical center across 48 frames via `in_depth`.
+    let ball_y = |f: i64| -> (f64, f64) {
+        let world = comp.in_depth(Rate::FPS_24.time_of(f));
+        let ball = world.clips.iter().find(|c| c.clip == "ball").expect("ball");
+        let min_y = ball
+            .corners
+            .iter()
+            .map(|c| c[1])
+            .fold(f64::INFINITY, f64::min);
+        let max_y = ball
+            .corners
+            .iter()
+            .map(|c| c[1])
+            .fold(f64::NEG_INFINITY, f64::max);
+        ((min_y + max_y) * 0.5, max_y)
+    };
+    let (y0, _) = ball_y(0);
+    assert!(
+        (y0 - (-0.3)).abs() < 1e-3,
+        "ball must start at y=-0.3, got {y0}"
+    );
+
+    let mut lowest_center = y0;
+    let mut rebounded = false;
+    let mut prev = y0;
+    for f in 1..48 {
+        let (cy, max_y) = ball_y(f);
+        assert!(
+            max_y <= 0.3 + 2e-3,
+            "frame {f}: ball penetrated floor y=0.3 (max_y={max_y})"
+        );
+        if cy > lowest_center {
+            lowest_center = cy;
+        } else if lowest_center > 0.15 && cy < prev - 1e-3 {
+            rebounded = true;
+        }
+        prev = cy;
+    }
+    assert!(
+        lowest_center > 0.18,
+        "ball must fall toward floor: lowest={lowest_center}"
+    );
+    assert!(rebounded, "ball must bounce back upward off static floor");
+
+    // Out-of-order scrubbing through Compositor::frame must be bit-identical.
+    let late_a = comp.frame(Rate::FPS_24.time_of(30), 1.0);
+    let _early = comp.frame(Rate::FPS_24.time_of(6), 1.0);
+    let late_b = comp.frame(Rate::FPS_24.time_of(30), 1.0);
+    assert_eq!(
+        late_a.rgba, late_b.rgba,
+        "random-seek 3D physics frame must be bit-identical"
+    );
+
+    // Changing initial velocity must invalidate the frame cache key.
+    let project2 = kerf_lang::parse_document(&doc(0.6), Catalog::builtin())
+        .unwrap_or_else(|e| panic!("{e:?}"))
+        .project;
+    let comp2 = Compositor::new(&project2, Catalog::builtin(), &ComposeOptions::default()).unwrap();
+    assert_ne!(
+        comp.frame_key(Rate::FPS_24.time_of(20), 1.0),
+        comp2.frame_key(Rate::FPS_24.time_of(20), 1.0),
+        "changing physics vel_x must change frame_key"
+    );
+}

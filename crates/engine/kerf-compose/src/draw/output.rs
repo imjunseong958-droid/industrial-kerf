@@ -273,6 +273,10 @@ impl Drawing {
             plan.drop_frame,
         )
             .hash(hash);
+        if let Some(digest) = plan.physics_digest {
+            digest.hash(hash);
+            at.flicks().hash(hash);
+        }
         for track in plan.tracks.iter().filter(|track| track.drawn(angle)) {
             for (place, shown) in track.shown.iter().enumerate() {
                 if !shown.shows(at) {

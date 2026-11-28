@@ -49,6 +49,7 @@ use kerf_geom::place::{lifted, turned};
 
 mod gltf;
 pub(super) mod mesh;
+pub(super) mod physics;
 mod seen;
 mod texture;
 pub(super) mod world;
@@ -287,6 +288,8 @@ pub(super) struct Scene {
     /// one thing with them, turned about places in the world and moved back, which keeps every
     /// length and every angle of it.
     carried: HashMap<Id, Affine3>,
+    /// Deterministic `kerf-sim` poses and twists (in frame heights) for `physics=dynamic` clips.
+    pub(super) simulated: HashMap<Id, (kerf_geom::lie::Se3, kerf_geom::lie::Twist)>,
 }
 
 impl Scene {
@@ -408,6 +411,11 @@ impl Scene {
         // A camera with a parent is where the parent takes it, looking as the parent turns it.
         let seen_by = Camera::of(&lens, (width, height), camera.and_then(rigged).as_ref());
         let (eye, forward) = (seen_by.eye, seen_by.forward);
+        let simulated = sequence
+            .physics
+            .as_ref()
+            .and_then(|world| world.lock().ok().map(|mut w| w.sample(at)))
+            .unwrap_or_default();
         // Every clip in depth that shows, on a track that shows or not: an effect may read a
         // hidden one. What is on one parent goes where it takes all of it, worked out once.
         let mut taken: HashMap<&Id, Option<Affine3>> = HashMap::new();
@@ -417,7 +425,7 @@ impl Scene {
             let Some(parent) = clip.parent.as_ref() else {
                 continue;
             };
-            if !shown.plan.three_d || !shown.shows(showing) {
+            if !shown.plan.three_d || !shown.shows(showing) || simulated.contains_key(&clip.id) {
                 continue;
             }
             let by = *taken
@@ -443,6 +451,7 @@ impl Scene {
             focus,
             aperture: read("aperture", 0.0) * height,
             carried,
+            simulated,
         }
     }
 
@@ -928,6 +937,29 @@ impl Plane {
     pub fn of(scene: &Scene, plan: &ClipPlan, size: (f64, f64), placement: &Placement) -> Self {
         let clip = &plan.clip;
         let (time, to_output) = (placement.time(), &placement.to_output);
+        if let Some(&(pose, _twist)) = scene.simulated.get(&clip.id) {
+            let (base, _) = lifted(to_output, size, scene.camera.center, [0.0; 3], None);
+            let len_x = dot(base.x, base.x).sqrt().max(1e-9);
+            let len_y = dot(base.y, base.y).sqrt().max(1e-9);
+            let [rx, ry, rz] = pose.rot.to_basis();
+            let across = times(rx, len_x);
+            let down = times(ry, len_y);
+            let middle = times(pose.trans, scene.camera.height);
+            let origin = minus(
+                minus(middle, times(across, size.0 / 2.0)),
+                times(down, size.1 / 2.0),
+            );
+            let perpendicular = cross(across, down);
+            return Self {
+                origin,
+                across,
+                down,
+                perpendicular,
+                area: dot(perpendicular, perpendicular),
+                normal: rz,
+                middle,
+            };
+        }
         let read = |name: &str| number(&param(clip, name).value_at(time));
         let numbers = [
             read("z") * scene.camera.height,

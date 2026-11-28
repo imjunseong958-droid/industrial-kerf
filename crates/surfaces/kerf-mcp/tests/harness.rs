@@ -5499,3 +5499,96 @@ fn an_agent_adds_to_the_cast_and_asks_for_several_takes() {
     let past = ok(&router, "make", json!({"media": "m9"}));
     assert_eq!(past["status"], "asked", "{past}");
 }
+
+#[test]
+fn direct_solves_3d_launch_velocity_and_tracking_camera_scripts() {
+    let dir = TempDir::new().unwrap();
+    std::fs::write(
+        dir.path().join("project.kerf"),
+        "kerf 1
+project name=\"Director\"
+sequence s1 rate=24 size=320x180 audio=48000
+  track V1 video
+    clip ball gen=mesh@1 at=0f dur=48f
+      set kind=ball width=0.14 height=0.14 length=0.14 color=#ff9933 x=-0.3 y=-0.1 z=0.0 physics=dynamic world_gravity=2.4 linear_drag=0.4
+  track V2 video
+    clip sun gen=light@1 at=0f dur=48f
+      set kind=directional x=-0.4 y=-0.5 z=1
+",
+    )
+    .unwrap();
+    let kerfd = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../target/debug/kerfd");
+    let router = router_on(dir.path(), Some(&kerfd));
+    router.set_permissions(Some(kerf_mcp::permissions::Permissions {
+        mode: kerf_mcp::permissions::Mode::Auto,
+        ..kerf_mcp::permissions::Permissions::default()
+    }));
+
+    // 1. Solve launch velocity so `ball` arrives at [0.22, -0.05, 0.25] at 1s (frame 24).
+    let solved = ok(
+        &router,
+        "look",
+        json!({"direct": {"clip": "ball", "target": [0.22, -0.05, 0.25], "at": "1s"}}),
+    );
+    assert!(
+        solved["error"].as_f64().unwrap() < 1e-3,
+        "director shooting error too high: {solved}"
+    );
+    let launch_script = solved["script"].as_str().unwrap();
+    let applied = ok(&router, "edit", json!({"script": launch_script}));
+    assert_eq!(applied["status"], "accepted", "{applied}");
+
+    // Verify through the actual compositor that the ball lands at the requested target at 1s.
+    let (_, doc) = router.runtime().get_document(false).unwrap();
+    let project = kerf_lang::parse_document(&doc, kerf_model::Catalog::builtin())
+        .unwrap()
+        .project;
+    let comp = kerf_compose::Compositor::new(
+        &project,
+        kerf_model::Catalog::builtin(),
+        &kerf_compose::ComposeOptions::default(),
+    )
+    .unwrap();
+    let world = comp.in_depth(kerf_model::Rate::FPS_24.time_of(24));
+    let ball = world.clips.iter().find(|c| c.clip == "ball").expect("ball");
+    let center = |axis: usize| {
+        let lo = ball
+            .corners
+            .iter()
+            .map(|c| c[axis])
+            .fold(f64::INFINITY, f64::min);
+        let hi = ball
+            .corners
+            .iter()
+            .map(|c| c[axis])
+            .fold(f64::NEG_INFINITY, f64::max);
+        (lo + hi) * 0.5
+    };
+    let aspect = 320.0 / 180.0;
+    assert!(
+        (center(0) / aspect - 0.22).abs() < 2e-3,
+        "x landed at {}",
+        center(0) / aspect
+    );
+    assert!(
+        (center(1) - (-0.05)).abs() < 2e-3,
+        "y landed at {}",
+        center(1)
+    );
+    assert!((center(2) - 0.25).abs() < 2e-3, "z landed at {}", center(2));
+
+    // 2. Plan a smooth SE(3) tracking camera following `ball` and apply its script.
+    let cam = ok(
+        &router,
+        "look",
+        json!({"direct": {"follow": "ball", "camera": "cam", "smoothing": 0.35, "every": 6}}),
+    );
+    let cam_script = cam["script"].as_str().unwrap();
+    assert!(
+        cam_script.contains("overwrite gen=camera@1"),
+        "{cam_script}"
+    );
+    let cam_applied = ok(&router, "edit", json!({"script": cam_script}));
+    assert_eq!(cam_applied["status"], "accepted", "{cam_applied}");
+    assert_eq!(cam_applied["check"]["valid"], true, "{cam_applied}");
+}
