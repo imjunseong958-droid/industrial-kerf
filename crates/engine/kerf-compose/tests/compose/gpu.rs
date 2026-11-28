@@ -134,7 +134,14 @@ fn scenes() -> Vec<(&'static str, String)> {
         ("wide blur", clip("      fx blur.gaussian radius=160\n")),
         ("directional", clip("      fx blur.directional direction=30 length=12\n")),
         ("sharpen", clip("      fx blur.unsharp amount=120 radius=3\n")),
-        ("corrected", clip("      fx color.basic exposure=0.4 contrast=1.2 saturation=1.3 temperature=200\n")),
+        // Settings that keep the test picture's flat colors off 0 and 1. A color with a channel
+        // there comes out of `temperature` as the gray halfway between its largest and smallest
+        // channel, whatever the other settings, and for these colors that gray is 127.5 of 255:
+        // arithmetic to the last bit rounds it up, and the CPU's table of 65,535 steps takes the
+        // step below and rounds it down. Pushed out instead (exposure=0.4 contrast=1.2
+        // saturation=1.3), nine tenths of the frame was that gray: a byte apart with nothing
+        // wrong in it, and the same gray with a setting wrong.
+        ("corrected", clip("      fx color.basic exposure=-0.3 contrast=0.85 saturation=0.8 temperature=200\n")),
         ("effects masked", clip("      mask k1 rect=0.2,0.2,0.8,0.8 feather=8\n      fx channel.invert\n")),
         (
             "solid under",
