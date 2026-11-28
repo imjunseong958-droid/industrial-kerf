@@ -288,9 +288,9 @@ impl Drawing {
             ));
             return;
         }
-        if plan.clip.retime != kerf_model::Retime::Frames {
+        if plan.clip.retime == kerf_model::Retime::Flow {
             why.push(format!(
-                "clip `{clip}` makes frames between frames with `retime`"
+                "clip `{clip}` makes frames between frames along their motion with `retime=flow`"
             ));
             return;
         }
@@ -449,8 +449,9 @@ impl Drawing {
         scale: f64,
     ) -> bool {
         let plan = &shown.plan;
-        // Frames between frames are made on the CPU.
-        if plan.clip.retime != kerf_model::Retime::Frames {
+        // Frames between frames, each moved along the motion between them, are made on the
+        // CPU. Two cross-faded are made here.
+        if plan.clip.retime == kerf_model::Retime::Flow {
             return false;
         }
         // A mesh is drawn on the CPU and handed over as a picture and how far off it is,
@@ -1413,20 +1414,33 @@ impl Drawing {
                 let Some(decoded) = self.pictures.decoded(*picture, time, size) else {
                     return Some(None);
                 };
-                let rgba = &decoded.picture;
-                if (rgba.width(), rgba.height()) != size {
-                    return None;
-                }
-                let stride = rgba.stride(0) as u32;
-                match (decoded.deep, crate::footage::yuv_of(rgba)) {
-                    (Some(input), Some(yuv)) => frame.yuv16(&yuv, input),
-                    (None, Some(yuv)) => frame.yuv(&yuv),
-                    (Some(input), None) => {
-                        frame.rgba16(rgba.data(0), size, stride, decoded.alpha, input)
+                // A frame as it decoded, in linear light.
+                let mut taken = |rgba: &ffmpeg_next::frame::Video| {
+                    if (rgba.width(), rgba.height()) != size {
+                        return None;
                     }
-                    (None, None) => {
-                        frame.rgba8(rgba.data(0), size.0, size.1, stride, decoded.alpha)
+                    let stride = rgba.stride(0) as u32;
+                    Some(match (decoded.deep, crate::footage::yuv_of(rgba)) {
+                        (Some(input), Some(yuv)) => frame.yuv16(&yuv, input),
+                        (None, Some(yuv)) => frame.yuv(&yuv),
+                        (Some(input), None) => {
+                            frame.rgba16(rgba.data(0), size, stride, decoded.alpha, input)
+                        }
+                        (None, None) => {
+                            frame.rgba8(rgba.data(0), size.0, size.1, stride, decoded.alpha)
+                        }
+                    })
+                };
+                let shown = taken(&decoded.picture)?;
+                match &decoded.toward {
+                    // Between two frames: each in linear light, then the one toward the other.
+                    Some((next, along)) => {
+                        let next = taken(next)?;
+                        let between = frame.between(shown, &next, *along);
+                        frame.release(next);
+                        between
                     }
+                    None => shown,
                 }
             }
             Source::Nested {

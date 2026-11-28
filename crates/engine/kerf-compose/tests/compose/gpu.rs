@@ -109,6 +109,11 @@ fn scenes() -> Vec<(&'static str, String)> {
             "smeared as it moves",
             over("      set x={0f:-0.3 23f:0.3} rotation={0f:0 23f:40} scale=0.7 shutter=180\n"),
         ),
+        (
+            // At half speed every other frame of the sequence lies half way between two of the file's.
+            "two frames cross-faded",
+            "  track V1 video\n    clip c1 media=m src=0f at=0f dur=24f speed=1/2 retime=blend\n      set scale=0.9\n".to_owned(),
+        ),
         ("flipped", clip("      set scale_x=-1 scale=0.9\n")),
         ("cropped", clip("      set crop_l=0.1 crop_t=0.05 crop_r=0.2 scale=0.9\n")),
         ("faint", clip("      set opacity=0.6 scale=0.9\n")),
