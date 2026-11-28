@@ -1070,9 +1070,24 @@ impl Command {
                                 run.set_arg(&memory).set_arg(&info);
                             }
                         }
-                        _ => {
+                        (wanted, found) => {
+                            let found = match found {
+                                Some(Bind::Buffer(held)) => {
+                                    format!("a buffer of {} bytes", held.bytes)
+                                }
+                                Some(Bind::Texture(texture)) => {
+                                    format!("a texture of {:?}", texture.texel)
+                                }
+                                None => "nothing".to_owned(),
+                            };
+                            let wanted = match wanted {
+                                Bound::Buffer { least } => {
+                                    format!("a buffer of at least {least} bytes")
+                                }
+                                Bound::Texture => "a texture".to_owned(),
+                            };
                             return Err(format!(
-                                "group {} binding {} is not bound to what its kernel reads",
+                                "group {} binding {} is handed {found} where its kernel reads {wanted}",
                                 resource.group, resource.binding
                             ));
                         }

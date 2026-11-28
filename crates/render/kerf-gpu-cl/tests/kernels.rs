@@ -1,62 +1,10 @@
-//! Kerf's kernels through this crate. Writing one out as OpenCL C needs no device, so that is
-//! checked everywhere. Running one needs an OpenCL device, and where there is one a kernel goes
-//! through wgpu as kerf-gpu sends it, against the same arithmetic done here.
+//! A kernel through this crate, as kerf-gpu sends one through wgpu, against the same arithmetic
+//! done here. It needs an OpenCL device, and where there is none there is nothing to run. That
+//! each of Kerf's kernels can be written out as OpenCL C, which needs no device, is held by the
+//! crates whose kernels they are (`kerf_gpu::written_for_opencl`).
 
-use kerf_gpu_cl::translate::translate;
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
-
-/// The kernels kerf-gpu draws every frame with.
-const KERNELS: [(&str, &str); 7] = [
-    (
-        "picture.wgsl",
-        include_str!("../../kerf-gpu/src/picture.wgsl"),
-    ),
-    ("input.wgsl", include_str!("../../kerf-gpu/src/input.wgsl")),
-    (
-        "finish.wgsl",
-        include_str!("../../kerf-gpu/src/finish.wgsl"),
-    ),
-    (
-        "finish16.wgsl",
-        include_str!("../../kerf-gpu/src/finish16.wgsl"),
-    ),
-    (
-        "finish_signal.wgsl",
-        include_str!("../../kerf-gpu/src/finish_signal.wgsl"),
-    ),
-    (
-        "planes.wgsl",
-        include_str!("../../kerf-gpu/src/planes.wgsl"),
-    ),
-    (
-        "output.wgsl",
-        include_str!("../../kerf-gpu/src/output.wgsl"),
-    ),
-];
-
-#[test]
-fn every_kernel_kerf_gpu_draws_with_is_written_out() {
-    for (name, source) in KERNELS {
-        let (module, info) =
-            kerf_gpu_cl::parse(source).unwrap_or_else(|error| panic!("{name}: {error}"));
-        assert!(!module.entry_points.is_empty(), "{name} has no kernel");
-        for point in &module.entry_points {
-            for exact in [false, true] {
-                let written = translate(&module, &info, &point.name, exact)
-                    .unwrap_or_else(|error| panic!("{name}, `{}`: {error}", point.name));
-                assert_eq!(written.workgroup, point.workgroup_size, "{name}");
-                assert!(
-                    written
-                        .source
-                        .contains(&format!("__kernel void {}(", written.kernel)),
-                    "{name}, `{}` has no kernel in what was written",
-                    point.name
-                );
-            }
-        }
-    }
-}
 
 fn now<F: Future>(future: F) -> F::Output {
     let mut future = std::pin::pin!(future);
@@ -69,8 +17,8 @@ fn now<F: Future>(future: F) -> F::Output {
 }
 
 /// A kernel of this test's own, which reads a one-number texture and a uniform and writes a
-/// picture: a quotient, a power, a loop and a switch, a load from outside the texture and a store
-/// outside the picture.
+/// picture: a quotient, a power, a smooth step, a loop and a switch, a number of a vector picked
+/// when run, a load from outside the texture and a store outside the picture.
 const KERNEL: &str = "
 struct U {
     scale: vec4<f32>,
@@ -81,6 +29,8 @@ struct U {
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var src: texture_2d<f32>;
 @group(0) @binding(2) var dst: texture_storage_2d<rgba32float, write>;
+// Another kernel's, were there one: this one's bind group does not hold it.
+@group(0) @binding(7) var never: texture_2d<f32>;
 
 fn raised(v: f32) -> f32 {
     return pow(max(v, 0.0), 2.4) / 3.0;
@@ -101,8 +51,12 @@ fn run(@builtin(global_invocation_id) id: vec3<u32>) {
         case 2u, 3u: { last = 0.5; }
         default: { last = 0.25; }
     }
+    // The number of `picked` that `mode` names is set, and read back the same way.
+    var picked = vec3(0.0, 0.0, 0.0);
+    picked[u.mode] = last + smoothstep(0.5, 4.5, v);
+    let third = vec3(picked.x, picked.y, picked.z)[u.mode];
     // Outside the picture nothing is stored.
-    textureStore(dst, p, vec4(raised(v), sum, v * u.scale.y, last));
+    textureStore(dst, p, vec4(raised(v), sum, v * u.scale.y, third));
 }
 ";
 
@@ -263,7 +217,9 @@ fn a_kernel_runs_on_opencl_as_its_arithmetic_says() {
                 .collect();
             let v = numbers[(y * w + (x + 1).min(w - 1)) as usize];
             let sum: f32 = (0..turns).fold(0.0, |sum, i| sum + i as f32 * v);
-            let wanted = [v.max(0.0).powf(2.4) / 3.0, sum, v * scale[1], 0.5];
+            let t = ((v - 0.5) / 4.0).clamp(0.0, 1.0);
+            let third = 0.5 + t * t * (3.0 - 2.0 * t);
+            let wanted = [v.max(0.0).powf(2.4) / 3.0, sum, v * scale[1], third];
             for (got, wanted) in got.iter().zip(wanted) {
                 assert!(
                     (got - wanted).abs() <= wanted.abs() * 1e-6,
@@ -272,4 +228,144 @@ fn a_kernel_runs_on_opencl_as_its_arithmetic_says() {
             }
         }
     }
+}
+
+/// A kernel of buffers: numbers in an array whose length its buffer says, a matrix's columns, and
+/// the most of them found in step by every run of the kernel at once.
+const BUFFERS: &str = "
+struct Scale {
+    by: vec2<f32>,
+    count: u32,
+};
+
+@group(0) @binding(0) var<uniform> scale: Scale;
+@group(0) @binding(1) var<storage, read> numbers: array<f32>;
+@group(0) @binding(2) var<storage, read_write> doubled: array<f32>;
+@group(0) @binding(3) var<storage, read_write> most: array<atomic<u32>>;
+
+fn sides(by: vec2<f32>) -> mat2x3<f32> {
+    return mat2x3(vec3(by.x, 0.0, 1.0), vec3(0.0, by.y, 2.0));
+}
+
+@compute @workgroup_size(64)
+fn run(@builtin(global_invocation_id) id: vec3<u32>) {
+    if id.x >= scale.count { return; }
+    let two = sides(scale.by);
+    // Past the end of `numbers` it reads the last of them.
+    let v = numbers[id.x + 1u];
+    doubled[id.x] = v * two[0].x + two[1].z + f32(arrayLength(&numbers));
+    atomicMax(&most[0], u32(v));
+    atomicMin(&most[1], u32(v));
+}
+";
+
+#[test]
+fn a_kernel_of_buffers_runs_on_opencl_as_its_arithmetic_says() {
+    let Some((device, queue)) = kerf_gpu_cl::open(false) else {
+        eprintln!("no OpenCL device: nothing to run");
+        return;
+    };
+    let numbers: Vec<f32> = (0..100).map(|i| ((i * 37) % 101) as f32 + 0.25).collect();
+    let floats =
+        |values: &[f32]| -> Vec<u8> { values.iter().flat_map(|n| n.to_le_bytes()).collect() };
+    let buffer = |bytes: &[u8], usage| {
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: bytes.len() as u64,
+            usage,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&buffer, 0, bytes);
+        buffer
+    };
+    use wgpu::BufferUsages as Usage;
+    let mut uniforms = floats(&[3.0, 5.0]);
+    uniforms.extend_from_slice(&(numbers.len() as u32).to_le_bytes());
+    uniforms.resize(16, 0);
+    let scale = buffer(&uniforms, Usage::UNIFORM | Usage::COPY_DST);
+    let read = buffer(&floats(&numbers), Usage::STORAGE | Usage::COPY_DST);
+    let doubled = buffer(
+        &vec![0u8; numbers.len() * 4],
+        Usage::STORAGE | Usage::COPY_SRC | Usage::COPY_DST,
+    );
+    let mut found = 0u32.to_le_bytes().to_vec();
+    found.extend_from_slice(&u32::MAX.to_le_bytes());
+    let most = buffer(&found, Usage::STORAGE | Usage::COPY_SRC | Usage::COPY_DST);
+
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: None,
+        source: wgpu::ShaderSource::Wgsl(BUFFERS.into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: None,
+        layout: None,
+        module: &module,
+        entry_point: Some("run"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
+    if let Some(error) = now(scope.pop()) {
+        panic!("the kernel was not made: {error}");
+    }
+    let entries: Vec<wgpu::BindGroupEntry<'_>> = [&scale, &read, &doubled, &most]
+        .into_iter()
+        .enumerate()
+        .map(|(binding, buffer)| wgpu::BindGroupEntry {
+            binding: binding as u32,
+            resource: buffer.as_entire_binding(),
+        })
+        .collect();
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout: &pipeline.get_bind_group_layout(0),
+        entries: &entries,
+    });
+    let back = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (numbers.len() * 4 + 8) as u64,
+        usage: Usage::COPY_DST | Usage::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_compute_pass(&Default::default());
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        // Two groups of 64 for a hundred numbers.
+        pass.dispatch_workgroups(2, 1, 1);
+    }
+    encoder.copy_buffer_to_buffer(&doubled, 0, &back, 0, Some((numbers.len() * 4) as u64));
+    encoder.copy_buffer_to_buffer(&most, 0, &back, (numbers.len() * 4) as u64, Some(8));
+    queue.submit([encoder.finish()]);
+    let slice = back.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        let _ = sender.send(result);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("the queue ran");
+    receiver
+        .recv()
+        .expect("the map was answered")
+        .expect("the buffer came back");
+    let data = slice.get_mapped_range().expect("its bytes");
+    let words: Vec<[u8; 4]> = data.as_chunks::<4>().0.to_vec();
+    let read_at = |i: usize| numbers[(i + 1).min(numbers.len() - 1)];
+    for (i, word) in words.iter().take(numbers.len()).enumerate() {
+        let wanted = read_at(i) * 3.0 + 2.0 + numbers.len() as f32;
+        assert_eq!(f32::from_le_bytes(*word), wanted, "at {i}");
+    }
+    let seen: Vec<u32> = (0..numbers.len()).map(|i| read_at(i) as u32).collect();
+    assert_eq!(
+        u32::from_le_bytes(words[numbers.len()]),
+        *seen.iter().max().expect("some"),
+        "the most"
+    );
+    assert_eq!(
+        u32::from_le_bytes(words[numbers.len() + 1]),
+        *seen.iter().min().expect("some"),
+        "the least"
+    );
 }

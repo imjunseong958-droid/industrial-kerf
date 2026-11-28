@@ -88,6 +88,15 @@ fn transitions() -> impl Iterator<Item = &'static kerf_model::FxDef> {
 /// Off by [`EXACT`] at most, as `kerf_fx`'s other kernels are held. A threshold landing on a value may
 /// flip, which it does where a sprocket hole of Film Roll ends exactly at a pixel of this size; at most
 /// [`FLIPS`] of the values may be further off.
+/// An accelerator with no graphics queue runs these kernels through OpenCL, which writes each out
+/// from its WGSL: every one of them has to be something it writes.
+#[test]
+fn every_kernel_is_written_out_for_opencl() {
+    let kernels =
+        kerf_gpu::written_for_opencl(&super::gpu::source()).unwrap_or_else(|why| panic!("{why}"));
+    assert!(kernels > 0);
+}
+
 #[test]
 fn each_kernel_draws_what_the_cpu_draws() {
     const EXACT: f32 = 5e-4;
