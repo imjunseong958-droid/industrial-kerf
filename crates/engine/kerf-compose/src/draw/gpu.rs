@@ -177,7 +177,7 @@ impl Drawing {
     ) -> Option<Frame> {
         let plan = &self.sequences[0];
         let (w, h) = output_size(plan.width, plan.height, scale);
-        if self.accel == Accel::Auto && w * h < SMALLEST_PIXELS {
+        if matches!(self.accel, Accel::Auto | Accel::Settled) && w * h < SMALLEST_PIXELS {
             return None;
         }
         let gpu = self.gpu()?;
@@ -197,7 +197,8 @@ impl Drawing {
     fn gpu(&self) -> Option<&'static Gpu> {
         match self.accel {
             Accel::Never => None,
-            Accel::Always => ready_gpu(),
+            // Built here if they are not yet, with whoever else asks meanwhile waiting too.
+            Accel::Always | Accel::Settled => ready_gpu(),
             // Building the kernels takes a second or two, which a viewer should not wait for: the
             // CPU draws until they are ready.
             Accel::Auto => {
