@@ -14,7 +14,11 @@ struct Options {
 fn main() {
     kerf_runtime::logging::to_stderr();
     kerf_engine::process::sidecar::forward_termination_signals();
-    if let Err(error) = run() {
+    let served = run();
+    // A tool that drew in this process, scopes or a still, may have had the GPU brought up on
+    // a thread of its own, which the client closing its end does not wait for.
+    kerf_engine::render::settle_gpu("kerf-mcp");
+    if let Err(error) = served {
         eprintln!("kerf-mcp: {error}");
         std::process::exit(1);
     }

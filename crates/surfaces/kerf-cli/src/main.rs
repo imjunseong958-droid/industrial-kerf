@@ -297,7 +297,11 @@ fn main() {
     kerf_runtime::crash::install("kerf");
     kerf_runtime::logging::to_stderr();
     kerf_engine::process::sidecar::forward_termination_signals();
-    if let Err(error) = run() {
+    let ran = run();
+    // A making or an agent's tool that drew in this process may have had the GPU brought up
+    // on a thread of its own.
+    kerf_engine::render::settle_gpu("kerf");
+    if let Err(error) = ran {
         eprintln!("kerf: {error:#}");
         std::process::exit(1);
     }

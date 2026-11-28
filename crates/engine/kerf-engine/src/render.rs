@@ -1253,6 +1253,21 @@ fn composited_render(
     })
 }
 
+/// How long a program waits, as it ends, for a GPU it began to bring up: far longer than that
+/// takes on any machine, a driver building every kernel for the first time included.
+const GPU_SETTLES_WITHIN: Duration = Duration::from_secs(120);
+
+/// Wait, as `program` is about to end, for a GPU that drawing in this process began to bring
+/// up. A still, a scope, or frames drawn as a viewer draws them have the compositor do that
+/// on a thread of its own, and a process that ends under that thread now and then dies as it
+/// ends, its work done ([`kerf_compose::gpu_settled`]). Where none is being brought up there
+/// is nothing to wait for, and past [`GPU_SETTLES_WITHIN`] the program says so and ends anyway.
+pub fn settle_gpu(program: &str) {
+    if !kerf_compose::gpu_settled(GPU_SETTLES_WITHIN) {
+        eprintln!("{program}: ending while the GPU is still being brought up");
+    }
+}
+
 /// What the compositor of a render is asked to draw.
 fn compose_options(sequence: Option<&str>, opts: &RenderOptions) -> ComposeOptions {
     ComposeOptions {
