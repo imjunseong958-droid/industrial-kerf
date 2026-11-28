@@ -254,19 +254,11 @@ enum CliCodec {
     Hevc,
 }
 
-/// How long the process waits, before it ends, for a GPU it began to bring up: far longer than
-/// that takes on any machine, a driver building every kernel for the first time included.
-const GPU_SETTLES_WITHIN: std::time::Duration = std::time::Duration::from_secs(120);
-
 fn main() -> Result<()> {
     kerf_engine::process::sidecar::forward_termination_signals();
     let done = run(Cli::parse());
-    // A command that drew frames may have had the GPU brought up on a thread of its own, and a
-    // process that ends under that thread now and then dies as it ends, its work done
-    // (`kerf_compose::gpu_settled`).
-    if !kerf_compose::gpu_settled(GPU_SETTLES_WITHIN) {
-        eprintln!("kerf-engine: ending while the GPU is still being brought up");
-    }
+    // A command that drew frames may have had the GPU brought up on a thread of its own.
+    kerf_engine::render::settle_gpu("kerf-engine");
     done
 }
 
