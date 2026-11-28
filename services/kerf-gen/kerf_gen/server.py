@@ -25,6 +25,21 @@ CANCEL_PATH = re.compile(r"^/v1/generations/([0-9a-f]+)/cancel$")
 OUT_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
+def created(job_id):
+    """What `POST /v1/generations` answers."""
+    return {"id": job_id}
+
+
+def refusal(why):
+    """What a refused request answers, with its status."""
+    return {"error": why}
+
+
+def listing(models):
+    """What `GET /v1/models` answers of `models`, by name."""
+    return {"models": [dict(name=name, **model.SPEC) for name, model in sorted(models.items())]}
+
+
 class Store:
     """The files sent and made, each kept by the SHA-256 of its bytes."""
 
@@ -175,7 +190,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
 
     def refuse(self, status, why):
-        self.answer(status, {"error": why})
+        self.answer(status, refusal(why))
 
     def allowed(self):
         said = self.headers.get("Authorization", "")
@@ -202,8 +217,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.allowed():
             return
         if self.path == "/v1/models":
-            listed = [dict(name=name, **model.SPEC) for name, model in sorted(self.models.items())]
-            return self.answer(200, {"models": listed})
+            return self.answer(200, listing(self.models))
         found = FILE_PATH.match(self.path)
         if found:
             return self.send_file(found.group(1))
@@ -262,7 +276,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             why = refuse_request(request, self.models, self.store)
             if why:
                 return self.refuse(400, why)
-            return self.answer(201, {"id": self.jobs.submit(request)})
+            return self.answer(201, created(self.jobs.submit(request)))
         found = CANCEL_PATH.match(self.path)
         if found:
             self.drain()

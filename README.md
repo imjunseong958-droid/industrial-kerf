@@ -406,6 +406,23 @@ services/kerf-gen/kerf-gen serve --data ~/kerf-gen --listen 127.0.0.1:8190 --mod
 `--model fake` answers with its guide, or a test picture, and needs no GPU;
 its tests run with `python3 -m unittest discover -s services/kerf-gen -t services/kerf-gen`.
 
+`--model wan-vace` is Wan 2.1 VACE 1.3B (832x480, 16 frames a second, up to
+5 s), which follows a guide Kerf draws (its depth, its ids, its picture), from
+a first frame or like reference pictures; a step can set `steps=`,
+`guidance=`, `strength=` and `negative=`. It needs a GPU, and PyTorch,
+diffusers and transformers in the Python that runs the server. Its weights are
+the single files Wan is published as, `wan2.1_vace_1.3B_fp16.safetensors`,
+`umt5_xxl_fp16.safetensors` and `wan_2.1_vae.safetensors`, in
+`KERF_GEN_WAN_VACE` (`/workspace/models/wan-vace-1.3b` by default), with
+diffusers' configs and tokenizer from `Wan-AI/Wan2.1-VACE-1.3B-diffusers` in
+`diffusers/` beside them (`*.json`, `*.txt` and `tokenizer/`). It loads before
+the server listens, and makes a 5 s shot in about five minutes on one MI250 GCD.
+
+To reach it from another computer, put a tunnel in front of it, such as
+`cloudflared tunnel --url http://127.0.0.1:8190`, and give Settings → Generation
+the tunnel's address and a key from `kerf-gen key add`. A quick tunnel's
+address changes each time it starts.
+
 ## MCP
 
 `kerf-mcp` speaks JSON-RPC MCP over stdin/stdout. Diagnostics go to stderr and

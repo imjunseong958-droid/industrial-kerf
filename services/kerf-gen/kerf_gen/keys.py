@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 
 FILE = "keys.json"
@@ -38,18 +39,36 @@ def add(data, name):
 
 
 class Keys:
-    """The keys a server takes, read once as it starts."""
+    """The keys a server takes: read again whenever the file changes, so a key made while it
+    runs is taken at once."""
 
     def __init__(self, data):
-        self._digests = [entry["sha256"] for entry in _read(data)]
+        self._path = os.path.join(data, FILE)
+        self._seen = None
+        self._digests = []
+        self._lock = threading.Lock()
+        self._read()
+
+    def _read(self):
+        try:
+            # Its size as well: two writes within one tick of the clock differ in it.
+            found = os.stat(self._path)
+            stamp = (found.st_mtime_ns, found.st_size)
+        except FileNotFoundError:
+            stamp = None
+        with self._lock:
+            if stamp != self._seen:
+                self._seen = stamp
+                self._digests = [entry["sha256"] for entry in _read(os.path.dirname(self._path))]
+            return list(self._digests)
 
     def __len__(self):
-        return len(self._digests)
+        return len(self._read())
 
     def takes(self, key):
         digest = _digest(key)
         # Compared in constant time, and against every key, so how long it takes says nothing.
         found = False
-        for kept in self._digests:
+        for kept in self._read():
             found |= hmac.compare_digest(kept, digest)
         return found

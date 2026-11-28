@@ -60,6 +60,9 @@ class ServerTest(unittest.TestCase):
             self.assertEqual(status, 401)
             self.assertIn("API key", said["error"])
         self.assertEqual(self.ask("GET", "/v1/models")[0], 200)
+        # One made while it runs is taken at once.
+        later = keys.add(self.data, "later")
+        self.assertEqual(self.ask("GET", "/v1/models", key=later)[0], 200)
 
     def test_a_file_is_kept_only_as_the_sha256_it_was_sent_to(self):
         data = b"a guide"

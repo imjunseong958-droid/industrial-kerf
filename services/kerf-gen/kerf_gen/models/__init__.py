@@ -1,6 +1,7 @@
 """The models a server can run, each a module of its own that says what it takes (`SPEC`, as
-the Kerf generation API's ModelSpec) and makes a file (`generate`). What a model takes is said
-in its module and nowhere else."""
+the Kerf generation API's ModelSpec) and makes a file (`generate`), and may load what it needs
+before the server listens (`prepare`). What a model takes is said in its module and nowhere
+else."""
 import importlib
 
 
@@ -11,6 +12,7 @@ class Stopped(Exception):
 # A model's name, as a `generate` line and `--model` name it, and its module.
 KNOWN = {
     "fake": "fake",
+    "wan-vace": "wan_vace",
 }
 
 

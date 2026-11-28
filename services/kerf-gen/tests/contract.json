@@ -1,0 +1,113 @@
+{
+  "created": {
+    "id": "0123abcd"
+  },
+  "error": {
+    "error": "no such request"
+  },
+  "models": {
+    "models": [
+      {
+        "about": "a shot that follows its guide",
+        "more": {
+          "steps": 30
+        },
+        "name": "fake",
+        "rate": 16.0,
+        "reads": [
+          "guide",
+          "first",
+          "ref",
+          "regions"
+        ],
+        "seconds": 5.0,
+        "size": [
+          832,
+          480
+        ]
+      }
+    ]
+  },
+  "request": {
+    "first": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "from": 4.0,
+    "guide": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "guides": {
+      "depth": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "kerf-request": 1,
+    "last": null,
+    "model": "fake",
+    "more": {
+      "steps": "30"
+    },
+    "moves": [
+      {
+        "frame": [
+          832,
+          480
+        ],
+        "name": "car",
+        "places": [
+          [
+            0.5,
+            0.5,
+            0.25,
+            0.125
+          ],
+          null
+        ],
+        "rate": 16.0
+      }
+    ],
+    "out": "out.mp4",
+    "prompt": "a red car on a wet street",
+    "references": [
+      "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    ],
+    "regions": [
+      {
+        "mask": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "prompt": "a red car"
+      }
+    ],
+    "seconds": 4.0,
+    "seed": 7,
+    "signals": [
+      {
+        "name": "swell",
+        "rate": 16.0,
+        "values": [
+          0.0,
+          0.5,
+          1.0
+        ]
+      }
+    ],
+    "size": [
+      832,
+      480
+    ]
+  },
+  "states": [
+    {
+      "state": "queued"
+    },
+    {
+      "line": "step 15 of 30",
+      "progress": 0.5,
+      "state": "running"
+    },
+    {
+      "out": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "state": "done"
+    },
+    {
+      "message": "it broke",
+      "state": "failed"
+    },
+    {
+      "state": "cancelled"
+    }
+  ]
+}
