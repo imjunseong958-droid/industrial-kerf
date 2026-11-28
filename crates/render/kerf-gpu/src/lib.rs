@@ -12,7 +12,8 @@
 //! draws everything. A driver on the CPU, such as Mesa's llvmpipe, counts only with
 //! `KERF_GPU=software`, for checking kernels on a machine with no GPU; it is slower than the reference.
 //! An accelerator that only computes, an AMD Instinct, has no graphics queue for wgpu to reach it by:
-//! `KERF_GPU=opencl` draws on the machine's OpenCL device instead, with the same kernels (kerf-gpu-cl).
+//! where wgpu reaches no GPU that works, the machine's OpenCL GPU draws instead, with the same
+//! kernels (kerf-gpu-cl). `KERF_GPU=opencl` asks for it whatever wgpu reaches.
 
 use kerf_color::{HdrOutput, InputTransform};
 use kerf_draw::correct::Correction;
@@ -184,9 +185,9 @@ impl Yuv<'_> {
 }
 
 /// How many kernels a WGSL module has, each written out as OpenCL C to see that it can be, or the
-/// first that cannot be and why. A kernel that cannot be runs nowhere OpenCL does the drawing
-/// (`KERF_GPU=opencl`), which no machine that tests it on a GPU of its own would show: a crate
-/// holds its kernels to this in its tests.
+/// first that cannot be and why. A kernel that cannot be runs nowhere OpenCL does the drawing,
+/// which no machine that tests it on a GPU of its own would show: a crate holds its kernels to
+/// this in its tests.
 pub fn written_for_opencl(source: &str) -> Result<usize, String> {
     kerf_gpu_cl::write_out_all(source)
 }
@@ -263,14 +264,25 @@ pub fn kernel_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// The device to draw on and its queue. `None` without a backend, an adapter, or a device that
-/// has what these kernels need, and for a driver on the CPU unless `KERF_GPU=software`. With
-/// `KERF_GPU=opencl` it is the machine's OpenCL device (kerf-gpu-cl), which is how an accelerator
-/// that has no graphics queue draws.
+/// The device to draw on and its queue: the GPU wgpu reaches, and where it reaches none that
+/// works, the machine's OpenCL GPU (kerf-gpu-cl), which is how an accelerator with no graphics
+/// queue draws. `KERF_GPU=opencl` asks for OpenCL's whatever wgpu reaches, and `KERF_GPU=software`
+/// for a driver on the CPU and nothing else.
 fn open_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    if std::env::var_os("KERF_GPU").is_some_and(|value| value == "opencl") {
+    let asked = |what: &str| std::env::var_os("KERF_GPU").is_some_and(|value| value == what);
+    if asked("opencl") {
         return kerf_gpu_cl::open(false);
     }
+    let software = asked("software");
+    match through_wgpu(software) {
+        None if !software => kerf_gpu_cl::open(false),
+        found => found,
+    }
+}
+
+/// wgpu's device and its queue. `None` without a backend, an adapter, or a device that has what
+/// these kernels need and carries work through, and for a driver on the CPU unless `software`.
+fn through_wgpu(software: bool) -> Option<(wgpu::Device, wgpu::Queue)> {
     if wgpu::Instance::enabled_backend_features().is_empty() {
         return None;
     }
@@ -281,7 +293,6 @@ fn open_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     }))
     .ok()?;
     // A driver on the CPU is slower than the reference, so it is only for checking kernels.
-    let software = std::env::var_os("KERF_GPU").is_some_and(|value| value == "software");
     if adapter.get_info().device_type == wgpu::DeviceType::Cpu && !software {
         return None;
     }
@@ -298,7 +309,46 @@ fn open_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     {
         return None;
     }
-    Some((device, queue))
+    carries(&device, &queue).then_some((device, queue))
+}
+
+/// Whether bytes sent to the device come back. A card that only computes can come up through a
+/// driver that takes it for one that draws: its device opens, and the first work it is sent is
+/// refused.
+fn carries(device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
+    // wgpu's own handlers panic. Whoever keeps the device sets its own after this.
+    device.on_uncaptured_error(Arc::new(|_| {}));
+    device.set_device_lost_callback(|_, _| {});
+    const SENT: [u8; 8] = *b"kerf-gpu";
+    let from = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("kerf-trial"),
+        contents: &SENT,
+        usage: wgpu::BufferUsages::COPY_SRC,
+    });
+    let back = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("kerf-trial"),
+        size: SENT.len() as u64,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("kerf-trial"),
+    });
+    encoder.copy_buffer_to_buffer(&from, 0, &back, 0, Some(SENT.len() as u64));
+    let submission = queue.submit([encoder.finish()]);
+    let slice = back.slice(..);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |result| {
+        // The receiver is gone only once the wait below has given up on the device.
+        let _ = sender.send(result);
+    });
+    let waited = device.poll(wgpu::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: Some(FRAME_TIMEOUT),
+    });
+    waited.is_ok()
+        && matches!(receiver.recv_timeout(FRAME_TIMEOUT), Ok(Ok(())))
+        && slice.get_mapped_range().is_ok_and(|data| data[..] == SENT)
 }
 
 /// What turns true when the device reports an error or is lost, in place of wgpu's handlers.
@@ -1961,6 +2011,20 @@ mod tests {
         ] {
             let kernels = written_for_opencl(source).unwrap_or_else(|why| panic!("{name}: {why}"));
             assert!(kernels > 0, "{name} has no kernel");
+        }
+    }
+
+    #[test]
+    fn a_gpu_known_to_be_there_is_opened() {
+        // A Mac has Metal, and a driver on the CPU that is asked for by name has to be installed.
+        // Only there is it known that a device opens and carries the copy it is tried with: one
+        // turned down for no reason would leave every other test here with nothing to compare.
+        let known = match std::env::var_os("KERF_GPU") {
+            None => cfg!(target_os = "macos"),
+            Some(asked) => asked == "software",
+        };
+        if known {
+            assert!(shared().is_some(), "no device where one is known to be");
         }
     }
 
