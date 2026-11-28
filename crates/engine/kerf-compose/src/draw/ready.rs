@@ -348,7 +348,7 @@ impl Drawing {
                 (Arc::new(image), per_source)
             }
             Source::Solid(color) => (
-                Arc::new(Image::filled(cw, ch, premultiplied(*color))),
+                Arc::new(spare::filled(cw, ch, premultiplied(*color))),
                 scale,
             ),
             Source::Title(title) => (Arc::new(title_on(title, &run)), per),

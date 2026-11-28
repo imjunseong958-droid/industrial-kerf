@@ -25,11 +25,24 @@ impl Image {
 
     /// A picture of one premultiplied color.
     pub fn filled(w: usize, h: usize, color: [f32; 4]) -> Self {
-        let mut px = Vec::with_capacity(w * h * 4);
-        for _ in 0..w * h {
-            px.extend_from_slice(&color);
-        }
-        Self { w, h, px }
+        let mut image = Self::new(w, h);
+        image.fill(color);
+        image
+    }
+
+    /// Every pixel made one premultiplied color, by a few cores, each a part of the picture.
+    /// One core took longer than drawing a plain frame with the picture. Memory takes it only
+    /// so fast, though, which a few cores reach: a row to each core made a render, with its
+    /// other frames and its encoder at work, slower than one core did, and four cores left a
+    /// frame drawn alone waiting on them.
+    pub fn fill(&mut self, color: [f32; 4]) {
+        const PARTS: usize = 8;
+        let part = (self.px.len().div_ceil(PARTS).div_ceil(4) * 4).max(4);
+        self.px.par_chunks_mut(part).for_each(|part| {
+            for pixel in part.as_chunks_mut::<4>().0 {
+                *pixel = color;
+            }
+        });
     }
 
     /// Straight 16-bit little-endian RGBA, `stride` bytes a row, with each pixel's code values
@@ -387,17 +400,38 @@ impl Image {
         if rect.w <= 0.0 || rect.h <= 0.0 || self.w == 0 || self.h == 0 {
             return None;
         }
-        if Landing::halves((self.w, self.h), m) {
-            // Shrinking to under half: from a picture halved first.
-            let half = self.downsample2();
-            let m = m.then_apply(&Affine::scale(2.0, 2.0));
-            let rect = Rect::new(rect.x / 2.0, rect.y / 2.0, rect.w / 2.0, rect.h / 2.0);
-            let placement = half.placement(w, h, &m, rect)?.owned();
-            return Some(placement);
+        if !Landing::halves((self.w, self.h), m) {
+            return Some(Placement {
+                image: std::borrow::Cow::Borrowed(self),
+                at: Landing::new((self.w, self.h), (w, h), m, rect)?,
+            });
         }
+        // Shrinking to under half: from a picture halved first, and halved again for as long
+        // as it still shrinks so. The last of them is the one placed, and is handed over as
+        // it is: a copy of it was a picture written twice.
+        let halved = |m: &Affine, rect: Rect| {
+            (
+                m.then_apply(&Affine::scale(2.0, 2.0)),
+                Rect::new(rect.x / 2.0, rect.y / 2.0, rect.w / 2.0, rect.h / 2.0),
+            )
+        };
+        let mut half = self.downsample2();
+        let (mut m, mut rect) = halved(m, rect);
+        loop {
+            m.inverse()?;
+            if rect.w <= 0.0 || rect.h <= 0.0 || half.w == 0 || half.h == 0 {
+                return None;
+            }
+            if !Landing::halves((half.w, half.h), &m) {
+                break;
+            }
+            half = half.downsample2();
+            (m, rect) = halved(&m, rect);
+        }
+        let at = Landing::new((half.w, half.h), (w, h), &m, rect)?;
         Some(Placement {
-            image: std::borrow::Cow::Borrowed(self),
-            at: Landing::new((self.w, self.h), (w, h), m, rect)?,
+            image: std::borrow::Cow::Owned(half),
+            at,
         })
     }
 
@@ -608,13 +642,6 @@ pub(crate) struct Placement<'a> {
 }
 
 impl Placement<'_> {
-    fn owned(self) -> Placement<'static> {
-        Placement {
-            image: std::borrow::Cow::Owned(self.image.into_owned()),
-            at: self.at,
-        }
-    }
-
     /// The premultiplied color at pixel `x`, `y` of the other picture, if
     /// any of this one covers it.
     #[inline]

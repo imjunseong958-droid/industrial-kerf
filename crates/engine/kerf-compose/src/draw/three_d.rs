@@ -1643,8 +1643,12 @@ impl Looked<'_> {
         (w, h): (usize, usize),
         deep: bool,
     ) -> (Image, Vec<f32>) {
-        let mut out = Image::new(w, h);
-        let mut depth = vec![f32::INFINITY; if deep { w * h } else { 0 }];
+        let mut out = spare::clear(w, h);
+        // Infinitely far all over, written by every core.
+        let mut depth = vec![0.0f32; if deep { w * h } else { 0 }];
+        depth
+            .par_chunks_mut(w.max(1))
+            .for_each(|row| row.fill(f32::INFINITY));
         let rows = out.px.par_chunks_mut(w.max(1) * 4).enumerate();
         let id = &plan.clip.id;
         if solid > 0.0 {
